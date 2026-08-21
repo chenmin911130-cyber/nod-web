@@ -1,0 +1,11 @@
+node_modules/
+web/dist/
+web/node_modules/
+.venv/
+__pycache__/
+*.pyc
+.env
+secrets.json
+.DS_Store
+*.log
+.railway/

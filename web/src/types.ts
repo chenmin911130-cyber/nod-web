@@ -1,0 +1,121 @@
+export type RunState = 'idle' | 'record' | 'listen' | 'think'
+export type Turn = { id: string; q: string; a: string }
+export type Lang = 'auto' | 'zh' | 'en'
+export type ViewMode = 'workspace' | 'focus' | 'fullscreen'
+export type AudioSource = 'system' | 'both' | 'mic'
+export type WorkspaceMode = 'interview' | 'meeting' | 'translate'
+export type PairLang = 'en' | 'zh'
+
+export interface ModelDef {
+  label: string
+  provider: string
+  model: string
+}
+
+export interface AppConfig {
+  llm?: { provider?: string; model?: string; max_tokens?: number; temperature?: number }
+  stt?: { model?: string; language?: string | null }
+  audio?: { source?: string }
+  ui?: { opacity?: number }
+  models?: ModelDef[]
+}
+
+export interface MeetingLine {
+  id: string
+  ts: string
+  text: string
+  marked?: boolean
+}
+
+export interface TranslatePair {
+  id: string
+  ts: string
+  original: string
+  translation: string
+}
+
+export interface AppState {
+  run: RunState
+  status: string
+  currentQ: string
+  currentQId: string
+  turns: Turn[]
+  partial: string
+  busy: boolean
+  opacity: number
+  pinned: boolean
+  micMuted: boolean
+  systemMuted: boolean
+  stealth: boolean
+  view: ViewMode
+  draft: string
+  llm: { provider: string; model: string }
+  lang: Lang
+  source: AudioSource
+  autoOn: boolean
+  models: ModelDef[]
+  keys: { hasLlm: boolean; hasStt: boolean }
+  workspaceMode: WorkspaceMode
+  meetingLines: MeetingLine[]
+  meetingSummary: string
+  meetingStartedAt: number | null
+  meetingPausedAt: number | null
+  meetingElapsedMs: number
+  meetingEnded: boolean
+  translatePairs: TranslatePair[]
+  translateFrom: PairLang
+  translateTo: PairLang
+  bilingual: boolean
+  translateAskId: string
+  translateBindId: string
+  summaryAskId: string
+}
+
+// 引擎 → 前端
+export type EngineEvent =
+  | { type: 'ready' }
+  | { type: 'pong' }
+  | { type: 'keys_status'; has_llm: boolean; has_stt: boolean }
+  | { type: 'state'; state: string }
+  | { type: 'status'; text: string }
+  | { type: 'partial'; text: string }
+  | { type: 'question'; id: string; text: string }
+  | { type: 'chunk'; id: string; text: string }
+  | { type: 'done'; id: string; stt: number; llm: number; ok: boolean }
+  | { type: 'error'; text: string }
+
+// 前端 → 引擎
+export type EngineMsg =
+  | { type: 'manual' }
+  | { type: 'toggle_listen' }
+  | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; mode?: string }
+  | { type: 'set_workspace'; mode: WorkspaceMode }
+  | { type: 'set_llm'; provider: string; model: string }
+  | { type: 'set_lang'; language: string | null }
+  | { type: 'set_source'; source: string }
+  | { type: 'set_mic_muted'; muted: boolean }
+  | { type: 'save_keys'; deepseek_key: string; assemblyai_key: string }
+  | { type: 'clear' }
+  | { type: 'ping' }
+
+export interface Api {
+  send(msg: EngineMsg): void
+  onEvent(cb: (e: EngineEvent) => void): () => void
+  onShortcut(cb: (k: 'f2' | 'f3' | 'f4' | 'f8' | 'f9') => void): () => void
+  setOpacity(n: number): void
+  setPinned(b: boolean): void
+  setStealth(on: boolean): void
+  setView(mode: ViewMode): void
+  copy(text: string): void
+  close(): void
+  minimize(): void
+  getConfig(): Promise<AppConfig>
+  openExternal(url: string): void
+  exportPdf(payload: { title?: string; html: string; dest?: string }): Promise<string>
+}
+
+declare global {
+  interface Window {
+    api: Api
+  }
+}

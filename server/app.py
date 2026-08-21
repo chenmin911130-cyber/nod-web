@@ -1,0 +1,986 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""Nod web engine: browser mic PCM → AssemblyAI cloud STT → LLM stream."""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import queue
+import re
+import threading
+import time
+import uuid
+from difflib import SequenceMatcher
+from pathlib import Path
+from typing import Any, Callable
+from urllib.parse import urlencode
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from openai import OpenAI
+
+SR = 16000
+STT_CLOUD = "assemblyai"
+ASSEMBLYAI_WS = "wss://streaming.assemblyai.com/v3/ws"
+ASSEMBLYAI_MODEL = "universal-3-5-pro"
+STATUS_READY = "Ready · F2 record / F3 listen / F4 clear · browser mic + cloud STT"
+STATUS_RECORD = "Recording · tap Listening / F2 to stop"
+STATUS_LISTEN = "Listening for the next question…"
+STATUS_TRANSCRIBE = "Transcribing…"
+STATUS_CHECK = "Checking question…"
+STATUS_GENERATE = "Generating answer…"
+STATUS_ANSWER_READY = "Answer ready"
+STATUS_WAIT_MORE = "I caught part of a question. Keep listening…"
+STATUS_EMPTY = "No speech detected, please try again"
+MANUAL_MAX_SEC = 120.0
+MANUAL_MIN_SEC = 0.4
+
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_CONFIG_PATH = ROOT / "config.json"
+WEB_DIST = ROOT / "web" / "dist"
+
+PROVIDER_ENDPOINTS = {
+    "deepseek": "https://api.deepseek.com",
+    "openrouter": "https://openrouter.ai/api/v1",
+}
+PROVIDER_KEY = {"deepseek": "DEEPSEEK_API_KEY", "openrouter": "OPENROUTER_API_KEY"}
+
+_STT_HALLUCINATIONS = (
+    "thank you for watching", "thanks for watching", "thanks for listening",
+    "please subscribe", "please like", "like and subscribe", "字幕", "謝謝收看",
+)
+_STT_STATUS_WORDS = (
+    "checking question", "answer ready", "calibrating microphone",
+    "microphone muted", "microphone unmuted",
+)
+_STT_SOCIAL_WORDS = {
+    "okay", "ok", "yes", "yeah", "yep", "sure", "right", "fine", "good",
+    "next", "thank you", "thanks", "got it", "alright", "well", "um", "uh",
+    "hmm", "great", "perfect", "cool", "nice", "嗯", "啊", "哦", "呃", "好的", "好",
+}
+GUARD_Q_WORDS = (
+    "what", "why", "how", "when", "where", "which", "who",
+    "can you", "could you", "tell me", "explain", "difference",
+    "define", "describe", "?", "吗", "么", "什么", "为什么", "怎么", "如何",
+    "介绍一下", "说说", "谈谈", "讲一下",
+)
+_STT_BOOST_FIXED = [
+    "Python", "C#", "ASP.NET", "SQL", "database", "API", "frontend", "backend",
+    "full-stack", "algorithm", "interview", "experience", "project",
+]
+
+
+def _ratio(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def load_all_keys() -> dict[str, str]:
+    names = ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "ASSEMBLYAI_API_KEY"]
+    keys: dict[str, str] = {}
+    hermes = os.environ.get("HERMES_ENV")
+    cands = [hermes] if hermes else []
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        cands.append(os.path.join(local, "hermes", ".env"))
+    cands.append(str(ROOT / ".env"))
+    for env_path in cands:
+        if not env_path or not os.path.exists(env_path):
+            continue
+        try:
+            with open(env_path, encoding="utf-8") as f:
+                for line in f:
+                    m = re.match(r"\s*([A-Z_]+_API_KEY)\s*=\s*(.+)", line)
+                    if m and m.group(1) in names:
+                        keys[m.group(1)] = m.group(2).strip().strip('"').strip("'")
+        except OSError:
+            pass
+    for n in names:
+        if not keys.get(n) and os.environ.get(n):
+            keys[n] = os.environ[n].strip()
+    appdata = os.environ.get("APPDATA")
+    secrets_path = os.path.join(appdata, "Nod", "secrets.json") if appdata else ""
+    if secrets_path and os.path.exists(secrets_path):
+        try:
+            with open(secrets_path, encoding="utf-8") as f:
+                data = json.load(f)
+            for n in names:
+                if not keys.get(n) and isinstance(data.get(n), str) and data[n].strip():
+                    keys[n] = data[n].strip()
+        except (OSError, json.JSONDecodeError):
+            pass
+    return keys
+
+
+def load_config() -> dict[str, Any]:
+    cfg: dict[str, Any] = {
+        "profile": {
+            "name": "",
+            "target_role": "Software Engineer",
+            "company": "",
+            "resume_summary": "",
+            "jd": "",
+            "style": "简洁结构化：先给结论，再 2-3 点展开；行为题用 STAR；语言口语化、可直接照着念。",
+        },
+        "llm": {"model": "deepseek-v4-flash", "max_tokens": 400, "temperature": 0.5, "provider": "deepseek"},
+        "stt": {"model": STT_CLOUD, "language": None, "vocabulary": []},
+        "audio": {"source": "mic"},
+        "ui": {"opacity": 88},
+        "models": [],
+    }
+    if DEFAULT_CONFIG_PATH.exists():
+        try:
+            with open(DEFAULT_CONFIG_PATH, encoding="utf-8") as f:
+                src = json.load(f)
+            for k, v in src.items():
+                if isinstance(v, dict) and isinstance(cfg.get(k), dict):
+                    cfg[k].update(v)
+                else:
+                    cfg[k] = v
+        except (OSError, json.JSONDecodeError):
+            pass
+    cfg.setdefault("stt", {})["model"] = STT_CLOUD
+    cfg.setdefault("audio", {})["source"] = "mic"
+    return cfg
+
+
+def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "llm": {
+            "provider": cfg.get("llm", {}).get("provider", "deepseek"),
+            "model": cfg.get("llm", {}).get("model", ""),
+        },
+        "stt": {"language": cfg.get("stt", {}).get("language")},
+        "audio": {"source": "mic"},
+        "ui": {"opacity": cfg.get("ui", {}).get("opacity", 88)},
+        "models": cfg.get("models") or [],
+    }
+
+
+def _stt_boost_words(cfg: dict[str, Any]) -> list[str]:
+    words = list(_STT_BOOST_FIXED)
+    seen = {w.lower() for w in words}
+    p = cfg.get("profile") or {}
+    for text in (p.get("resume_summary") or "", p.get("jd") or ""):
+        for tok in re.split(r"[，。、,.;；:：\s()（）/+\\-]+", text):
+            tok = tok.strip()
+            if len(tok) >= 2 and re.search(r"[A-Za-z]", tok) and tok.lower() not in seen:
+                words.append(tok)
+                seen.add(tok.lower())
+    for tok in (cfg.get("stt") or {}).get("vocabulary") or []:
+        tok = str(tok).strip()
+        if len(tok) >= 2 and tok.lower() not in seen:
+            words.append(tok)
+            seen.add(tok.lower())
+    return words[:50]
+
+
+def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
+    params = [
+        ("sample_rate", str(SR)),
+        ("speech_model", ASSEMBLYAI_MODEL),
+        ("format_turns", "true"),
+        ("max_turn_silence", "1200"),
+    ]
+    lang = (cfg.get("stt") or {}).get("language")
+    codes = ["zh"] if lang == "zh" else (["en"] if lang == "en" else ["zh", "en"])
+    for code in codes:
+        params.append(("language_codes", code))
+    boost = _stt_boost_words(cfg)
+    if boost:
+        params.append(("word_boost", ",".join(boost)))
+        params.append(("boost_param", "medium"))
+    params.append(("speech_threshold", "2"))
+    return ASSEMBLYAI_WS + "?" + urlencode(params)
+
+
+def clean_transcript(text: str, recent_finals=None, last_answer=None) -> tuple[str, str]:
+    t = (text or "").strip()
+    t = re.sub(r"[.?!。！？]{2,}", lambda m: m.group(0)[0], t)
+    t = re.sub(r"\s+", " ", t)
+    t = re.sub(r"\b(\w+)(?: \1\b)+", r"\1", t, flags=re.IGNORECASE)
+    if not t or not re.search(r"[A-Za-z0-9\u4e00-\u9fff]", t):
+        return "", "no content"
+    low = t.lower()
+    if any(h in low for h in _STT_HALLUCINATIONS):
+        return "", "hallucination"
+    if len(t) < 60 and any(s in low for s in _STT_STATUS_WORDS):
+        return "", "status text"
+    if low in _STT_SOCIAL_WORDS:
+        return "", "social phrase"
+    if recent_finals:
+        for prev in recent_finals[-2:]:
+            if prev and _ratio(low, prev.lower()) > 0.85:
+                return "", "duplicate"
+    if last_answer and len(last_answer) > 12:
+        a = last_answer.lower()
+        if _ratio(low, a) > 0.7 or (len(low) > 15 and low in a):
+            return "", "echo"
+    return t, ""
+
+
+def guard_question(text: str, recent_questions, last_answer=None) -> str:
+    t = (text or "").strip()
+    if not t:
+        return "reject"
+    low = t.lower()
+    if low in _STT_SOCIAL_WORDS or len(t) < 4:
+        return "reject"
+    if last_answer and len(last_answer) > 12:
+        a = last_answer.lower()
+        if _ratio(low, a) > 0.7 or (len(low) > 15 and low in a):
+            return "reject"
+    if recent_questions:
+        for q in recent_questions[-2:]:
+            if q and _ratio(low, q.lower()) > 0.9:
+                return "reject"
+    if any(w in low for w in GUARD_Q_WORDS) or len(t) >= 18:
+        if t.endswith((",", "，", "、")) or low.endswith((" and", " or", " the", " a")):
+            return "wait"
+        return "accept"
+    if len(t) >= 10:
+        return "wait"
+    return "reject"
+
+
+def attachments_to_prompt(files) -> str:
+    if not files:
+        return ""
+    blocks = []
+    for item in files:
+        name = (item or {}).get("name") or "file"
+        mime = (item or {}).get("mime") or ""
+        data = (item or {}).get("data") or ""
+        try:
+            raw = __import__("base64").b64decode(data)
+        except Exception:
+            blocks.append(f"[Could not read {name}]")
+            continue
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if ext in ("txt", "md") or mime.startswith("text/"):
+            body = raw.decode("utf-8", errors="replace")[:12000]
+        elif ext == "pdf" or mime == "application/pdf":
+            try:
+                from pypdf import PdfReader
+                from io import BytesIO
+                reader = PdfReader(BytesIO(raw))
+                body = "\n".join((p.extract_text() or "") for p in reader.pages)[:12000]
+                body = body or f"[PDF attached: {name}, no extractable text.]"
+            except Exception as e:
+                body = f"[Could not read {name}: {e}]"
+        elif mime.startswith("image/"):
+            body = f"[Image attached: {name}]"
+        else:
+            body = f"[Attached file: {name}]"
+        blocks.append(f"--- Attached: {name} ---\n{body}")
+    return "\n\n".join(blocks)
+
+
+def assemblyai_transcribe_pcm(api_key: str, pcm: bytes, cfg: dict[str, Any], timeout: float = 18.0) -> str:
+    import websocket
+    result = {"text": "", "err": None}
+    done = threading.Event()
+    url = assemblyai_ws_url(cfg)
+
+    def on_open(ws):
+        def send():
+            step = SR // 10 * 2
+            try:
+                for i in range(0, len(pcm), step):
+                    if not ws.sock or not ws.sock.connected:
+                        return
+                    ws.send(pcm[i:i + step], websocket.ABNF.OPCODE_BINARY)
+                if ws.sock and ws.sock.connected:
+                    ws.send(json.dumps({"type": "Terminate"}))
+            except Exception as e:
+                result["err"] = str(e)
+                done.set()
+        threading.Thread(target=send, daemon=True).start()
+
+    def on_message(_ws, message):
+        try:
+            data = json.loads(message)
+        except (TypeError, json.JSONDecodeError):
+            return
+        kind = data.get("type")
+        if kind == "Turn":
+            t = (data.get("utterance") or data.get("transcript") or "").strip()
+            if t:
+                result["text"] = t
+            if data.get("end_of_turn"):
+                done.set()
+        elif kind in ("Termination", "Error"):
+            if kind == "Error":
+                result["err"] = data.get("error") or message
+            done.set()
+
+    def on_error(_ws, error):
+        result["err"] = str(error)
+        done.set()
+
+    def on_close(_ws, status_code, msg):
+        if status_code and status_code >= 400 and not result["text"]:
+            result["err"] = result["err"] or f"WebSocket {status_code} {msg or ''}".strip()
+        done.set()
+
+    ws = websocket.WebSocketApp(
+        url,
+        header=[f"Authorization: {api_key}"],
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close,
+    )
+    threading.Thread(target=lambda: ws.run_forever(ping_interval=20, ping_timeout=10), daemon=True).start()
+    if not done.wait(timeout):
+        result["err"] = result["err"] or "AssemblyAI timeout"
+    try:
+        ws.close()
+    except Exception:
+        pass
+    if result["err"] and not result["text"]:
+        raise RuntimeError(result["err"])
+    return result["text"]
+
+
+class Pipeline:
+    def __init__(self, cfg: dict[str, Any], keys: dict[str, str], emit: Callable[[dict], None]):
+        self.cfg = cfg
+        self._keys = dict(keys)
+        self.emit = emit
+        self._provider = cfg["llm"].get("provider", "deepseek")
+        self._model = cfg["llm"].get("model", "deepseek-v4-flash")
+        self.client = self._make_client()
+        self._qa_history: list[dict] = []
+        self._last_answer = ""
+        self._cancel = threading.Event()
+
+    def _new_qid(self) -> str:
+        return f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+
+    def assemblyai_key(self) -> str:
+        return (self._keys.get("ASSEMBLYAI_API_KEY") or "").strip()
+
+    def _make_client(self) -> OpenAI:
+        endpoint = PROVIDER_ENDPOINTS.get(self._provider, PROVIDER_ENDPOINTS["deepseek"])
+        key = (self._keys.get(PROVIDER_KEY.get(self._provider, "DEEPSEEK_API_KEY"), "") or "").strip() or "missing"
+        return OpenAI(api_key=key, base_url=endpoint)
+
+    def set_keys(self, keys: dict[str, str]) -> None:
+        self._keys.update({k: v for k, v in keys.items() if v})
+        self.client = self._make_client()
+
+    def set_model(self, provider: str, model: str) -> None:
+        self._provider = provider
+        self._model = model
+        self.client = self._make_client()
+        self.emit({"type": "status", "text": f"Switched to model: {model} ({provider})"})
+
+    def key_status(self) -> dict[str, bool]:
+        return {
+            "has_llm": bool((self._keys.get("OPENROUTER_API_KEY") or self._keys.get("DEEPSEEK_API_KEY") or "").strip()),
+            "has_stt": bool(self.assemblyai_key()),
+        }
+
+    def _lang_rule(self) -> str:
+        return (
+            "\n5. Match the interviewer's language: Chinese question → Chinese answer; "
+            "English question → English answer."
+        )
+
+    def _build_messages(self, question: str, mode: str = "auto") -> list[dict]:
+        if mode == "summary" or question.startswith("Summarize the following meeting transcript"):
+            return [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a meeting notetaker. Write a recap the user can scan after the call.\n"
+                        "Output exactly these sections, using short bullets:\n"
+                        "- Key points\n- Decisions\n- Action items (include owner only if it was said)\n"
+                        "No preamble. Do not invent people, numbers, or commitments."
+                    ),
+                },
+                {"role": "user", "content": question},
+            ]
+        if mode == "translate" or question.startswith("Translate to "):
+            return [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a translator for live captions.\n"
+                        "Output ONLY the translation — no quotes, labels, notes, or preamble.\n"
+                        "Preserve names, numbers, and meaning."
+                    ),
+                },
+                {"role": "user", "content": question},
+            ]
+        p = self.cfg.get("profile") or {}
+        hist = self._qa_history[-2:]
+        ctx = ""
+        if hist:
+            ctx = "\n\nRecent confirmed Q&A (follow-up context only):\n" + "\n".join(
+                f"Q: {h['q']}\nA: {h['a'][:300]}" for h in hist
+            )
+        sys_msg = (
+            "You are a senior interview coach helping a candidate answer questions in real time.\n"
+            f"Candidate background: {p.get('resume_summary') or ''}\n"
+            f"Target role: {p.get('target_role') or 'Software Engineer'}"
+            + (f" / Company: {p.get('company')}" if p.get("company") else "")
+            + (f"\nJob description (JD): {p.get('jd')}" if p.get("jd") else "")
+            + "\n\nYou answer ONLY the user's confirmed question.\n"
+            f"\nAnswer rules:\n1. Output a complete answer the candidate can read aloud verbatim.\n"
+            f"2. Style: {p.get('style') or ''}\n"
+            "3. Speed mode: 60-100 words, 3-5 sentences, lead with the conclusion.\n"
+            "4. Technical questions: accurate answer + brief reason; behavioral: STAR.\n"
+            + self._lang_rule()
+            + ctx
+        )
+        return [
+            {"role": "system", "content": sys_msg},
+            {"role": "user", "content": f"Interviewer question: {question}\n\nAnswer:"},
+        ]
+
+    def process_text(self, question: str, mode: str = "ask") -> None:
+        t = (question or "").strip()
+        if not t:
+            self.emit({"type": "status", "text": "Please type a question first"})
+            self.emit({"type": "done", "id": "", "stt": 0, "llm": 0, "ok": False})
+            return
+        qid = self._new_qid()
+        self.emit({"type": "status", "text": STATUS_GENERATE})
+        self.emit({"type": "question", "id": qid, "text": t})
+        t0 = time.time()
+        llm = self.cfg.get("llm") or {}
+        answer = ""
+        try:
+            kwargs: dict[str, Any] = dict(
+                model=self._model,
+                messages=self._build_messages(t, mode),
+                max_tokens=max(llm.get("max_tokens", 600), 1200) if mode == "summary" else llm.get("max_tokens", 600),
+                stream=True,
+            )
+            if not str(self._model).startswith(("o1", "o3")):
+                kwargs["temperature"] = llm.get("temperature", 0.5)
+            if self._provider == "deepseek":
+                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            stream = self.client.chat.completions.create(**kwargs)
+            for ch in stream:
+                if self._cancel.is_set():
+                    break
+                delta = ch.choices[0].delta
+                if delta.content:
+                    answer += delta.content
+                    self.emit({"type": "chunk", "id": qid, "text": delta.content})
+        except Exception as e:
+            self.emit({"type": "error", "text": f"Generation failed:{e}"})
+            self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
+            return
+        if not answer:
+            self.emit({"type": "error", "text": "Generation failed: empty response"})
+            self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
+            return
+        self._last_answer = answer[-400:]
+        if mode not in ("translate", "summary"):
+            self._qa_history.append({"qid": qid, "q": t, "a": answer})
+            self._qa_history = self._qa_history[-6:]
+        self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": True})
+
+
+class CloudListener:
+    def __init__(self, api_key: str, cfg: dict[str, Any], on_final, on_partial, on_error):
+        self.api_key = api_key
+        self.cfg = cfg
+        self.on_final = on_final
+        self.on_partial = on_partial
+        self.on_error = on_error
+        self._q: queue.Queue[bytes] = queue.Queue(maxsize=80)
+        self._stop = threading.Event()
+        self._ready = threading.Event()
+        self._fail: list[str] = []
+        self._ws = None
+        self._last_final = ""
+        self._muted = False
+
+    def set_muted(self, muted: bool) -> None:
+        self._muted = bool(muted)
+
+    def push_pcm(self, pcm: bytes) -> None:
+        if self._muted or not pcm:
+            return
+        try:
+            self._q.put_nowait(pcm)
+        except queue.Full:
+            pass
+
+    def start(self) -> None:
+        import websocket
+        url = assemblyai_ws_url(self.cfg)
+        self._stop.clear()
+        self._ready.clear()
+        self._fail = []
+        self._ws = websocket.WebSocketApp(
+            url,
+            header=[f"Authorization: {self.api_key}"],
+            on_open=lambda _ws: self._ready.set(),
+            on_message=self._on_message,
+            on_error=self._on_ws_error,
+            on_close=self._on_close,
+        )
+        threading.Thread(target=lambda: self._ws.run_forever(ping_interval=20, ping_timeout=10), daemon=True).start()
+        if not self._ready.wait(10):
+            self.stop()
+            raise RuntimeError("AssemblyAI connection timeout — check network and API key")
+        if self._fail:
+            self.stop()
+            raise RuntimeError(self._fail[0])
+        threading.Thread(target=self._sender, daemon=True).start()
+
+    def _sender(self) -> None:
+        import websocket
+        while not self._stop.is_set():
+            try:
+                chunk = self._q.get(timeout=0.08)
+            except queue.Empty:
+                continue
+            ws = self._ws
+            try:
+                if ws and ws.sock and ws.sock.connected:
+                    ws.send(chunk, websocket.ABNF.OPCODE_BINARY)
+            except Exception as e:
+                if not self._stop.is_set() and self.on_error:
+                    self.on_error(str(e))
+                return
+
+    def _on_message(self, _ws, message) -> None:
+        try:
+            data = json.loads(message)
+        except (TypeError, json.JSONDecodeError):
+            return
+        kind = data.get("type")
+        if kind == "Turn":
+            text = (data.get("utterance") or data.get("transcript") or "").strip()
+            if not text:
+                return
+            if data.get("end_of_turn"):
+                if data.get("turn_is_formatted") is False:
+                    if self.on_partial:
+                        self.on_partial(text)
+                    return
+                cleaned = text.strip()
+                if cleaned and cleaned != self._last_final:
+                    self._last_final = cleaned
+                    threading.Thread(target=self.on_final, args=(cleaned,), daemon=True).start()
+            elif self.on_partial:
+                self.on_partial(text)
+        elif kind == "Error" and self.on_error:
+            self.on_error(str(data.get("error") or message))
+
+    def _on_ws_error(self, _ws, error) -> None:
+        self._fail.append(str(error))
+        self._ready.set()
+        if not self._stop.is_set() and self.on_error:
+            self.on_error(str(error))
+
+    def _on_close(self, _ws, status, msg) -> None:
+        if self._stop.is_set():
+            return
+        extra = f"{status or ''} {msg or ''}".strip()
+        if not self._ready.is_set():
+            self._fail.append(f"AssemblyAI connection closed {extra}".strip())
+            self._ready.set()
+
+    def stop(self) -> None:
+        self._stop.set()
+        ws = self._ws
+        if ws:
+            try:
+                ws.close()
+            except Exception:
+                pass
+            self._ws = None
+
+
+class Session:
+    def __init__(self, emit: Callable[[dict], None], cfg: dict[str, Any], keys: dict[str, str]):
+        self.emit = emit
+        self.cfg = cfg
+        self.pipeline = Pipeline(cfg, keys, emit)
+        self._listener: CloudListener | None = None
+        self._manual_buf = bytearray()
+        self._manual = False
+        self._manual_started = 0.0
+        self._busy = False
+        self._pending = None
+        self._pending_asks: list[tuple[str, str]] = []
+        self._pending_wait = (None, 0.0)
+        self._recent_finals: list[tuple[str, float]] = []
+        self._mic_muted = False
+        self._workspace = "interview"
+
+    def start(self) -> None:
+        st = self.pipeline.key_status()
+        self.emit({"type": "keys_status", "has_llm": st["has_llm"], "has_stt": st["has_stt"]})
+        self.emit({"type": "ready"})
+        self.emit({"type": "state", "state": "idle"})
+        self.emit({"type": "status", "text": STATUS_READY})
+
+    def close(self) -> None:
+        self._stop_listening()
+        self.pipeline._cancel.set()
+
+    def push_pcm(self, pcm: bytes) -> None:
+        if self._mic_muted or not pcm:
+            return
+        if self._manual:
+            self._manual_buf.extend(pcm)
+            if time.time() - self._manual_started > MANUAL_MAX_SEC:
+                self._stop_manual()
+            return
+        if self._listener:
+            self._listener.push_pcm(pcm)
+
+    def dispatch(self, msg: dict) -> None:
+        mtype = msg.get("type")
+        if mtype == "manual":
+            self.manual()
+        elif mtype == "toggle_listen":
+            self.toggle_listen()
+        elif mtype == "ask":
+            self.ask(msg.get("text", ""), msg.get("files"), msg.get("mode") or "ask")
+        elif mtype == "set_workspace":
+            self.set_workspace(msg.get("mode") or "interview")
+        elif mtype == "set_llm":
+            self.set_llm(msg.get("provider", "deepseek"), msg.get("model", ""))
+        elif mtype == "set_lang":
+            lang = msg.get("language")
+            self.cfg.setdefault("stt", {})["language"] = lang if lang in ("zh", "en") else None
+            self.emit({"type": "status", "text": f"Language: {lang or 'Auto'}"})
+            if self._listener:
+                self._stop_listening()
+                self._start_listening()
+        elif mtype == "set_mic_muted":
+            self.set_mic_muted(bool(msg.get("muted", False)))
+        elif mtype == "set_source":
+            self.emit({"type": "status", "text": "Web uses browser microphone (cloud STT)"})
+        elif mtype == "save_keys":
+            self.save_keys(msg.get("deepseek_key", ""), msg.get("assemblyai_key", ""))
+        elif mtype == "clear":
+            self.pipeline._cancel.set()
+            self._pending = None
+            self._pending_asks = []
+            self.emit({"type": "status", "text": "Cleared"})
+        elif mtype == "ping":
+            self.emit({"type": "pong"})
+        else:
+            self.emit({"type": "error", "text": f"Unknown command: {mtype}"})
+
+    def save_keys(self, deepseek_key="", assemblyai_key="") -> None:
+        updates = {}
+        if isinstance(deepseek_key, str) and deepseek_key.strip():
+            updates["DEEPSEEK_API_KEY"] = deepseek_key.strip()
+        if isinstance(assemblyai_key, str) and assemblyai_key.strip():
+            updates["ASSEMBLYAI_API_KEY"] = assemblyai_key.strip()
+        if not updates:
+            self.emit({"type": "error", "text": "Please paste at least one key"})
+            return
+        self.pipeline.set_keys(updates)
+        st = self.pipeline.key_status()
+        self.emit({"type": "keys_status", "has_llm": st["has_llm"], "has_stt": st["has_stt"]})
+        self.emit({"type": "status", "text": "API keys saved — ready to go"})
+
+    def set_workspace(self, mode: str) -> None:
+        if mode not in ("interview", "meeting", "translate"):
+            mode = "interview"
+        self._workspace = mode
+        self._pending = None
+        self._pending_asks = []
+        self._pending_wait = (None, 0.0)
+
+    def set_llm(self, provider: str, model: str) -> None:
+        try:
+            self.pipeline.set_model(provider, model)
+        except Exception as e:
+            self.emit({"type": "error", "text": f"Failed to switch model: {e}"})
+            return
+        self.cfg.setdefault("llm", {})["provider"] = provider
+        self.cfg["llm"]["model"] = model
+
+    def set_mic_muted(self, muted: bool) -> None:
+        self._mic_muted = muted
+        if self._listener:
+            self._listener.set_muted(muted)
+        if muted:
+            if self._manual:
+                self._manual = False
+                self._manual_buf = bytearray()
+                self.emit({"type": "state", "state": "idle"})
+            self.emit({"type": "status", "text": "Microphone muted"})
+        else:
+            self.emit({"type": "status", "text": "Microphone unmuted"})
+
+    def toggle_listen(self) -> None:
+        if self._manual:
+            self.emit({"type": "status", "text": "Stop recording before enabling Auto"})
+            return
+        if not self._listener:
+            self._start_listening()
+        else:
+            self._stop_listening()
+
+    def _start_listening(self) -> None:
+        key = self.pipeline.assemblyai_key()
+        if not key:
+            self.emit({"type": "error", "text": "Missing AssemblyAI key — add it to start cloud listening"})
+            return
+        listener = CloudListener(
+            api_key=key,
+            cfg=self.cfg,
+            on_final=self._on_final,
+            on_partial=lambda text: self.emit({"type": "partial", "text": text}) if text else None,
+            on_error=lambda e: self.emit({"type": "error", "text": f"Transcription failed:{e}"}),
+        )
+        try:
+            listener.start()
+        except Exception as e:
+            self.emit({"type": "error", "text": f"Transcription failed:could not start listening ({e})"})
+            return
+        if self._mic_muted:
+            listener.set_muted(True)
+        self._listener = listener
+        self.emit({"type": "state", "state": "listen"})
+        self.emit({"type": "status", "text": STATUS_LISTEN})
+
+    def _stop_listening(self) -> None:
+        self.pipeline._cancel.set()
+        self._pending = None
+        lst = self._listener
+        self._listener = None
+        if lst:
+            try:
+                lst.stop()
+            except Exception:
+                pass
+        self.emit({"type": "state", "state": "idle"})
+        self.emit({"type": "status", "text": STATUS_READY})
+
+    def manual(self) -> None:
+        if self._mic_muted:
+            self.emit({"type": "status", "text": "Microphone is muted — unmute first"})
+            return
+        if self._manual:
+            self._stop_manual()
+            return
+        if self._busy:
+            return
+        if self._listener:
+            self.emit({"type": "status", "text": "Turn off Auto before recording"})
+            return
+        self._manual = True
+        self._manual_buf = bytearray()
+        self._manual_started = time.time()
+        self.emit({"type": "state", "state": "record"})
+        self.emit({"type": "status", "text": STATUS_RECORD})
+
+    def _stop_manual(self) -> None:
+        pcm = bytes(self._manual_buf)
+        self._manual = False
+        self._manual_buf = bytearray()
+        dur = len(pcm) / (SR * 2)
+        if dur < MANUAL_MIN_SEC:
+            self.emit({"type": "state", "state": "idle"})
+            self.emit({"type": "status", "text": "Recording too short, try again"})
+            return
+        self.emit({"type": "state", "state": "think"})
+        self.emit({"type": "status", "text": STATUS_TRANSCRIBE})
+        threading.Thread(target=self._finish_manual, args=(pcm,), daemon=True).start()
+
+    def _finish_manual(self, pcm: bytes) -> None:
+        key = self.pipeline.assemblyai_key()
+        if not key:
+            self.emit({"type": "error", "text": "Missing AssemblyAI key"})
+            self.emit({"type": "state", "state": "idle"})
+            return
+        try:
+            text = assemblyai_transcribe_pcm(key, pcm, self.cfg)
+        except Exception as e:
+            self.emit({"type": "error", "text": f"Transcription failed:{e}"})
+            self.emit({"type": "state", "state": "idle"})
+            return
+        cleaned, _ = clean_transcript(text or "", None, self.pipeline._last_answer)
+        if not cleaned:
+            self.emit({"type": "status", "text": STATUS_EMPTY})
+            self.emit({"type": "state", "state": "idle"})
+            return
+        if self._workspace in ("meeting", "translate"):
+            qid = self.pipeline._new_qid()
+            self.emit({"type": "question", "id": qid, "text": cleaned})
+            self.emit({"type": "state", "state": "idle"})
+            return
+        self._busy = True
+        self.pipeline._cancel.clear()
+        try:
+            self.pipeline.process_text(cleaned, "ask")
+        finally:
+            self._busy = False
+            self.emit({"type": "state", "state": "idle"})
+
+    def ask(self, text, files=None, mode="ask") -> None:
+        extra = attachments_to_prompt(files)
+        text = (text or "").strip()
+        if extra:
+            text = f"{extra}\n\n{text}".strip() if text else extra
+        if not text:
+            return
+        if mode == "ask" and text.startswith("Summarize the following meeting transcript"):
+            mode = "summary"
+        if mode == "ask" and text.startswith("Translate to "):
+            mode = "translate"
+        if self._busy:
+            if mode in ("translate", "summary"):
+                self._pending_asks.append((text, mode))
+                return
+            self.emit({"type": "status", "text": "Still working, please wait"})
+            return
+        self._busy = True
+        self.pipeline._cancel.clear()
+        self.emit({"type": "state", "state": "think"})
+
+        def work():
+            try:
+                self.pipeline.process_text(text, mode)
+            finally:
+                self._busy = False
+                listening = self._listener is not None
+                self.emit({"type": "state", "state": "listen" if listening else "idle"})
+                if self._pending_asks:
+                    nxt, md = self._pending_asks.pop(0)
+                    self.ask(nxt, None, md)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_final(self, text: str) -> None:
+        recent = [t for t, _ in self._recent_finals[-3:]]
+        cleaned, _reason = clean_transcript(text, recent, self.pipeline._last_answer)
+        if not cleaned:
+            return
+        now = time.time()
+        for t, ts in self._recent_finals:
+            if now - ts < 5.0 and _ratio(cleaned.lower(), t.lower()) > 0.85:
+                return
+        self._recent_finals.append((cleaned, now))
+        self._recent_finals = self._recent_finals[-8:]
+        if self._workspace in ("meeting", "translate"):
+            qid = self.pipeline._new_qid()
+            self.emit({"type": "question", "id": qid, "text": cleaned})
+            return
+        recent_qs = [h["q"] for h in self.pipeline._qa_history]
+        verdict = guard_question(cleaned, recent_qs, self.pipeline._last_answer)
+        if verdict == "wait":
+            ptxt, pts = self._pending_wait
+            if ptxt and time.time() - pts < 2.0:
+                self._pending_wait = (None, 0.0)
+                self._on_final(f"{ptxt} {cleaned}")
+            else:
+                self._pending_wait = (cleaned, time.time())
+                self.emit({"type": "status", "text": STATUS_WAIT_MORE})
+            return
+        self._pending_wait = (None, 0.0)
+        if verdict == "reject":
+            return
+        if self._busy:
+            self._pending = cleaned
+            return
+        self._busy = True
+        self.pipeline._cancel.clear()
+        self.emit({"type": "state", "state": "think"})
+        self.emit({"type": "status", "text": STATUS_CHECK})
+
+        def work():
+            try:
+                self.pipeline.process_text(cleaned, "ask")
+            finally:
+                self._busy = False
+                listening = self._listener is not None
+                self.emit({"type": "state", "state": "listen" if listening else "idle"})
+                pending = self._pending
+                self._pending = None
+                if pending:
+                    self._on_final(pending)
+
+        threading.Thread(target=work, daemon=True).start()
+
+
+CFG = load_config()
+KEYS = load_all_keys()
+
+app = FastAPI(title="Nod Web")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/api/health")
+def health():
+    return {"ok": True, "stt": "assemblyai", "audio": "browser-mic"}
+
+
+@app.get("/api/config")
+def api_config():
+    return JSONResponse(public_config(CFG))
+
+
+@app.websocket("/ws")
+async def ws_endpoint(ws: WebSocket):
+    await ws.accept()
+    loop = asyncio.get_running_loop()
+    out: asyncio.Queue[str] = asyncio.Queue()
+
+    def emit(obj: dict) -> None:
+        asyncio.run_coroutine_threadsafe(out.put(json.dumps(obj, ensure_ascii=False)), loop)
+
+    session = Session(emit, json.loads(json.dumps(CFG)), dict(KEYS))
+    session.start()
+
+    async def sender():
+        while True:
+            msg = await out.get()
+            await ws.send_text(msg)
+
+    send_task = asyncio.create_task(sender())
+    try:
+        while True:
+            message = await ws.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+            data = message.get("bytes")
+            text = message.get("text")
+            if data:
+                session.push_pcm(data)
+            elif text:
+                try:
+                    session.dispatch(json.loads(text))
+                except json.JSONDecodeError:
+                    continue
+    except WebSocketDisconnect:
+        pass
+    finally:
+        send_task.cancel()
+        session.close()
+
+
+if WEB_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=str(WEB_DIST / "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    def spa(full_path: str):
+        dest = WEB_DIST / full_path
+        if full_path and dest.exists() and dest.is_file():
+            return FileResponse(dest)
+        return FileResponse(WEB_DIST / "index.html")

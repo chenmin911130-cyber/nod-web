@@ -1,0 +1,55 @@
+{
+  "profile": {
+    "name": "",
+    "target_role": "Software Engineer（软件工程师）",
+    "company": "",
+    "resume_summary": "",
+    "jd": "",
+    "style": "简洁结构化：先给结论，再 2-3 点展开；行为题用 STAR 结构；语言口语化、可直接照着念；中文提问用中文答，英文提问用英文答。"
+  },
+  "llm": {
+    "model": "deepseek-v4-flash",
+    "max_tokens": 300,
+    "temperature": 0.5,
+    "provider": "deepseek"
+  },
+  "stt": {
+    "model": "assemblyai",
+    "language": "en",
+    "ignore_mic_in_auto": false,
+    "vocabulary": [
+      "OOP",
+      "React",
+      "TypeScript",
+      "SQL",
+      "Kubernetes",
+      "AssemblyAI"
+    ],
+    "debug": false
+  },
+  "audio": {
+    "device": "auto",
+    "samplerate": 16000,
+    "source": "system"
+  },
+  "hotkey": {
+    "manual": "f2",
+    "continuous": "f3",
+    "clear": "f4"
+  },
+  "ui": {
+    "opacity": 81
+  },
+  "models": [
+    {
+      "label": "DeepSeek V4 Flash · 极速推荐",
+      "provider": "deepseek",
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "label": "DeepSeek V4 Pro · 更聪明",
+      "provider": "deepseek",
+      "model": "deepseek-v4-pro"
+    }
+  ]
+}
