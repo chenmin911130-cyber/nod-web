@@ -15,7 +15,7 @@
   },
   "stt": {
     "model": "assemblyai",
-    "language": "en",
+    "language": null,
     "ignore_mic_in_auto": false,
     "vocabulary": [
       "OOP",

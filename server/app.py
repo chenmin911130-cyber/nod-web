@@ -223,6 +223,18 @@ def clean_transcript(text: str, recent_finals=None, last_answer=None) -> tuple[s
     return t, ""
 
 
+def detect_question_lang(text: str) -> str:
+    """Guess whether the interviewer spoke Chinese or English."""
+    t = text or ""
+    cjk = len(re.findall(r"[\u4e00-\u9fff]", t))
+    latin = len(re.findall(r"[A-Za-z]", t))
+    if cjk >= 2 and cjk >= max(3, latin * 0.4):
+        return "zh"
+    if cjk > latin:
+        return "zh"
+    return "en"
+
+
 def guard_question(text: str, recent_questions, last_answer=None) -> str:
     t = (text or "").strip()
     if not t:
@@ -386,10 +398,22 @@ class Pipeline:
             "has_stt": bool(self.assemblyai_key()),
         }
 
-    def _lang_rule(self) -> str:
+    def _answer_lang(self, question: str) -> str:
+        locked = (self.cfg.get("stt") or {}).get("language")
+        if locked in ("zh", "en"):
+            return locked
+        return detect_question_lang(question)
+
+    def _lang_rule(self, question: str) -> str:
+        lang = self._answer_lang(question)
+        if lang == "zh":
+            return (
+                "LANGUAGE (hard rule): The interviewer asked in Chinese. "
+                "Answer in Chinese only. Do not switch to English except for proper nouns and tech terms."
+            )
         return (
-            "\n5. Match the interviewer's language: Chinese question → Chinese answer; "
-            "English question → English answer."
+            "LANGUAGE (hard rule): The interviewer asked in English. "
+            "Answer in English only. Do not use Chinese."
         )
 
     def _build_messages(self, question: str, mode: str = "auto") -> list[dict]:
@@ -432,16 +456,23 @@ class Pipeline:
             + (f" / Company: {p.get('company')}" if p.get("company") else "")
             + (f"\nJob description (JD): {p.get('jd')}" if p.get("jd") else "")
             + "\n\nYou answer ONLY the user's confirmed question.\n"
-            f"\nAnswer rules:\n1. Output a complete answer the candidate can read aloud verbatim.\n"
+            + self._lang_rule(question)
+            + "\n\nAnswer rules:\n1. Output a complete answer the candidate can read aloud verbatim.\n"
             f"2. Style: {p.get('style') or ''}\n"
             "3. Speed mode: 60-100 words, 3-5 sentences, lead with the conclusion.\n"
             "4. Technical questions: accurate answer + brief reason; behavioral: STAR.\n"
-            + self._lang_rule()
+            "5. Follow the LANGUAGE hard rule above even if the resume or style notes are in another language.\n"
             + ctx
+        )
+        lang = self._answer_lang(question)
+        lang_line = (
+            "Answer language: Chinese only."
+            if lang == "zh"
+            else "Answer language: English only."
         )
         return [
             {"role": "system", "content": sys_msg},
-            {"role": "user", "content": f"Interviewer question: {question}\n\nAnswer:"},
+            {"role": "user", "content": f"Interviewer question: {question}\n\n{lang_line}\n\nAnswer:"},
         ]
 
     def process_text(self, question: str, mode: str = "ask") -> None:

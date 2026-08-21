@@ -161,7 +161,13 @@ export default function TitleBar(props: Props) {
               key={l.value}
               className={`lang-pill${lang === l.value ? ' active' : ''}`}
               onClick={() => props.onLang(l.value)}
-              title="Speech recognition language"
+              title={
+                l.value === 'auto'
+                  ? 'Auto: answer in the same language as the question'
+                  : l.value === 'zh'
+                    ? 'Force Chinese answers'
+                    : 'Force English answers'
+              }
             >
               {l.label}
             </button>
