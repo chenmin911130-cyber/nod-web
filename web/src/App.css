@@ -1914,6 +1914,18 @@ html.nod-web .titlebar {
   color: #9fb3d0;
 }
 
+.rail-lang {
+  padding: 0 8px;
+}
+
+.rail-lang-select {
+  width: 100%;
+  max-width: 112px;
+  height: 28px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
 .rail-icon-btn {
   -webkit-app-region: no-drag;
   display: flex;
@@ -2165,9 +2177,71 @@ html.nod-web .titlebar {
   grid-template-columns: 1fr;
 }
 
-.tr-head-row {
-  flex-shrink: 0;
-  padding-bottom: 4px;
+.tr-to-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 0;
+  overflow: visible;
+}
+
+.tr-to-head > span {
+  color: #7f92b2;
+  line-height: 32px;
+}
+
+.tr-to-select {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  height: 32px;
+  min-height: 32px;
+  width: 168px;
+  min-width: 168px;
+  max-width: 168px;
+  flex: 0 0 168px;
+  margin: 0;
+  padding: 0 28px 0 12px;
+  border: 1px solid rgba(157, 184, 227, 0.22);
+  border-radius: 10px;
+  background-color: rgba(115, 138, 183, 0.12);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path fill='%239fb3d0' d='M1.2 1.4L6 6.2l4.8-4.8' stroke='%239fb3d0' stroke-width='1.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 12px 8px;
+  color: #e8eef8;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 30px;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+  outline: none;
+}
+
+.tr-to-select:hover,
+.tr-to-select:focus {
+  border-color: rgba(93, 211, 245, 0.45);
+}
+
+.tr-to-select option {
+  background: #10182b;
+  color: #d5dfef;
+}
+
+.tr-lang-chip {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(34, 211, 238, 0.28);
+  color: #9fb3d0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  vertical-align: middle;
 }
 
 .tr-body {
@@ -2186,11 +2260,10 @@ html.nod-web .titlebar {
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
 }
 
 .tr-pair:hover {
-  background: rgba(34, 211, 238, 0.06);
+  background: rgba(34, 211, 238, 0.04);
 }
 
 .tr-pair.live {
@@ -2201,15 +2274,65 @@ html.nod-web .titlebar {
 .tr-cell {
   min-width: 0;
   display: flex;
+  align-items: flex-start;
   gap: 10px;
   font-size: 15px;
   line-height: 1.5;
   color: #e8eef8;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .tr-cell.pending {
   color: #7f92b2;
   font-style: italic;
+}
+
+.tr-cell.failed {
+  color: #f87171;
+}
+
+.tr-copy-hit {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tr-copy-hit:disabled {
+  cursor: default;
+}
+
+.tr-retry {
+  flex: 0 0 auto;
+  margin-left: auto;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.1);
+  color: #fecaca;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.kicker-hint {
+  color: #6b7c96;
+  font-weight: 500;
 }
 
 .tr-cols.single {

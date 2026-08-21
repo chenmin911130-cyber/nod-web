@@ -129,7 +129,7 @@ def load_config() -> dict[str, Any]:
         "llm": {"model": "deepseek-v4-flash", "max_tokens": 400, "temperature": 0.5, "provider": "deepseek"},
         "stt": {"model": STT_CLOUD, "language": None, "vocabulary": []},
         "audio": {"source": "mic"},
-        "ui": {"opacity": 88},
+        "ui": {"opacity": 88, "translate_to": "zh"},
         "models": [],
     }
     if DEFAULT_CONFIG_PATH.exists():
@@ -156,7 +156,10 @@ def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
         },
         "stt": {"language": cfg.get("stt", {}).get("language")},
         "audio": {"source": "mic"},
-        "ui": {"opacity": cfg.get("ui", {}).get("opacity", 88)},
+        "ui": {
+            "opacity": cfg.get("ui", {}).get("opacity", 88),
+            "translate_to": cfg.get("ui", {}).get("translate_to") or "zh",
+        },
         "models": cfg.get("models") or [],
     }
 
@@ -370,6 +373,7 @@ class Pipeline:
         self._qa_history: list[dict] = []
         self._last_answer = ""
         self._cancel = threading.Event()
+        self._gen_seq = 0
 
     def _new_qid(self) -> str:
         return f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
@@ -416,7 +420,22 @@ class Pipeline:
             "Answer in English only. Do not use Chinese."
         )
 
+    def _strip_nod_tag(self, question: str) -> str:
+        text = question or ""
+        if text.startswith("[NOD_TRANSLATE") or text.startswith("[NOD_SUMMARY"):
+            nl = text.find("\n")
+            if nl >= 0:
+                return text[nl + 1:].strip()
+        return text
+
+    def _is_internal(self, question: str, mode: str) -> bool:
+        if mode == "translate":
+            return True
+        t = (question or "").lstrip()
+        return t.startswith(("[NOD_TRANSLATE", "Translate to "))
+
     def _build_messages(self, question: str, mode: str = "auto") -> list[dict]:
+        question = self._strip_nod_tag(question)
         if mode == "summary" or question.startswith("Summarize the following meeting transcript"):
             return [
                 {
@@ -437,7 +456,7 @@ class Pipeline:
                     "content": (
                         "You are a translator for live captions.\n"
                         "Output ONLY the translation — no quotes, labels, notes, or preamble.\n"
-                        "Preserve names, numbers, and meaning."
+                        "Preserve names, numbers, and meaning. If the text is already in the target language, return it unchanged."
                     ),
                 },
                 {"role": "user", "content": question},
@@ -481,17 +500,27 @@ class Pipeline:
             self.emit({"type": "status", "text": "Please type a question first"})
             self.emit({"type": "done", "id": "", "stt": 0, "llm": 0, "ok": False})
             return
+        self._cancel.clear()
+        self._gen_seq += 1
+        seq = self._gen_seq
         qid = self._new_qid()
+        internal = self._is_internal(t, mode)
         self.emit({"type": "status", "text": STATUS_GENERATE})
-        self.emit({"type": "question", "id": qid, "text": t})
+        if not internal:
+            self.emit({"type": "question", "id": qid, "text": t})
         t0 = time.time()
         llm = self.cfg.get("llm") or {}
+        max_tokens = llm.get("max_tokens", 600)
+        if mode == "summary":
+            max_tokens = max(max_tokens, 1200)
+        elif mode == "translate":
+            max_tokens = max(max_tokens, 800)
         answer = ""
         try:
             kwargs: dict[str, Any] = dict(
                 model=self._model,
                 messages=self._build_messages(t, mode),
-                max_tokens=max(llm.get("max_tokens", 600), 1200) if mode == "summary" else llm.get("max_tokens", 600),
+                max_tokens=max_tokens,
                 stream=True,
             )
             if not str(self._model).startswith(("o1", "o3")):
@@ -500,15 +529,19 @@ class Pipeline:
                 kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
             stream = self.client.chat.completions.create(**kwargs)
             for ch in stream:
-                if self._cancel.is_set():
-                    break
+                if seq != self._gen_seq or self._cancel.is_set():
+                    return
                 delta = ch.choices[0].delta
                 if delta.content:
                     answer += delta.content
                     self.emit({"type": "chunk", "id": qid, "text": delta.content})
         except Exception as e:
+            if seq != self._gen_seq:
+                return
             self.emit({"type": "error", "text": f"Generation failed:{e}"})
             self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
+            return
+        if seq != self._gen_seq or self._cancel.is_set():
             return
         if not answer:
             self.emit({"type": "error", "text": "Generation failed: empty response"})
@@ -516,7 +549,7 @@ class Pipeline:
             return
         self._last_answer = answer[-400:]
         if mode not in ("translate", "summary"):
-            self._qa_history.append({"qid": qid, "q": t, "a": answer})
+            self._qa_history.append({"qid": qid, "q": self._strip_nod_tag(t), "a": answer})
             self._qa_history = self._qa_history[-6:]
         self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": True})
 
@@ -700,10 +733,13 @@ class Session:
         elif mtype == "save_keys":
             self.save_keys(msg.get("deepseek_key", ""), msg.get("assemblyai_key", ""))
         elif mtype == "clear":
-            self.pipeline._cancel.set()
+            self.cancel_generate()
             self._pending = None
-            self._pending_asks = []
             self.emit({"type": "status", "text": "Cleared"})
+        elif mtype == "cancel_generate":
+            self.cancel_generate()
+        elif mtype == "set_translate_to":
+            self.set_translate_to(msg.get("lang") or "zh")
         elif mtype == "ping":
             self.emit({"type": "pong"})
         else:
@@ -722,6 +758,19 @@ class Session:
         st = self.pipeline.key_status()
         self.emit({"type": "keys_status", "has_llm": st["has_llm"], "has_stt": st["has_stt"]})
         self.emit({"type": "status", "text": "API keys saved — ready to go"})
+
+    def cancel_generate(self) -> None:
+        """Cancel the in-flight LLM stream without stopping STT."""
+        self.pipeline._gen_seq += 1
+        self.pipeline._cancel.set()
+        self._pending_asks = []
+        self._busy = False
+
+    def set_translate_to(self, lang: str) -> None:
+        allowed = ("zh", "ja", "ko", "en", "it", "es", "fr", "de", "pt")
+        if lang not in allowed:
+            lang = "zh"
+        self.cfg.setdefault("ui", {})["translate_to"] = lang
 
     def set_workspace(self, mode: str) -> None:
         if mode not in ("interview", "meeting", "translate"):
@@ -866,9 +915,13 @@ class Session:
             text = f"{extra}\n\n{text}".strip() if text else extra
         if not text:
             return
-        if mode == "ask" and text.startswith("Summarize the following meeting transcript"):
+        body = text
+        if body.startswith("[NOD_TRANSLATE") or body.startswith("[NOD_SUMMARY"):
+            nl = body.find("\n")
+            body = body[nl + 1:].strip() if nl >= 0 else body
+        if mode == "ask" and body.startswith("Summarize the following meeting transcript"):
             mode = "summary"
-        if mode == "ask" and text.startswith("Translate to "):
+        if mode == "ask" and body.startswith("Translate to "):
             mode = "translate"
         if self._busy:
             if mode in ("translate", "summary"):

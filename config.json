@@ -38,7 +38,8 @@
     "clear": "f4"
   },
   "ui": {
-    "opacity": 81
+    "opacity": 81,
+    "translate_to": "zh"
   },
   "models": [
     {

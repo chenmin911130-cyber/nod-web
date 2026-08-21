@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import type { PairLang, TranslatePair } from '../types'
+import type { AudioSource, PairLang, TranslatePair } from '../types'
+import { TRANSLATE_LANGS } from '../types'
+import { isWeb } from '../platform'
 import type { AttachPayload, LocalAttach } from '../attach'
 import { toPayload } from '../attach'
 import PromptAttach from './PromptAttach'
@@ -8,16 +10,18 @@ import EmptyState from './EmptyState'
 interface Props {
   pairs: TranslatePair[]
   partial: string
-  busy: boolean
+  bindId: string
   bilingual: boolean
-  from: PairLang
   to: PairLang
+  source: AudioSource
   onTranslate: (text: string, files?: AttachPayload[]) => void
-  onCopyPair: (pair: TranslatePair) => void
+  onTranslateTo: (lang: PairLang) => void
+  onCopyField: (pair: TranslatePair, field: 'original' | 'translation') => void
+  onRetry: (id: string) => void
 }
 
 function langTag(code: PairLang): string {
-  return code === 'zh' ? 'CH' : 'EN'
+  return TRANSLATE_LANGS.find((l) => l.id === code)?.tag ?? code.toUpperCase()
 }
 
 function Sparkle() {
@@ -29,7 +33,18 @@ function Sparkle() {
   )
 }
 
-export default function TranslatePane({ pairs, partial, busy, bilingual, from, to, onTranslate, onCopyPair }: Props) {
+export default function TranslatePane({
+  pairs,
+  partial,
+  bindId,
+  bilingual,
+  to,
+  source,
+  onTranslate,
+  onTranslateTo,
+  onCopyField,
+  onRetry,
+}: Props) {
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<LocalAttach[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -40,57 +55,103 @@ export default function TranslatePane({ pairs, partial, busy, bilingual, from, t
 
   const submit = () => {
     const t = input.trim()
-    if (busy || (!t && files.length === 0)) return
+    if (!t && files.length === 0) return
     onTranslate(t, files.length ? toPayload(files) : undefined)
     setInput('')
     setFiles([])
   }
 
   const empty = pairs.length === 0 && !partial
-  const last = pairs[pairs.length - 1]
+  const queued = pairs.filter((p) => !p.translation && !p.failed && p.id !== bindId).length
+  const sourceHint = isWeb
+    ? 'Browser mic'
+    : source === 'both'
+      ? 'System + mic'
+      : 'System audio'
 
   return (
     <div className="main translate-main">
-      <div className="kicker">Captions · {langTag(from)} → {langTag(to)}</div>
+      <div className="kicker">
+        Captions · Auto → {langTag(to)}
+        {queued > 0 ? ` · ${queued} queued` : ''}
+        <span className="kicker-hint"> · F3 {sourceHint} · F2 your mic</span>
+      </div>
       <div className={`tr-sheet${bilingual ? '' : ' single'}`}>
         <div className="tr-head-row">
-          {bilingual && <div className="tr-col-head">{langTag(from)}</div>}
-          <div className="tr-col-head">{langTag(to)}</div>
+          {bilingual && <div className="tr-col-head">Auto</div>}
+          <label className="tr-col-head tr-to-head">
+            <span>To</span>
+            <select
+              className="tr-to-select"
+              value={to}
+              onChange={(e) => onTranslateTo(e.target.value as PairLang)}
+              title="Language of the translated text"
+            >
+              {TRANSLATE_LANGS.map((l) => (
+                <option key={l.id} value={l.id}>{l.tag} · {l.name}</option>
+              ))}
+            </select>
+          </label>
         </div>
         <div className="tr-body">
           {empty ? (
             <EmptyState
               compact
               title="No captions yet"
-              sub="Start listening, or type a line to translate"
+              sub={isWeb
+                ? 'F3 listens on the browser microphone. F2 records a clip. Or type a line below.'
+                : 'F3 listens to system audio. F2 records your microphone. Or type a line below.'}
               shortcuts={[
-                { key: 'F3', label: 'Listen' },
-                { key: 'F2', label: 'Record' },
+                { key: 'F3', label: isWeb ? 'Listen' : 'System audio' },
+                { key: 'F2', label: isWeb ? 'Record' : 'Your mic' },
               ]}
             />
           ) : (
             <>
               {pairs.map((p) => {
-                const pending = !p.translation && busy && last?.id === p.id
+                const pending = !p.translation
+                const active = pending && !p.failed && p.id === bindId
+                let status = p.translation
+                if (!status) {
+                  if (p.failed) status = 'Failed'
+                  else if (active) status = 'Translating…'
+                  else status = 'Waiting…'
+                }
                 return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className="tr-pair"
-                    onClick={() => onCopyPair(p)}
-                    title="Copy this translation"
-                  >
+                  <div key={p.id} className="tr-pair">
                     {bilingual && (
-                      <div className="tr-cell">
+                      <button
+                        type="button"
+                        className="tr-cell"
+                        onClick={() => onCopyField(p, 'original')}
+                        title="Copy original"
+                      >
                         <span className="meet-ts">{p.ts}</span>
                         <span>{p.original}</span>
-                      </div>
+                      </button>
                     )}
-                    <div className={`tr-cell${p.translation ? '' : ' pending'}`}>
+                    <div className={`tr-cell${p.translation ? '' : ' pending'}${p.failed ? ' failed' : ''}`}>
                       {!bilingual && <span className="meet-ts">{p.ts}</span>}
-                      <span>{p.translation || (pending ? 'Translating…' : 'Waiting…')}</span>
+                      <button
+                        type="button"
+                        className="tr-copy-hit"
+                        onClick={() => onCopyField(p, 'translation')}
+                        title={p.translation ? 'Copy translation' : undefined}
+                        disabled={!p.translation}
+                      >
+                        <span>{status}</span>
+                        {p.passthrough && p.translation ? <span className="tr-lang-chip">Same lang</span> : null}
+                        {p.to && p.to !== to && p.translation ? (
+                          <span className="tr-lang-chip">{langTag(p.to)}</span>
+                        ) : null}
+                      </button>
+                      {p.failed ? (
+                        <button type="button" className="tr-retry" onClick={() => onRetry(p.id)}>
+                          Retry
+                        </button>
+                      ) : null}
                     </div>
-                  </button>
+                  </div>
                 )
               })}
               {partial && (
@@ -113,7 +174,7 @@ export default function TranslatePane({ pairs, partial, busy, bilingual, from, t
         </div>
       </div>
 
-      <PromptAttach files={files} onChange={setFiles} disabled={busy}>
+      <PromptAttach files={files} onChange={setFiles}>
         <input
           className="prompt-input"
           placeholder="Type to translate..."
@@ -123,7 +184,7 @@ export default function TranslatePane({ pairs, partial, busy, bilingual, from, t
             if (e.key === 'Enter') submit()
           }}
         />
-        <button className="gen-btn" onClick={submit} disabled={busy || (!input.trim() && files.length === 0)}>
+        <button className="gen-btn" onClick={submit} disabled={!input.trim() && files.length === 0}>
           <Sparkle />
           Translate
         </button>

@@ -4,7 +4,19 @@ export type Lang = 'auto' | 'zh' | 'en'
 export type ViewMode = 'workspace' | 'focus' | 'fullscreen'
 export type AudioSource = 'system' | 'both' | 'mic'
 export type WorkspaceMode = 'interview' | 'meeting' | 'translate'
-export type PairLang = 'en' | 'zh'
+export type PairLang = 'zh' | 'ja' | 'ko' | 'en' | 'it' | 'es' | 'fr' | 'de' | 'pt'
+
+export const TRANSLATE_LANGS: Array<{ id: PairLang; tag: string; name: string }> = [
+  { id: 'zh', tag: 'CH', name: 'Chinese' },
+  { id: 'ja', tag: 'JA', name: 'Japanese' },
+  { id: 'ko', tag: 'KO', name: 'Korean' },
+  { id: 'en', tag: 'EN', name: 'English' },
+  { id: 'it', tag: 'IT', name: 'Italian' },
+  { id: 'es', tag: 'ES', name: 'Spanish' },
+  { id: 'fr', tag: 'FR', name: 'French' },
+  { id: 'de', tag: 'DE', name: 'German' },
+  { id: 'pt', tag: 'PT', name: 'Portuguese' },
+]
 
 export interface ModelDef {
   label: string
@@ -16,7 +28,7 @@ export interface AppConfig {
   llm?: { provider?: string; model?: string; max_tokens?: number; temperature?: number }
   stt?: { model?: string; language?: string | null }
   audio?: { source?: string }
-  ui?: { opacity?: number }
+  ui?: { opacity?: number; translate_to?: PairLang }
   models?: ModelDef[]
 }
 
@@ -32,6 +44,9 @@ export interface TranslatePair {
   ts: string
   original: string
   translation: string
+  to?: PairLang
+  failed?: boolean
+  passthrough?: boolean
 }
 
 export interface AppState {
@@ -96,6 +111,8 @@ export type EngineMsg =
   | { type: 'set_mic_muted'; muted: boolean }
   | { type: 'save_keys'; deepseek_key: string; assemblyai_key: string }
   | { type: 'clear' }
+  | { type: 'cancel_generate' }
+  | { type: 'set_translate_to'; lang: PairLang }
   | { type: 'ping' }
 
 export interface Api {

@@ -1,17 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import type { PairLang, RunState, WorkspaceMode } from '../types'
-
-function langTag(code: PairLang): string {
-  return code === 'zh' ? 'CH' : 'EN'
-}
+import type { RunState, WorkspaceMode } from '../types'
 
 interface Props {
   mode: WorkspaceMode
   run: RunState
   autoOn: boolean
   bilingual: boolean
-  translateFrom: PairLang
-  translateTo: PairLang
   onPrimary: () => void
   onRecord: () => void
   onCopy: () => void
@@ -19,7 +13,6 @@ interface Props {
   onPause: () => void
   onMark: () => void
   onExport: () => void
-  onFlipLang: () => void
   onBilingual: () => void
   meetingPaused?: boolean
 }
@@ -94,17 +87,6 @@ function PdfIcon() {
   )
 }
 
-function SwapIcon() {
-  return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 7h10" />
-      <path d="M11 4l3 3-3 3" />
-      <path d="M16 13H6" />
-      <path d="M9 10l-3 3 3 3" />
-    </svg>
-  )
-}
-
 function RecIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -143,7 +125,7 @@ function primaryLabel(mode: WorkspaceMode, listening: boolean, paused = false): 
 }
 
 export default function SideRail(props: Props) {
-  const { mode, run, autoOn, bilingual, translateFrom, translateTo, meetingPaused } = props
+  const { mode, run, autoOn, bilingual, meetingPaused } = props
   const recording = run === 'record'
   const listening = run === 'listen' || recording
   const primaryOn = mode === 'interview' ? autoOn || run === 'listen' : listening
@@ -182,7 +164,9 @@ export default function SideRail(props: Props) {
         title={
           mode === 'interview'
             ? (primaryOn ? 'Stop Auto Listen (F3)' : 'Start Auto Listen (F3)')
-            : primaryLabel(mode, listening, meetingPaused)
+            : mode === 'translate'
+              ? (listening ? 'Stop listening to system audio (F3)' : 'Listen to system audio (F3)')
+              : primaryLabel(mode, listening, meetingPaused)
         }
       >
         <span className="rail-primary-ring">
@@ -233,14 +217,6 @@ export default function SideRail(props: Props) {
 
       {mode === 'translate' && (
         <>
-          <button
-            className="rail-icon-btn rail-flip"
-            onClick={props.onFlipLang}
-            title="Flip translation direction. Recognition language stays in the title bar."
-          >
-            <SwapIcon />
-            <span>{langTag(translateFrom)} ⇄ {langTag(translateTo)}</span>
-          </button>
           <div className="rail-sec">
             <span className="rail-sec-label">Bilingual</span>
             <button
@@ -255,7 +231,7 @@ export default function SideRail(props: Props) {
             className={`rail-icon-btn${recording ? ' live' : ''}`}
             onClick={props.onRecord}
             disabled={autoOn || run === 'listen'}
-            title={recording ? 'Stop recording (F2)' : 'Record a clip to translate (F2)'}
+            title={recording ? 'Stop recording (F2)' : 'Record your microphone (F2)'}
           >
             <RecIcon />
             <span>{recording ? 'Recording' : 'Record'}</span>

@@ -155,24 +155,26 @@ export default function TitleBar(props: Props) {
       </div>
 
       <div className="titlebar-right no-drag">
-        <div className="lang-pills" role="group" aria-label="Speech recognition language">
-          {LANGS.map((l) => (
-            <button
-              key={l.value}
-              className={`lang-pill${lang === l.value ? ' active' : ''}`}
-              onClick={() => props.onLang(l.value)}
-              title={
-                l.value === 'auto'
-                  ? 'Auto: answer in the same language as the question'
-                  : l.value === 'zh'
-                    ? 'Force Chinese answers'
-                    : 'Force English answers'
-              }
-            >
-              {l.label}
-            </button>
-          ))}
-        </div>
+        {mode !== 'translate' && (
+          <div className="lang-pills" role="group" aria-label="Speech recognition language">
+            {LANGS.map((l) => (
+              <button
+                key={l.value}
+                className={`lang-pill${lang === l.value ? ' active' : ''}`}
+                onClick={() => props.onLang(l.value)}
+                title={
+                  l.value === 'auto'
+                    ? 'Auto: answer in the same language as the question'
+                    : l.value === 'zh'
+                      ? 'Force Chinese answers'
+                      : 'Force English answers'
+                }
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="tb-icons">
           {isWeb ? (
