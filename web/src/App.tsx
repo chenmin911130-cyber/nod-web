@@ -216,28 +216,31 @@ function reducer(state: AppState, action: Action): AppState {
         case 'chunk': {
           let meetingSummary = state.meetingSummary
           let translatePairs = state.translatePairs
+          let translateAskId = state.translateAskId
           if (ev.id && ev.id === state.summaryAskId) {
             meetingSummary += ev.text
           }
+          if (state.translateBindId && ev.id) {
+            translateAskId = ev.id
+          }
           const translateChunk =
-            state.workspaceMode === 'translate' ||
-            (ev.id && ev.id === state.translateAskId) ||
-            Boolean(state.translateBindId)
+            Boolean(state.translateBindId) ||
+            (Boolean(translateAskId) && ev.id === translateAskId)
           if (translateChunk && state.translatePairs.length) {
             translatePairs = applyTranslateChunk(translatePairs, state.translateBindId, ev.text ?? '')
           }
           if (state.workspaceMode !== 'interview' || state.turns.length === 0) {
-            return { ...state, meetingSummary, translatePairs }
+            return { ...state, meetingSummary, translatePairs, translateAskId }
           }
           const turns = state.turns.slice()
           const last = turns[turns.length - 1]
-          if (ev.id && last.id !== ev.id && ev.id !== state.translateAskId && ev.id !== state.summaryAskId) {
-            return { ...state, meetingSummary, translatePairs }
+          if (ev.id && last.id !== ev.id && ev.id !== translateAskId && ev.id !== state.summaryAskId) {
+            return { ...state, meetingSummary, translatePairs, translateAskId }
           }
           if (!ev.id || last.id === ev.id) {
             turns[turns.length - 1] = { ...last, a: last.a + ev.text }
           }
-          return { ...state, turns, meetingSummary, translatePairs }
+          return { ...state, turns, meetingSummary, translatePairs, translateAskId }
         }
         case 'done':
           return { ...state, busy: false, translateAskId: '', summaryAskId: '' }
@@ -407,11 +410,22 @@ export default function App() {
 
   useEffect(() => {
     const api = window.api
+    const syncWorkspace = () => {
+      const s = stateRef.current
+      api.send({ type: 'set_workspace', mode: s.workspaceMode })
+      if (s.workspaceMode === 'translate') {
+        api.send({ type: 'set_translate_to', lang: s.translateTo })
+      }
+    }
     const offEvent = api.onEvent((e) => {
+      if (e.type === 'ready') syncWorkspace()
       dispatch({ type: 'engine', ev: e })
       if (e.type === 'question' && stateRef.current.workspaceMode === 'translate') {
-        const last = stateRef.current.translatePairs[stateRef.current.translatePairs.length - 1]
         const text = e.text ?? ''
+        if (!isTranslatePrompt(text)) {
+          api.send({ type: 'cancel_generate' })
+        }
+        const last = stateRef.current.translatePairs[stateRef.current.translatePairs.length - 1]
         if (last && !last.translation && normOriginal(last.original) === normOriginal(text)) {
           askedTranslate.current.delete(last.id)
           queueMicrotask(() => pumpTranslateRef.current())
@@ -426,7 +440,9 @@ export default function App() {
       queueMicrotask(() => {
         if (id) {
           const row = stateRef.current.translatePairs.find((p) => p.id === id)
-          if (row && !(row.translation || '').trim()) {
+          if (row && (row.translation || '').trim()) {
+            dispatch({ type: 'release_translate' })
+          } else if (row && !(row.translation || '').trim()) {
             const n = (translateRetries.current.get(id) || 0) + 1
             translateRetries.current.set(id, n)
             if (n <= 2) askedTranslate.current.delete(id)
@@ -619,6 +635,7 @@ export default function App() {
       dispatch({ type: 'stealth', on: false })
     }
     if (s.view !== 'workspace') dispatch({ type: 'view', view: 'workspace' })
+    if (mode === 'translate') window.api.send({ type: 'cancel_generate' })
     window.api.send({ type: 'set_workspace', mode })
     dispatch({ type: 'workspace', mode })
     if (mode === 'translate' && s.lang !== 'auto') {
@@ -651,6 +668,8 @@ export default function App() {
       return
     }
     if (s.run === 'record') return
+    window.api.send({ type: 'set_workspace', mode: 'translate' })
+    window.api.send({ type: 'set_translate_to', lang: s.translateTo })
     window.api.send({ type: 'toggle_listen' })
   }, [])
 

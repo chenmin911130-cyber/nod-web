@@ -775,10 +775,13 @@ class Session:
     def set_workspace(self, mode: str) -> None:
         if mode not in ("interview", "meeting", "translate"):
             mode = "interview"
+        prev = self._workspace
         self._workspace = mode
         self._pending = None
         self._pending_asks = []
         self._pending_wait = (None, 0.0)
+        if mode == "translate" and prev != "translate":
+            self.cancel_generate()
 
     def set_llm(self, provider: str, model: str) -> None:
         try:
@@ -957,7 +960,14 @@ class Session:
                 return
         self._recent_finals.append((cleaned, now))
         self._recent_finals = self._recent_finals[-8:]
-        if self._workspace in ("meeting", "translate"):
+        if self._workspace == "translate":
+            self.cancel_generate()
+            self._pending = None
+            self._pending_wait = (None, 0.0)
+            qid = self.pipeline._new_qid()
+            self.emit({"type": "question", "id": qid, "text": cleaned})
+            return
+        if self._workspace == "meeting":
             qid = self.pipeline._new_qid()
             self.emit({"type": "question", "id": qid, "text": cleaned})
             return
