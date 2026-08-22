@@ -20,13 +20,10 @@ body,
 #root {
   margin: 0;
   padding: 0;
-  height: 100%;
-  background: transparent;
-  overflow: hidden;
+  min-height: 100%;
+  background: #07101f;
   font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif;
   color: var(--text);
-  -webkit-user-select: none;
-  user-select: none;
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
@@ -34,9 +31,11 @@ body,
 html.nod-web,
 html.nod-web body,
 html.nod-web #root {
-  background: #07101f;
   height: 100%;
-  min-height: 100dvh;
+  background: transparent;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 html.nod-web #root {

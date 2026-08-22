@@ -7,6 +7,7 @@ function wsUrl(): string {
 }
 
 export function installWebApi(): void {
+  if (window.api) return
   document.documentElement.classList.add('nod-web')
   const eventListeners = new Set<(e: EngineEvent) => void>()
   const shortcutListeners = new Set<(k: 'f2' | 'f3' | 'f4' | 'f8' | 'f9') => void>()
