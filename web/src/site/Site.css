@@ -1,3 +1,31 @@
+.funnel {
+  display: flex;
+  gap: 0.7rem;
+  padding: 0;
+  margin: 0 0 1.1rem;
+  list-style: none;
+  flex-wrap: wrap;
+}
+
+.funnel a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #7d98b2;
+  text-decoration: none;
+  font: 500 11px 'DM Mono', monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.funnel .on a {
+  color: #63e6bc;
+}
+
+.funnel b {
+  font-weight: 500;
+}
+
 .nod-site-page {
   min-height: 100svh;
   background:

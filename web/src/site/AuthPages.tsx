@@ -2,6 +2,25 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { api, setToken } from '../auth'
 import './Site.css'
 
+function Funnel({ current }: { current: 'product' | 'account' | 'workspace' }) {
+  const steps = [
+    { id: 'product', n: '01', label: 'Product', href: '/' },
+    { id: 'account', n: '02', label: 'Register', href: '/signup' },
+    { id: 'workspace', n: '03', label: 'Workspace', href: '/app' },
+  ] as const
+  return (
+    <ol className="funnel">
+      {steps.map((s) => (
+        <li key={s.id} className={s.id === current ? 'on' : ''}>
+          <a href={s.href}>
+            <b>{s.n}</b> {s.label}
+          </a>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
 function Header({ extra }: { extra?: ReactNode }) {
   return (
     <header className="site-header">
@@ -45,8 +64,9 @@ export function LoginPage() {
       <div className="site-wrap">
         <div className="site-card">
           <div className="eyebrow">ACCOUNT</div>
+          <Funnel current="account" />
           <h1>Sign in to Nod</h1>
-          <p>Your trial quota, history, and workspace stay on this account.</p>
+          <p>After you sign in, Nod opens the workspace — the live Interview, Meeting, and Translate window.</p>
           <form className="site-form" onSubmit={submit}>
             <label>
               Email
@@ -58,7 +78,7 @@ export function LoginPage() {
             </label>
             {err && <div className="site-err">{err}</div>}
             <button className="button button-primary" type="submit" disabled={busy}>
-              {busy ? 'Signing in…' : 'Sign in'}
+              {busy ? 'Opening workspace…' : 'Sign in and open workspace'}
             </button>
           </form>
           <div className="site-links">
@@ -101,9 +121,10 @@ export function SignupPage() {
       <Header extra={<a className="button button-ghost" href="/login">Sign in</a>} />
       <div className="site-wrap">
         <div className="site-card">
-          <div className="eyebrow">FREE TRIAL</div>
-          <h1>Create your Nod account</h1>
-          <p>20 minutes of live transcription and 100,000 generation tokens to try Interview, Meeting, and Translate.</p>
+          <div className="eyebrow">REGISTER</div>
+          <Funnel current="account" />
+          <h1>Create your account</h1>
+          <p>Step 2 of 3. After this, Nod switches you into the workspace automatically.</p>
           <form className="site-form" onSubmit={submit}>
             <label>
               Name
@@ -126,7 +147,7 @@ export function SignupPage() {
             </label>
             {err && <div className="site-err">{err}</div>}
             <button className="button button-primary" type="submit" disabled={busy}>
-              {busy ? 'Creating…' : 'Start free trial'}
+              {busy ? 'Opening workspace…' : 'Create account and open workspace'}
             </button>
           </form>
           <div className="site-links">

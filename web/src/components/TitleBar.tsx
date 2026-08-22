@@ -136,10 +136,17 @@ export default function TitleBar(props: Props) {
 
   return (
     <div className="titlebar">
-      <div className="brand no-drag">
-        <NodLogo />
-        <span className="brand-white">Nod</span>
-      </div>
+      {isWeb ? (
+        <a href="/" className="brand no-drag" title="Product page">
+          <NodLogo />
+          <span className="brand-white">Nod</span>
+        </a>
+      ) : (
+        <div className="brand no-drag">
+          <NodLogo />
+          <span className="brand-white">Nod</span>
+        </div>
+      )}
 
       <div className="mode-pills no-drag" role="tablist" aria-label="Workspace mode">
         {MODES.map((m) => (

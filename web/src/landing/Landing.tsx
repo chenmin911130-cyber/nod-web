@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { fetchMe } from '../auth'
 import './Landing.css'
 
 type ConsoleMode = 'interview' | 'meeting' | 'translate'
@@ -49,10 +50,14 @@ function NodLogo() {
 export default function Landing() {
   const [mode, setMode] = useState<ConsoleMode>('interview')
   const [navOpen, setNavOpen] = useState(false)
+  const [signedIn, setSignedIn] = useState(false)
   const demo = MODES[mode]
+  const primaryHref = signedIn ? '/app' : '/signup'
+  const primaryLabel = signedIn ? 'Enter workspace' : 'Start free trial'
 
   useEffect(() => {
     document.title = 'Nod — Listen. Note. Translate.'
+    void fetchMe().then((me) => setSignedIn(Boolean(me)))
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -90,11 +95,17 @@ export default function Landing() {
             </a>
           </nav>
           <div className="header-actions">
-            <a className="button button-ghost" href="/login">
-              Sign in
-            </a>
-            <a className="button button-primary" href="/signup">
-              Start free trial
+            {signedIn ? (
+              <a className="button button-ghost" href="/account">
+                Account
+              </a>
+            ) : (
+              <a className="button button-ghost" href="/login">
+                Sign in
+              </a>
+            )}
+            <a className="button button-primary" href={primaryHref}>
+              {primaryLabel}
             </a>
             <button
               className="mobile-toggle"
@@ -122,12 +133,12 @@ export default function Landing() {
                 <span className="underline">Speak the next line.</span>
               </h1>
               <p className="hero-copy">
-                Nod is one live window for interviews, meetings, and captions. The browser uses your
-                microphone. The Windows desktop hears system audio from Teams and Zoom.
+                Product page first. Create an account. Then Nod opens the live workspace — Interview,
+                Meeting, and Translate in one window.
               </p>
               <div className="hero-actions">
-                <a className="button button-primary" href="/signup">
-                  Start free trial
+                <a className="button button-primary" href={primaryHref}>
+                  {primaryLabel}
                 </a>
                 <a className="button button-ghost" href="#workspaces">
                   See how it works ↓
@@ -136,10 +147,10 @@ export default function Landing() {
               <div className="signal-row">
                 <span>
                   <i className="dot" />
-                  Live transcription
+                  1 · Product
                 </span>
-                <span>English or Chinese answers</span>
-                <span>Start in the browser</span>
+                <span>2 · Register</span>
+                <span>3 · Workspace</span>
               </div>
             </div>
 
@@ -448,8 +459,8 @@ export default function Landing() {
                   <b>Per user / day</b>
                 </div>
               </div>
-              <a className="button button-primary" href="/signup">
-                Create account <span>↗</span>
+              <a className="button button-primary" href={primaryHref}>
+                {signedIn ? 'Enter workspace' : 'Create account'}
               </a>
             </aside>
           </div>
@@ -505,16 +516,18 @@ export default function Landing() {
                 can start with a live window.
               </h2>
               <p>
-                Open Nod in the browser. Interview, Meeting, and Translate are already in the same
-                workspace.
+                Create an account, then Nod switches you into the workspace. Interview, Meeting, and
+                Translate stay in that live window.
               </p>
               <div className="cta-actions">
-                <a className="button button-primary" href="/signup">
-                  Start free trial
+                <a className="button button-primary" href={primaryHref}>
+                  {primaryLabel}
                 </a>
-                <a className="button button-ghost" href="/login">
-                  Sign in
-                </a>
+                {!signedIn && (
+                  <a className="button button-ghost" href="/login">
+                    Sign in
+                  </a>
+                )}
               </div>
             </div>
           </div>
@@ -537,9 +550,8 @@ export default function Landing() {
           <div className="footer-links">
             <a href="/privacy">Privacy</a>
             <a href="/terms">Terms</a>
-            <a href="/consent">Recording consent</a>
-            <a href="/signup">Start trial</a>
-            <a href="/login">Sign in</a>
+            <a href="/signup">Register</a>
+            <a href="/app">Workspace</a>
           </div>
         </div>
       </footer>
