@@ -130,6 +130,44 @@
   text-decoration: none;
 }
 
+.google-auth {
+  margin: 1.1rem 0 0.2rem;
+}
+
+.google-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  background: #f4f8fc !important;
+  color: #102033 !important;
+  border: 1px solid #d7e4ef !important;
+}
+
+.google-btn:hover {
+  background: #ffffff !important;
+}
+
+.site-or {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin: 1rem 0 0.2rem;
+  color: #7d98b2;
+  font: 500 11px 'DM Mono', monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.site-or::before,
+.site-or::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #294762;
+}
+
 .quota-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

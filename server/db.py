@@ -26,7 +26,8 @@ class User(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(255))
+    password_hash: Mapped[str] = mapped_column(String(255), default="")
+    clerk_id: Mapped[str] = mapped_column(String(64), default="", index=True)
     name: Mapped[str] = mapped_column(String(120), default="")
     plan: Mapped[str] = mapped_column(String(32), default="free")
     subscription_status: Mapped[str] = mapped_column(String(32), default="trialing")
@@ -137,10 +138,22 @@ engine = create_engine(database_url(), connect_args=connect_args, pool_pre_ping=
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
 
+def _add_column_if_missing(table: str, column: str, spec: str) -> None:
+    with engine.begin() as conn:
+        if is_sqlite():
+            rows = conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+            names = {row[1] for row in rows}
+            if column not in names:
+                conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {spec}")
+        else:
+            conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {spec}")
+
+
 def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     (DATA_DIR / "backups").mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
+    _add_column_if_missing("users", "clerk_id", "VARCHAR(64) DEFAULT ''")
 
 
 @contextmanager

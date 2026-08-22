@@ -27,7 +27,7 @@ from openai import OpenAI
 from server.commerce import router as commerce_router
 from server.db import init_db
 from server.logging_setup import backup_now, setup_logging
-from server.settings import AUTH_DISABLED, COOKIE_NAME, PUBLIC_URL
+from server.settings import AUTH_DISABLED, CLERK_PUBLISHABLE_KEY, COOKIE_NAME, PUBLIC_URL
 from server.security import user_from_token
 
 SR = 16000
@@ -170,6 +170,7 @@ def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
         },
         "models": cfg.get("models") or [],
         "auth_required": not AUTH_DISABLED,
+        "clerk_publishable_key": CLERK_PUBLISHABLE_KEY,
     }
 
 

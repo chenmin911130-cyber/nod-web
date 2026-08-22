@@ -23,7 +23,7 @@ from server.security import (
     valid_email,
     verify_password,
 )
-from server.settings import MAIL_FROM, PLANS, PUBLIC_URL, STRIPE_PRICE_PRO, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
+from server.settings import CLERK_PUBLISHABLE_KEY, MAIL_FROM, PLANS, PUBLIC_URL, STRIPE_PRICE_PRO, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 from server.logging_setup import backup_now
 
 log = logging.getLogger("nod.api")
@@ -53,6 +53,10 @@ class ResetIn(BaseModel):
 
 class ConsentIn(BaseModel):
     consent: bool = True
+
+
+class ClerkIn(BaseModel):
+    token: str = ""
 
 
 class FeedbackIn(BaseModel):
@@ -117,7 +121,11 @@ def login(body: LoginIn, request: Request, response: Response):
     email = body.email.strip().lower()
     with db_session() as db:
         user = db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
-        if user is None or not verify_password(body.password, user.password_hash):
+        if user is None:
+            raise HTTPException(401, "Email or password is wrong")
+        if not (user.password_hash or "").strip():
+            raise HTTPException(401, "This account uses Google. Continue with Google.")
+        if not verify_password(body.password, user.password_hash):
             raise HTTPException(401, "Email or password is wrong")
         db.expunge(user)
     token = _set_session(response, request, user)
@@ -128,6 +136,44 @@ def login(body: LoginIn, request: Request, response: Response):
 def logout(response: Response):
     response.delete_cookie(key="nod_session", path="/")
     return {"ok": True}
+
+
+@router.post("/api/auth/clerk")
+def clerk_login(request: Request, response: Response, body: ClerkIn | None = None):
+    from server.clerk_auth import _token_from_request, clerk_profile, verify_clerk_session
+
+    token = _token_from_request(request, body.token if body else "")
+    payload = verify_clerk_session(token)
+    clerk_id = str(payload["sub"])
+    email, name = clerk_profile(clerk_id)
+    with db_session() as db:
+        user = db.query(User).filter(User.clerk_id == clerk_id, User.deleted_at.is_(None)).first()
+        if user is None:
+            user = db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
+        if user is None:
+            user = User(
+                id=new_id(),
+                email=email,
+                password_hash="",
+                clerk_id=clerk_id,
+                name=name,
+                plan="free",
+                subscription_status="trialing",
+                recording_consent_at=utcnow(),
+            )
+            db.add(user)
+            db.flush()
+        else:
+            if not user.clerk_id:
+                user.clerk_id = clerk_id
+            if name and not user.name:
+                user.name = name
+            if not user.recording_consent_at:
+                user.recording_consent_at = utcnow()
+        db.expunge(user)
+    nod_token = _set_session(response, request, user)
+    log.info("clerk login user=%s clerk=%s", user.id, clerk_id)
+    return {"ok": True, "token": nod_token, "user": _public_user(user)}
 
 
 @router.post("/api/auth/forgot")

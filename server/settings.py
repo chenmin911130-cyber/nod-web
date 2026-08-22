@@ -17,6 +17,9 @@ AUTH_DISABLED = os.environ.get("AUTH_DISABLED", "").strip().lower() in ("1", "tr
 COOKIE_NAME = "nod_session"
 TOKEN_DAYS = 14
 
+CLERK_PUBLISHABLE_KEY = (os.environ.get("CLERK_PUBLISHABLE_KEY") or "").strip()
+CLERK_SECRET_KEY = (os.environ.get("CLERK_SECRET_KEY") or "").strip()
+
 STRIPE_SECRET_KEY = (os.environ.get("STRIPE_SECRET_KEY") or "").strip()
 STRIPE_WEBHOOK_SECRET = (os.environ.get("STRIPE_WEBHOOK_SECRET") or "").strip()
 STRIPE_PRICE_PRO = (os.environ.get("STRIPE_PRICE_PRO") or "").strip()

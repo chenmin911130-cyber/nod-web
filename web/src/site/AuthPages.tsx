@@ -1,12 +1,14 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { api, setToken } from '../auth'
 import './Site.css'
+
+const GoogleButton = lazy(() => import('./ClerkAuth').then((m) => ({ default: m.GoogleButton })))
 
 function Funnel({ current }: { current: 'product' | 'account' | 'workspace' }) {
   const steps = [
     { id: 'product', n: '01', label: 'Product', href: '/' },
     { id: 'account', n: '02', label: 'Register', href: '/signup' },
-    { id: 'workspace', n: '03', label: 'Workspace', href: '/app' },
+    { id: 'workspace', n: '03', label: 'Workspace', href: '/login?next=/app' },
   ] as const
   return (
     <ol className="funnel">
@@ -34,7 +36,7 @@ function Header({ extra }: { extra?: ReactNode }) {
   )
 }
 
-export function LoginPage() {
+export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [err, setErr] = useState('')
@@ -66,7 +68,15 @@ export function LoginPage() {
           <div className="eyebrow">ACCOUNT</div>
           <Funnel current="account" />
           <h1>Sign in to Nod</h1>
-          <p>After you sign in, Nod opens the workspace — the live Interview, Meeting, and Translate window.</p>
+          <p>Interview, Meeting, and Translate need an account. Continue with Google, or use email.</p>
+          {clerkEnabled && (
+            <>
+              <Suspense fallback={null}>
+                <GoogleButton next={next} />
+              </Suspense>
+              <div className="site-or">or email</div>
+            </>
+          )}
           <form className="site-form" onSubmit={submit}>
             <label>
               Email
@@ -91,7 +101,7 @@ export function LoginPage() {
   )
 }
 
-export function SignupPage() {
+export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
@@ -124,7 +134,15 @@ export function SignupPage() {
           <div className="eyebrow">REGISTER</div>
           <Funnel current="account" />
           <h1>Create your account</h1>
-          <p>Step 2 of 3. After this, Nod switches you into the workspace automatically.</p>
+          <p>Step 2 of 3. Google is one tap. Email still works if you prefer a password.</p>
+          {clerkEnabled && (
+            <>
+              <Suspense fallback={null}>
+                <GoogleButton next="/app" />
+              </Suspense>
+              <div className="site-or">or email</div>
+            </>
+          )}
           <form className="site-form" onSubmit={submit}>
             <label>
               Name

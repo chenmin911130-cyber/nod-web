@@ -243,6 +243,16 @@ html.nod-site {
   flex-wrap: wrap;
 }
 
+.hero-actions .google-auth {
+  margin: 0;
+}
+
+.hero-actions .google-btn {
+  width: auto;
+  min-height: 44px;
+  padding: 0 1.1rem;
+}
+
 .signal-row {
   display: flex;
   gap: 1.1rem;

@@ -110,6 +110,13 @@ export default function AccountPage() {
               type="button"
               onClick={() => {
                 logout()
+                const clerk = (window as unknown as { Clerk?: { signOut?: () => Promise<unknown> } }).Clerk
+                if (clerk?.signOut) {
+                  void clerk.signOut().finally(() => {
+                    location.href = '/'
+                  })
+                  return
+                }
                 location.href = '/'
               }}
             >

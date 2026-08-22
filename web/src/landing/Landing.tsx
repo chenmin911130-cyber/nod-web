@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { fetchMe } from '../auth'
 import './Landing.css'
+
+const GoogleButton = lazy(() => import('../site/ClerkAuth').then((m) => ({ default: m.GoogleButton })))
 
 type ConsoleMode = 'interview' | 'meeting' | 'translate'
 
@@ -47,7 +49,7 @@ function NodLogo() {
   )
 }
 
-export default function Landing() {
+export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boolean }) {
   const [mode, setMode] = useState<ConsoleMode>('interview')
   const [navOpen, setNavOpen] = useState(false)
   const [signedIn, setSignedIn] = useState(false)
@@ -137,6 +139,11 @@ export default function Landing() {
                 Meeting, and Translate in one window.
               </p>
               <div className="hero-actions">
+                {clerkEnabled && !signedIn ? (
+                  <Suspense fallback={null}>
+                    <GoogleButton next="/app" />
+                  </Suspense>
+                ) : null}
                 <a className="button button-primary" href={primaryHref}>
                   {primaryLabel}
                 </a>
@@ -551,7 +558,7 @@ export default function Landing() {
             <a href="/privacy">Privacy</a>
             <a href="/terms">Terms</a>
             <a href="/signup">Register</a>
-            <a href="/app">Workspace</a>
+            <a href={signedIn ? '/app' : '/login?next=/app'}>Workspace</a>
           </div>
         </div>
       </footer>
