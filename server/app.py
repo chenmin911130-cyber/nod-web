@@ -1221,12 +1221,39 @@ async def ws_endpoint(ws: WebSocket):
         session.close()
 
 
+HTML_NO_CACHE = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
+def _html_page(name: str) -> FileResponse:
+    return FileResponse(
+        WEB_DIST / name,
+        media_type="text/html; charset=utf-8",
+        headers=HTML_NO_CACHE,
+    )
+
+
 if WEB_DIST.exists():
     app.mount("/assets", StaticFiles(directory=str(WEB_DIST / "assets")), name="assets")
 
+    @app.get("/")
+    def marketing_home():
+        return _html_page("index.html")
+
+    @app.get("/app")
+    def workspace_home():
+        page = WEB_DIST / "app.html"
+        return _html_page("app.html") if page.exists() else _html_page("index.html")
+
     @app.get("/{full_path:path}")
     def spa(full_path: str):
+        if full_path == "app" or full_path.startswith("app/"):
+            page = WEB_DIST / "app.html"
+            return _html_page("app.html") if page.exists() else _html_page("index.html")
         dest = WEB_DIST / full_path
         if full_path and dest.exists() and dest.is_file():
             return FileResponse(dest)
-        return FileResponse(WEB_DIST / "index.html")
+        return _html_page("index.html")

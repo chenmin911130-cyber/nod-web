@@ -1,8 +1,34 @@
-import { defineConfig } from 'vite'
+import { fileURLToPath } from 'node:url'
+import { defineConfig, type Connect } from 'vite'
 import react from '@vitejs/plugin-react'
 
+function rewriteAppPath(): Connect.NextHandleFunction {
+  return (req, _res, next) => {
+    const raw = req.url || ''
+    const q = raw.indexOf('?')
+    const pathname = q === -1 ? raw : raw.slice(0, q)
+    const search = q === -1 ? '' : raw.slice(q)
+    if (pathname === '/app' || pathname.startsWith('/app/')) {
+      req.url = `/app.html${search}`
+    }
+    next()
+  }
+}
+
+function appHtmlPlugin() {
+  return {
+    name: 'nod-app-html',
+    configureServer(server: { middlewares: { use: (fn: Connect.NextHandleFunction) => void } }) {
+      server.middlewares.use(rewriteAppPath())
+    },
+    configurePreviewServer(server: { middlewares: { use: (fn: Connect.NextHandleFunction) => void } }) {
+      server.middlewares.use(rewriteAppPath())
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), appHtmlPlugin()],
   server: {
     host: '127.0.0.1',
     port: 5174,
@@ -14,5 +40,11 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        app: fileURLToPath(new URL('./app.html', import.meta.url)),
+      },
+    },
   },
 })
