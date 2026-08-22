@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import type { AttachPayload } from './attach'
 import type { AppConfig, AppState, AudioSource, EngineEvent, Lang, PairLang, TranslatePair, ViewMode, WorkspaceMode } from './types'
 import { TRANSLATE_LANGS } from './types'
@@ -11,6 +11,7 @@ import TranslatePane from './components/TranslatePane'
 import StatusToast from './components/StatusToast'
 import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
+import { api as authApi, fetchMe } from './auth'
 
 const PLACEHOLDER = 'Waiting for the next question…'
 const STATUS_READY = 'Ready · F2 record / F3 listen / F4 clear'
@@ -52,6 +53,7 @@ const initial: AppState = {
   translateAskId: '',
   translateBindId: '',
   summaryAskId: '',
+  quota: null as { stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; ok: boolean } | null,
 }
 
 type Action =
@@ -246,6 +248,22 @@ function reducer(state: AppState, action: Action): AppState {
           return { ...state, busy: false, translateAskId: '', summaryAskId: '' }
         case 'error':
           return { ...state, status: ev.text, busy: false }
+        case 'auth_required':
+          window.location.replace('/login?next=/app')
+          return state
+        case 'quota':
+          return {
+            ...state,
+            quota: {
+              ok: ev.ok,
+              stt_seconds: ev.stt_seconds,
+              stt_limit: ev.stt_limit,
+              llm_tokens: ev.llm_tokens,
+              llm_limit: ev.llm_limit,
+            },
+          }
+        case 'quota_exceeded':
+          return { ...state, busy: false, status: 'Usage limit reached — open Account' }
         default:
           return state
       }
@@ -394,6 +412,11 @@ export default function App() {
   const translateTimer = useRef(0)
   const pumpTranslateRef = useRef<() => void>(() => {})
   const tickRef = useRef(0)
+  const [consent, setConsent] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    void fetchMe().then((me) => setConsent(me ? me.consent : true))
+  }, [])
 
   const clearTranslateTimer = () => {
     if (translateTimer.current) {
@@ -959,6 +982,11 @@ ${actions.length ? `<h2>Marked actions</h2>${actions.map((ln) => `<div class="ln
         onSystemMuted={handleSystemMuted}
         onStealth={handleStealth}
         onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
+        quotaLabel={
+          state.quota
+            ? `${Math.max(0, Math.round((state.quota.stt_limit - state.quota.stt_seconds) / 60))}m left`
+            : 'Account'
+        }
       />
       <div className="workspace">
         <SideRail
@@ -1015,6 +1043,26 @@ ${actions.length ? `<h2>Marked actions</h2>${actions.map((ln) => `<div class="ln
         )}
       </div>
       <StatusToast text={state.status} />
+      {consent === false && (
+        <div className="consent-mask">
+          <div className="consent-card">
+            <h2>Recording consent</h2>
+            <p>
+              The workspace sends microphone audio to AssemblyAI and text to a language model. Tell others in the
+              room if they must know. Read the <a href="/privacy">privacy policy</a> and <a href="/consent">consent note</a>.
+            </p>
+            <button
+              className="keysetup-save"
+              type="button"
+              onClick={() => {
+                void authApi('/api/me/consent', { method: 'POST', body: JSON.stringify({ consent: true }) }).then(() => setConsent(true))
+              }}
+            >
+              I understand — start
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

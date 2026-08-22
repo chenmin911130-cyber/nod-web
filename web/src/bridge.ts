@@ -3,7 +3,15 @@ import { MicCapture } from './audio'
 
 function wsUrl(): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${proto}//${location.host}/ws`
+  const token = (() => {
+    try {
+      return localStorage.getItem('nod_token') || ''
+    } catch {
+      return ''
+    }
+  })()
+  const q = token ? `?token=${encodeURIComponent(token)}` : ''
+  return `${proto}//${location.host}/ws${q}`
 }
 
 export function installWebApi(): void {

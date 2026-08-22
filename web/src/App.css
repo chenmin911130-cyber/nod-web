@@ -3392,3 +3392,37 @@ html.nod-web .ov-root {
     height: 40px;
   }
 }
+
+.consent-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(5, 12, 24, 0.78);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.consent-card {
+  width: min(460px, 100%);
+  border: 1px solid rgba(91, 218, 244, 0.28);
+  border-radius: 18px;
+  padding: 1.4rem 1.5rem;
+  background: #0e1d31;
+  color: #e8f2fb;
+}
+
+.consent-card h2 {
+  margin: 0 0 0.6rem;
+  font-size: 1.15rem;
+}
+
+.consent-card p {
+  color: #9db4cb;
+  line-height: 1.7;
+  font-size: 0.88rem;
+}
+
+.consent-card a {
+  color: #5bdaf4;
+}

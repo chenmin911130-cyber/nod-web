@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+import threading
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from typing import Iterator
+
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
+
+from server.settings import DATA_DIR, database_url, is_sqlite
+
+_lock = threading.Lock()
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    name: Mapped[str] = mapped_column(String(120), default="")
+    plan: Mapped[str] = mapped_column(String(32), default="free")
+    subscription_status: Mapped[str] = mapped_column(String(32), default="trialing")
+    stripe_customer_id: Mapped[str] = mapped_column(String(64), default="")
+    stripe_subscription_id: Mapped[str] = mapped_column(String(64), default="")
+    recording_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ResetToken(Base):
+    __tablename__ = "reset_tokens"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UsageSession(Base):
+    __tablename__ = "usage_sessions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    mode: Mapped[str] = mapped_column(String(32), default="interview")
+    title: Mapped[str] = mapped_column(String(200), default="")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stt_seconds: Mapped[float] = mapped_column(Float, default=0)
+    llm_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    llm_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0)
+
+
+class HistoryItem(Base):
+    __tablename__ = "history_items"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("usage_sessions.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    qid: Mapped[str] = mapped_column(String(64), default="")
+    text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class UsageDay(Base):
+    __tablename__ = "usage_days"
+    __table_args__ = (UniqueConstraint("user_id", "day", name="uq_user_day"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(32), index=True)
+    day: Mapped[str] = mapped_column(String(10), index=True)
+    stt_seconds: Mapped[float] = mapped_column(Float, default=0)
+    llm_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class GlobalDay(Base):
+    __tablename__ = "global_days"
+
+    day: Mapped[str] = mapped_column(String(10), primary_key=True)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0)
+    stt_seconds: Mapped[float] = mapped_column(Float, default=0)
+    llm_tokens: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Order(Base):
+    __tablename__ = "orders"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    plan: Mapped[str] = mapped_column(String(32), default="pro")
+    amount_cents: Mapped[int] = mapped_column(Integer, default=0)
+    currency: Mapped[str] = mapped_column(String(8), default="usd")
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    stripe_checkout_id: Mapped[str] = mapped_column(String(80), default="")
+    stripe_payment_intent: Mapped[str] = mapped_column(String(80), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Feedback(Base):
+    __tablename__ = "feedback"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(32), default="")
+    email: Mapped[str] = mapped_column(String(255), default="")
+    message: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(32), default="")
+    action: Mapped[str] = mapped_column(String(64))
+    detail: Mapped[str] = mapped_column(Text, default="")
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+connect_args = {"check_same_thread": False} if is_sqlite() else {}
+engine = create_engine(database_url(), connect_args=connect_args, pool_pre_ping=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+
+
+def init_db() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    (DATA_DIR / "backups").mkdir(parents=True, exist_ok=True)
+    Base.metadata.create_all(engine)
+
+
+@contextmanager
+def db_session() -> Iterator[Session]:
+    with _lock:
+        s = SessionLocal()
+        try:
+            yield s
+            s.commit()
+        except Exception:
+            s.rollback()
+            raise
+        finally:
+            s.close()
+
+
+init_db()

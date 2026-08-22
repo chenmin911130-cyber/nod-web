@@ -13,5 +13,6 @@ COPY server ./server
 COPY config.json .
 COPY --from=frontend /web/dist ./web/dist
 ENV PORT=8080
+ENV DATA_DIR=/data
 EXPOSE 8080
 CMD ["sh", "-c", "uvicorn server.app:app --host 0.0.0.0 --port ${PORT:-8080}"]

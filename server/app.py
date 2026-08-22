@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import queue
 import re
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
@@ -21,6 +23,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
+
+from server.commerce import router as commerce_router
+from server.db import init_db
+from server.logging_setup import backup_now, setup_logging
+from server.settings import AUTH_DISABLED, COOKIE_NAME, PUBLIC_URL
+from server.security import user_from_token
 
 SR = 16000
 STT_CLOUD = "assemblyai"
@@ -161,6 +169,7 @@ def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
             "translate_to": cfg.get("ui", {}).get("translate_to") or "zh",
         },
         "models": cfg.get("models") or [],
+        "auth_required": not AUTH_DISABLED,
     }
 
 
@@ -374,6 +383,8 @@ class Pipeline:
         self._last_answer = ""
         self._cancel = threading.Event()
         self._gen_seq = 0
+        self.user_id: str | None = None
+        self.usage_session_id: str | None = None
 
     def _new_qid(self) -> str:
         return f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
@@ -500,6 +511,16 @@ class Pipeline:
             self.emit({"type": "status", "text": "Please type a question first"})
             self.emit({"type": "done", "id": "", "stt": 0, "llm": 0, "ok": False})
             return
+        if self.user_id:
+            from server.meter import check_can_generate
+
+            ok, snap = check_can_generate(self.user_id)
+            self.emit({"type": "quota", **snap})
+            if not ok:
+                self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "llm"})
+                self.emit({"type": "error", "text": "Usage limit reached. Open Account to see remaining quota."})
+                self.emit({"type": "done", "id": "", "stt": 0, "llm": 0, "ok": False})
+                return
         self._cancel.clear()
         self._gen_seq += 1
         seq = self._gen_seq
@@ -551,6 +572,19 @@ class Pipeline:
         if mode not in ("translate", "summary"):
             self._qa_history.append({"qid": qid, "q": self._strip_nod_tag(t), "a": answer})
             self._qa_history = self._qa_history[-6:]
+        if self.user_id:
+            from server.meter import consume_llm, save_history
+
+            inp = max(1, len(t) // 4)
+            out = max(1, len(answer) // 4)
+            ok, snap = consume_llm(self.user_id, self.usage_session_id, inp, out)
+            self.emit({"type": "quota", **snap})
+            kind_q = "transcript" if mode in ("translate", "summary") else "question"
+            if not internal:
+                save_history(self.user_id, self.usage_session_id, kind_q, self._strip_nod_tag(t), qid)
+            save_history(self.user_id, self.usage_session_id, "answer" if mode == "ask" else mode, answer, qid)
+            if not ok:
+                self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "llm"})
         self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": True})
 
 
@@ -669,10 +703,14 @@ class CloudListener:
 
 
 class Session:
-    def __init__(self, emit: Callable[[dict], None], cfg: dict[str, Any], keys: dict[str, str]):
+    def __init__(self, emit: Callable[[dict], None], cfg: dict[str, Any], keys: dict[str, str], user_id: str | None = None):
         self.emit = emit
         self.cfg = cfg
         self.pipeline = Pipeline(cfg, keys, emit)
+        self.user_id = user_id
+        self.pipeline.user_id = user_id
+        self.usage_session_id: str | None = None
+        self._pcm_unmetered = 0
         self._listener: CloudListener | None = None
         self._manual_buf = bytearray()
         self._manual = False
@@ -695,10 +733,62 @@ class Session:
     def close(self) -> None:
         self._stop_listening()
         self.pipeline._cancel.set()
+        if self.usage_session_id:
+            from server.meter import close_usage_session
+
+            close_usage_session(self.usage_session_id)
+            self.usage_session_id = None
+            self.pipeline.usage_session_id = None
+
+    def _quota_block(self, snap: dict) -> None:
+        self.emit({"type": "quota", **snap})
+        self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "limit"})
+        self.emit({"type": "error", "text": "Usage limit reached. Open Account to upgrade or wait for reset."})
+        self.emit({"type": "status", "text": "Usage limit reached"})
+
+    def _ensure_usage(self) -> bool:
+        if not self.user_id:
+            return True
+        from server.meter import open_usage_session, usage_snapshot
+
+        if self.usage_session_id:
+            snap = usage_snapshot(self.user_id)
+            self.emit({"type": "quota", **snap})
+            if not snap.get("ok"):
+                self._quota_block(snap)
+                return False
+            return True
+        sid, snap = open_usage_session(self.user_id, self._workspace)
+        self.emit({"type": "quota", **snap})
+        if not sid:
+            self._quota_block(snap)
+            return False
+        self.usage_session_id = sid
+        self.pipeline.usage_session_id = sid
+        return True
 
     def push_pcm(self, pcm: bytes) -> None:
         if self._mic_muted or not pcm:
             return
+        if self.user_id:
+            self._pcm_unmetered += len(pcm)
+            if self._pcm_unmetered >= 16000:
+                seconds = self._pcm_unmetered / float(SR * 2)
+                self._pcm_unmetered = 0
+                if not self._ensure_usage():
+                    return
+                from server.meter import consume_stt
+
+                ok, snap = consume_stt(self.user_id, seconds, self.usage_session_id)
+                self.emit({"type": "quota", **snap})
+                if not ok:
+                    self._quota_block(snap)
+                    if self._listener:
+                        self._stop_listening()
+                    if self._manual:
+                        self._manual = False
+                        self._manual_buf = bytearray()
+                    return
         if self._manual:
             self._manual_buf.extend(pcm)
             if time.time() - self._manual_started > MANUAL_MAX_SEC:
@@ -810,6 +900,8 @@ class Session:
             self.emit({"type": "status", "text": "Stop recording before enabling Auto"})
             return
         if not self._listener:
+            if not self._ensure_usage():
+                return
             self._start_listening()
         else:
             self._stop_listening()
@@ -861,6 +953,8 @@ class Session:
             return
         if self._listener:
             self.emit({"type": "status", "text": "Turn off Auto before recording"})
+            return
+        if not self._ensure_usage():
             return
         self._manual = True
         self._manual_buf = bytearray()
@@ -918,6 +1012,8 @@ class Session:
             text = f"{extra}\n\n{text}".strip() if text else extra
         if not text:
             return
+        if not self._ensure_usage():
+            return
         body = text
         if body.startswith("[NOD_TRANSLATE") or body.startswith("[NOD_SUMMARY"):
             nl = body.find("\n")
@@ -970,6 +1066,10 @@ class Session:
         if self._workspace == "meeting":
             qid = self.pipeline._new_qid()
             self.emit({"type": "question", "id": qid, "text": cleaned})
+            if self.user_id and self.usage_session_id:
+                from server.meter import save_history
+
+                save_history(self.user_id, self.usage_session_id, "transcript", cleaned, qid)
             return
         recent_qs = [h["q"] for h in self.pipeline._qa_history]
         verdict = guard_question(cleaned, recent_qs, self.pipeline._last_answer)
@@ -1010,19 +1110,60 @@ class Session:
 
 CFG = load_config()
 KEYS = load_all_keys()
+log = logging.getLogger("nod")
 
-app = FastAPI(title="Nod Web")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    setup_logging()
+    init_db()
+    try:
+        backup_now()
+    except Exception:
+        log.exception("startup backup failed")
+
+    def loop():
+        while True:
+            time.sleep(6 * 3600)
+            try:
+                backup_now()
+            except Exception:
+                log.exception("scheduled backup failed")
+
+    threading.Thread(target=loop, daemon=True, name="nod-backup").start()
+    yield
+
+
+app = FastAPI(title="Nod Web", lifespan=lifespan)
+_origins = [
+    "http://127.0.0.1:5174",
+    "http://localhost:5174",
+    "http://127.0.0.1:9320",
+    "http://localhost:9320",
+]
+if PUBLIC_URL:
+    _origins.append(PUBLIC_URL.rstrip("/"))
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(commerce_router)
 
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "stt": "assemblyai", "audio": "browser-mic"}
+    from server.db import engine
+
+    db_ok = True
+    try:
+        with engine.connect() as conn:
+            conn.exec_driver_sql("SELECT 1")
+    except Exception:
+        db_ok = False
+    return {"ok": db_ok, "stt": "assemblyai", "audio": "browser-mic", "auth": not AUTH_DISABLED}
 
 
 @app.get("/api/config")
@@ -1032,6 +1173,13 @@ def api_config():
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
+    token = (ws.query_params.get("token") or "").strip() or (ws.cookies.get(COOKIE_NAME) or "").strip()
+    user = user_from_token(token) if token else None
+    if not AUTH_DISABLED and user is None:
+        await ws.accept()
+        await ws.send_text(json.dumps({"type": "auth_required"}))
+        await ws.close(code=4401)
+        return
     await ws.accept()
     loop = asyncio.get_running_loop()
     out: asyncio.Queue[str] = asyncio.Queue()
@@ -1039,8 +1187,12 @@ async def ws_endpoint(ws: WebSocket):
     def emit(obj: dict) -> None:
         asyncio.run_coroutine_threadsafe(out.put(json.dumps(obj, ensure_ascii=False)), loop)
 
-    session = Session(emit, json.loads(json.dumps(CFG)), dict(KEYS))
+    session = Session(emit, json.loads(json.dumps(CFG)), dict(KEYS), user.id if user else None)
     session.start()
+    if user:
+        from server.meter import usage_snapshot
+
+        emit({"type": "quota", **usage_snapshot(user.id)})
 
     async def sender():
         while True:

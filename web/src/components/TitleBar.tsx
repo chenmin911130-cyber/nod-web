@@ -22,6 +22,7 @@ interface Props {
   onSystemMuted: (muted: boolean) => void
   onStealth: (on: boolean) => void
   onFullScreen: () => void
+  quotaLabel?: string
 }
 
 const LANGS: Array<{ label: string; value: Lang }> = [
@@ -217,6 +218,12 @@ export default function TitleBar(props: Props) {
             >
               <PinIcon />
             </button>
+          )}
+
+          {isWeb && (
+            <a className="lang-pill" href="/account" title="Account and remaining quota">
+              {props.quotaLabel || 'Account'}
+            </a>
           )}
 
           <div className="tb-more" ref={menuRef}>
