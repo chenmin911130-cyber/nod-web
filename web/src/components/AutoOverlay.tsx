@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RunState, Turn } from '../types'
 import { AnswerContent, QuestionBlock } from './AnswerContent'
+import { isWeb } from '../platform'
 
 interface Props {
   run: RunState
@@ -263,20 +264,24 @@ export default function AutoOverlay(props: Props) {
           >
             {micMuted ? <MicMuteIcon /> : <MicOnIcon2 />}
           </button>
-          <button
-            className={`ov-fn-btn${pinned ? ' on' : ''}`}
-            onClick={() => onPinned(!pinned)}
-            title={pinned ? 'Pinned on top' : 'Pin on top'}
-          >
-            <PinIcon />
-          </button>
-          <button
-            className={`ov-fn-btn${stealth ? ' on' : ''}`}
-            onClick={() => onStealth(!stealth)}
-            title={stealth ? 'Stealth on — hidden from screen capture (F9)' : 'Stealth — hide from screen capture (F9)'}
-          >
-            <EyeOffIcon />
-          </button>
+          {!isWeb && (
+            <button
+              className={`ov-fn-btn${pinned ? ' on' : ''}`}
+              onClick={() => onPinned(!pinned)}
+              title={pinned ? 'Pinned on top' : 'Pin on top'}
+            >
+              <PinIcon />
+            </button>
+          )}
+          {!isWeb && (
+            <button
+              className={`ov-fn-btn${stealth ? ' on' : ''}`}
+              onClick={() => onStealth(!stealth)}
+              title={stealth ? 'Stealth on — hidden from screen capture (F9)' : 'Stealth — hide from screen capture (F9)'}
+            >
+              <EyeOffIcon />
+            </button>
+          )}
           <button className="ov-view-btn" onClick={onViewToggle} title="Switch view (F8)">
             <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M8 3H3v5" />
@@ -291,7 +296,8 @@ export default function AutoOverlay(props: Props) {
             title={autoOn ? 'Stop Listening' : 'Start Listening'}
           >
             <MicStopIcon />
-            {autoOn ? 'Stop Listening' : 'Start Listening'}
+            <span className="ov-stop-label">{autoOn ? 'Stop Listening' : 'Start Listening'}</span>
+            <span className="ov-stop-label-short">{autoOn ? 'Stop' : 'Start'}</span>
           </button>
         </div>
       </div>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer, useRef } from 'react'
 import type { AttachPayload } from './attach'
 import type { AppConfig, AppState, AudioSource, EngineEvent, Lang, PairLang, TranslatePair, ViewMode, WorkspaceMode } from './types'
 import { TRANSLATE_LANGS } from './types'
+import { isWeb } from './platform'
 import TitleBar from './components/TitleBar'
 import SideRail from './components/SideRail'
 import AnswerPane from './components/AnswerPane'
@@ -155,7 +156,7 @@ function reducer(state: AppState, action: Action): AppState {
           let view = state.view
           let meetingStartedAt = state.meetingStartedAt
           if (run === 'listen') {
-            if (state.workspaceMode === 'interview' && !autoOn && view === 'workspace') view = 'focus'
+            if (!isWeb && state.workspaceMode === 'interview' && !autoOn && view === 'workspace') view = 'focus'
             autoOn = true
             if (state.workspaceMode === 'meeting' && meetingStartedAt == null) meetingStartedAt = Date.now()
           } else if (run === 'idle') {
