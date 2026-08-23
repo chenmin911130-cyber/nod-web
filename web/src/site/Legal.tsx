@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from 'react'
 import { track } from './track'
 import './Site.css'
+import NodMark from './NodMark'
 
 function Shell({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -8,6 +9,7 @@ function Shell({ title, children }: { title: string; children: ReactNode }) {
       <header className="site-header">
         <div className="shell header-inner">
           <a className="brand" href="/">
+            <NodMark />
             Nod
           </a>
           <div className="header-actions">

@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } f
 import { api, setToken } from '../auth'
 import { track } from './track'
 import './Site.css'
+import NodMark from './NodMark'
 
 const GoogleButton = lazy(() => import('./ClerkAuth').then((m) => ({ default: m.GoogleButton })))
 
@@ -29,6 +30,7 @@ function Header({ extra }: { extra?: ReactNode }) {
     <header className="site-header">
       <div className="shell header-inner">
         <a className="brand" href="/">
+          <NodMark />
           Nod
         </a>
         <div className="header-actions">{extra}</div>

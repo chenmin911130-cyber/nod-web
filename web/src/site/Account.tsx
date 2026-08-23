@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, fetchMe, logout, type Me } from '../auth'
 import './Site.css'
+import NodMark from './NodMark'
 
 type SessionRow = {
   id: string
@@ -99,6 +100,7 @@ export default function AccountPage() {
       <header className="site-header">
         <div className="shell header-inner">
           <a className="brand" href="/">
+            <NodMark />
             Nod
           </a>
           <div className="header-actions">

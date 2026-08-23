@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import '../landing/Landing.css'
 import './Admin.css'
+import NodMark from './NodMark'
 
 type Tab = 'overview' | 'users' | 'sessions' | 'feedback' | 'settings'
 
@@ -195,6 +196,10 @@ export default function AdminPage() {
     return (
       <div className="admin-shell">
         <form className="admin-login" onSubmit={signIn}>
+          <div className="brand">
+            <NodMark size={28} />
+            Nod
+          </div>
           <div className="eyebrow">NOD ADMIN</div>
           <h1>Test console</h1>
           <p>Free testing only. Enter the admin token to see customer data. Default local token is leonardo.</p>
@@ -215,7 +220,8 @@ export default function AdminPage() {
     <div className="admin-shell">
       <aside className="admin-side">
         <div className="brand">
-          <i /> Nod
+          <NodMark />
+          Nod
         </div>
         <div className="nav-label">OPERATIONS</div>
         {(['overview', 'users', 'sessions', 'feedback'] as const).map((id) => (

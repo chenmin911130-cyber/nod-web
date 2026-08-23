@@ -1272,6 +1272,17 @@ def _html_page(name: str) -> FileResponse:
 if WEB_DIST.exists():
     app.mount("/assets", StaticFiles(directory=str(WEB_DIST / "assets")), name="assets")
 
+    def _favicon() -> FileResponse:
+        path = WEB_DIST / "favicon.svg"
+        if not path.exists():
+            path = ROOT / "web" / "public" / "favicon.svg"
+        return FileResponse(path, media_type="image/svg+xml")
+
+    @app.get("/favicon.svg")
+    @app.get("/favicon.ico")
+    def favicon():
+        return _favicon()
+
     @app.get("/")
     def marketing_home():
         return _html_page("index.html")
