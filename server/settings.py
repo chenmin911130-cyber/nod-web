@@ -15,7 +15,12 @@ if not PUBLIC_URL:
 AUTH_SECRET = (os.environ.get("AUTH_SECRET") or "").strip() or secrets.token_hex(32)
 AUTH_DISABLED = os.environ.get("AUTH_DISABLED", "").strip().lower() in ("1", "true", "yes")
 COOKIE_NAME = "nod_session"
+GUEST_COOKIE_NAME = "nod_guest"
 TOKEN_DAYS = 14
+GUEST_TOKEN_DAYS = 30
+
+GUEST_STT_SECONDS = 60
+GUEST_LLM_TOKENS = 50_000
 
 CLERK_PUBLISHABLE_KEY = (os.environ.get("CLERK_PUBLISHABLE_KEY") or "").strip()
 CLERK_SECRET_KEY = (os.environ.get("CLERK_SECRET_KEY") or "").strip()

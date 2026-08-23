@@ -27,8 +27,8 @@ from openai import OpenAI
 from server.commerce import router as commerce_router
 from server.db import init_db
 from server.logging_setup import backup_now, setup_logging
-from server.settings import AUTH_DISABLED, CLERK_PUBLISHABLE_KEY, COOKIE_NAME, PUBLIC_URL
-from server.security import user_from_token
+from server.settings import AUTH_DISABLED, CLERK_PUBLISHABLE_KEY, COOKIE_NAME, GUEST_STT_SECONDS, PUBLIC_URL
+from server.security import guest_from_token, user_from_token
 
 SR = 16000
 STT_CLOUD = "assemblyai"
@@ -170,6 +170,7 @@ def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
         },
         "models": cfg.get("models") or [],
         "auth_required": not AUTH_DISABLED,
+        "guest_trial_seconds": GUEST_STT_SECONDS,
         "clerk_publishable_key": CLERK_PUBLISHABLE_KEY,
     }
 
@@ -385,6 +386,7 @@ class Pipeline:
         self._cancel = threading.Event()
         self._gen_seq = 0
         self.user_id: str | None = None
+        self.guest_id: str | None = None
         self.usage_session_id: str | None = None
 
     def _new_qid(self) -> str:
@@ -522,6 +524,17 @@ class Pipeline:
                 self.emit({"type": "error", "text": "Usage limit reached. Open Account to see remaining quota."})
                 self.emit({"type": "done", "id": "", "stt": 0, "llm": 0, "ok": False})
                 return
+        elif self.guest_id:
+            from server.guest import check_guest_can_generate
+
+            ok, snap = check_guest_can_generate(self.guest_id)
+            self.emit({"type": "quota", **snap})
+            if not ok:
+                self.emit({"type": "guest_trial_ended", **snap})
+                self.emit({"type": "quota_exceeded", "reason": "guest_trial"})
+                self.emit({"type": "error", "text": "Your 1-minute guest trial ended. Sign in to keep listening."})
+                self.emit({"type": "done", "id": "", "stt": 0, "llm": 0, "ok": False})
+                return
         self._cancel.clear()
         self._gen_seq += 1
         seq = self._gen_seq
@@ -586,6 +599,16 @@ class Pipeline:
             save_history(self.user_id, self.usage_session_id, "answer" if mode == "ask" else mode, answer, qid)
             if not ok:
                 self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "llm"})
+        elif self.guest_id:
+            from server.guest import consume_guest_llm
+
+            inp = max(1, len(t) // 4)
+            out = max(1, len(answer) // 4)
+            ok, snap = consume_guest_llm(self.guest_id, inp, out)
+            self.emit({"type": "quota", **snap})
+            if not ok:
+                self.emit({"type": "guest_trial_ended", **snap})
+                self.emit({"type": "quota_exceeded", "reason": "guest_trial"})
         self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": True})
 
 
@@ -704,12 +727,21 @@ class CloudListener:
 
 
 class Session:
-    def __init__(self, emit: Callable[[dict], None], cfg: dict[str, Any], keys: dict[str, str], user_id: str | None = None):
+    def __init__(
+        self,
+        emit: Callable[[dict], None],
+        cfg: dict[str, Any],
+        keys: dict[str, str],
+        user_id: str | None = None,
+        guest_id: str | None = None,
+    ):
         self.emit = emit
         self.cfg = cfg
         self.pipeline = Pipeline(cfg, keys, emit)
         self.user_id = user_id
+        self.guest_id = guest_id
         self.pipeline.user_id = user_id
+        self.pipeline.guest_id = guest_id
         self.usage_session_id: str | None = None
         self._pcm_unmetered = 0
         self._listener: CloudListener | None = None
@@ -742,12 +774,33 @@ class Session:
             self.pipeline.usage_session_id = None
 
     def _quota_block(self, snap: dict) -> None:
+        if self._listener:
+            self._stop_listening()
+        if self._manual:
+            self._manual = False
+            self._manual_buf = bytearray()
+            self.emit({"type": "state", "state": "idle"})
         self.emit({"type": "quota", **snap})
+        if self.guest_id:
+            self.emit({"type": "guest_trial_ended", **snap})
+            self.emit({"type": "quota_exceeded", "reason": "guest_trial"})
+            self.emit({"type": "error", "text": "Your 1-minute guest trial ended. Sign in to keep listening."})
+            self.emit({"type": "status", "text": "Guest trial ended — sign in to continue"})
+            return
         self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "limit"})
         self.emit({"type": "error", "text": "Usage limit reached. Open Account to upgrade or wait for reset."})
         self.emit({"type": "status", "text": "Usage limit reached"})
 
     def _ensure_usage(self) -> bool:
+        if self.guest_id:
+            from server.guest import guest_usage_snapshot
+
+            snap = guest_usage_snapshot(self.guest_id)
+            self.emit({"type": "quota", **snap})
+            if not snap.get("ok"):
+                self._quota_block(snap)
+                return False
+            return True
         if not self.user_id:
             return True
         from server.meter import open_usage_session, usage_snapshot
@@ -771,24 +824,24 @@ class Session:
     def push_pcm(self, pcm: bytes) -> None:
         if self._mic_muted or not pcm:
             return
-        if self.user_id:
+        if self.user_id or self.guest_id:
             self._pcm_unmetered += len(pcm)
             if self._pcm_unmetered >= 16000:
                 seconds = self._pcm_unmetered / float(SR * 2)
                 self._pcm_unmetered = 0
                 if not self._ensure_usage():
                     return
-                from server.meter import consume_stt
+                if self.guest_id:
+                    from server.guest import consume_guest_stt
 
-                ok, snap = consume_stt(self.user_id, seconds, self.usage_session_id)
+                    ok, snap = consume_guest_stt(self.guest_id, seconds)
+                else:
+                    from server.meter import consume_stt
+
+                    ok, snap = consume_stt(self.user_id, seconds, self.usage_session_id)
                 self.emit({"type": "quota", **snap})
                 if not ok:
                     self._quota_block(snap)
-                    if self._listener:
-                        self._stop_listening()
-                    if self._manual:
-                        self._manual = False
-                        self._manual_buf = bytearray()
                     return
         if self._manual:
             self._manual_buf.extend(pcm)
@@ -1176,7 +1229,8 @@ def api_config():
 async def ws_endpoint(ws: WebSocket):
     token = (ws.query_params.get("token") or "").strip() or (ws.cookies.get(COOKIE_NAME) or "").strip()
     user = user_from_token(token) if token else None
-    if not AUTH_DISABLED and user is None:
+    guest_id = None if user else guest_from_token(token)
+    if not AUTH_DISABLED and user is None and guest_id is None:
         await ws.accept()
         await ws.send_text(json.dumps({"type": "auth_required"}))
         await ws.close(code=4401)
@@ -1188,12 +1242,16 @@ async def ws_endpoint(ws: WebSocket):
     def emit(obj: dict) -> None:
         asyncio.run_coroutine_threadsafe(out.put(json.dumps(obj, ensure_ascii=False)), loop)
 
-    session = Session(emit, json.loads(json.dumps(CFG)), dict(KEYS), user.id if user else None)
+    session = Session(emit, json.loads(json.dumps(CFG)), dict(KEYS), user.id if user else None, guest_id=guest_id)
     session.start()
     if user:
         from server.meter import usage_snapshot
 
         emit({"type": "quota", **usage_snapshot(user.id)})
+    elif guest_id:
+        from server.guest import guest_usage_snapshot
+
+        emit({"type": "quota", **guest_usage_snapshot(guest_id)})
 
     async def sender():
         while True:

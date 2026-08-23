@@ -1,15 +1,11 @@
 import type { Api, AppConfig, EngineEvent, EngineMsg } from './types'
 import { MicCapture } from './audio'
 
+import { getGuestToken, getToken } from './auth'
+
 function wsUrl(): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const token = (() => {
-    try {
-      return localStorage.getItem('nod_token') || ''
-    } catch {
-      return ''
-    }
-  })()
+  const token = getToken() || getGuestToken()
   const q = token ? `?token=${encodeURIComponent(token)}` : ''
   return `${proto}//${location.host}/ws${q}`
 }

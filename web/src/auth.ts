@@ -1,10 +1,12 @@
 const TOKEN_KEY = 'nod_token'
+const GUEST_TOKEN_KEY = 'nod_guest_token'
 
 export type Quota = {
   ok: boolean
   reason?: string
   plan?: string
   plan_name?: string
+  guest?: boolean
   stt_seconds: number
   stt_limit: number
   llm_tokens: number
@@ -48,10 +50,48 @@ export function getToken(): string {
 
 export function setToken(token: string): void {
   try {
-    if (token) localStorage.setItem(TOKEN_KEY, token)
-    else localStorage.removeItem(TOKEN_KEY)
+    if (token) {
+      localStorage.setItem(TOKEN_KEY, token)
+      localStorage.removeItem(GUEST_TOKEN_KEY)
+    } else localStorage.removeItem(TOKEN_KEY)
   } catch {
     /* ignore */
+  }
+}
+
+export function getGuestToken(): string {
+  try {
+    return localStorage.getItem(GUEST_TOKEN_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+export function setGuestToken(token: string): void {
+  try {
+    if (token) localStorage.setItem(GUEST_TOKEN_KEY, token)
+    else localStorage.removeItem(GUEST_TOKEN_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+export type GuestSession = {
+  token: string
+  guest_id: string
+  usage: Quota
+}
+
+export async function ensureGuestSession(): Promise<GuestSession | null> {
+  try {
+    const res = await fetch('/api/guest/session', { method: 'POST', credentials: 'include' })
+    if (!res.ok) return null
+    const data = (await res.json()) as GuestSession & { ok?: boolean }
+    if (!data.token) return null
+    setGuestToken(data.token)
+    return { token: data.token, guest_id: data.guest_id, usage: data.usage }
+  } catch {
+    return null
   }
 }
 
@@ -80,5 +120,6 @@ export async function fetchMe(): Promise<Me | null> {
 
 export function logout(): void {
   setToken('')
+  setGuestToken('')
   void api('/api/auth/logout', { method: 'POST' }).catch(() => undefined)
 }

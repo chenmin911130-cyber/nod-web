@@ -112,6 +112,17 @@ class Order(Base):
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class GuestUsage(Base):
+    __tablename__ = "guest_usage"
+
+    guest_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    stt_seconds: Mapped[float] = mapped_column(Float, default=0)
+    llm_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    ip_hash: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Feedback(Base):
     __tablename__ = "feedback"
 

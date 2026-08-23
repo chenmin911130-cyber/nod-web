@@ -56,6 +56,7 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
   const demo = MODES[mode]
   const primaryHref = signedIn ? '/app' : '/signup'
   const primaryLabel = signedIn ? 'Enter workspace' : 'Start free trial'
+  const tryHref = '/app?mode=translate'
 
   useEffect(() => {
     document.title = 'Nod — AI Notes, Live Transcription & Translation'
@@ -138,15 +139,20 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
               <p className="hero-copy">
                 Nod is a live voice workspace — not a passive transcript. Interview, Meeting, and
                 Translate share one window: live transcription with AssemblyAI, AI notes and answers
-                with DeepSeek.
+                with DeepSeek. Try Translate free for one minute — no sign-in required.
               </p>
               <div className="hero-actions">
+                {!signedIn ? (
+                  <a className="button button-primary" href={tryHref}>
+                    Try 1 minute free
+                  </a>
+                ) : null}
                 {clerkEnabled && !signedIn ? (
                   <Suspense fallback={null}>
                     <GoogleButton next="/app" />
                   </Suspense>
                 ) : null}
-                <a className="button button-primary" href={primaryHref}>
+                <a className={`button ${signedIn ? 'button-primary' : 'button-ghost'}`} href={primaryHref}>
                   {primaryLabel}
                 </a>
                 <a className="button button-ghost" href="#demo">
@@ -156,10 +162,10 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
               <div className="signal-row">
                 <span>
                   <i className="dot" />
-                  Explore the demo
+                  No account needed
                 </span>
-                <span>→ Try free trial</span>
-                <span>→ Save your history</span>
+                <span>→ 1 min live preview</span>
+                <span>→ Sign in to save history</span>
               </div>
             </div>
 
@@ -469,9 +475,9 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
                 Then decide if it stays.
               </h2>
               <p>
-                Create an account to start a free trial: 20 minutes of live transcription and 100,000 generation
-                tokens. Pro is $12 / month with eight hours of transcription. Windows desktop — system audio, pin,
-                and minutes — is next.
+                Try live Translate for one minute without an account. Create a free account for 20
+                minutes of live transcription and 100,000 generation tokens. Pro is $12 / month with
+                eight hours of transcription. Windows desktop — system audio, pin, and minutes — is next.
               </p>
               <div className="checks">
                 <div className="check">
@@ -506,6 +512,10 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
               </p>
               <div className="plan-lines">
                 <div>
+                  <span>Guest preview</span>
+                  <b>1 min live</b>
+                </div>
+                <div>
                   <span>Free trial</span>
                   <b>20 min STT</b>
                 </div>
@@ -518,9 +528,14 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
                   <b>Per user / day</b>
                 </div>
               </div>
-              <a className="button button-primary" href={primaryHref}>
-                {signedIn ? 'Enter workspace' : 'Create account'}
+              <a className="button button-primary" href={signedIn ? '/app' : tryHref}>
+                {signedIn ? 'Enter workspace' : 'Try 1 minute free'}
               </a>
+              {!signedIn && (
+                <a className="button button-ghost" href="/signup">
+                  Create account
+                </a>
+              )}
             </aside>
           </div>
         </section>
@@ -633,11 +648,16 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
                 can start with a live window.
               </h2>
               <p>
-                You have seen the demo. Start a free trial to open the live workspace — Interview,
-                Meeting, and Translate in one window, with history saved to your account.
+                You have seen the demo. Try one minute of live Translate with no sign-in, or start a
+                free trial to open the workspace with history saved to your account.
               </p>
               <div className="cta-actions">
-                <a className="button button-primary" href={primaryHref}>
+                {!signedIn && (
+                  <a className="button button-primary" href={tryHref}>
+                    Try 1 minute free
+                  </a>
+                )}
+                <a className={`button ${signedIn ? 'button-primary' : 'button-ghost'}`} href={primaryHref}>
                   {primaryLabel}
                 </a>
                 {!signedIn && (
@@ -668,7 +688,7 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
             <a href="/privacy">Privacy</a>
             <a href="/terms">Terms</a>
             <a href="/signup">Register</a>
-            <a href={signedIn ? '/app' : '/login?next=/app'}>Workspace</a>
+            <a href={signedIn ? '/app' : tryHref}>Workspace</a>
           </div>
         </div>
       </footer>

@@ -108,6 +108,7 @@ export type EngineEvent =
   | { type: 'auth_required' }
   | { type: 'quota'; ok: boolean; reason?: string; plan?: string; plan_name?: string; stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; sessions?: number; session_limit?: number; daily_cost_usd?: number; daily_cost_limit?: number }
   | { type: 'quota_exceeded'; reason: string }
+  | { type: 'guest_trial_ended'; ok: boolean; reason?: string; stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number }
 
 // 前端 → 引擎
 export type EngineMsg =

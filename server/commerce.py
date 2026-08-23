@@ -17,13 +17,14 @@ from server.security import (
     hash_password,
     hash_token,
     issue_jwt,
+    issue_guest_jwt,
     new_id,
     optional_user,
     require_admin,
     valid_email,
     verify_password,
 )
-from server.settings import CLERK_PUBLISHABLE_KEY, MAIL_FROM, PLANS, PUBLIC_URL, STRIPE_PRICE_PRO, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
+from server.settings import CLERK_PUBLISHABLE_KEY, GUEST_COOKIE_NAME, GUEST_TOKEN_DAYS, MAIL_FROM, PLANS, PUBLIC_URL, STRIPE_PRICE_PRO, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 from server.logging_setup import backup_now
 
 log = logging.getLogger("nod.api")
@@ -215,6 +216,30 @@ def reset(body: ResetIn, request: Request, response: Response):
         db.expunge(user)
     token = _set_session(response, request, user)
     return {"ok": True, "token": token, "user": _public_user(user)}
+
+
+@router.post("/api/guest/session")
+def guest_session(request: Request, response: Response):
+    from server.guest import ensure_guest, guest_usage_snapshot
+
+    guest_id = (request.cookies.get(GUEST_COOKIE_NAME) or "").strip()
+    if not guest_id:
+        guest_id = new_id()
+    ip = request.client.host if request.client else ""
+    ensure_guest(guest_id, ip)
+    https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    response.set_cookie(
+        key=GUEST_COOKIE_NAME,
+        value=guest_id,
+        httponly=True,
+        samesite="lax",
+        secure=https,
+        max_age=GUEST_TOKEN_DAYS * 86400,
+        path="/",
+    )
+    token = issue_guest_jwt(guest_id)
+    usage = guest_usage_snapshot(guest_id)
+    return {"ok": True, "token": token, "guest_id": guest_id, "usage": usage}
 
 
 @router.get("/api/me")

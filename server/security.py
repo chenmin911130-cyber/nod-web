@@ -11,7 +11,7 @@ import jwt
 from fastapi import Cookie, Header, HTTPException, Request
 
 from server.db import User, db_session
-from server.settings import AUTH_DISABLED, AUTH_SECRET, COOKIE_NAME, TOKEN_DAYS
+from server.settings import AUTH_DISABLED, AUTH_SECRET, COOKIE_NAME, GUEST_TOKEN_DAYS, TOKEN_DAYS
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -40,8 +40,20 @@ def issue_jwt(user_id: str, email: str) -> str:
     payload = {
         "sub": user_id,
         "email": email,
+        "typ": "user",
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(days=TOKEN_DAYS)).timestamp()),
+    }
+    return jwt.encode(payload, AUTH_SECRET, algorithm="HS256")
+
+
+def issue_guest_jwt(guest_id: str) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": guest_id,
+        "typ": "guest",
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(days=GUEST_TOKEN_DAYS)).timestamp()),
     }
     return jwt.encode(payload, AUTH_SECRET, algorithm="HS256")
 
@@ -73,12 +85,27 @@ def read_token(request: Request, cookie: str | None = None, authorization: str |
     return (request.cookies.get(COOKIE_NAME) or "").strip()
 
 
+def guest_from_token(token: str) -> str | None:
+    if not token:
+        return None
+    try:
+        payload = decode_jwt(token)
+    except jwt.PyJWTError:
+        return None
+    if payload.get("typ") != "guest":
+        return None
+    guest_id = payload.get("sub")
+    return str(guest_id) if guest_id else None
+
+
 def user_from_token(token: str) -> User | None:
     if not token:
         return None
     try:
         payload = decode_jwt(token)
     except jwt.PyJWTError:
+        return None
+    if payload.get("typ") == "guest":
         return None
     uid = payload.get("sub")
     if not uid:

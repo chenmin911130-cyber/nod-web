@@ -3428,3 +3428,41 @@ html.nod-web .ov-root {
 .consent-card a {
   color: #5bdaf4;
 }
+
+.guest-trial-banner {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  z-index: 12;
+  padding: 0.45rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid rgba(91, 218, 244, 0.28);
+  background: rgba(8, 18, 34, 0.92);
+  color: #9db4cb;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.guest-trial-banner a {
+  color: #5bdaf4;
+  text-decoration: none;
+}
+
+.guest-gate-card .guest-gate-eyebrow {
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  color: #5bdaf4;
+  margin-bottom: 0.35rem;
+}
+
+.guest-gate-actions {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+
+.guest-gate-actions .button {
+  text-align: center;
+  text-decoration: none;
+}

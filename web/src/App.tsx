@@ -11,7 +11,8 @@ import TranslatePane from './components/TranslatePane'
 import StatusToast from './components/StatusToast'
 import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
-import { api as authApi, fetchMe } from './auth'
+import GuestGate from './components/GuestGate'
+import { api as authApi, fetchMe, type Quota } from './auth'
 
 const PLACEHOLDER = 'Waiting for the next question…'
 const STATUS_READY = 'Ready · F2 record / F3 listen / F4 clear'
@@ -263,6 +264,9 @@ function reducer(state: AppState, action: Action): AppState {
             },
           }
         case 'quota_exceeded':
+          if (ev.reason === 'guest_trial') {
+            return { ...state, busy: false, status: 'Guest trial ended — sign in to continue' }
+          }
           return { ...state, busy: false, status: 'Usage limit reached — open Account' }
         default:
           return state
@@ -401,8 +405,21 @@ function engineSource(listenMic: boolean, systemMuted: boolean): AudioSource {
   return listenMic ? 'both' : 'system'
 }
 
-export default function App() {
-  const [state, dispatch] = useReducer(reducer, initial)
+export default function App({
+  guestMode = false,
+  guestUsage = null,
+  initialMode,
+  clerkEnabled = false,
+}: {
+  guestMode?: boolean
+  guestUsage?: Quota | null
+  initialMode?: WorkspaceMode
+  clerkEnabled?: boolean
+}) {
+  const [state, dispatch] = useReducer(reducer, { initialMode, guestMode }, ({ initialMode, guestMode }) => ({
+    ...initial,
+    workspaceMode: initialMode ?? (guestMode ? 'translate' : 'interview'),
+  }))
   const stateRef = useRef(state)
   stateRef.current = state
   const askedTranslate = useRef<Set<string>>(new Set())
@@ -412,11 +429,45 @@ export default function App() {
   const translateTimer = useRef(0)
   const pumpTranslateRef = useRef<() => void>(() => {})
   const tickRef = useRef(0)
+  const guestListenStarted = useRef(false)
   const [consent, setConsent] = useState<boolean | null>(null)
+  const [guestTrialEnded, setGuestTrialEnded] = useState(() => Boolean(guestUsage && !guestUsage.ok))
 
   useEffect(() => {
+    if (guestMode) {
+      setConsent(true)
+      return
+    }
     void fetchMe().then((me) => setConsent(me ? me.consent : true))
-  }, [])
+  }, [guestMode])
+
+  useEffect(() => {
+    if (!guestMode || guestTrialEnded) return
+    if (guestUsage) {
+      dispatch({
+        type: 'engine',
+        ev: {
+          type: 'quota',
+          ok: guestUsage.ok,
+          stt_seconds: guestUsage.stt_seconds,
+          stt_limit: guestUsage.stt_limit,
+          llm_tokens: guestUsage.llm_tokens,
+          llm_limit: guestUsage.llm_limit,
+        },
+      })
+    }
+    const api = window.api
+    const off = api.onEvent((e) => {
+      if (e.type === 'guest_trial_ended' || (e.type === 'quota_exceeded' && e.reason === 'guest_trial')) {
+        setGuestTrialEnded(true)
+      }
+      if (e.type === 'ready' && !guestListenStarted.current) {
+        guestListenStarted.current = true
+        queueMicrotask(() => api.send({ type: 'toggle_listen' }))
+      }
+    })
+    return () => off()
+  }, [guestMode, guestTrialEnded, guestUsage])
 
   const clearTranslateTimer = () => {
     if (translateTimer.current) {
@@ -919,6 +970,10 @@ ${actions.length ? `<h2>Marked actions</h2>${actions.map((ln) => `<div class="ln
     return () => window.clearInterval(id)
   }, [state.workspaceMode, state.meetingStartedAt, state.run])
 
+  if (guestTrialEnded) {
+    return <GuestGate clerkEnabled={clerkEnabled} />
+  }
+
   if (!state.keys.hasLlm || !state.keys.hasStt) {
     return <KeySetup hasLlm={state.keys.hasLlm} hasStt={state.keys.hasStt} />
   }
@@ -983,9 +1038,13 @@ ${actions.length ? `<h2>Marked actions</h2>${actions.map((ln) => `<div class="ln
         onStealth={handleStealth}
         onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
         quotaLabel={
-          state.quota
-            ? `${Math.max(0, Math.round((state.quota.stt_limit - state.quota.stt_seconds) / 60))}m left`
-            : 'Account'
+          guestMode && state.quota
+            ? `${Math.max(0, Math.ceil(state.quota.stt_limit - state.quota.stt_seconds))}s left`
+            : state.quota
+              ? `${Math.max(0, Math.round((state.quota.stt_limit - state.quota.stt_seconds) / 60))}m left`
+              : guestMode
+                ? 'Guest trial'
+                : 'Account'
         }
       />
       <div className="workspace">
@@ -1043,6 +1102,11 @@ ${actions.length ? `<h2>Marked actions</h2>${actions.map((ln) => `<div class="ln
         )}
       </div>
       <StatusToast text={state.status} />
+      {guestMode && !guestTrialEnded && (
+        <div className="guest-trial-banner">
+          Guest preview · 1 minute free · <a href="/signup?next=/app">Sign in to save history</a>
+        </div>
+      )}
       {consent === false && (
         <div className="consent-mask">
           <div className="consent-card">
