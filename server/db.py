@@ -34,6 +34,7 @@ class User(Base):
     stripe_customer_id: Mapped[str] = mapped_column(String(64), default="")
     stripe_subscription_id: Mapped[str] = mapped_column(String(64), default="")
     recording_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stt_limit_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -154,6 +155,7 @@ def init_db() -> None:
     (DATA_DIR / "backups").mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
     _add_column_if_missing("users", "clerk_id", "VARCHAR(64) DEFAULT ''")
+    _add_column_if_missing("users", "stt_limit_seconds", "INTEGER")
 
 
 @contextmanager

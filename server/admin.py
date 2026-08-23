@@ -10,6 +10,7 @@ from server.meter import (
     admin_feedback,
     admin_overview,
     admin_sessions,
+    admin_set_stt_limit,
     admin_user_detail,
     admin_users,
     delete_user_data,
@@ -66,6 +67,18 @@ def users(q: str = "", _: None = Depends(require_admin)):
 @router.get("/api/admin/users/{user_id}")
 def user_detail(user_id: str, _: None = Depends(require_admin)):
     row = admin_user_detail(user_id)
+    if row is None:
+        raise HTTPException(404, "User not found")
+    return {"ok": True, "user": row}
+
+
+class UserQuotaIn(BaseModel):
+    minutes: float | None = None
+
+
+@router.patch("/api/admin/users/{user_id}/quota")
+def user_quota(user_id: str, body: UserQuotaIn, _: None = Depends(require_admin)):
+    row = admin_set_stt_limit(user_id, body.minutes)
     if row is None:
         raise HTTPException(404, "User not found")
     return {"ok": True, "user": row}

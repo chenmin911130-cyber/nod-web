@@ -133,8 +133,10 @@ export default function AccountPage() {
             Plan: <b>{me.plan_name}</b> · {me.subscription_status}
             {paid === '1' ? ' · Payment received. Refresh if the plan has not updated yet.' : ''}
             {me.quota_disabled || u.quota_disabled
-              ? ' · Testing: transcription, generation, and daily caps are not enforced.'
-              : me.plan === 'pro'
+              ? ' · Testing: transcription, generation, and daily caps are not enforced unless an admin sets a monthly time cap.'
+              : u.stt_limit_seconds != null
+                ? ` · ${fmtMin(u.stt_limit)} of live transcription this month. Listening pauses when the cap is reached.`
+                : me.plan === 'pro'
                 ? ' · Cancel anytime from Manage billing. Hitting a cap pauses listening and generation until the month resets.'
                 : ' · Trial needs no card. Generation tokens are limited. Upgrade anytime — cancel Pro from this page after checkout.'}
           </p>
@@ -169,7 +171,7 @@ export default function AccountPage() {
             </div>
           </div>
           <div className="hero-actions">
-            {me.quota_disabled || u.quota_disabled ? (
+            {me.quota_disabled || u.quota_disabled || !me.stripe_enabled ? (
               <a className="button button-primary" href="/app">
                 Open workspace
               </a>

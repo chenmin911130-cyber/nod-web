@@ -32,6 +32,16 @@ def plan_of(user: User) -> dict:
     return PLANS[pid]
 
 
+def stt_limit_seconds(user: User) -> int | None:
+    """Monthly transcription cap in seconds. None means unlimited."""
+    raw = getattr(user, "stt_limit_seconds", None)
+    if raw is not None:
+        return max(0, int(raw))
+    if QUOTA_DISABLED:
+        return None
+    return int(plan_of(user)["stt_seconds"])
+
+
 def _cost_stt(seconds: float) -> float:
     return (seconds / 60.0) * STT_USD_PER_MINUTE
 
@@ -90,14 +100,12 @@ def usage_snapshot(user_id: str) -> dict:
         global_cost = float(glob.cost_usd) if glob else 0.0
         reason = ""
         ok = True
+        cap = stt_limit_seconds(user)
+        if cap is not None and float(stt) >= cap:
+            ok, reason = False, "stt"
         if not QUOTA_DISABLED:
-            if stt >= plan["stt_seconds"]:
-                ok, reason = False, "stt"
-            elif tokens >= plan["llm_tokens"]:
+            if ok and tokens >= plan["llm_tokens"]:
                 ok, reason = False, "llm"
-            elif sessions >= plan["sessions"] and sessions > 0 and plan["sessions"] <= sessions:
-                # still allow continuing an open session; new sessions blocked separately
-                pass
             if daily_cost >= plan["daily_cost_usd"]:
                 ok, reason = False, "daily"
             if global_cost >= GLOBAL_DAILY_BUDGET_USD:
@@ -105,11 +113,12 @@ def usage_snapshot(user_id: str) -> dict:
         return {
             "ok": ok,
             "reason": reason,
-            "quota_disabled": QUOTA_DISABLED,
+            "quota_disabled": cap is None,
             "plan": plan["id"],
             "plan_name": plan["name"],
             "stt_seconds": round(float(stt), 2),
-            "stt_limit": plan["stt_seconds"],
+            "stt_limit": cap if cap is not None else plan["stt_seconds"],
+            "stt_limit_seconds": cap,
             "llm_tokens": tokens,
             "llm_limit": plan["llm_tokens"],
             "sessions": int(sessions),
@@ -124,10 +133,10 @@ def usage_snapshot(user_id: str) -> dict:
 
 def can_start_session(user_id: str) -> tuple[bool, dict]:
     snap = usage_snapshot(user_id)
-    if QUOTA_DISABLED:
-        return True, snap
     if not snap.get("ok"):
         return False, snap
+    if QUOTA_DISABLED:
+        return True, snap
     if snap["sessions"] >= snap["session_limit"]:
         snap["ok"] = False
         snap["reason"] = "sessions"
@@ -378,6 +387,7 @@ def _public_admin_user(user: User, usage: dict | None = None) -> dict:
         "cost_usd": u.get("cost_usd", 0),
         "sessions": u.get("sessions", 0),
         "last_seen": u.get("last_seen"),
+        "stt_limit_seconds": user.stt_limit_seconds,
     }
 
 
@@ -406,6 +416,18 @@ def admin_user_detail(user_id: str) -> dict | None:
         "usage": usage_snapshot(user.id),
         "history": list_history(user.id, 30),
     }
+
+
+def admin_set_stt_limit(user_id: str, minutes: float | None) -> dict | None:
+    with db_session() as db:
+        user = db.get(User, user_id)
+        if user is None or user.deleted_at is not None:
+            return None
+        if minutes is None:
+            user.stt_limit_seconds = None
+        else:
+            user.stt_limit_seconds = max(0, int(round(float(minutes) * 60)))
+    return admin_user_detail(user_id)
 
 
 def admin_sessions(limit: int = 60) -> list[dict]:

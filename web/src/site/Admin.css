@@ -237,6 +237,35 @@
   cursor: pointer;
 }
 
+.ghost.on {
+  border-color: #5bdaf4;
+  color: #5bdaf4;
+}
+
+.quota-box {
+  margin: 4px 0 16px;
+  padding: 14px 0;
+  border-top: 1px solid #1c334a;
+  border-bottom: 1px solid #1c334a;
+}
+
+.quota-box b {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.quota-presets,
+.quota-custom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.quota-custom .search {
+  width: 160px;
+}
+
 .search {
   width: 280px;
   border: 1px solid #233b55;

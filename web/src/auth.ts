@@ -15,6 +15,7 @@ export type Quota = {
   daily_cost_limit: number
   consent?: boolean
   quota_disabled?: boolean
+  stt_limit_seconds?: number | null
 }
 
 export type Me = {

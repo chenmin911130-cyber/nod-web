@@ -31,6 +31,13 @@ type AdminUser = {
   cost_usd: number
   sessions: number
   last_seen: string | null
+  stt_limit_seconds: number | null
+  usage?: {
+    stt_seconds: number
+    stt_limit: number
+    stt_limit_seconds: number | null
+    quota_disabled: boolean
+  }
   history?: Array<{
     id: string
     mode: string
@@ -68,6 +75,13 @@ function mins(sec: number) {
   return `${Math.round((sec / 60) * 10) / 10} min`
 }
 
+function capLabel(sec: number | null | undefined) {
+  if (sec == null) return 'Unlimited'
+  return mins(sec)
+}
+
+const PRESETS = [20, 60, 120, 480]
+
 async function adminApi<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   const token = sessionStorage.getItem(TOKEN_KEY) || ''
@@ -94,6 +108,8 @@ export default function AdminPage() {
   const [sessions, setSessions] = useState<SessionRow[]>([])
   const [feedback, setFeedback] = useState<FeedbackRow[]>([])
   const [backupMsg, setBackupMsg] = useState('')
+  const [minutes, setMinutes] = useState('')
+  const [quotaMsg, setQuotaMsg] = useState('')
 
   const load = async (which: Tab = tab) => {
     if (which === 'overview') {
@@ -143,6 +159,23 @@ export default function AdminPage() {
   const openUser = async (id: string) => {
     const out = await adminApi<{ user: AdminUser }>(`/api/admin/users/${id}`)
     setSelected(out.user)
+    const cap = out.user.stt_limit_seconds
+    setMinutes(cap == null ? '' : String(Math.round((cap / 60) * 10) / 10))
+    setQuotaMsg('')
+  }
+
+  const saveQuota = async (value: number | null) => {
+    if (!selected) return
+    setQuotaMsg('')
+    const out = await adminApi<{ user: AdminUser }>(`/api/admin/users/${selected.id}/quota`, {
+      method: 'PATCH',
+      body: JSON.stringify({ minutes: value }),
+    })
+    setSelected(out.user)
+    setUsers((list) => list.map((u) => (u.id === out.user.id ? { ...u, ...out.user } : u)))
+    const cap = out.user.stt_limit_seconds
+    setMinutes(cap == null ? '' : String(Math.round((cap / 60) * 10) / 10))
+    setQuotaMsg(cap == null ? 'Unlimited this month' : `${capLabel(cap)} per month`)
   }
 
   const removeUser = async (id: string) => {
@@ -275,7 +308,7 @@ export default function AdminPage() {
             <div className="admin-top">
               <div>
                 <h1>Users</h1>
-                <p className="sub">Everyone is on the free test plan. Search email or name.</p>
+                <p className="sub">Default is unlimited. Open a user to set monthly transcription minutes.</p>
               </div>
               <form
                 onSubmit={(e) => {
@@ -292,7 +325,8 @@ export default function AdminPage() {
                   <tr>
                     <th>User</th>
                     <th>Plan</th>
-                    <th>STT</th>
+                    <th>Used</th>
+                    <th>Cap</th>
                     <th>Tokens</th>
                     <th>Consent</th>
                     <th />
@@ -310,11 +344,12 @@ export default function AdminPage() {
                         <span className="tag trial">Free test</span>
                       </td>
                       <td>{mins(u.stt_seconds)}</td>
+                      <td>{capLabel(u.stt_limit_seconds)}</td>
                       <td>{u.llm_tokens.toLocaleString()}</td>
                       <td>{u.consent ? 'Yes' : <span className="tag off">No</span>}</td>
                       <td>
                         <button className="ghost" type="button" onClick={() => void openUser(u.id)}>
-                          History
+                          Quota
                         </button>
                       </td>
                     </tr>
@@ -336,6 +371,50 @@ export default function AdminPage() {
                   <button className="ghost" type="button" onClick={() => void removeUser(selected.id)}>
                     Delete test account
                   </button>
+                </div>
+                <div className="quota-box">
+                  <b>Monthly transcription</b>
+                  <p className="sub">
+                    Used this month:{' '}
+                    {mins(selected.usage?.stt_seconds ?? selected.stt_seconds)}
+                    {selected.stt_limit_seconds == null ? ' · no cap' : ` / ${capLabel(selected.stt_limit_seconds)}`}
+                  </p>
+                  <div className="quota-presets">
+                    <button className={`ghost${selected.stt_limit_seconds == null ? ' on' : ''}`} type="button" onClick={() => void saveQuota(null)}>
+                      Unlimited
+                    </button>
+                    {PRESETS.map((n) => (
+                      <button
+                        key={n}
+                        className={`ghost${selected.stt_limit_seconds === n * 60 ? ' on' : ''}`}
+                        type="button"
+                        onClick={() => void saveQuota(n)}
+                      >
+                        {n >= 60 ? `${n / 60} hr` : `${n} min`}
+                      </button>
+                    ))}
+                  </div>
+                  <form
+                    className="quota-custom"
+                    onSubmit={(e) => {
+                      e.preventDefault()
+                      const n = Number(minutes)
+                      if (!Number.isFinite(n) || n < 0) return
+                      void saveQuota(n)
+                    }}
+                  >
+                    <input
+                      className="search"
+                      value={minutes}
+                      onChange={(e) => setMinutes(e.target.value)}
+                      placeholder="Custom minutes"
+                      inputMode="decimal"
+                    />
+                    <button className="ghost" type="submit">
+                      Save
+                    </button>
+                  </form>
+                  {quotaMsg && <p className="site-ok">{quotaMsg}</p>}
                 </div>
                 {(selected.history || []).map((s) => (
                   <p key={s.id} className="sub">
@@ -416,7 +495,7 @@ export default function AdminPage() {
               <div className="toggle">
                 <div>
                   <b>Usage limits</b>
-                  <p className="sub">Off while testing. Listening and generation are not blocked.</p>
+                  <p className="sub">Off by default. A per-user monthly transcription cap still applies if you set one.</p>
                 </div>
                 <span className="tag test">Off</span>
               </div>
