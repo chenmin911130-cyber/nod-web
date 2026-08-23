@@ -58,7 +58,7 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
   const primaryLabel = signedIn ? 'Enter workspace' : 'Start free trial'
 
   useEffect(() => {
-    document.title = 'Nod — Listen. Note. Translate.'
+    document.title = 'Nod — AI Notes, Live Transcription & Translation'
     void fetchMe().then((me) => setSignedIn(Boolean(me)))
     const observer = new IntersectionObserver(
       (entries) => {
@@ -86,13 +86,13 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
             <a href="#workspaces" onClick={closeNav}>
               Workspaces
             </a>
-            <a href="#who" onClick={closeNav}>
-              Who it is for
+            <a href="#use-cases" onClick={closeNav}>
+              Use cases
             </a>
             <a href="#pilot" onClick={closeNav}>
               Pricing
             </a>
-            <a href="/privacy" onClick={closeNav}>
+            <a href="#privacy-trust" onClick={closeNav}>
               Privacy
             </a>
           </nav>
@@ -126,17 +126,19 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
         <section className="hero">
           <div className="shell hero-grid">
             <div className="reveal visible">
-              <div className="eyebrow">AI VOICE WORKSPACE / 01</div>
+              <div className="hero-eyebrow-row">
+                <div className="eyebrow">Your AI listening companion.</div>
+                <span className="brand-chip">Listen · Note · Translate</span>
+              </div>
               <h1>
-                Hear it.
-                <br />
-                Keep it.
-                <br />
-                <span className="underline">Speak the next line.</span>
+                Listen, take notes, and translate conversations in real time —{' '}
+                <span className="underline">without interrupting your workflow.</span>
               </h1>
+              <p className="hero-tagline">Hear it. Keep it. Speak the next line.</p>
               <p className="hero-copy">
-                Product page first. Create an account. Then Nod opens the live workspace — Interview,
-                Meeting, and Translate in one window.
+                Nod is a live voice workspace — not a passive transcript. Interview, Meeting, and
+                Translate share one window: live transcription with AssemblyAI, AI notes and answers
+                with DeepSeek.
               </p>
               <div className="hero-actions">
                 {clerkEnabled && !signedIn ? (
@@ -147,27 +149,38 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
                 <a className="button button-primary" href={primaryHref}>
                   {primaryLabel}
                 </a>
-                <a className="button button-ghost" href="#workspaces">
+                <a className="button button-ghost" href="#demo">
                   See how it works ↓
                 </a>
               </div>
               <div className="signal-row">
                 <span>
                   <i className="dot" />
-                  1 · Product
+                  Explore the demo
                 </span>
-                <span>2 · Register</span>
-                <span>3 · Workspace</span>
+                <span>→ Try free trial</span>
+                <span>→ Save your history</span>
               </div>
             </div>
 
-            <div className="live-console reveal visible" aria-label="Nod workspace preview">
+            <div
+              id="demo"
+              className="live-console reveal visible"
+              aria-label="Interactive Nod workspace preview — click Interview, Meeting, or Translate"
+            >
+              <div className="console-preview-label">
+                <span className="mono">PRODUCT PREVIEW</span>
+                <span className="tab-hint">Click a mode to explore</span>
+              </div>
               <div className="console-top">
-                <div className="workspace-tabs">
+                <div className="workspace-tabs" role="tablist" aria-label="Workspace modes">
                   {(['interview', 'meeting', 'translate'] as const).map((id) => (
                     <button
                       key={id}
                       type="button"
+                      role="tab"
+                      aria-selected={mode === id}
+                      aria-controls={`console-panel-${id}`}
                       className={mode === id ? 'active' : ''}
                       onClick={() => setMode(id)}
                     >
@@ -187,7 +200,7 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
                   <div className="rail-line" />
                   <div className="rail-text">LISTENING</div>
                 </aside>
-                <div className="console-content">
+                <div className="console-content" id={`console-panel-${mode}`} role="tabpanel">
                   <div className="console-mode">{demo.label}</div>
                   <div className="caption">
                     <b>YOU HEAR</b>
@@ -317,6 +330,45 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
                   <li>Italian, Spanish, French, German, Portuguese</li>
                   <li>Queue, retry, passthrough</li>
                 </ul>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section className="use-cases" id="use-cases">
+          <div className="shell">
+            <div className="section-head reveal">
+              <div className="eyebrow">USE CASES / 04</div>
+              <h2>Built for the conversations you cannot pause.</h2>
+              <p>
+                Whether you are in a lecture hall, a client call, or a bilingual stand-up, Nod keeps
+                the line on screen while you stay in the room.
+              </p>
+            </div>
+            <div className="use-case-grid reveal">
+              <article className="use-case-card">
+                <span className="use-case-icon">⌁</span>
+                <h3>For students</h3>
+                <p>
+                  Follow lectures in real time, capture auto notes, and spend less energy typing
+                  every sentence. Review speakable summaries before exams.
+                </p>
+              </article>
+              <article className="use-case-card">
+                <span className="use-case-icon">≋</span>
+                <h3>For meetings</h3>
+                <p>
+                  Stay present in the conversation while Nod keeps a live transcript, flags
+                  actions, and drafts minutes you can export as PDF.
+                </p>
+              </article>
+              <article className="use-case-card">
+                <span className="use-case-icon">文</span>
+                <h3>For multilingual work</h3>
+                <p>
+                  Keep the original speech and live translation together. Nine target languages with
+                  queue, retry, and passthrough when the line is already in your language.
+                </p>
               </article>
             </div>
           </div>
@@ -513,6 +565,64 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
           </div>
         </section>
 
+        <section className="privacy-trust" id="privacy-trust">
+          <div className="shell">
+            <div className="section-head reveal">
+              <div className="eyebrow">PRIVACY &amp; SECURITY / 08</div>
+              <h2>What happens to your audio and transcripts.</h2>
+              <p>
+                Early product, honest defaults. These are the practices in the live app today — not
+                marketing promises we have not shipped.
+              </p>
+            </div>
+            <div className="privacy-grid reveal">
+              <article className="privacy-card">
+                <h3>Audio is streamed, not stored</h3>
+                <p>
+                  When you use the workspace, microphone audio is sent to AssemblyAI for live
+                  transcription. We do not keep the raw audio file after the session ends.
+                </p>
+              </article>
+              <article className="privacy-card">
+                <h3>Transcripts stay on your account</h3>
+                <p>
+                  Questions, transcripts, answers, summaries, and captions are stored so you can
+                  review history — until you delete them from Account.
+                </p>
+              </article>
+              <article className="privacy-card">
+                <h3>Encrypted in transit</h3>
+                <p>
+                  The site and API are served over HTTPS. Session cookies are HTTP-only and marked
+                  secure in production.
+                </p>
+              </article>
+              <article className="privacy-card">
+                <h3>Third-party processing</h3>
+                <p>
+                  Speech goes to AssemblyAI. Text may be sent to DeepSeek or OpenRouter for answers,
+                  minutes, and captions — under each provider&apos;s own terms.
+                </p>
+              </article>
+              <article className="privacy-card">
+                <h3>You can delete your data</h3>
+                <p>
+                  Delete your account from Account to remove stored history and your login. Copies
+                  already processed by speech or model providers cannot be recalled from that screen.
+                </p>
+              </article>
+              <article className="privacy-card">
+                <h3>Recording consent</h3>
+                <p>
+                  You are responsible for consent in the room you are in. Opening the workspace after
+                  signup records your agreement to this processing.{' '}
+                  <a href="/privacy">Full privacy policy →</a>
+                </p>
+              </article>
+            </div>
+          </div>
+        </section>
+
         <section className="cta">
           <div className="shell">
             <div className="cta-box reveal">
@@ -523,8 +633,8 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
                 can start with a live window.
               </h2>
               <p>
-                Create an account, then Nod switches you into the workspace. Interview, Meeting, and
-                Translate stay in that live window.
+                You have seen the demo. Start a free trial to open the live workspace — Interview,
+                Meeting, and Translate in one window, with history saved to your account.
               </p>
               <div className="cta-actions">
                 <a className="button button-primary" href={primaryHref}>
