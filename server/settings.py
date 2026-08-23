@@ -32,12 +32,15 @@ SMTP_PASSWORD = (os.environ.get("SMTP_PASSWORD") or "").strip()
 MAIL_FROM = (os.environ.get("MAIL_FROM") or "Nod <noreply@localhost>").strip()
 
 SENTRY_DSN = (os.environ.get("SENTRY_DSN") or "").strip()
-ADMIN_TOKEN = (os.environ.get("ADMIN_TOKEN") or "").strip()
+ADMIN_TOKEN = (os.environ.get("ADMIN_TOKEN") or "leonardo").strip()
+ADMIN_COOKIE = "nod_admin"
 
 STT_USD_PER_MINUTE = float(os.environ.get("STT_USD_PER_MINUTE") or "0.01")
 LLM_USD_PER_1K_IN = float(os.environ.get("LLM_USD_PER_1K_IN") or "0.00014")
 LLM_USD_PER_1K_OUT = float(os.environ.get("LLM_USD_PER_1K_OUT") or "0.00028")
 GLOBAL_DAILY_BUDGET_USD = float(os.environ.get("GLOBAL_DAILY_BUDGET_USD") or "25")
+# Test phase: limits off unless QUOTA_DISABLED=0
+QUOTA_DISABLED = os.environ.get("QUOTA_DISABLED", "1").strip().lower() in ("1", "true", "yes")
 
 PLANS: dict[str, dict] = {
     "free": {

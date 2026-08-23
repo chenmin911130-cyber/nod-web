@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { api, setToken } from '../auth'
+import { track } from './track'
 import './Site.css'
 
 const GoogleButton = lazy(() => import('./ClerkAuth').then((m) => ({ default: m.GoogleButton })))
@@ -68,7 +69,7 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
           <div className="eyebrow">ACCOUNT</div>
           <Funnel current="account" />
           <h1>Sign in to Nod</h1>
-          <p>Interview, Meeting, and Translate need an account. Continue with Google, or use email.</p>
+          <p>Interview, Meeting, and Translate need an account. Continue with Google, or use email. Google is optional.</p>
           {clerkEnabled && (
             <>
               <Suspense fallback={null}>
@@ -93,7 +94,7 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
           </form>
           <div className="site-links">
             <a href="/forgot">Forgot password</a>
-            <a href="/signup">Start free trial</a>
+            <a href="/signup">Start free — Google or email</a>
           </div>
         </div>
       </div>
@@ -113,12 +114,14 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
     e.preventDefault()
     setBusy(true)
     setErr('')
+    track('cta_signup_email')
     try {
       const out = await api<{ token: string }>('/api/auth/register', {
         method: 'POST',
         body: JSON.stringify({ email, password, name, consent }),
       })
       setToken(out.token)
+      track('signup_success', { method: 'email' })
       location.href = '/app'
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Could not create account')
@@ -134,7 +137,7 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
           <div className="eyebrow">REGISTER</div>
           <Funnel current="account" />
           <h1>Create your account</h1>
-          <p>Step 2 of 3. Google is one tap. Email still works if you prefer a password.</p>
+          <p>Google or email — both start the same free trial. No card required. 20 minutes of transcription included.</p>
           {clerkEnabled && (
             <>
               <Suspense fallback={null}>
@@ -159,8 +162,8 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
             <label className="site-check">
               <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} required />
               <span>
-                I agree to the <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>, and I understand that
-                audio is sent to speech and language providers while I use the workspace.
+                I agree to the <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>. You will confirm
+                microphone and data use again before recording starts.
               </span>
             </label>
             {err && <div className="site-err">{err}</div>}

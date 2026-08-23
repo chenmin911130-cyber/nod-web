@@ -1,21 +1,20 @@
 import { createRoot } from 'react-dom/client'
+import Site from './site/Site'
 
 const rootEl = document.getElementById('root')
 
 async function boot() {
   if (!rootEl) return
   document.documentElement.classList.add('nod-site')
-  const { default: Site } = await import('./site/Site')
-  let clerkKey = ''
+  const root = createRoot(rootEl)
+  root.render(<Site />)
+
   try {
     const cfg = (await fetch('/api/config').then((res) => res.json())) as { clerk_publishable_key?: string }
-    clerkKey = cfg.clerk_publishable_key || ''
-  } catch {
-    clerkKey = ''
-  }
-  if (clerkKey) {
+    const clerkKey = cfg.clerk_publishable_key || ''
+    if (!clerkKey) return
     const { ClerkProvider } = await import('@clerk/clerk-react')
-    createRoot(rootEl).render(
+    root.render(
       <ClerkProvider
         publishableKey={clerkKey}
         afterSignOutUrl="/"
@@ -35,9 +34,9 @@ async function boot() {
         <Site clerkEnabled />
       </ClerkProvider>,
     )
-    return
+  } catch {
+    /* stay on the first paint */
   }
-  createRoot(rootEl).render(<Site />)
 }
 
 void boot()

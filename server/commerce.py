@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import timedelta
 from typing import Any
@@ -8,9 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from server.db import Feedback, Order, ResetToken, User, db_session, utcnow
+from server.db import AuditLog, Feedback, Order, ResetToken, User, db_session, utcnow
 from server.mailer import send_reset_email
-from server.meter import admin_overview, delete_user_data, list_history, plan_of, usage_snapshot
+from server.meter import delete_user_data, list_history, plan_of, usage_snapshot
 from server.security import (
     cookie_kwargs,
     current_user,
@@ -19,12 +20,10 @@ from server.security import (
     issue_jwt,
     new_id,
     optional_user,
-    require_admin,
     valid_email,
     verify_password,
 )
 from server.settings import CLERK_PUBLISHABLE_KEY, MAIL_FROM, PLANS, PUBLIC_URL, STRIPE_PRICE_PRO, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
-from server.logging_setup import backup_now
 
 log = logging.getLogger("nod.api")
 router = APIRouter()
@@ -79,6 +78,7 @@ def _public_user(user: User) -> dict[str, Any]:
         "usage": snap,
         "plans": list(PLANS.values()),
         "stripe_enabled": bool(STRIPE_SECRET_KEY and STRIPE_PRICE_PRO),
+        "quota_disabled": bool(snap.get("quota_disabled")),
     }
 
 
@@ -106,7 +106,7 @@ def register(body: RegisterIn, request: Request, response: Response):
             name=(body.name or "").strip()[:120],
             plan="free",
             subscription_status="trialing",
-            recording_consent_at=utcnow() if body.consent else None,
+            recording_consent_at=None,
         )
         db.add(user)
         db.flush()
@@ -159,7 +159,7 @@ def clerk_login(request: Request, response: Response, body: ClerkIn | None = Non
                 name=name,
                 plan="free",
                 subscription_status="trialing",
-                recording_consent_at=utcnow(),
+                recording_consent_at=None,
             )
             db.add(user)
             db.flush()
@@ -168,8 +168,6 @@ def clerk_login(request: Request, response: Response, body: ClerkIn | None = Non
                 user.clerk_id = clerk_id
             if name and not user.name:
                 user.name = name
-            if not user.recording_consent_at:
-                user.recording_consent_at = utcnow()
         db.expunge(user)
     nod_token = _set_session(response, request, user)
     log.info("clerk login user=%s clerk=%s", user.id, clerk_id)
@@ -231,6 +229,35 @@ def consent(body: ConsentIn, user: User = Depends(current_user)):
         if row:
             row.recording_consent_at = utcnow()
     return {"ok": True, "consent": True}
+
+
+ALLOWED_EVENTS = {
+    "cta_hero_start",
+    "cta_google",
+    "cta_signup_email",
+    "cta_pricing",
+    "scroll_pricing",
+    "open_privacy",
+    "signup_success",
+}
+
+
+class EventIn(BaseModel):
+    name: str = ""
+    path: str = ""
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/api/events")
+def funnel_event(request: Request, body: EventIn):
+    name = (body.name or "").strip()[:64]
+    if name not in ALLOWED_EVENTS:
+        return {"ok": False}
+    ip = request.client.host if request.client else ""
+    detail = json.dumps({"path": (body.path or "")[:200], "extra": body.extra}, ensure_ascii=False)[:2000]
+    with db_session() as db:
+        db.add(AuditLog(id=new_id(), user_id="", action=name, detail=detail, ip=ip[:64]))
+    return {"ok": True}
 
 
 @router.get("/api/account/history")
@@ -383,14 +410,3 @@ def feedback(body: FeedbackIn, user: User | None = Depends(optional_user)):
         except Exception:
             log.exception("feedback mail failed")
     return {"ok": True}
-
-
-@router.get("/api/admin/usage")
-def admin_usage(_: None = Depends(require_admin)):
-    return {"ok": True, **admin_overview()}
-
-
-@router.post("/api/admin/backup")
-def admin_backup(_: None = Depends(require_admin)):
-    path = backup_now()
-    return {"ok": True, "path": str(path) if path else None}

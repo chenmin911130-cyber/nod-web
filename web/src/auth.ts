@@ -14,6 +14,7 @@ export type Quota = {
   daily_cost_usd: number
   daily_cost_limit: number
   consent?: boolean
+  quota_disabled?: boolean
 }
 
 export type Me = {
@@ -36,6 +37,7 @@ export type Me = {
     blurb: string
   }>
   stripe_enabled: boolean
+  quota_disabled?: boolean
 }
 
 export function getToken(): string {

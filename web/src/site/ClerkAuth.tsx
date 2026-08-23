@@ -6,14 +6,19 @@ import {
   useSignIn,
 } from '@clerk/clerk-react'
 import { api, getToken, setToken } from '../auth'
+import { track } from './track'
 import './Site.css'
 
 async function exchangeClerkSession(sessionToken: string) {
-  const out = await api<{ token: string }>('/api/auth/clerk', {
+  const out = await api<{ token: string; user?: { created_at?: string | null } }>('/api/auth/clerk', {
     method: 'POST',
     body: JSON.stringify({ token: sessionToken }),
   })
   setToken(out.token)
+  const created = out.user?.created_at ? Date.parse(out.user.created_at) : 0
+  if (created && Date.now() - created < 120_000) {
+    track('signup_success', { method: 'google' })
+  }
 }
 
 export function ClerkChrome() {
@@ -67,6 +72,7 @@ export function GoogleButton({ next = '/app' }: { next?: string }) {
 
   const start = async () => {
     if (!signIn) return
+    track('cta_google')
     setBusy(true)
     setErr('')
     const complete = `/login?next=${encodeURIComponent(next)}`

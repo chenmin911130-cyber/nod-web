@@ -4,13 +4,14 @@ from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select
 
-from server.db import GlobalDay, HistoryItem, UsageDay, UsageSession, User, db_session, utcnow
+from server.db import Feedback, GlobalDay, HistoryItem, UsageDay, UsageSession, User, db_session, utcnow
 from server.security import new_id
 from server.settings import (
     GLOBAL_DAILY_BUDGET_USD,
     LLM_USD_PER_1K_IN,
     LLM_USD_PER_1K_OUT,
     PLANS,
+    QUOTA_DISABLED,
     STT_USD_PER_MINUTE,
 )
 
@@ -89,20 +90,22 @@ def usage_snapshot(user_id: str) -> dict:
         global_cost = float(glob.cost_usd) if glob else 0.0
         reason = ""
         ok = True
-        if stt >= plan["stt_seconds"]:
-            ok, reason = False, "stt"
-        elif tokens >= plan["llm_tokens"]:
-            ok, reason = False, "llm"
-        elif sessions >= plan["sessions"] and sessions > 0 and plan["sessions"] <= sessions:
-            # still allow continuing an open session; new sessions blocked separately
-            pass
-        if daily_cost >= plan["daily_cost_usd"]:
-            ok, reason = False, "daily"
-        if global_cost >= GLOBAL_DAILY_BUDGET_USD:
-            ok, reason = False, "global"
+        if not QUOTA_DISABLED:
+            if stt >= plan["stt_seconds"]:
+                ok, reason = False, "stt"
+            elif tokens >= plan["llm_tokens"]:
+                ok, reason = False, "llm"
+            elif sessions >= plan["sessions"] and sessions > 0 and plan["sessions"] <= sessions:
+                # still allow continuing an open session; new sessions blocked separately
+                pass
+            if daily_cost >= plan["daily_cost_usd"]:
+                ok, reason = False, "daily"
+            if global_cost >= GLOBAL_DAILY_BUDGET_USD:
+                ok, reason = False, "global"
         return {
             "ok": ok,
             "reason": reason,
+            "quota_disabled": QUOTA_DISABLED,
             "plan": plan["id"],
             "plan_name": plan["name"],
             "stt_seconds": round(float(stt), 2),
@@ -121,6 +124,8 @@ def usage_snapshot(user_id: str) -> dict:
 
 def can_start_session(user_id: str) -> tuple[bool, dict]:
     snap = usage_snapshot(user_id)
+    if QUOTA_DISABLED:
+        return True, snap
     if not snap.get("ok"):
         return False, snap
     if snap["sessions"] >= snap["session_limit"]:
@@ -295,9 +300,20 @@ def hash_placeholder() -> str:
 
 
 def admin_overview() -> dict:
+    today = _day()
+    start = datetime.strptime(today, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     with db_session() as db:
         days = db.execute(select(GlobalDay).order_by(GlobalDay.day.desc()).limit(14)).scalars().all()
         users = db.execute(select(func.count()).select_from(User).where(User.deleted_at.is_(None))).scalar() or 0
+        signups_today = db.execute(
+            select(func.count()).select_from(User).where(User.deleted_at.is_(None), User.created_at >= start)
+        ).scalar() or 0
+        no_consent = db.execute(
+            select(func.count()).select_from(User).where(User.deleted_at.is_(None), User.recording_consent_at.is_(None))
+        ).scalar() or 0
+        open_sessions = db.execute(select(func.count()).select_from(UsageSession).where(UsageSession.ended_at.is_(None))).scalar() or 0
+        feedback_n = db.execute(select(func.count()).select_from(Feedback)).scalar() or 0
+        glob = db.get(GlobalDay, today)
         top = db.execute(
             select(UsageDay.user_id, func.sum(UsageDay.cost_usd))
             .group_by(UsageDay.user_id)
@@ -306,7 +322,127 @@ def admin_overview() -> dict:
         ).all()
         return {
             "users": int(users),
+            "signups_today": int(signups_today),
+            "no_consent": int(no_consent),
+            "open_sessions": int(open_sessions),
+            "feedback": int(feedback_n),
+            "stt_seconds_today": round(float(glob.stt_seconds), 1) if glob else 0,
+            "cost_usd_today": round(float(glob.cost_usd), 4) if glob else 0,
             "days": [{"day": d.day, "cost_usd": round(d.cost_usd, 4), "stt_seconds": round(d.stt_seconds, 1), "llm_tokens": d.llm_tokens} for d in days],
             "top_users": [{"user_id": uid, "cost_usd": round(float(cost or 0), 4)} for uid, cost in top],
             "global_daily_budget_usd": GLOBAL_DAILY_BUDGET_USD,
+            "quota_disabled": QUOTA_DISABLED,
         }
+
+
+def _user_usage_maps(db, user_ids: list[str]) -> dict[str, dict]:
+    if not user_ids:
+        return {}
+    rows = db.execute(
+        select(
+            UsageSession.user_id,
+            func.coalesce(func.sum(UsageSession.stt_seconds), 0),
+            func.coalesce(func.sum(UsageSession.llm_input_tokens + UsageSession.llm_output_tokens), 0),
+            func.coalesce(func.sum(UsageSession.estimated_cost_usd), 0),
+            func.count(),
+            func.max(UsageSession.started_at),
+        )
+        .where(UsageSession.user_id.in_(user_ids))
+        .group_by(UsageSession.user_id)
+    ).all()
+    out = {}
+    for uid, stt, tokens, cost, n, last in rows:
+        out[uid] = {
+            "stt_seconds": round(float(stt or 0), 1),
+            "llm_tokens": int(tokens or 0),
+            "cost_usd": round(float(cost or 0), 4),
+            "sessions": int(n or 0),
+            "last_seen": last.isoformat() if last else None,
+        }
+    return out
+
+
+def _public_admin_user(user: User, usage: dict | None = None) -> dict:
+    u = usage or {}
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "plan": user.plan,
+        "subscription_status": user.subscription_status,
+        "consent": bool(user.recording_consent_at),
+        "google": bool(user.clerk_id),
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "stt_seconds": u.get("stt_seconds", 0),
+        "llm_tokens": u.get("llm_tokens", 0),
+        "cost_usd": u.get("cost_usd", 0),
+        "sessions": u.get("sessions", 0),
+        "last_seen": u.get("last_seen"),
+    }
+
+
+def admin_users(q: str = "", limit: int = 80) -> list[dict]:
+    from sqlalchemy import or_
+
+    with db_session() as db:
+        stmt = select(User).where(User.deleted_at.is_(None)).order_by(User.created_at.desc())
+        needle = (q or "").strip()
+        if needle:
+            like = f"%{needle}%"
+            stmt = stmt.where(or_(User.email.ilike(like), User.name.ilike(like)))
+        users = db.execute(stmt.limit(max(1, min(limit, 200)))).scalars().all()
+        usage = _user_usage_maps(db, [u.id for u in users])
+        return [_public_admin_user(u, usage.get(u.id)) for u in users]
+
+
+def admin_user_detail(user_id: str) -> dict | None:
+    with db_session() as db:
+        user = db.get(User, user_id)
+        if user is None or user.deleted_at is not None:
+            return None
+        usage = _user_usage_maps(db, [user.id]).get(user.id) or {}
+    return {
+        **_public_admin_user(user, usage),
+        "usage": usage_snapshot(user.id),
+        "history": list_history(user.id, 30),
+    }
+
+
+def admin_sessions(limit: int = 60) -> list[dict]:
+    with db_session() as db:
+        rows = db.execute(select(UsageSession).order_by(UsageSession.started_at.desc()).limit(max(1, min(limit, 200)))).scalars().all()
+        emails = {}
+        ids = {r.user_id for r in rows}
+        if ids:
+            for u in db.execute(select(User).where(User.id.in_(ids))).scalars().all():
+                emails[u.id] = u.email
+        return [
+            {
+                "id": s.id,
+                "user_id": s.user_id,
+                "email": emails.get(s.user_id, ""),
+                "mode": s.mode,
+                "title": s.title,
+                "started_at": s.started_at.isoformat() if s.started_at else None,
+                "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+                "stt_seconds": round(s.stt_seconds, 2),
+                "llm_tokens": s.llm_input_tokens + s.llm_output_tokens,
+                "cost_usd": round(s.estimated_cost_usd, 4),
+            }
+            for s in rows
+        ]
+
+
+def admin_feedback(limit: int = 80) -> list[dict]:
+    with db_session() as db:
+        rows = db.execute(select(Feedback).order_by(Feedback.created_at.desc()).limit(max(1, min(limit, 200)))).scalars().all()
+        return [
+            {
+                "id": r.id,
+                "user_id": r.user_id,
+                "email": r.email,
+                "message": r.message,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]

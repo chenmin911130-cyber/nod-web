@@ -12,6 +12,9 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Nod" />
     <link rel="canonical" href="https://nodpilot.com/" />
+    <link rel="alternate" hreflang="en" href="https://nodpilot.com/" />
+    <link rel="alternate" hreflang="zh-Hans" href="https://nodpilot.com/zh" />
+    <link rel="alternate" hreflang="x-default" href="https://nodpilot.com/" />
     <title>Nod — AI Notes, Live Transcription &amp; Translation</title>
     <meta
       name="description"
@@ -25,16 +28,16 @@
       property="og:description"
       content="Listen, take notes, and translate conversations in real time. Interview, Meeting, and Translate in one live workspace."
     />
-    <meta property="og:image" content="https://nodpilot.com/og-image.svg" />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
+    <meta property="og:image" content="https://nodpilot.com/og.png" />
+    <meta property="og:image:width" content="1376" />
+    <meta property="og:image:height" content="768" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Nod — AI Notes, Live Transcription &amp; Translation" />
     <meta
       name="twitter:description"
       content="Listen, take notes, and translate conversations in real time. Interview, Meeting, and Translate in one live workspace."
     />
-    <meta name="twitter:image" content="https://nodpilot.com/og-image.svg" />
+    <meta name="twitter:image" content="https://nodpilot.com/og.png" />
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -52,9 +55,59 @@
         }
       }
     </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap"
+    />
+    <style>
+      html, body, #root {
+        margin: 0;
+        min-height: 100%;
+        background: #07101f;
+        color: #f2f6fb;
+        font-family: 'IBM Plex Sans', system-ui, sans-serif;
+      }
+      .boot-hero {
+        box-sizing: border-box;
+        width: min(calc(100% - 48px), 1180px);
+        margin: 0 auto;
+        padding: 128px 0 72px;
+      }
+      .boot-hero .eyebrow {
+        color: #5bdaf4;
+        font: 500 12px/1 'DM Mono', ui-monospace, monospace;
+        letter-spacing: 0.13em;
+        text-transform: uppercase;
+      }
+      .boot-hero h1 {
+        margin: 0.9rem 0 1.35rem;
+        font: 700 clamp(2.6rem, 7vw, 5.4rem)/1.02 'Space Grotesk', system-ui, sans-serif;
+        letter-spacing: -0.08em;
+      }
+      .boot-hero p {
+        max-width: 540px;
+        color: #b9c9da;
+        font-size: 1.1rem;
+        line-height: 1.9;
+      }
+    </style>
+    <script>
+      document.documentElement.classList.add('nod-site')
+      if ((location.pathname.replace(/\/+$/, '') || '/') === '/zh') {
+        document.documentElement.lang = 'zh-Hans'
+      }
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot-hero">
+        <div class="eyebrow">AI VOICE WORKSPACE / 01</div>
+        <h1>Hear it.<br />Keep it.<br />Speak the next line.</h1>
+        <p>A live AI workspace for bilingual interview practice, meeting notes, and real-time captions.</p>
+      </div>
+    </div>
     <script type="module" src="/src/site-main.tsx"></script>
   </body>
 </html>

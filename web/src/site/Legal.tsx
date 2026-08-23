@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
+import { track } from './track'
 import './Site.css'
 
 function Shell({ title, children }: { title: string; children: ReactNode }) {
@@ -11,7 +12,7 @@ function Shell({ title, children }: { title: string; children: ReactNode }) {
           </a>
           <div className="header-actions">
             <a className="button button-ghost" href="/signup">
-              Start free trial
+              Start free
             </a>
           </div>
         </div>
@@ -28,6 +29,9 @@ function Shell({ title, children }: { title: string; children: ReactNode }) {
 }
 
 export function PrivacyPage() {
+  useEffect(() => {
+    track('open_privacy')
+  }, [])
   return (
     <Shell title="Privacy Policy">
       <p>Last updated: 23 August 2026. Nod Web (“Nod”, “we”) is an early product operated for commercial trial.</p>
@@ -40,13 +44,19 @@ export function PrivacyPage() {
       </ul>
       <h2>Audio</h2>
       <p>
-        When you use the workspace, microphone audio is streamed to AssemblyAI for transcription. We do not keep the raw audio file
-        after the live session. Transcript text may be stored on your account until you delete it.
+        When you enable the microphone, audio is streamed to AssemblyAI for transcription. We do not keep the raw audio file
+        after the live session. Transcript text may be stored on your account until you delete it. Free trial users send the
+        same audio and text as paid users.
       </p>
       <h2>Language models</h2>
       <p>
         Transcripts, questions, and attached text may be sent to DeepSeek or OpenRouter to generate answers, minutes, or captions.
         Those providers process the text under their own terms.
+      </p>
+      <h2>Consent</h2>
+      <p>
+        Recording consent is collected the first time you start the microphone — not only before a paid plan. You can read this
+        page and the <a href="/consent">consent note</a> before enabling audio.
       </p>
       <h2>Cookies</h2>
       <p>We use an HTTP-only session cookie and an optional local token so you stay signed in.</p>
@@ -67,19 +77,25 @@ export function TermsPage() {
       <p>Last updated: 23 August 2026.</p>
       <h2>The service</h2>
       <p>
-        Nod provides a live voice workspace for interview practice, meeting notes, and captions. It is sold as a trial and a paid
+        Nod provides a live voice workspace for interview rehearsal, meeting notes, and captions. It is sold as a trial and a paid
         Pro plan. Features can change while the product is in early access.
       </p>
       <h2>Your responsibilities</h2>
       <ul>
         <li>You must have the right to record or transcribe the room you are in. Many places require consent from everyone present.</li>
-        <li>Interview answers are drafts for you to speak. You are responsible for accuracy and for following interviewer and platform rules.</li>
+        <li>
+          Interview is for rehearsal, spoken-answer practice, and post-session reflection. You are responsible for accuracy and for
+          following interviewer and platform rules.
+        </li>
         <li>Do not use Nod to break the law, harass people, or overload the service.</li>
       </ul>
       <h2>Plans and payment</h2>
       <p>
-        The free trial includes a monthly transcription and generation cap. Pro raises those caps. If Stripe is connected, paid
-        subscriptions renew monthly until you cancel. Usage limits still apply so model cost stays bounded.
+        The free trial includes 20 minutes of transcription and 100,000 generation tokens per month. No credit card is required to
+        start. Pro is USD $12 per month, with eight hours of transcription and 2,000,000 tokens. If Stripe is connected, paid
+        subscriptions renew monthly until you cancel from Account. Generation tokens are limited on every plan. If you hit a
+        transcription, token, or daily cost cap, listening and generation pause until you upgrade or the month resets. Nothing
+        extra is billed automatically.
       </p>
       <h2>Limits</h2>
       <p>
@@ -96,19 +112,25 @@ export function ConsentPage() {
   return (
     <Shell title="Recording consent">
       <p>
-        Nod listens through your browser microphone (web) or system audio (Windows desktop). Speech is sent to AssemblyAI. Text may
-        be sent to a language model. Other people in the call may not know you are transcribing unless you tell them.
+        Nod listens through your browser microphone on the web. Windows desktop (system audio from Zoom or Teams, pin, and stealth)
+        is coming soon for public download. Speech is sent to AssemblyAI. Text may be sent to a language model. Other people in the
+        call may not know you are transcribing unless you tell them.
       </p>
-      <h2>Before you start</h2>
+      <h2>Before you start recording</h2>
       <ul>
+        <li>This confirmation appears the first time you enable the microphone — including on the free trial.</li>
         <li>Tell participants you are using a transcription tool, if the law or the room requires it.</li>
-        <li>Do not use Interview as a hidden prompt in a live interview if that violates the employer’s rules.</li>
+        <li>Use Interview for rehearsal, spoken-answer practice, and post-session reflection — not as a hidden prompt in a live interview if that violates the employer’s rules.</li>
         <li>You can withdraw by signing out and deleting your account. That does not erase provider logs they already hold.</li>
       </ul>
       <p>
-        Opening the workspace after signup, or ticking the box on create-account, is your recorded consent for that processing.
+        Confirming the in-app prompt before the microphone turns on is your recorded consent for that processing.
       </p>
-      <a className="button button-primary" href="/signup">
+      <a
+        className="button button-primary"
+        href="/signup"
+        onClick={() => track('cta_hero_start', { place: 'consent' })}
+      >
         Continue to signup
       </a>
     </Shell>

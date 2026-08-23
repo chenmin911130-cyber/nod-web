@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react'
 import Landing from '../landing/Landing'
+import AdminPage from './Admin'
 import AccountPage from './Account'
 import { ForgotPage, LoginPage, ResetPage, SignupPage } from './AuthPages'
 import { ConsentPage, PrivacyPage, TermsPage } from './Legal'
@@ -35,8 +36,12 @@ export default function Site({ clerkEnabled = false }: { clerkEnabled?: boolean 
       <TermsPage />
     ) : path === '/consent' ? (
       <ConsentPage />
+    ) : path === '/admin' ? (
+      <AdminPage />
+    ) : path === '/zh' ? (
+      <Landing locale="zh" clerkEnabled={clerkEnabled} />
     ) : (
-      <Landing clerkEnabled={clerkEnabled} />
+      <Landing locale="en" clerkEnabled={clerkEnabled} />
     )
 
   if (!clerkEnabled) return page

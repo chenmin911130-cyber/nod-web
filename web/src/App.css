@@ -3428,3 +3428,13 @@ html.nod-web .ov-root {
 .consent-card a {
   color: #5bdaf4;
 }
+
+.consent-later {
+  margin-top: 10px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #89a2b9;
+  cursor: pointer;
+  font: 500 0.84rem/1 'IBM Plex Sans', sans-serif;
+}

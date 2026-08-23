@@ -1,8 +1,8 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { fetchMe } from '../auth'
+import { applySeo, track } from '../site/track'
+import { COPY, type Locale } from './copy'
 import './Landing.css'
-
-const GoogleButton = lazy(() => import('../site/ClerkAuth').then((m) => ({ default: m.GoogleButton })))
 
 type ConsoleMode = 'interview' | 'meeting' | 'translate'
 
@@ -49,65 +49,110 @@ function NodLogo() {
   )
 }
 
-export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boolean }) {
+function DemoVideo({ caption }: { caption: string }) {
+  const [ok, setOk] = useState(false)
+  return (
+    <div className={`demo-video-wrap${ok ? ' on' : ''}`}>
+      <video
+        className="demo-video"
+        src="/demo.mp4"
+        poster="/og.png"
+        controls
+        playsInline
+        preload="metadata"
+        onLoadedData={() => setOk(true)}
+        onError={() => setOk(false)}
+      />
+      {ok ? <p className="demo-caption">{caption}</p> : null}
+    </div>
+  )
+}
+
+export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabled?: boolean }) {
   const [mode, setMode] = useState<ConsoleMode>('interview')
   const [navOpen, setNavOpen] = useState(false)
   const [signedIn, setSignedIn] = useState(false)
+  const priced = useRef(false)
+  const t = COPY[locale]
   const demo = MODES[mode]
   const primaryHref = signedIn ? '/app' : '/signup'
-  const primaryLabel = signedIn ? 'Enter workspace' : 'Start free trial'
+  const primaryLabel = signedIn ? t.enterWorkspace : t.startFreeLong
+  const home = locale === 'zh' ? '/zh' : '/'
 
   useEffect(() => {
-    document.title = 'Nod — AI Notes, Live Transcription & Translation'
+    const origin = window.location.origin.replace(/\/+$/, '')
+    applySeo({
+      title: t.title,
+      description: t.description,
+      ogTitle: t.ogTitle,
+      url: origin + (locale === 'zh' ? '/zh' : '/'),
+      lang: t.htmlLang,
+      image: `${origin}/og.png`,
+    })
     void fetchMe().then((me) => setSignedIn(Boolean(me)))
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          if (entry.isIntersecting) entry.target.classList.add('visible')
+          if (entry.isIntersecting) {
+            entry.target.classList.add('visible')
+            if (entry.target.id === 'pilot' && !priced.current) {
+              priced.current = true
+              track('scroll_pricing')
+            }
+          }
         }
       },
       { threshold: 0.12 },
     )
-    document.querySelectorAll('.nod-landing .reveal').forEach((el) => observer.observe(el))
+    document.querySelectorAll('.nod-landing .reveal, .nod-landing #pilot').forEach((el) => observer.observe(el))
     return () => observer.disconnect()
-  }, [])
+  }, [locale, t.description, t.htmlLang, t.ogTitle, t.title])
 
   const closeNav = () => setNavOpen(false)
+  const onHeroCta = () => track('cta_hero_start', { place: 'hero', signed_in: signedIn })
+  const onHeaderCta = () => track('cta_hero_start', { place: 'header' })
+  const onPriceCta = () => track('cta_pricing')
 
   return (
     <div className="nod-landing">
       <header className={`site-header${navOpen ? ' nav-open' : ''}`}>
         <div className="shell header-inner">
-          <a className="brand" href="#top" onClick={closeNav}>
+          <a className="brand" href={home} onClick={closeNav}>
             <NodLogo />
             Nod
           </a>
           <nav className="desktop-nav">
             <a href="#workspaces" onClick={closeNav}>
-              Workspaces
+              {t.navWorkspaces}
             </a>
-            <a href="#use-cases" onClick={closeNav}>
-              Use cases
+            <a href="#who" onClick={closeNav}>
+              {t.navWho}
             </a>
             <a href="#pilot" onClick={closeNav}>
-              Pricing
+              {t.navPricing}
             </a>
-            <a href="#privacy-trust" onClick={closeNav}>
-              Privacy
+            <a href="/privacy" onClick={closeNav}>
+              {t.navPrivacy}
+            </a>
+            <a className="lang-switch" href={t.langSwitchHref} hrefLang={locale === 'zh' ? 'en' : 'zh-Hans'} onClick={closeNav} aria-label={t.langSwitchLabel}>
+              {t.langSwitch}
             </a>
           </nav>
           <div className="header-actions">
+            <a className="lang-switch header-lang" href={t.langSwitchHref} hrefLang={locale === 'zh' ? 'en' : 'zh-Hans'} aria-label={t.langSwitchLabel}>
+              {t.langSwitch}
+            </a>
             {signedIn ? (
               <a className="button button-ghost" href="/account">
-                Account
+                {t.navAccount}
               </a>
             ) : (
               <a className="button button-ghost" href="/login">
-                Sign in
+                {t.navSignIn}
               </a>
             )}
-            <a className="button button-primary" href={primaryHref}>
-              {primaryLabel}
+            <a className="button button-primary" href={primaryHref} onClick={onHeaderCta}>
+              {signedIn ? t.enterWorkspace : t.startFree}
             </a>
             <button
               className="mobile-toggle"
@@ -126,61 +171,41 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
         <section className="hero">
           <div className="shell hero-grid">
             <div className="reveal visible">
-              <div className="hero-eyebrow-row">
-                <div className="eyebrow">Your AI listening companion.</div>
-                <span className="brand-chip">Listen · Note · Translate</span>
-              </div>
+              <div className="eyebrow">{t.eyebrow}</div>
               <h1>
-                Listen, take notes, and translate conversations in real time —{' '}
-                <span className="underline">without interrupting your workflow.</span>
+                Hear it.
+                <br />
+                Keep it.
+                <br />
+                <span className="underline">Speak the next line.</span>
               </h1>
-              <p className="hero-tagline">Hear it. Keep it. Speak the next line.</p>
-              <p className="hero-copy">
-                Nod is a live voice workspace — not a passive transcript. Interview, Meeting, and
-                Translate share one window: live transcription with AssemblyAI, AI notes and answers
-                with DeepSeek.
-              </p>
+              <p className="hero-copy">{t.heroCopy}</p>
               <div className="hero-actions">
-                {clerkEnabled && !signedIn ? (
-                  <Suspense fallback={null}>
-                    <GoogleButton next="/app" />
-                  </Suspense>
-                ) : null}
-                <a className="button button-primary" href={primaryHref}>
+                <a className="button button-primary" href={primaryHref} onClick={onHeroCta}>
                   {primaryLabel}
                 </a>
-                <a className="button button-ghost" href="#demo">
-                  See how it works ↓
+                <a className="button button-ghost" href="#workspaces">
+                  {t.seeHow}
                 </a>
               </div>
+              {!signedIn && <p className="hero-note">{t.startFreeNote}</p>}
               <div className="signal-row">
                 <span>
                   <i className="dot" />
-                  Explore the demo
+                  {t.step1}
                 </span>
-                <span>→ Try free trial</span>
-                <span>→ Save your history</span>
+                <span>{t.step2}</span>
+                <span>{t.step3}</span>
               </div>
             </div>
 
-            <div
-              id="demo"
-              className="live-console reveal visible"
-              aria-label="Interactive Nod workspace preview — click Interview, Meeting, or Translate"
-            >
-              <div className="console-preview-label">
-                <span className="mono">PRODUCT PREVIEW</span>
-                <span className="tab-hint">Click a mode to explore</span>
-              </div>
+            <div className="live-console reveal visible" aria-label={t.consoleAria}>
               <div className="console-top">
-                <div className="workspace-tabs" role="tablist" aria-label="Workspace modes">
+                <div className="workspace-tabs">
                   {(['interview', 'meeting', 'translate'] as const).map((id) => (
                     <button
                       key={id}
                       type="button"
-                      role="tab"
-                      aria-selected={mode === id}
-                      aria-controls={`console-panel-${id}`}
                       className={mode === id ? 'active' : ''}
                       onClick={() => setMode(id)}
                     >
@@ -200,7 +225,7 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
                   <div className="rail-line" />
                   <div className="rail-text">LISTENING</div>
                 </aside>
-                <div className="console-content" id={`console-panel-${mode}`} role="tabpanel">
+                <div className="console-content">
                   <div className="console-mode">{demo.label}</div>
                   <div className="caption">
                     <b>YOU HEAR</b>
@@ -223,12 +248,12 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
 
         <div className="proof">
           <div className="shell proof-inner">
-            <p className="mono">BUILT FOR MOMENTS THAT MATTER</p>
+            <p className="mono">{t.proofKicker}</p>
             <div className="proof-list">
-              <span>Live transcript</span>
-              <span>Speakable answers</span>
-              <span>Nine languages</span>
-              <span>Copy and PDF export</span>
+              <span>{t.proof1}</span>
+              <span>{t.proof2}</span>
+              <span>{t.proof3}</span>
+              <span>{t.proof4}</span>
             </div>
           </div>
         </div>
@@ -236,42 +261,29 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
         <section className="problem">
           <div className="shell">
             <div className="section-head reveal">
-              <div className="eyebrow">WHY NOD / 02</div>
+              <div className="eyebrow">{t.whyEyebrow}</div>
               <h2>
-                You do not need more tools.
+                {t.whyH2a}
                 <br />
-                You need a way to not lose the room.
+                {t.whyH2b}
               </h2>
-              <p>
-                Interviews, client calls, and cross-language meetings move faster than notes. Nod turns
-                speech into a line you can keep, answer, or caption — while the conversation is still
-                happening.
-              </p>
+              <p>{t.whyP}</p>
             </div>
             <div className="problem-grid reveal">
               <article className="problem-card">
-                <span className="index">01 / PREPARE</span>
-                <h3>Practice should not be a guess</h3>
-                <p>
-                  Hear the question, then speak a structured answer. Auto matches language: English in,
-                  English out. Chinese in, Chinese out.
-                </p>
+                <span className="index">{t.prepIndex}</span>
+                <h3>{t.prepH}</h3>
+                <p>{t.prepP}</p>
               </article>
               <article className="problem-card">
-                <span className="index">02 / REMEMBER</span>
-                <h3>Meetings should not live in memory</h3>
-                <p>
-                  Keep the transcript, flag actions, and leave with a summary you can print or save as
-                  PDF.
-                </p>
+                <span className="index">{t.rememberIndex}</span>
+                <h3>{t.rememberH}</h3>
+                <p>{t.rememberP}</p>
               </article>
               <article className="problem-card">
-                <span className="index">03 / UNDERSTAND</span>
-                <h3>Language should not stall the next line</h3>
-                <p>
-                  Live captions in the language you need, with a queue, retry, and passthrough when the
-                  line is already there.
-                </p>
+                <span className="index">{t.understandIndex}</span>
+                <h3>{t.understandH}</h3>
+                <p>{t.understandP}</p>
               </article>
             </div>
           </div>
@@ -280,17 +292,15 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
         <section className="workspaces" id="workspaces">
           <div className="shell">
             <div className="section-head reveal">
-              <div className="eyebrow">THREE WORKSPACES / 03</div>
+              <div className="eyebrow">{t.wsEyebrow}</div>
               <h2>
-                Not three scattered tools.
+                {t.wsH2a}
                 <br />
-                One continuous voice workspace.
+                {t.wsH2b}
               </h2>
-              <p>
-                Interview, Meeting, and Translate share the same live window, shortcuts, and history. Switch
-                the mode. Keep listening.
-              </p>
+              <p>{t.wsP}</p>
             </div>
+            <DemoVideo caption={t.demoCaption} />
             <div className="workspace-grid">
               <article className="work-card interview reveal">
                 <div className="card-top">
@@ -298,11 +308,11 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
                   <span className="tag">INTERVIEW</span>
                 </div>
                 <h3>Interview</h3>
-                <p>Hear the question. Stream an answer you can speak aloud.</p>
+                <p>{t.interviewP}</p>
                 <ul className="feature-list">
-                  <li>Auto language matching</li>
-                  <li>F2 record · F3 listen · F4 clear</li>
-                  <li>Copy the latest answer</li>
+                  <li>{t.interviewF1}</li>
+                  <li>{t.interviewF2}</li>
+                  <li>{t.interviewF3}</li>
                 </ul>
               </article>
               <article className="work-card meeting reveal">
@@ -311,11 +321,11 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
                   <span className="tag">MEETING</span>
                 </div>
                 <h3>Meeting</h3>
-                <p>Keep the room on a timeline, then leave with minutes you can act on.</p>
+                <p>{t.meetingP}</p>
                 <ul className="feature-list">
-                  <li>Live transcript</li>
-                  <li>Action flags</li>
-                  <li>Summary and PDF / print</li>
+                  <li>{t.meetingF1}</li>
+                  <li>{t.meetingF2}</li>
+                  <li>{t.meetingF3}</li>
                 </ul>
               </article>
               <article className="work-card translate reveal">
@@ -324,51 +334,12 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
                   <span className="tag">TRANSLATE</span>
                 </div>
                 <h3>Translate</h3>
-                <p>Captions while the other language is still in the air.</p>
+                <p>{t.translateP}</p>
                 <ul className="feature-list">
-                  <li>Chinese, Japanese, Korean, English</li>
-                  <li>Italian, Spanish, French, German, Portuguese</li>
-                  <li>Queue, retry, passthrough</li>
+                  <li>{t.translateF1}</li>
+                  <li>{t.translateF2}</li>
+                  <li>{t.translateF3}</li>
                 </ul>
-              </article>
-            </div>
-          </div>
-        </section>
-
-        <section className="use-cases" id="use-cases">
-          <div className="shell">
-            <div className="section-head reveal">
-              <div className="eyebrow">USE CASES / 04</div>
-              <h2>Built for the conversations you cannot pause.</h2>
-              <p>
-                Whether you are in a lecture hall, a client call, or a bilingual stand-up, Nod keeps
-                the line on screen while you stay in the room.
-              </p>
-            </div>
-            <div className="use-case-grid reveal">
-              <article className="use-case-card">
-                <span className="use-case-icon">⌁</span>
-                <h3>For students</h3>
-                <p>
-                  Follow lectures in real time, capture auto notes, and spend less energy typing
-                  every sentence. Review speakable summaries before exams.
-                </p>
-              </article>
-              <article className="use-case-card">
-                <span className="use-case-icon">≋</span>
-                <h3>For meetings</h3>
-                <p>
-                  Stay present in the conversation while Nod keeps a live transcript, flags
-                  actions, and drafts minutes you can export as PDF.
-                </p>
-              </article>
-              <article className="use-case-card">
-                <span className="use-case-icon">文</span>
-                <h3>For multilingual work</h3>
-                <p>
-                  Keep the original speech and live translation together. Nine target languages with
-                  queue, retry, and passthrough when the line is already in your language.
-                </p>
               </article>
             </div>
           </div>
@@ -377,47 +348,44 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
         <section className="flow">
           <div className="shell flow-layout">
             <div className="flow-copy reveal">
-              <div className="eyebrow">HOW IT WORKS / 04</div>
+              <div className="eyebrow">{t.flowEyebrow}</div>
               <h2>
-                Hear it.
+                {t.flowH2a}
                 <br />
-                Get a result you can use.
+                {t.flowH2b}
               </h2>
-              <p>
-                The point is not more AI talk. It is a line on screen at the moment you need it: an
-                answer to speak, a decision to keep, or a caption to follow.
-              </p>
+              <p>{t.flowP}</p>
             </div>
             <div className="flow-stages reveal">
               <div className="flow-stage">
                 <strong>01</strong>
                 <div>
-                  <h3>Capture audio</h3>
-                  <p>Browser microphone, or Windows system audio on desktop.</p>
+                  <h3>{t.flow1H}</h3>
+                  <p>{t.flow1P}</p>
                 </div>
                 <span className="arrow">→</span>
               </div>
               <div className="flow-stage">
                 <strong>02</strong>
                 <div>
-                  <h3>Transcribe</h3>
-                  <p>Streaming speech-to-text with AssemblyAI Universal 3.5 Pro.</p>
+                  <h3>{t.flow2H}</h3>
+                  <p>{t.flow2P}</p>
                 </div>
                 <span className="arrow">→</span>
               </div>
               <div className="flow-stage">
                 <strong>03</strong>
                 <div>
-                  <h3>Generate the result</h3>
-                  <p>DeepSeek streams the answer, minutes, or caption into the right pane.</p>
+                  <h3>{t.flow3H}</h3>
+                  <p>{t.flow3P}</p>
                 </div>
                 <span className="arrow">→</span>
               </div>
               <div className="flow-stage">
                 <strong>04</strong>
                 <div>
-                  <h3>Keep moving</h3>
-                  <p>Copy, export, or keep listening. F2 / F3 / F4 stay the same.</p>
+                  <h3>{t.flow4H}</h3>
+                  <p>{t.flow4P}</p>
                 </div>
                 <span className="arrow">↗</span>
               </div>
@@ -428,31 +396,25 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
         <section className="audience" id="who">
           <div className="shell">
             <div className="section-head reveal">
-              <div className="eyebrow">WHO IT IS FOR / 05</div>
-              <h2>Built first for bilingual professional talk.</h2>
-              <p>
-                Start where English and Chinese switch in the same hour. Then carry the same window into
-                remote meetings and live interpretation.
-              </p>
+              <div className="eyebrow">{t.whoEyebrow}</div>
+              <h2>{t.whoH2}</h2>
+              <p>{t.whoP}</p>
             </div>
             <div className="audience-grid reveal">
               <article className="audience-main">
-                <h3>Bilingual professionals</h3>
-                <p>
-                  Candidates, students, and cross-border teams who need a speakable answer, a clean
-                  record, or a caption without leaving the call.
-                </p>
+                <h3>{t.whoMainH}</h3>
+                <p>{t.whoMainP}</p>
               </article>
               <div className="audience-side">
                 <article className="audience-mini">
-                  <span>REMOTE WORK</span>
-                  <h4>Remote meetings</h4>
-                  <p>Keep the transcript and actions instead of rewriting the room afterwards.</p>
+                  <span>{t.whoRemote}</span>
+                  <h4>{t.whoRemoteH}</h4>
+                  <p>{t.whoRemoteP}</p>
                 </article>
                 <article className="audience-mini">
-                  <span>LIVE INTERPRET</span>
-                  <h4>Live captions</h4>
-                  <p>Follow the other language while you still have a turn to take.</p>
+                  <span>{t.whoLive}</span>
+                  <h4>{t.whoLiveH}</h4>
+                  <p>{t.whoLiveP}</p>
                 </article>
               </div>
             </div>
@@ -462,65 +424,72 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
         <section className="commercial" id="pilot">
           <div className="shell commercial-grid">
             <div className="reveal">
-              <div className="eyebrow">PILOT / 06</div>
+              <div className="eyebrow">{t.priceEyebrow}</div>
               <h2>
-                Prove it in a real conversation.
+                {t.priceH2a}
                 <br />
-                Then decide if it stays.
+                {t.priceH2b}
               </h2>
-              <p>
-                Create an account to start a free trial: 20 minutes of live transcription and 100,000 generation
-                tokens. Pro is $12 / month with eight hours of transcription. Windows desktop — system audio, pin,
-                and minutes — is next.
-              </p>
+              <p>{t.priceP}</p>
+              <p className="desktop-status">{t.desktopNote}</p>
               <div className="checks">
                 <div className="check">
                   <i>✓</i>
                   <div>
-                    <strong>Usage you can see</strong>
-                    <span>Plans will track transcription and generation, not hidden seat math.</span>
+                    <strong>{t.check1H}</strong>
+                    <span>{t.check1P}</span>
                   </div>
                 </div>
                 <div className="check">
                   <i>✓</i>
                   <div>
-                    <strong>Privacy before paid</strong>
-                    <span>Recording consent, data notes, and deletion land before commercial plans.</span>
+                    <strong>{t.check2H}</strong>
+                    <span>{t.check2P}</span>
                   </div>
                 </div>
                 <div className="check">
                   <i>✓</i>
                   <div>
-                    <strong>Feedback shapes the queue</strong>
-                    <span>Early workflows decide what ships next — not a feature dump.</span>
+                    <strong>{t.check3H}</strong>
+                    <span>{t.check3P}</span>
                   </div>
                 </div>
               </div>
             </div>
             <aside className="pricing-note reveal">
-              <span className="mono">EARLY ACCESS</span>
-              <h3>Start with one real task.</h3>
-              <p>
-                Run an interview drill, a meeting, or a live caption. Then decide if Nod belongs in the
-                next call.
-              </p>
+              <span className="mono">{t.planKicker}</span>
+              <h3>{t.planH}</h3>
+              <p>{t.planP}</p>
               <div className="plan-lines">
                 <div>
-                  <span>Free trial</span>
-                  <b>20 min STT</b>
+                  <span>{t.planFree}</span>
+                  <b>{t.planFreeV}</b>
                 </div>
                 <div>
-                  <span>Pro monthly</span>
-                  <b>$12</b>
+                  <span>{t.planPro}</span>
+                  <b>{t.planProV}</b>
                 </div>
                 <div>
-                  <span>Hard cost caps</span>
-                  <b>Per user / day</b>
+                  <span>{t.planLimits}</span>
+                  <b>{t.planLimitsV}</b>
+                </div>
+                <div>
+                  <span>{t.planCancel}</span>
+                  <b>{t.planCancelV}</b>
+                </div>
+                <div>
+                  <span>{t.planCard}</span>
+                  <b>{t.planCardV}</b>
+                </div>
+                <div>
+                  <span>{t.planOver}</span>
+                  <b>{t.planOverV}</b>
                 </div>
               </div>
-              <a className="button button-primary" href={primaryHref}>
-                {signedIn ? 'Enter workspace' : 'Create account'}
+              <a className="button button-primary" href={primaryHref} onClick={onPriceCta}>
+                {signedIn ? t.enterWorkspace : t.planCta}
               </a>
+              <p className="plan-fine">{t.planFine}</p>
             </aside>
           </div>
         </section>
@@ -528,96 +497,30 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
         <section className="faq" id="faq">
           <div className="shell faq-grid">
             <div className="reveal">
-              <div className="eyebrow">FAQ / 07</div>
+              <div className="eyebrow">{t.faqEyebrow}</div>
               <h2>
-                Know what it does.
+                {t.faqH2a}
                 <br />
-                Know what it does not.
+                {t.faqH2b}
               </h2>
-              <p>
-                Nod is for preparation, minutes, and captions. Use it inside the rules of the room you
-                are in.
-              </p>
+              <p>{t.faqP}</p>
             </div>
             <div className="faq-list reveal">
               <article className="faq-item">
-                <h3>When should I use Interview?</h3>
-                <p>
-                  For practice and for live questions you want to answer out loud. Follow the
-                  interviewer, the platform, and local rules. You stay responsible for what you say.
-                </p>
+                <h3>{t.faq1H}</h3>
+                <p>{t.faq1P}</p>
               </article>
               <article className="faq-item">
-                <h3>What is the difference between web and desktop?</h3>
-                <p>
-                  The web app hears your browser microphone. It cannot capture system audio from Zoom or
-                  Teams. The Windows desktop can. Pin and stealth are desktop-only.
-                </p>
+                <h3>{t.faq2H}</h3>
+                <p>{t.faq2P}</p>
               </article>
               <article className="faq-item">
-                <h3>Where does the audio go?</h3>
-                <p>
-                  Speech is sent to AssemblyAI for transcription and to DeepSeek for answers, minutes,
-                  and captions. Consent and deletion will be explicit before paid plans.
-                </p>
+                <h3>{t.faq3H}</h3>
+                <p>{t.faq3P}</p>
               </article>
-            </div>
-          </div>
-        </section>
-
-        <section className="privacy-trust" id="privacy-trust">
-          <div className="shell">
-            <div className="section-head reveal">
-              <div className="eyebrow">PRIVACY &amp; SECURITY / 08</div>
-              <h2>What happens to your audio and transcripts.</h2>
-              <p>
-                Early product, honest defaults. These are the practices in the live app today — not
-                marketing promises we have not shipped.
-              </p>
-            </div>
-            <div className="privacy-grid reveal">
-              <article className="privacy-card">
-                <h3>Audio is streamed, not stored</h3>
-                <p>
-                  When you use the workspace, microphone audio is sent to AssemblyAI for live
-                  transcription. We do not keep the raw audio file after the session ends.
-                </p>
-              </article>
-              <article className="privacy-card">
-                <h3>Transcripts stay on your account</h3>
-                <p>
-                  Questions, transcripts, answers, summaries, and captions are stored so you can
-                  review history — until you delete them from Account.
-                </p>
-              </article>
-              <article className="privacy-card">
-                <h3>Encrypted in transit</h3>
-                <p>
-                  The site and API are served over HTTPS. Session cookies are HTTP-only and marked
-                  secure in production.
-                </p>
-              </article>
-              <article className="privacy-card">
-                <h3>Third-party processing</h3>
-                <p>
-                  Speech goes to AssemblyAI. Text may be sent to DeepSeek or OpenRouter for answers,
-                  minutes, and captions — under each provider&apos;s own terms.
-                </p>
-              </article>
-              <article className="privacy-card">
-                <h3>You can delete your data</h3>
-                <p>
-                  Delete your account from Account to remove stored history and your login. Copies
-                  already processed by speech or model providers cannot be recalled from that screen.
-                </p>
-              </article>
-              <article className="privacy-card">
-                <h3>Recording consent</h3>
-                <p>
-                  You are responsible for consent in the room you are in. Opening the workspace after
-                  signup records your agreement to this processing.{' '}
-                  <a href="/privacy">Full privacy policy →</a>
-                </p>
+              <article className="faq-item">
+                <h3>{t.faq4H}</h3>
+                <p>{t.faq4P}</p>
               </article>
             </div>
           </div>
@@ -626,26 +529,24 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
         <section className="cta">
           <div className="shell">
             <div className="cta-box reveal">
-              <div className="eyebrow">START WITH ONE CONVERSATION</div>
+              <div className="eyebrow">{t.ctaEyebrow}</div>
               <h2>
-                The next important call
+                {t.ctaH2a}
                 <br />
-                can start with a live window.
+                {t.ctaH2b}
               </h2>
-              <p>
-                You have seen the demo. Start a free trial to open the live workspace — Interview,
-                Meeting, and Translate in one window, with history saved to your account.
-              </p>
+              <p>{t.ctaP}</p>
               <div className="cta-actions">
-                <a className="button button-primary" href={primaryHref}>
+                <a className="button button-primary" href={primaryHref} onClick={() => track('cta_hero_start', { place: 'footer' })}>
                   {primaryLabel}
                 </a>
                 {!signedIn && (
                   <a className="button button-ghost" href="/login">
-                    Sign in
+                    {t.navSignIn}
                   </a>
                 )}
               </div>
+              {!signedIn && <p className="hero-note">{t.startFreeNote}</p>}
             </div>
           </div>
         </section>
@@ -654,21 +555,26 @@ export default function Landing({ clerkEnabled = false }: { clerkEnabled?: boole
       <footer className="footer">
         <div className="shell footer-inner">
           <div>
-            <a className="brand" href="#top">
+            <a className="brand" href={home}>
               <NodLogo />
               Nod
             </a>
             <p>
-              Interview · Meeting · Translate
+              {t.footerTag}
               <br />
-              © 2026 Nod. Early product.
+              {t.footerCopy}
             </p>
           </div>
           <div className="footer-links">
-            <a href="/privacy">Privacy</a>
+            <a href={t.langSwitchHref} hrefLang={locale === 'zh' ? 'en' : 'zh-Hans'}>
+              {t.langSwitch}
+            </a>
+            <a href="/privacy">
+              {t.navPrivacy}
+            </a>
             <a href="/terms">Terms</a>
-            <a href="/signup">Register</a>
-            <a href={signedIn ? '/app' : '/login?next=/app'}>Workspace</a>
+            <a href="/signup">{t.footerRegister}</a>
+            <a href={signedIn ? '/app' : '/login?next=/app'}>{t.footerWorkspace}</a>
           </div>
         </div>
       </footer>

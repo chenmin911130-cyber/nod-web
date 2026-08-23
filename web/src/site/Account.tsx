@@ -132,6 +132,11 @@ export default function AccountPage() {
           <p>
             Plan: <b>{me.plan_name}</b> · {me.subscription_status}
             {paid === '1' ? ' · Payment received. Refresh if the plan has not updated yet.' : ''}
+            {me.quota_disabled || u.quota_disabled
+              ? ' · Testing: transcription, generation, and daily caps are not enforced.'
+              : me.plan === 'pro'
+                ? ' · Cancel anytime from Manage billing. Hitting a cap pauses listening and generation until the month resets.'
+                : ' · Trial needs no card. Generation tokens are limited. Upgrade anytime — cancel Pro from this page after checkout.'}
           </p>
           <div className="quota-grid">
             <div className="quota-card">
@@ -145,7 +150,7 @@ export default function AccountPage() {
               </div>
             </div>
             <div className="quota-card">
-              <span>Generation tokens</span>
+              <span>Generation tokens left</span>
               <b>{Math.max(0, u.llm_limit - u.llm_tokens).toLocaleString()}</b>
               <span>
                 {u.llm_tokens.toLocaleString()} / {u.llm_limit.toLocaleString()}
@@ -164,13 +169,17 @@ export default function AccountPage() {
             </div>
           </div>
           <div className="hero-actions">
-            {me.plan === 'pro' ? (
+            {me.quota_disabled || u.quota_disabled ? (
+              <a className="button button-primary" href="/app">
+                Open workspace
+              </a>
+            ) : me.plan === 'pro' ? (
               <button className="button button-primary" type="button" onClick={() => void portal()}>
                 Manage billing
               </button>
             ) : (
               <button className="button button-primary" type="button" onClick={() => void checkout()}>
-                Upgrade to Pro · $12 / month
+                Upgrade to Pro · USD $12 / month
               </button>
             )}
             <a className="button button-ghost" href="/privacy">

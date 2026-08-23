@@ -112,10 +112,15 @@ def optional_user(
     return user_from_token(token)
 
 
-def require_admin(x_admin_token: str | None = Header(default=None)) -> None:
+def require_admin(
+    request: Request,
+    x_admin_token: str | None = Header(default=None),
+    nod_admin: str | None = Cookie(default=None, alias="nod_admin"),
+) -> None:
     from server.settings import ADMIN_TOKEN
 
-    if not ADMIN_TOKEN or not x_admin_token or not hmac.compare_digest(x_admin_token, ADMIN_TOKEN):
+    offered = (x_admin_token or nod_admin or request.cookies.get("nod_admin") or "").strip()
+    if not ADMIN_TOKEN or not offered or not hmac.compare_digest(offered, ADMIN_TOKEN):
         raise HTTPException(status_code=401, detail="Admin token required")
 
 

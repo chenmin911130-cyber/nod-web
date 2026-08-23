@@ -20,14 +20,15 @@ from urllib.parse import urlencode
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 
+from server.admin import router as admin_router
 from server.commerce import router as commerce_router
 from server.db import init_db
 from server.logging_setup import backup_now, setup_logging
-from server.settings import AUTH_DISABLED, CLERK_PUBLISHABLE_KEY, COOKIE_NAME, PUBLIC_URL
+from server.settings import AUTH_DISABLED, CLERK_PUBLISHABLE_KEY, COOKIE_NAME, PUBLIC_URL, QUOTA_DISABLED
 from server.security import user_from_token
 
 SR = 16000
@@ -43,7 +44,7 @@ STATUS_GENERATE = "Generating answer…"
 STATUS_ANSWER_READY = "Answer ready"
 STATUS_WAIT_MORE = "I caught part of a question. Keep listening…"
 STATUS_EMPTY = "No speech detected, please try again"
-MANUAL_MAX_SEC = 120.0
+MANUAL_MAX_SEC = 30 * 60.0 if QUOTA_DISABLED else 120.0
 MANUAL_MIN_SEC = 0.4
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -1152,6 +1153,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(commerce_router)
+app.include_router(admin_router)
 
 
 @app.get("/api/health")
@@ -1227,6 +1229,36 @@ HTML_NO_CACHE = {
     "Pragma": "no-cache",
     "Expires": "0",
 }
+
+
+@app.get("/robots.txt")
+def robots():
+    base = PUBLIC_URL.rstrip("/")
+    body = "\n".join(
+        [
+            "User-agent: *",
+            "Allow: /",
+            "Disallow: /app",
+            "Disallow: /account",
+            "Disallow: /admin",
+            "Disallow: /api/",
+            f"Sitemap: {base}/sitemap.xml",
+            "",
+        ]
+    )
+    return Response(content=body, media_type="text/plain; charset=utf-8")
+
+
+@app.get("/sitemap.xml")
+def sitemap():
+    base = PUBLIC_URL.rstrip("/")
+    paths = ["/", "/zh", "/privacy", "/terms", "/consent", "/signup", "/login"]
+    urls = []
+    for path in paths:
+        loc = base + ("" if path == "/" else path)
+        urls.append(f"  <url><loc>{loc}</loc><changefreq>weekly</changefreq></url>")
+    body = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' + "\n".join(urls) + "\n</urlset>\n"
+    return Response(content=body, media_type="application/xml; charset=utf-8")
 
 
 def _html_page(name: str) -> FileResponse:

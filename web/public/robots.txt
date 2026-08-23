@@ -1,4 +1,8 @@
 User-agent: *
 Allow: /
+Disallow: /app
+Disallow: /account
+Disallow: /admin
+Disallow: /api/
 
 Sitemap: https://nodpilot.com/sitemap.xml

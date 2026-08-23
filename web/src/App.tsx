@@ -53,7 +53,7 @@ const initial: AppState = {
   translateAskId: '',
   translateBindId: '',
   summaryAskId: '',
-  quota: null as { stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; ok: boolean } | null,
+  quota: null as { stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; ok: boolean; quota_disabled?: boolean } | null,
 }
 
 type Action =
@@ -260,6 +260,7 @@ function reducer(state: AppState, action: Action): AppState {
               stt_limit: ev.stt_limit,
               llm_tokens: ev.llm_tokens,
               llm_limit: ev.llm_limit,
+              quota_disabled: ev.quota_disabled,
             },
           }
         case 'quota_exceeded':
@@ -413,10 +414,53 @@ export default function App() {
   const pumpTranslateRef = useRef<() => void>(() => {})
   const tickRef = useRef(0)
   const [consent, setConsent] = useState<boolean | null>(null)
+  const consentRef = useRef<boolean | null>(null)
+  const [consentOpen, setConsentOpen] = useState(false)
+  const pendingMic = useRef<(() => void) | null>(null)
 
   useEffect(() => {
-    void fetchMe().then((me) => setConsent(me ? me.consent : true))
+    void fetchMe().then((me) => {
+      const ok = me ? Boolean(me.consent) : true
+      consentRef.current = ok
+      setConsent(ok)
+    })
   }, [])
+
+  const guardMic = (fn: () => void) => {
+    const running = stateRef.current.run === 'listen' || stateRef.current.run === 'record'
+    if (running || consentRef.current === true) {
+      fn()
+      return
+    }
+    pendingMic.current = fn
+    if (consentRef.current === null) {
+      void fetchMe().then((me) => {
+        const ok = me ? Boolean(me.consent) : true
+        consentRef.current = ok
+        setConsent(ok)
+        if (ok) {
+          const next = pendingMic.current
+          pendingMic.current = null
+          next?.()
+        } else {
+          setConsentOpen(true)
+        }
+      })
+      return
+    }
+    setConsentOpen(true)
+  }
+
+  const acceptConsent = () => {
+    void authApi('/api/me/consent', { method: 'POST', body: JSON.stringify({ consent: true }) }).then(() => {
+      consentRef.current = true
+      setConsent(true)
+      setConsentOpen(false)
+      const next = pendingMic.current
+      pendingMic.current = null
+      next?.()
+    })
+  }
 
   const clearTranslateTimer = () => {
     if (translateTimer.current) {
@@ -477,8 +521,8 @@ export default function App() {
     })
     const offShortcut = api.onShortcut((k) => {
       const mode = stateRef.current.workspaceMode
-      if (k === 'f2') api.send({ type: 'manual' })
-      else if (k === 'f3') api.send({ type: 'toggle_listen' })
+      if (k === 'f2') guardMic(() => api.send({ type: 'manual' }))
+      else if (k === 'f3') guardMic(() => api.send({ type: 'toggle_listen' }))
       else if (k === 'f4') {
         askedTranslate.current.clear()
         releaseTranslateGate()
@@ -556,7 +600,7 @@ export default function App() {
         }
         return
       }
-      if (k === 'a') window.api.send({ type: 'toggle_listen' })
+      if (k === 'a') guardMic(() => window.api.send({ type: 'toggle_listen' }))
       else if (k === 'c') copyLatest()
       else if (k === 'x') {
         askedTranslate.current.clear()
@@ -672,7 +716,7 @@ export default function App() {
     const s = stateRef.current
     if (s.workspaceMode === 'interview') {
       if (s.run === 'record') return
-      window.api.send({ type: 'toggle_listen' })
+      guardMic(() => window.api.send({ type: 'toggle_listen' }))
       return
     }
     if (s.workspaceMode === 'meeting') {
@@ -687,17 +731,19 @@ export default function App() {
       } else {
         dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
       }
-      window.api.send({ type: 'toggle_listen' })
+      guardMic(() => window.api.send({ type: 'toggle_listen' }))
       return
     }
     if (s.run === 'record') return
-    window.api.send({ type: 'set_workspace', mode: 'translate' })
-    window.api.send({ type: 'set_translate_to', lang: s.translateTo })
-    window.api.send({ type: 'toggle_listen' })
+    guardMic(() => {
+      window.api.send({ type: 'set_workspace', mode: 'translate' })
+      window.api.send({ type: 'set_translate_to', lang: s.translateTo })
+      window.api.send({ type: 'toggle_listen' })
+    })
   }, [])
 
   const handleRecord = useCallback(() => {
-    window.api.send({ type: 'manual' })
+    guardMic(() => window.api.send({ type: 'manual' }))
   }, [])
 
   const handlePause = useCallback(() => {
@@ -983,9 +1029,11 @@ ${actions.length ? `<h2>Marked actions</h2>${actions.map((ln) => `<div class="ln
         onStealth={handleStealth}
         onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
         quotaLabel={
-          state.quota
-            ? `${Math.max(0, Math.round((state.quota.stt_limit - state.quota.stt_seconds) / 60))}m left`
-            : 'Account'
+          state.quota?.quota_disabled
+            ? 'Test · unlimited'
+            : state.quota
+              ? `${Math.max(0, Math.round((state.quota.stt_limit - state.quota.stt_seconds) / 60))}m left`
+              : 'Account'
         }
       />
       <div className="workspace">
@@ -1043,22 +1091,28 @@ ${actions.length ? `<h2>Marked actions</h2>${actions.map((ln) => `<div class="ln
         )}
       </div>
       <StatusToast text={state.status} />
-      {consent === false && (
+      {consentOpen && (
         <div className="consent-mask">
           <div className="consent-card">
-            <h2>Recording consent</h2>
+            <h2>Before you start recording</h2>
             <p>
-              The workspace sends microphone audio to AssemblyAI and text to a language model. Tell others in the
-              room if they must know. Read the <a href="/privacy">privacy policy</a> and <a href="/consent">consent note</a>.
+              The first time you enable the microphone, Nod sends audio to AssemblyAI and text to a language model.
+              This applies on the free trial, not only paid plans. Tell others in the room if they must know. You can
+              delete stored history from Account. Read the <a href="/privacy">privacy policy</a> and{' '}
+              <a href="/consent">consent note</a>.
             </p>
+            <button className="keysetup-save" type="button" onClick={acceptConsent}>
+              I agree — enable microphone
+            </button>
             <button
-              className="keysetup-save"
+              className="consent-later"
               type="button"
               onClick={() => {
-                void authApi('/api/me/consent', { method: 'POST', body: JSON.stringify({ consent: true }) }).then(() => setConsent(true))
+                pendingMic.current = null
+                setConsentOpen(false)
               }}
             >
-              I understand — start
+              Not now
             </button>
           </div>
         </div>
