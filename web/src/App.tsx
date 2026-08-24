@@ -136,7 +136,7 @@ function reducer(state: AppState, action: Action): AppState {
       const cfg = action.cfg
       const llm = { provider: cfg.llm?.provider ?? 'deepseek', model: cfg.llm?.model ?? '' }
       const langRaw = cfg.stt?.language
-      const lang: Lang = langRaw === 'zh' || langRaw === 'en' ? langRaw : 'auto'
+      const lang: Lang = TRANSLATE_LANGS.some((l) => l.id === langRaw) ? (langRaw as Lang) : 'auto'
       const srcRaw = cfg.audio?.source ?? 'system'
       const systemMuted = srcRaw === 'mic'
       const source: AudioSource = srcRaw === 'both' || srcRaw === 'mic' ? 'both' : 'system'
@@ -388,7 +388,6 @@ function looksLikeTarget(text: string, to: PairLang): boolean {
   const n = chars.length
   if (to === 'zh') return han / n >= 0.5 && kana === 0 && hangul === 0
   if (to === 'ja') return kana / n >= 0.12 || ((han + kana) / n >= 0.5 && kana > 0)
-  if (to === 'ko') return hangul / n >= 0.4
   if (to === 'en') return latin / n >= 0.7 && han + kana + hangul === 0
   return false
 }
@@ -705,10 +704,6 @@ export default function App() {
     if (mode === 'translate') window.api.send({ type: 'cancel_generate' })
     window.api.send({ type: 'set_workspace', mode })
     dispatch({ type: 'workspace', mode })
-    if (mode === 'translate' && s.lang !== 'auto') {
-      window.api.send({ type: 'set_lang', language: null })
-      dispatch({ type: 'lang', lang: 'auto' })
-    }
     dispatch({ type: 'engine', ev: { type: 'status', text: `Mode · ${mode[0].toUpperCase()}${mode.slice(1)}` } })
   }, [])
 

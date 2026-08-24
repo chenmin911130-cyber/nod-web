@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AudioSource, Lang, ModelDef, WorkspaceMode } from '../types'
+import { TRANSLATE_LANGS } from '../types'
 import { isWeb } from '../platform'
 import OpacityBar from './OpacityBar'
 
@@ -25,10 +26,9 @@ interface Props {
   quotaLabel?: string
 }
 
-const LANGS: Array<{ label: string; value: Lang }> = [
-  { label: 'Auto', value: 'auto' },
-  { label: 'CH', value: 'zh' },
-  { label: 'EN', value: 'en' },
+const LANGS: Array<{ label: string; value: Lang; name: string }> = [
+  { label: 'Auto', value: 'auto', name: 'Auto' },
+  ...TRANSLATE_LANGS.map((l) => ({ label: l.tag, value: l.id as Lang, name: l.name })),
 ]
 
 const MODES: Array<{ id: WorkspaceMode; label: string }> = [
@@ -115,23 +115,37 @@ function MoreIcon() {
   )
 }
 
+function Chevron() {
+  return (
+    <svg width="8" height="6" viewBox="0 0 8 6" fill="none" aria-hidden="true">
+      <path d="M1 1.2L4 4.4L7 1.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 export default function TitleBar(props: Props) {
   const { mode, models, llm, lang, source, opacity, pinned, systemMuted, stealth } = props
   const curIdx = models.findIndex((m) => m.provider === llm.provider && m.model === llm.model)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [langOpen, setLangOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  const langRef = useRef<HTMLDivElement>(null)
+  const currentLang = LANGS.find((l) => l.value === lang) ?? LANGS[0]
 
   useEffect(() => {
-    if (!menuOpen) return
+    if (!menuOpen && !langOpen) return
     const onDown = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false)
+      const t = e.target as Node
+      if (menuOpen && !menuRef.current?.contains(t)) setMenuOpen(false)
+      if (langOpen && !langRef.current?.contains(t)) setLangOpen(false)
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
-  }, [menuOpen])
+  }, [menuOpen, langOpen])
 
   useEffect(() => {
     setMenuOpen(false)
+    setLangOpen(false)
   }, [mode])
 
   return (
@@ -163,26 +177,49 @@ export default function TitleBar(props: Props) {
       </div>
 
       <div className="titlebar-right no-drag">
-        {mode !== 'translate' && (
-          <div className="lang-pills" role="group" aria-label="Speech recognition language">
-            {LANGS.map((l) => (
-              <button
-                key={l.value}
-                className={`lang-pill${lang === l.value ? ' active' : ''}`}
-                onClick={() => props.onLang(l.value)}
-                title={
-                  l.value === 'auto'
-                    ? 'Auto: answer in the same language as the question'
-                    : l.value === 'zh'
-                      ? 'Force Chinese answers'
-                      : 'Force English answers'
-                }
-              >
-                {l.label}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="lang-pills" ref={langRef}>
+          <button
+            type="button"
+            className={`lang-select-btn${langOpen ? ' open' : ''}`}
+            aria-haspopup="listbox"
+            aria-expanded={langOpen}
+            aria-label="Speech language"
+            title={
+              currentLang.value === 'auto'
+                ? 'Auto: match the spoken language'
+                : mode === 'interview'
+                  ? `Force ${currentLang.name} speech and answers`
+                  : `Lock speech recognition to ${currentLang.name}`
+            }
+            onClick={() => {
+              setLangOpen((v) => !v)
+              setMenuOpen(false)
+            }}
+          >
+            <span>{currentLang.label}</span>
+            <Chevron />
+          </button>
+          {langOpen && (
+            <div className="lang-menu" role="listbox" aria-label="Speech language">
+              {LANGS.map((l) => (
+                <button
+                  key={l.value}
+                  type="button"
+                  role="option"
+                  aria-selected={lang === l.value}
+                  className={`lang-menu-item${lang === l.value ? ' active' : ''}`}
+                  onClick={() => {
+                    props.onLang(l.value)
+                    setLangOpen(false)
+                  }}
+                >
+                  <span className="lang-menu-tag">{l.label}</span>
+                  <span className="lang-menu-name">{l.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div className="tb-icons">
           {isWeb ? (
@@ -236,7 +273,10 @@ export default function TitleBar(props: Props) {
           <div className="tb-more" ref={menuRef}>
             <button
               className={`tb-icon more-btn${menuOpen ? ' on' : ''}`}
-              onClick={() => setMenuOpen((v) => !v)}
+              onClick={() => {
+                setMenuOpen((v) => !v)
+                setLangOpen(false)
+              }}
               title="Settings"
               aria-expanded={menuOpen}
             >

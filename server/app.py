@@ -157,17 +157,42 @@ def load_config() -> dict[str, Any]:
     return cfg
 
 
+_TRANSLATE_LANGS = ("zh", "ja", "en", "it", "es", "fr", "de", "pt")
+_LANG_NAMES = {
+    "zh": "Chinese",
+    "ja": "Japanese",
+    "en": "English",
+    "it": "Italian",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "pt": "Portuguese",
+}
+
+
+def _normalize_translate_to(lang: Any) -> str:
+    if isinstance(lang, str) and lang in _TRANSLATE_LANGS:
+        return lang
+    return "zh"
+
+
+def _normalize_stt_lang(lang: Any) -> str | None:
+    if isinstance(lang, str) and lang in _TRANSLATE_LANGS:
+        return lang
+    return None
+
+
 def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
     return {
         "llm": {
             "provider": cfg.get("llm", {}).get("provider", "deepseek"),
             "model": cfg.get("llm", {}).get("model", ""),
         },
-        "stt": {"language": cfg.get("stt", {}).get("language")},
+        "stt": {"language": _normalize_stt_lang(cfg.get("stt", {}).get("language"))},
         "audio": {"source": "mic"},
         "ui": {
             "opacity": cfg.get("ui", {}).get("opacity", 88),
-            "translate_to": cfg.get("ui", {}).get("translate_to") or "zh",
+            "translate_to": _normalize_translate_to(cfg.get("ui", {}).get("translate_to")),
         },
         "models": cfg.get("models") or [],
         "auth_required": not AUTH_DISABLED,
@@ -200,9 +225,8 @@ def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
         ("format_turns", "true"),
         ("max_turn_silence", "1200"),
     ]
-    lang = (cfg.get("stt") or {}).get("language")
-    codes = ["zh"] if lang == "zh" else (["en"] if lang == "en" else ["zh", "en"])
-    for code in codes:
+    lang = _normalize_stt_lang((cfg.get("stt") or {}).get("language"))
+    for code in ((lang,) if lang else _TRANSLATE_LANGS):
         params.append(("language_codes", code))
     boost = _stt_boost_words(cfg)
     if boost:
@@ -416,21 +440,22 @@ class Pipeline:
         }
 
     def _answer_lang(self, question: str) -> str:
-        locked = (self.cfg.get("stt") or {}).get("language")
-        if locked in ("zh", "en"):
+        locked = _normalize_stt_lang((self.cfg.get("stt") or {}).get("language"))
+        if locked:
             return locked
         return detect_question_lang(question)
 
     def _lang_rule(self, question: str) -> str:
         lang = self._answer_lang(question)
+        name = _LANG_NAMES.get(lang, "English")
         if lang == "zh":
             return (
                 "LANGUAGE (hard rule): The interviewer asked in Chinese. "
                 "Answer in Chinese only. Do not switch to English except for proper nouns and tech terms."
             )
         return (
-            "LANGUAGE (hard rule): The interviewer asked in English. "
-            "Answer in English only. Do not use Chinese."
+            f"LANGUAGE (hard rule): The interviewer asked in {name}. "
+            f"Answer in {name} only. Do not switch language except for proper nouns and tech terms."
         )
 
     def _strip_nod_tag(self, question: str) -> str:
@@ -497,11 +522,8 @@ class Pipeline:
             + ctx
         )
         lang = self._answer_lang(question)
-        lang_line = (
-            "Answer language: Chinese only."
-            if lang == "zh"
-            else "Answer language: English only."
-        )
+        name = _LANG_NAMES.get(lang, "English")
+        lang_line = f"Answer language: {name} only."
         return [
             {"role": "system", "content": sys_msg},
             {"role": "user", "content": f"Interviewer question: {question}\n\n{lang_line}\n\nAnswer:"},
@@ -812,9 +834,9 @@ class Session:
         elif mtype == "set_llm":
             self.set_llm(msg.get("provider", "deepseek"), msg.get("model", ""))
         elif mtype == "set_lang":
-            lang = msg.get("language")
-            self.cfg.setdefault("stt", {})["language"] = lang if lang in ("zh", "en") else None
-            self.emit({"type": "status", "text": f"Language: {lang or 'Auto'}"})
+            lang = _normalize_stt_lang(msg.get("language"))
+            self.cfg.setdefault("stt", {})["language"] = lang
+            self.emit({"type": "status", "text": f"Language: {_LANG_NAMES.get(lang or '', 'Auto')}"})
             if self._listener:
                 self._stop_listening()
                 self._start_listening()
@@ -859,10 +881,7 @@ class Session:
         self._busy = False
 
     def set_translate_to(self, lang: str) -> None:
-        allowed = ("zh", "ja", "ko", "en", "it", "es", "fr", "de", "pt")
-        if lang not in allowed:
-            lang = "zh"
-        self.cfg.setdefault("ui", {})["translate_to"] = lang
+        self.cfg.setdefault("ui", {})["translate_to"] = _normalize_translate_to(lang)
 
     def set_workspace(self, mode: str) -> None:
         if mode not in ("interview", "meeting", "translate"):

@@ -29,7 +29,7 @@ const MODES: Record<
     hear: '“Let’s make the next step clear for everyone.”',
     live: '让我们把下一步向所有人说明清楚。',
     answerLabel: 'CAPTION',
-    answer: 'Nine target languages. Queue, retry, or pass through if it is already in the target language.',
+    answer: 'Eight target languages. Queue, retry, or pass through if it is already in the target language.',
   },
 }
 

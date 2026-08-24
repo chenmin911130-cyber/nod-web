@@ -1,15 +1,14 @@
 export type RunState = 'idle' | 'record' | 'listen' | 'think'
 export type Turn = { id: string; q: string; a: string }
-export type Lang = 'auto' | 'zh' | 'en'
 export type ViewMode = 'workspace' | 'focus' | 'fullscreen'
 export type AudioSource = 'system' | 'both' | 'mic'
 export type WorkspaceMode = 'interview' | 'meeting' | 'translate'
-export type PairLang = 'zh' | 'ja' | 'ko' | 'en' | 'it' | 'es' | 'fr' | 'de' | 'pt'
+export type PairLang = 'zh' | 'ja' | 'en' | 'it' | 'es' | 'fr' | 'de' | 'pt'
+export type Lang = 'auto' | PairLang
 
 export const TRANSLATE_LANGS: Array<{ id: PairLang; tag: string; name: string }> = [
   { id: 'zh', tag: 'CH', name: 'Chinese' },
   { id: 'ja', tag: 'JA', name: 'Japanese' },
-  { id: 'ko', tag: 'KO', name: 'Korean' },
   { id: 'en', tag: 'EN', name: 'English' },
   { id: 'it', tag: 'IT', name: 'Italian' },
   { id: 'es', tag: 'ES', name: 'Spanish' },
