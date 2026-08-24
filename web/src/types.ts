@@ -27,7 +27,7 @@ export interface AppConfig {
   llm?: { provider?: string; model?: string; max_tokens?: number; temperature?: number }
   stt?: { model?: string; language?: string | null }
   audio?: { source?: string }
-  ui?: { opacity?: number; translate_to?: PairLang }
+  ui?: { opacity?: number; translate_from?: Lang; translate_to?: PairLang }
   models?: ModelDef[]
 }
 
@@ -44,6 +44,7 @@ export interface TranslatePair {
   original: string
   translation: string
   to?: PairLang
+  from?: PairLang
   failed?: boolean
   passthrough?: boolean
 }
@@ -77,8 +78,9 @@ export interface AppState {
   meetingElapsedMs: number
   meetingEnded: boolean
   translatePairs: TranslatePair[]
-  translateFrom: PairLang
+  translateFrom: Lang
   translateTo: PairLang
+  heardLang: PairLang | null
   bilingual: boolean
   translateAskId: string
   translateBindId: string
@@ -100,7 +102,7 @@ export type EngineEvent =
   | { type: 'state'; state: string }
   | { type: 'status'; text: string }
   | { type: 'partial'; text: string }
-  | { type: 'question'; id: string; text: string }
+  | { type: 'question'; id: string; text: string; language?: string }
   | { type: 'chunk'; id: string; text: string }
   | { type: 'done'; id: string; stt: number; llm: number; ok: boolean }
   | { type: 'error'; text: string }
@@ -121,6 +123,7 @@ export type EngineMsg =
   | { type: 'save_keys'; deepseek_key: string; assemblyai_key: string }
   | { type: 'clear' }
   | { type: 'cancel_generate' }
+  | { type: 'set_translate_from'; language: PairLang | null }
   | { type: 'set_translate_to'; lang: PairLang }
   | { type: 'ping' }
 

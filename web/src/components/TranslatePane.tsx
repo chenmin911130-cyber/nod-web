@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AudioSource, PairLang, TranslatePair } from '../types'
+import type { AudioSource, Lang, PairLang, TranslatePair } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import { isWeb } from '../platform'
 import type { AttachPayload, LocalAttach } from '../attach'
@@ -13,15 +13,28 @@ interface Props {
   bindId: string
   bilingual: boolean
   to: PairLang
+  from: Lang
+  heardFrom?: PairLang | null
   source: AudioSource
   onTranslate: (text: string, files?: AttachPayload[]) => void
   onTranslateTo: (lang: PairLang) => void
+  onTranslateFrom: (lang: Lang) => void
+  onSwap: () => void
   onCopyField: (pair: TranslatePair, field: 'original' | 'translation') => void
   onRetry: (id: string) => void
 }
 
 function langTag(code: PairLang): string {
   return TRANSLATE_LANGS.find((l) => l.id === code)?.tag ?? code.toUpperCase()
+}
+
+function SwapIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M3.2 5.2h9.1M9.6 2.8l2.7 2.4-2.7 2.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12.8 10.8H3.7M6.4 8.4 3.7 10.8l2.7 2.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
 }
 
 function Sparkle() {
@@ -39,9 +52,13 @@ export default function TranslatePane({
   bindId,
   bilingual,
   to,
+  from,
+  heardFrom,
   source,
   onTranslate,
   onTranslateTo,
+  onTranslateFrom,
+  onSwap,
   onCopyField,
   onRetry,
 }: Props) {
@@ -69,23 +86,49 @@ export default function TranslatePane({
       ? 'System + mic'
       : 'System audio'
 
+  const fromTag = from === 'auto' ? (heardFrom ? langTag(heardFrom) : 'Auto') : langTag(from)
+  const sameLang = from !== 'auto' && from === to
+
   return (
     <div className="main translate-main">
       <div className="kicker">
-        Captions · Auto → {langTag(to)}
+        Captions · {fromTag} → {langTag(to)}
+        {sameLang ? ' · same language' : ''}
         {queued > 0 ? ` · ${queued} queued` : ''}
         <span className="kicker-hint"> · F3 {sourceHint} · F2 your mic</span>
       </div>
       <div className={`tr-sheet${bilingual ? '' : ' single'}`}>
         <div className="tr-head-row">
-          {bilingual && <div className="tr-col-head">Auto</div>}
+          <label className="tr-col-head tr-to-head tr-from-head">
+            <span>From</span>
+            <select
+              className="tr-to-select"
+              value={from}
+              onChange={(e) => onTranslateFrom(e.target.value as Lang)}
+              title="Speech to recognize. Independent from Interview language."
+            >
+              <option value="auto">Auto · detect</option>
+              {TRANSLATE_LANGS.map((l) => (
+                <option key={l.id} value={l.id}>{l.tag} · {l.name} only</option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="tr-swap"
+            onClick={onSwap}
+            title={from === 'auto' ? 'Lock From to current To and flip captions' : 'Swap From and To'}
+            aria-label="Swap From and To"
+          >
+            <SwapIcon />
+          </button>
           <label className="tr-col-head tr-to-head">
             <span>To</span>
             <select
               className="tr-to-select"
               value={to}
               onChange={(e) => onTranslateTo(e.target.value as PairLang)}
-              title="Language of the translated text"
+              title="Language of the translated captions"
             >
               {TRANSLATE_LANGS.map((l) => (
                 <option key={l.id} value={l.id}>{l.tag} · {l.name}</option>
@@ -99,7 +142,7 @@ export default function TranslatePane({
               compact
               title="No captions yet"
               sub={isWeb
-                ? 'F3 listens on the browser microphone. F2 records a clip. Or type a line below.'
+                ? 'F3 listens on the browser microphone. Lock From to one language if the room is mixed. F2 records a clip. Or type a line below.'
                 : 'F3 listens to system audio. F2 records your microphone. Or type a line below.'}
               shortcuts={[
                 { key: 'F3', label: isWeb ? 'Listen' : 'System audio' },
@@ -128,6 +171,7 @@ export default function TranslatePane({
                       >
                         <span className="meet-ts">{p.ts}</span>
                         <span>{p.original}</span>
+                        {p.from ? <span className="tr-lang-chip">{langTag(p.from)}</span> : null}
                       </button>
                     )}
                     <div className={`tr-cell${p.translation ? '' : ' pending'}${p.failed ? ' failed' : ''}`}>

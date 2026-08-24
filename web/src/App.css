@@ -2184,7 +2184,14 @@ html.nod-web .ov-root {
   overflow: hidden;
 }
 
-.tr-head-row,
+.tr-head-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 8px;
+  padding: 10px 12px;
+  align-items: center;
+}
+
 .tr-pair {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2192,9 +2199,37 @@ html.nod-web .ov-root {
   padding: 10px 12px;
 }
 
-.tr-sheet.single .tr-head-row,
+.tr-sheet.single .tr-head-row {
+  grid-template-columns: 1fr auto 1fr;
+}
+
 .tr-sheet.single .tr-pair {
   grid-template-columns: 1fr;
+}
+
+.tr-from-head {
+  justify-content: flex-start;
+}
+
+.tr-swap {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 1px solid rgba(157, 184, 227, 0.22);
+  border-radius: 10px;
+  background: rgba(115, 138, 183, 0.12);
+  color: #9fb3d0;
+  cursor: pointer;
+}
+
+.tr-swap:hover,
+.tr-swap:focus {
+  border-color: rgba(93, 211, 245, 0.45);
+  color: #e8eef8;
 }
 
 .tr-to-head {
@@ -2204,6 +2239,7 @@ html.nod-web .ov-root {
   gap: 8px;
   margin-bottom: 0;
   overflow: visible;
+  min-width: 0;
 }
 
 .tr-to-head > span {
@@ -2217,10 +2253,10 @@ html.nod-web .ov-root {
   box-sizing: border-box;
   height: 32px;
   min-height: 32px;
-  width: 168px;
-  min-width: 168px;
+  width: 100%;
+  min-width: 0;
   max-width: 168px;
-  flex: 0 0 168px;
+  flex: 1 1 auto;
   margin: 0;
   padding: 0 28px 0 12px;
   border: 1px solid rgba(157, 184, 227, 0.22);
@@ -2879,7 +2915,7 @@ html.nod-web .ov-root {
 
 .lang-select-btn {
   height: 24px;
-  min-width: 62px;
+  min-width: 88px;
   padding: 0 8px 0 10px;
   display: inline-flex;
   align-items: center;

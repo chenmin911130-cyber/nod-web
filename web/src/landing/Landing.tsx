@@ -13,7 +13,7 @@ const MODES: Record<
   interview: {
     label: 'INTERVIEW · AUTO',
     hear: '“Walk me through a time you solved a hard problem.”',
-    live: 'Matching language… English question, English answer.',
+    live: 'Matching language… the answer follows the question.',
     answerLabel: 'SPEAKABLE ANSWER',
     answer: 'Lead with the result, then one project: the judgment, the action, and the impact.',
   },

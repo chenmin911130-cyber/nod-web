@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AudioSource, Lang, ModelDef, WorkspaceMode } from '../types'
+import type { AudioSource, Lang, ModelDef, PairLang, WorkspaceMode } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import { isWeb } from '../platform'
 import OpacityBar from './OpacityBar'
@@ -9,6 +9,7 @@ interface Props {
   models: ModelDef[]
   llm: { provider: string; model: string }
   lang: Lang
+  heardLang?: PairLang | null
   source: AudioSource
   opacity: number
   pinned: boolean
@@ -124,13 +125,15 @@ function Chevron() {
 }
 
 export default function TitleBar(props: Props) {
-  const { mode, models, llm, lang, source, opacity, pinned, systemMuted, stealth } = props
+  const { mode, models, llm, lang, heardLang, source, opacity, pinned, systemMuted, stealth } = props
   const curIdx = models.findIndex((m) => m.provider === llm.provider && m.model === llm.model)
   const [menuOpen, setMenuOpen] = useState(false)
   const [langOpen, setLangOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const langRef = useRef<HTMLDivElement>(null)
   const currentLang = LANGS.find((l) => l.value === lang) ?? LANGS[0]
+  const heardTag = heardLang ? TRANSLATE_LANGS.find((l) => l.id === heardLang)?.tag : ''
+  const langLabel = lang === 'auto' && heardTag ? `Auto · ${heardTag}` : currentLang.label
 
   useEffect(() => {
     if (!menuOpen && !langOpen) return
@@ -177,6 +180,7 @@ export default function TitleBar(props: Props) {
       </div>
 
       <div className="titlebar-right no-drag">
+        {mode !== 'translate' && (
         <div className="lang-pills" ref={langRef}>
           <button
             type="button"
@@ -186,17 +190,17 @@ export default function TitleBar(props: Props) {
             aria-label="Speech language"
             title={
               currentLang.value === 'auto'
-                ? 'Auto: match the spoken language'
+                ? 'Auto: hear among supported languages. Interview answers match the question. Translate To still picks the caption language.'
                 : mode === 'interview'
                   ? `Force ${currentLang.name} speech and answers`
-                  : `Lock speech recognition to ${currentLang.name}`
+                  : `Lock speech recognition to ${currentLang.name}. Translate To still picks the caption language.`
             }
             onClick={() => {
               setLangOpen((v) => !v)
               setMenuOpen(false)
             }}
           >
-            <span>{currentLang.label}</span>
+            <span>{langLabel}</span>
             <Chevron />
           </button>
           {langOpen && (
@@ -220,6 +224,7 @@ export default function TitleBar(props: Props) {
             </div>
           )}
         </div>
+        )}
 
         <div className="tb-icons">
           {isWeb ? (

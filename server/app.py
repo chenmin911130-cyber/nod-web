@@ -138,7 +138,7 @@ def load_config() -> dict[str, Any]:
         "llm": {"model": "deepseek-v4-flash", "max_tokens": 400, "temperature": 0.5, "provider": "deepseek"},
         "stt": {"model": STT_CLOUD, "language": None, "vocabulary": []},
         "audio": {"source": "mic"},
-        "ui": {"opacity": 88, "translate_to": "zh"},
+        "ui": {"opacity": 88, "translate_from": "auto", "translate_to": "zh"},
         "models": [],
     }
     if DEFAULT_CONFIG_PATH.exists():
@@ -168,6 +168,7 @@ _LANG_NAMES = {
     "de": "German",
     "pt": "Portuguese",
 }
+_LANG_ALIASES = {"cmn": "zh", "yue": "zh", "jp": "ja", "chi": "zh"}
 
 
 def _normalize_translate_to(lang: Any) -> str:
@@ -176,10 +177,28 @@ def _normalize_translate_to(lang: Any) -> str:
     return "zh"
 
 
+def _normalize_translate_from(lang: Any) -> str | None:
+    if lang in (None, "", "auto"):
+        return None
+    return _normalize_stt_lang(lang)
+
+
 def _normalize_stt_lang(lang: Any) -> str | None:
     if isinstance(lang, str) and lang in _TRANSLATE_LANGS:
         return lang
     return None
+
+
+def heard_lang_from_code(raw: Any) -> str | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    code = raw.strip().lower().replace("_", "-").split("-", 1)[0]
+    code = _LANG_ALIASES.get(code, code)
+    return _normalize_stt_lang(code)
+
+
+def heard_lang_from_turn(data: dict[str, Any]) -> str | None:
+    return heard_lang_from_code(data.get("language_code") or data.get("language"))
 
 
 def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -192,6 +211,7 @@ def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
         "audio": {"source": "mic"},
         "ui": {
             "opacity": cfg.get("ui", {}).get("opacity", 88),
+            "translate_from": _normalize_translate_from(cfg.get("ui", {}).get("translate_from")) or "auto",
             "translate_to": _normalize_translate_to(cfg.get("ui", {}).get("translate_to")),
         },
         "models": cfg.get("models") or [],
@@ -241,7 +261,7 @@ def clean_transcript(text: str, recent_finals=None, last_answer=None) -> tuple[s
     t = re.sub(r"[.?!。！？]{2,}", lambda m: m.group(0)[0], t)
     t = re.sub(r"\s+", " ", t)
     t = re.sub(r"\b(\w+)(?: \1\b)+", r"\1", t, flags=re.IGNORECASE)
-    if not t or not re.search(r"[A-Za-z0-9\u4e00-\u9fff]", t):
+    if not t or not re.search(r"[A-Za-z0-9\u00C0-\u024F\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]", t):
         return "", "no content"
     low = t.lower()
     if any(h in low for h in _STT_HALLUCINATIONS):
@@ -262,14 +282,28 @@ def clean_transcript(text: str, recent_finals=None, last_answer=None) -> tuple[s
 
 
 def detect_question_lang(text: str) -> str:
-    """Guess whether the interviewer spoke Chinese or English."""
+    """Guess speech language among the eight product languages."""
     t = text or ""
-    cjk = len(re.findall(r"[\u4e00-\u9fff]", t))
-    latin = len(re.findall(r"[A-Za-z]", t))
-    if cjk >= 2 and cjk >= max(3, latin * 0.4):
+    kana = len(re.findall(r"[\u3040-\u30FF]", t))
+    han = len(re.findall(r"[\u4e00-\u9fff]", t))
+    latin = len(re.findall(r"[A-Za-zÀ-ÿ]", t))
+    if kana >= 2 or (kana and (han + kana) >= latin):
+        return "ja"
+    if han >= 2 and han >= max(3, latin * 0.4):
         return "zh"
-    if cjk > latin:
+    if han > latin:
         return "zh"
+    low = t.lower()
+    if re.search(r"[¿¡ñ]|cómo|está[s]?|qué |hola\b", low):
+        return "es"
+    if re.search(r"[çœæ]|à |è |ê|pourquoi|bonjour|ça\b|vous ", low):
+        return "fr"
+    if re.search(r"[äöüß]|nicht\b|\bund\b|\bich\b|wie geht", low):
+        return "de"
+    if re.search(r"perché|ciao\b|grazie|più", low):
+        return "it"
+    if re.search(r"[ãõ]|você|não|olá", low):
+        return "pt"
     return "en"
 
 
@@ -330,9 +364,9 @@ def attachments_to_prompt(files) -> str:
     return "\n\n".join(blocks)
 
 
-def assemblyai_transcribe_pcm(api_key: str, pcm: bytes, cfg: dict[str, Any], timeout: float = 18.0) -> str:
+def assemblyai_transcribe_pcm(api_key: str, pcm: bytes, cfg: dict[str, Any], timeout: float = 18.0) -> tuple[str, str | None]:
     import websocket
-    result = {"text": "", "err": None}
+    result = {"text": "", "lang": None, "err": None}
     done = threading.Event()
     url = assemblyai_ws_url(cfg)
 
@@ -361,6 +395,7 @@ def assemblyai_transcribe_pcm(api_key: str, pcm: bytes, cfg: dict[str, Any], tim
             t = (data.get("utterance") or data.get("transcript") or "").strip()
             if t:
                 result["text"] = t
+                result["lang"] = heard_lang_from_turn(data) or result.get("lang")
             if data.get("end_of_turn"):
                 done.set()
         elif kind in ("Termination", "Error"):
@@ -394,7 +429,7 @@ def assemblyai_transcribe_pcm(api_key: str, pcm: bytes, cfg: dict[str, Any], tim
         pass
     if result["err"] and not result["text"]:
         raise RuntimeError(result["err"])
-    return result["text"]
+    return result["text"], result.get("lang")
 
 
 class Pipeline:
@@ -411,6 +446,7 @@ class Pipeline:
         self._gen_seq = 0
         self.user_id: str | None = None
         self.usage_session_id: str | None = None
+        self._heard_lang: str | None = None
 
     def _new_qid(self) -> str:
         return f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
@@ -443,6 +479,8 @@ class Pipeline:
         locked = _normalize_stt_lang((self.cfg.get("stt") or {}).get("language"))
         if locked:
             return locked
+        if self._heard_lang:
+            return self._heard_lang
         return detect_question_lang(question)
 
     def _lang_rule(self, question: str) -> str:
@@ -529,8 +567,9 @@ class Pipeline:
             {"role": "user", "content": f"Interviewer question: {question}\n\n{lang_line}\n\nAnswer:"},
         ]
 
-    def process_text(self, question: str, mode: str = "ask") -> None:
+    def process_text(self, question: str, mode: str = "ask", heard_lang: str | None = None) -> None:
         t = (question or "").strip()
+        self._heard_lang = _normalize_stt_lang(heard_lang)
         if not t:
             self.emit({"type": "status", "text": "Please type a question first"})
             self.emit({"type": "done", "id": "", "stt": 0, "llm": 0, "ok": False})
@@ -552,7 +591,11 @@ class Pipeline:
         internal = self._is_internal(t, mode)
         self.emit({"type": "status", "text": STATUS_GENERATE})
         if not internal:
-            self.emit({"type": "question", "id": qid, "text": t})
+            heard = self._heard_lang or (detect_question_lang(t) if mode == "ask" else None)
+            ev: dict[str, Any] = {"type": "question", "id": qid, "text": t}
+            if heard:
+                ev["language"] = heard
+            self.emit(ev)
         t0 = time.time()
         llm = self.cfg.get("llm") or {}
         max_tokens = llm.get("max_tokens", 600)
@@ -687,16 +730,18 @@ class CloudListener:
             text = (data.get("utterance") or data.get("transcript") or "").strip()
             if not text:
                 return
+            speechy = bool(re.search(r"[A-Za-z0-9\u00C0-\u024F\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]", text))
             if data.get("end_of_turn"):
                 if data.get("turn_is_formatted") is False:
-                    if self.on_partial:
+                    if speechy and self.on_partial:
                         self.on_partial(text)
                     return
                 cleaned = text.strip()
                 if cleaned and cleaned != self._last_final:
                     self._last_final = cleaned
-                    threading.Thread(target=self.on_final, args=(cleaned,), daemon=True).start()
-            elif self.on_partial:
+                    lang = heard_lang_from_turn(data)
+                    threading.Thread(target=self.on_final, args=(cleaned, lang), daemon=True).start()
+            elif speechy and self.on_partial:
                 self.on_partial(text)
         elif kind == "Error" and self.on_error:
             self.on_error(str(data.get("error") or message))
@@ -740,9 +785,9 @@ class Session:
         self._manual = False
         self._manual_started = 0.0
         self._busy = False
-        self._pending = None
+        self._pending: tuple[str, str | None] | None = None
         self._pending_asks: list[tuple[str, str]] = []
-        self._pending_wait = (None, 0.0)
+        self._pending_wait: tuple[str | None, float, str | None] = (None, 0.0, None)
         self._recent_finals: list[tuple[str, float]] = []
         self._mic_muted = False
         self._workspace = "interview"
@@ -835,11 +880,13 @@ class Session:
             self.set_llm(msg.get("provider", "deepseek"), msg.get("model", ""))
         elif mtype == "set_lang":
             lang = _normalize_stt_lang(msg.get("language"))
+            prev = self._effective_stt_lang()
             self.cfg.setdefault("stt", {})["language"] = lang
             self.emit({"type": "status", "text": f"Language: {_LANG_NAMES.get(lang or '', 'Auto')}"})
-            if self._listener:
-                self._stop_listening()
-                self._start_listening()
+            if self._workspace != "translate" and self._listener and prev != lang:
+                self._restart_listener()
+        elif mtype == "set_translate_from":
+            self.set_translate_from(msg.get("language"))
         elif mtype == "set_mic_muted":
             self.set_mic_muted(bool(msg.get("muted", False)))
         elif mtype == "set_source":
@@ -883,16 +930,45 @@ class Session:
     def set_translate_to(self, lang: str) -> None:
         self.cfg.setdefault("ui", {})["translate_to"] = _normalize_translate_to(lang)
 
+    def set_translate_from(self, lang: Any) -> None:
+        prev = self._effective_stt_lang()
+        locked = _normalize_translate_from(lang)
+        self.cfg.setdefault("ui", {})["translate_from"] = locked or "auto"
+        if self._workspace == "translate" and self._listener and prev != locked:
+            self._restart_listener()
+
+    def _effective_stt_lang(self, workspace: str | None = None) -> str | None:
+        ws = self._workspace if workspace is None else workspace
+        if ws == "translate":
+            return _normalize_translate_from((self.cfg.get("ui") or {}).get("translate_from"))
+        return _normalize_stt_lang((self.cfg.get("stt") or {}).get("language"))
+
+    def _stt_cfg(self) -> dict[str, Any]:
+        cfg = dict(self.cfg)
+        stt = dict(cfg.get("stt") or {})
+        stt["language"] = self._effective_stt_lang()
+        cfg["stt"] = stt
+        return cfg
+
+    def _restart_listener(self) -> None:
+        if not self._listener:
+            return
+        self._stop_listening()
+        self._start_listening()
+
     def set_workspace(self, mode: str) -> None:
         if mode not in ("interview", "meeting", "translate"):
             mode = "interview"
         prev = self._workspace
+        prev_lang = self._effective_stt_lang(prev)
         self._workspace = mode
         self._pending = None
         self._pending_asks = []
-        self._pending_wait = (None, 0.0)
+        self._pending_wait = (None, 0.0, None)
         if mode == "translate" and prev != "translate":
             self.cancel_generate()
+        if self._listener and prev_lang != self._effective_stt_lang():
+            self._restart_listener()
 
     def set_llm(self, provider: str, model: str) -> None:
         try:
@@ -934,7 +1010,7 @@ class Session:
             return
         listener = CloudListener(
             api_key=key,
-            cfg=self.cfg,
+            cfg=self._stt_cfg(),
             on_final=self._on_final,
             on_partial=lambda text: self.emit({"type": "partial", "text": text}) if text else None,
             on_error=lambda e: self.emit({"type": "error", "text": f"Transcription failed:{e}"}),
@@ -1003,7 +1079,7 @@ class Session:
             self.emit({"type": "state", "state": "idle"})
             return
         try:
-            text = assemblyai_transcribe_pcm(key, pcm, self.cfg)
+            text, lang = assemblyai_transcribe_pcm(key, pcm, self._stt_cfg())
         except Exception as e:
             self.emit({"type": "error", "text": f"Transcription failed:{e}"})
             self.emit({"type": "state", "state": "idle"})
@@ -1013,15 +1089,19 @@ class Session:
             self.emit({"type": "status", "text": STATUS_EMPTY})
             self.emit({"type": "state", "state": "idle"})
             return
+        heard = lang or detect_question_lang(cleaned)
         if self._workspace in ("meeting", "translate"):
             qid = self.pipeline._new_qid()
-            self.emit({"type": "question", "id": qid, "text": cleaned})
+            ev: dict[str, Any] = {"type": "question", "id": qid, "text": cleaned}
+            if heard:
+                ev["language"] = heard
+            self.emit(ev)
             self.emit({"type": "state", "state": "idle"})
             return
         self._busy = True
         self.pipeline._cancel.clear()
         try:
-            self.pipeline.process_text(cleaned, "ask")
+            self.pipeline.process_text(cleaned, "ask", heard)
         finally:
             self._busy = False
             self.emit({"type": "state", "state": "idle"})
@@ -1066,7 +1146,7 @@ class Session:
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _on_final(self, text: str) -> None:
+    def _on_final(self, text: str, lang: str | None = None) -> None:
         recent = [t for t, _ in self._recent_finals[-3:]]
         cleaned, _reason = clean_transcript(text, recent, self.pipeline._last_answer)
         if not cleaned:
@@ -1077,37 +1157,41 @@ class Session:
                 return
         self._recent_finals.append((cleaned, now))
         self._recent_finals = self._recent_finals[-8:]
+        heard = lang or detect_question_lang(cleaned)
+        qev: dict[str, Any] = {"type": "question", "id": "", "text": cleaned}
+        if heard:
+            qev["language"] = heard
         if self._workspace == "translate":
             self.cancel_generate()
             self._pending = None
-            self._pending_wait = (None, 0.0)
-            qid = self.pipeline._new_qid()
-            self.emit({"type": "question", "id": qid, "text": cleaned})
+            self._pending_wait = (None, 0.0, None)
+            qev["id"] = self.pipeline._new_qid()
+            self.emit(qev)
             return
         if self._workspace == "meeting":
-            qid = self.pipeline._new_qid()
-            self.emit({"type": "question", "id": qid, "text": cleaned})
+            qev["id"] = self.pipeline._new_qid()
+            self.emit(qev)
             if self.user_id and self.usage_session_id:
                 from server.meter import save_history
 
-                save_history(self.user_id, self.usage_session_id, "transcript", cleaned, qid)
+                save_history(self.user_id, self.usage_session_id, "transcript", cleaned, qev["id"])
             return
         recent_qs = [h["q"] for h in self.pipeline._qa_history]
         verdict = guard_question(cleaned, recent_qs, self.pipeline._last_answer)
         if verdict == "wait":
-            ptxt, pts = self._pending_wait
+            ptxt, pts, plang = self._pending_wait
             if ptxt and time.time() - pts < 2.0:
-                self._pending_wait = (None, 0.0)
-                self._on_final(f"{ptxt} {cleaned}")
+                self._pending_wait = (None, 0.0, None)
+                self._on_final(f"{ptxt} {cleaned}", plang or lang)
             else:
-                self._pending_wait = (cleaned, time.time())
+                self._pending_wait = (cleaned, time.time(), lang)
                 self.emit({"type": "status", "text": STATUS_WAIT_MORE})
             return
-        self._pending_wait = (None, 0.0)
+        self._pending_wait = (None, 0.0, None)
         if verdict == "reject":
             return
         if self._busy:
-            self._pending = cleaned
+            self._pending = (cleaned, lang)
             return
         self._busy = True
         self.pipeline._cancel.clear()
@@ -1116,7 +1200,7 @@ class Session:
 
         def work():
             try:
-                self.pipeline.process_text(cleaned, "ask")
+                self.pipeline.process_text(cleaned, "ask", heard)
             finally:
                 self._busy = False
                 listening = self._listener is not None
@@ -1124,7 +1208,8 @@ class Session:
                 pending = self._pending
                 self._pending = None
                 if pending:
-                    self._on_final(pending)
+                    ptxt, plang = pending
+                    self._on_final(ptxt, plang)
 
         threading.Thread(target=work, daemon=True).start()
 

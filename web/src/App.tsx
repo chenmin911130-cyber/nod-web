@@ -17,6 +17,47 @@ const PLACEHOLDER = 'Waiting for the next question…'
 const STATUS_READY = 'Ready · F2 record / F3 listen / F4 clear'
 const TRANSLATE_PREFIX = 'Translate to '
 const SUMMARY_PREFIX = 'Summarize the following meeting transcript'
+const TRANSLATE_PAIR_KEY = 'nod_translate_pair'
+
+function isPairLang(value: unknown): value is PairLang {
+  return TRANSLATE_LANGS.some((l) => l.id === value)
+}
+
+function isLang(value: unknown): value is Lang {
+  return value === 'auto' || isPairLang(value)
+}
+
+function readStoredPair(): { from: Lang; to: PairLang } | null {
+  try {
+    const raw = localStorage.getItem(TRANSLATE_PAIR_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { from?: unknown; to?: unknown }
+    if (!isLang(parsed.from) || !isPairLang(parsed.to)) return null
+    return { from: parsed.from, to: parsed.to }
+  } catch {
+    return null
+  }
+}
+
+function persistTranslatePair(from: Lang, to: PairLang) {
+  try {
+    localStorage.setItem(TRANSLATE_PAIR_KEY, JSON.stringify({ from, to }))
+  } catch {
+    /* private mode / quota */
+  }
+}
+
+function swapTranslatePair(from: Lang, to: PairLang, heard: PairLang | null): { from: Lang; to: PairLang } {
+  if (from === 'auto') {
+    const nextFrom = to
+    const nextTo = heard && heard !== to ? heard : to === 'zh' ? 'en' : 'zh'
+    return { from: nextFrom, to: nextTo }
+  }
+  if (from === to) return { from, to: from === 'zh' ? 'en' : 'zh' }
+  return { from: to, to: from }
+}
+
+const storedPair = readStoredPair()
 
 const initial: AppState = {
   run: 'idle',
@@ -47,8 +88,9 @@ const initial: AppState = {
   meetingElapsedMs: 0,
   meetingEnded: false,
   translatePairs: [],
-  translateFrom: 'en',
-  translateTo: 'zh',
+  translateFrom: storedPair?.from ?? 'auto',
+  translateTo: storedPair?.to ?? 'zh',
+  heardLang: null,
   bilingual: true,
   translateAskId: '',
   translateBindId: '',
@@ -71,6 +113,7 @@ type Action =
   | { type: 'config'; cfg: AppConfig }
   | { type: 'clear' }
   | { type: 'workspace'; mode: WorkspaceMode }
+  | { type: 'translate_from'; lang: Lang }
   | { type: 'translate_to'; lang: PairLang }
   | { type: 'bilingual'; on: boolean }
   | { type: 'mark_action' }
@@ -141,9 +184,12 @@ function reducer(state: AppState, action: Action): AppState {
       const systemMuted = srcRaw === 'mic'
       const source: AudioSource = srcRaw === 'both' || srcRaw === 'mic' ? 'both' : 'system'
       const opacity = Math.min(100, Math.max(10, Math.round(cfg.ui?.opacity ?? 83)))
-      const toRaw = cfg.ui?.translate_to
-      const translateTo: PairLang = TRANSLATE_LANGS.some((l) => l.id === toRaw) ? (toRaw as PairLang) : state.translateTo
-      return { ...state, llm, lang, source, systemMuted, opacity, models: cfg.models ?? [], translateTo }
+      const stored = readStoredPair()
+      const fromRaw = stored?.from ?? cfg.ui?.translate_from
+      const translateFrom: Lang = isLang(fromRaw) ? fromRaw : state.translateFrom
+      const toRaw = stored?.to ?? cfg.ui?.translate_to
+      const translateTo: PairLang = isPairLang(toRaw) ? toRaw : state.translateTo
+      return { ...state, llm, lang, source, systemMuted, opacity, models: cfg.models ?? [], translateFrom, translateTo }
     }
     case 'engine': {
       const ev = action.ev
@@ -172,7 +218,7 @@ function reducer(state: AppState, action: Action): AppState {
         case 'status':
           return { ...state, status: ev.text }
         case 'partial':
-          return { ...state, partial: ev.text }
+          return { ...state, partial: hasSpeechContent(ev.text) ? ev.text : '' }
         case 'question': {
           const qid = ev.id ?? ''
           const text = ev.text ?? ''
@@ -190,9 +236,10 @@ function reducer(state: AppState, action: Action): AppState {
             return { ...state, summaryAskId: qid, meetingSummary: '', partial: '', busy: true }
           }
           const ts = formatClock()
+          const heard = parseHeardLang(ev.language, text)
           if (state.workspaceMode === 'meeting') {
             const meetingLines = [...state.meetingLines, { id: qid, ts: formatTs(state.meetingStartedAt), text }]
-            return { ...state, meetingLines, currentQ: text, currentQId: qid, partial: '' }
+            return { ...state, meetingLines, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
           }
           if (state.workspaceMode === 'translate') {
             if (isTranslatePrompt(text)) {
@@ -206,14 +253,24 @@ function reducer(state: AppState, action: Action): AppState {
               }
             }
             const last = state.translatePairs[state.translatePairs.length - 1]
-            if (last && normOriginal(last.original) === normOriginal(text)) {
-              return { ...state, currentQ: text, partial: '' }
+            if (!hasSpeechContent(text)) {
+              return { ...state, partial: '' }
             }
-            const translatePairs = [...state.translatePairs, { id: qid, ts, original: text, translation: '', to: state.translateTo }]
-            return { ...state, translatePairs, currentQ: text, currentQId: qid, partial: '' }
+            if (last && normOriginal(last.original) === normOriginal(text)) {
+              return { ...state, currentQ: text, partial: '', heardLang: heard ?? state.heardLang }
+            }
+            const translatePairs = [...state.translatePairs, {
+              id: qid,
+              ts,
+              original: text,
+              translation: '',
+              to: state.translateTo,
+              from: state.lang !== 'auto' ? state.lang : (heard ?? undefined),
+            }]
+            return { ...state, translatePairs, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
           }
           const turns = [...state.turns, { id: qid, q: text, a: '' }]
-          return { ...state, turns, currentQ: text, currentQId: qid, partial: '' }
+          return { ...state, turns, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
         }
         case 'chunk': {
           let meetingSummary = state.meetingSummary
@@ -309,6 +366,8 @@ function reducer(state: AppState, action: Action): AppState {
       }
     case 'workspace':
       return { ...state, workspaceMode: action.mode, view: 'workspace' }
+    case 'translate_from':
+      return { ...state, translateFrom: action.lang }
     case 'translate_to':
       return { ...state, translateTo: action.lang }
     case 'bilingual':
@@ -378,6 +437,14 @@ function normOriginal(text: string): string {
   return (text || '').trim().replace(/\s+/g, ' ')
 }
 
+function hasSpeechContent(text: string): boolean {
+  return /[A-Za-z0-9\u00C0-\u024F\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]/u.test(normOriginal(text))
+}
+
+const NOT_ENGLISH_MARKS = /[¿¡ñßœæàâçèéêëîïôùûÿáéíóúüäöüßãõàèìòù]/iu
+const NOT_ENGLISH_WORDS =
+  /\b(?:hola|gracias|buenos|bonjour|bonsoir|merci|salut|pourquoi|êtes|ça|wie geht|nicht|danke|bitte|guten|você|não|olá|obrigado|perché|ciao|grazie|più|cómo|estás|usted|quién|dónde|también|comment ça|comment ca|como estas|qué tal|que tal)\b/iu
+
 function looksLikeTarget(text: string, to: PairLang): boolean {
   const chars = Array.from(normOriginal(text)).filter((c) => !/\s/u.test(c))
   if (chars.length < 2) return false
@@ -388,8 +455,26 @@ function looksLikeTarget(text: string, to: PairLang): boolean {
   const n = chars.length
   if (to === 'zh') return han / n >= 0.5 && kana === 0 && hangul === 0
   if (to === 'ja') return kana / n >= 0.12 || ((han + kana) / n >= 0.5 && kana > 0)
-  if (to === 'en') return latin / n >= 0.7 && han + kana + hangul === 0
+  if (to === 'en') {
+    const raw = normOriginal(text)
+    return latin / n >= 0.7 && han + kana + hangul === 0 && !NOT_ENGLISH_MARKS.test(raw) && !NOT_ENGLISH_WORDS.test(raw)
+  }
   return false
+}
+
+function parseHeardLang(raw: string | undefined, text: string): PairLang | null {
+  if (raw && TRANSLATE_LANGS.some((l) => l.id === raw)) return raw as PairLang
+  const t = normOriginal(text)
+  if (!t) return null
+  if (/[\u3040-\u30FF]/.test(t)) return 'ja'
+  if (/\p{Script=Han}/u.test(t)) return 'zh'
+  if (/[¿¡ñ]|cómo|está/i.test(t)) return 'es'
+  if (/[çœæ]|pourquoi|bonjour|\bça\b/i.test(t)) return 'fr'
+  if (/[äöüß]|nicht\b|wie geht/i.test(t)) return 'de'
+  if (/perché|ciao\b|grazie|più/i.test(t)) return 'it'
+  if (/[ãõ]|você|não|olá/i.test(t)) return 'pt'
+  if (/[A-Za-z]/.test(t)) return 'en'
+  return null
 }
 
 function langTag(lang: PairLang): string {
@@ -478,9 +563,11 @@ export default function App() {
     const api = window.api
     const syncWorkspace = () => {
       const s = stateRef.current
+      api.send({ type: 'set_translate_from', language: s.translateFrom === 'auto' ? null : s.translateFrom })
+      api.send({ type: 'set_translate_to', lang: s.translateTo })
       api.send({ type: 'set_workspace', mode: s.workspaceMode })
-      if (s.workspaceMode === 'translate') {
-        api.send({ type: 'set_translate_to', lang: s.translateTo })
+      if (s.workspaceMode !== 'translate') {
+        api.send({ type: 'set_lang', language: s.lang === 'auto' ? null : s.lang })
       }
     }
     const offEvent = api.onEvent((e) => {
@@ -660,6 +747,50 @@ export default function App() {
     dispatch({ type: 'lang', lang })
   }, [])
 
+  const handleTranslateFrom = useCallback((lang: Lang) => {
+    const s = stateRef.current
+    if (lang === s.translateFrom) return
+    persistTranslatePair(lang, s.translateTo)
+    window.api.send({ type: 'set_translate_from', language: lang === 'auto' ? null : lang })
+    dispatch({ type: 'translate_from', lang })
+    const fromName = lang === 'auto' ? 'Auto' : targetName(lang)
+    dispatch({
+      type: 'engine',
+      ev: {
+        type: 'status',
+        text: lang === 'auto'
+          ? `Hear Auto · captions ${targetName(s.translateTo)}`
+          : lang === s.translateTo
+            ? `Hear ${fromName} · same as captions`
+            : `Hear ${fromName} only · captions ${targetName(s.translateTo)}`,
+      },
+    })
+  }, [])
+
+  const handleSwapTranslate = useCallback(() => {
+    const s = stateRef.current
+    const next = swapTranslatePair(s.translateFrom, s.translateTo, s.heardLang)
+    if (next.from === s.translateFrom && next.to === s.translateTo) return
+    persistTranslatePair(next.from, next.to)
+    if (next.from !== s.translateFrom) {
+      window.api.send({ type: 'set_translate_from', language: next.from === 'auto' ? null : next.from })
+      dispatch({ type: 'translate_from', lang: next.from })
+    }
+    if (next.to !== s.translateTo) {
+      const stuck = inflightTranslate.current
+      window.api.send({ type: 'cancel_generate' })
+      window.api.send({ type: 'set_translate_to', lang: next.to })
+      releaseTranslateGate(stuck)
+      dispatch({ type: 'translate_to', lang: next.to })
+      queueMicrotask(() => pumpTranslateRef.current())
+    }
+    const fromName = next.from === 'auto' ? 'Auto' : targetName(next.from)
+    dispatch({
+      type: 'engine',
+      ev: { type: 'status', text: `Captions · ${fromName} → ${targetName(next.to)}` },
+    })
+  }, [])
+
   const handleSource = useCallback((source: AudioSource) => {
     const s = stateRef.current
     const listenMic = source === 'both'
@@ -701,7 +832,13 @@ export default function App() {
       dispatch({ type: 'stealth', on: false })
     }
     if (s.view !== 'workspace') dispatch({ type: 'view', view: 'workspace' })
-    if (mode === 'translate') window.api.send({ type: 'cancel_generate' })
+    if (mode === 'translate') {
+      window.api.send({ type: 'cancel_generate' })
+      window.api.send({ type: 'set_translate_from', language: s.translateFrom === 'auto' ? null : s.translateFrom })
+      window.api.send({ type: 'set_translate_to', lang: s.translateTo })
+    } else {
+      window.api.send({ type: 'set_lang', language: s.lang === 'auto' ? null : s.lang })
+    }
     window.api.send({ type: 'set_workspace', mode })
     dispatch({ type: 'workspace', mode })
     dispatch({ type: 'engine', ev: { type: 'status', text: `Mode · ${mode[0].toUpperCase()}${mode.slice(1)}` } })
@@ -732,6 +869,7 @@ export default function App() {
     if (s.run === 'record') return
     guardMic(() => {
       window.api.send({ type: 'set_workspace', mode: 'translate' })
+      window.api.send({ type: 'set_translate_from', language: s.translateFrom === 'auto' ? null : s.translateFrom })
       window.api.send({ type: 'set_translate_to', lang: s.translateTo })
       window.api.send({ type: 'toggle_listen' })
     })
@@ -755,6 +893,8 @@ export default function App() {
 
   const handleTranslateTo = useCallback((lang: PairLang) => {
     if (lang === stateRef.current.translateTo) return
+    const s = stateRef.current
+    persistTranslatePair(s.translateFrom, lang)
     const stuck = inflightTranslate.current
     window.api.send({ type: 'cancel_generate' })
     window.api.send({ type: 'set_translate_to', lang })
@@ -762,7 +902,12 @@ export default function App() {
     dispatch({ type: 'translate_to', lang })
     dispatch({
       type: 'engine',
-      ev: { type: 'status', text: `Translate to ${targetName(lang)}` },
+      ev: {
+        type: 'status',
+        text: s.translateFrom !== 'auto' && s.translateFrom === lang
+          ? `Translate to ${targetName(lang)} · same as From`
+          : `Translate to ${targetName(lang)}`,
+      },
     })
     queueMicrotask(() => pumpTranslateRef.current())
   }, [])
@@ -771,7 +916,9 @@ export default function App() {
     if (inflightTranslate.current) return
     const s = stateRef.current
     const id = pairId || `cap-${Date.now()}`
-    if (looksLikeTarget(text, s.translateTo)) {
+    const pair = pairId ? s.translatePairs.find((p) => p.id === pairId) : undefined
+    const sameLang = pair?.from ? pair.from === s.translateTo : looksLikeTarget(text, s.translateTo)
+    if (sameLang) {
       askedTranslate.current.add(id)
       dispatch({ type: 'fill_translate', id, translation: text, passthrough: true })
       queueMicrotask(() => pumpTranslateRef.current())
@@ -1009,6 +1156,7 @@ ${actions.length ? `<h2>Marked actions</h2>${actions.map((ln) => `<div class="ln
         models={state.models}
         llm={state.llm}
         lang={state.lang}
+        heardLang={state.heardLang}
         source={state.source}
         opacity={state.opacity}
         pinned={state.pinned}
@@ -1069,9 +1217,13 @@ ${actions.length ? `<h2>Marked actions</h2>${actions.map((ln) => `<div class="ln
             bindId={state.translateBindId}
             bilingual={state.bilingual}
             to={state.translateTo}
+            from={state.translateFrom}
+            heardFrom={state.translateFrom === 'auto' ? state.heardLang : state.translateFrom}
             source={state.source}
             onTranslate={handleTranslateTyped}
             onTranslateTo={handleTranslateTo}
+            onTranslateFrom={handleTranslateFrom}
+            onSwap={handleSwapTranslate}
             onCopyField={copyPairField}
             onRetry={handleRetryTranslate}
           />
