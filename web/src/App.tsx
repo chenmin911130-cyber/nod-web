@@ -217,8 +217,16 @@ function reducer(state: AppState, action: Action): AppState {
         }
         case 'status':
           return { ...state, status: ev.text }
-        case 'partial':
-          return { ...state, partial: hasSpeechContent(ev.text) ? ev.text : '' }
+        case 'partial': {
+          const text = ev.text ?? ''
+          if (state.workspaceMode === 'translate' && state.translateFrom !== 'auto') {
+            const heard = parseHeardLang(ev.language, text)
+            if (text && !matchesLockedFrom(text, state.translateFrom, heard)) {
+              return { ...state, partial: '' }
+            }
+          }
+          return { ...state, partial: hasSpeechContent(text) ? text : '' }
+        }
         case 'question': {
           const qid = ev.id ?? ''
           const text = ev.text ?? ''
@@ -256,6 +264,9 @@ function reducer(state: AppState, action: Action): AppState {
             if (!hasSpeechContent(text)) {
               return { ...state, partial: '' }
             }
+            if (state.translateFrom !== 'auto' && !matchesLockedFrom(text, state.translateFrom, heard)) {
+              return { ...state, partial: '' }
+            }
             if (last && normOriginal(last.original) === normOriginal(text)) {
               return { ...state, currentQ: text, partial: '', heardLang: heard ?? state.heardLang }
             }
@@ -265,7 +276,7 @@ function reducer(state: AppState, action: Action): AppState {
               original: text,
               translation: '',
               to: state.translateTo,
-              from: state.lang !== 'auto' ? state.lang : (heard ?? undefined),
+              from: state.translateFrom !== 'auto' ? state.translateFrom : (heard ?? undefined),
             }]
             return { ...state, translatePairs, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
           }
@@ -462,6 +473,21 @@ function looksLikeTarget(text: string, to: PairLang): boolean {
   return false
 }
 
+function matchesLockedFrom(text: string, locked: PairLang, heard: PairLang | null): boolean {
+  if (heard && heard !== locked) return false
+  if (locked === 'en' || locked === 'zh' || locked === 'ja') return looksLikeTarget(text, locked)
+  if (/[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]/u.test(text)) return false
+  const t = normOriginal(text)
+  if (/[\u3040-\u30FF]/.test(t)) return locked === 'ja'
+  if (/\p{Script=Han}/u.test(t)) return locked === 'zh'
+  if (/[¿¡ñ]|cómo|está|hola\b/i.test(t)) return locked === 'es'
+  if (/[çœæ]|pourquoi|bonjour|\bça\b/i.test(t)) return locked === 'fr'
+  if (/[äöüß]|nicht\b|wie geht/i.test(t)) return locked === 'de'
+  if (/perché|ciao\b|grazie|più/i.test(t)) return locked === 'it'
+  if (/[ãõ]|você|não|olá/i.test(t)) return locked === 'pt'
+  return true
+}
+
 function parseHeardLang(raw: string | undefined, text: string): PairLang | null {
   if (raw && TRANSLATE_LANGS.some((l) => l.id === raw)) return raw as PairLang
   const t = normOriginal(text)
@@ -575,6 +601,11 @@ export default function App() {
       dispatch({ type: 'engine', ev: e })
       if (e.type === 'question' && stateRef.current.workspaceMode === 'translate') {
         const text = e.text ?? ''
+        const s = stateRef.current
+        if (!isTranslatePrompt(text) && s.translateFrom !== 'auto') {
+          const heard = parseHeardLang(e.language, text)
+          if (!matchesLockedFrom(text, s.translateFrom, heard)) return
+        }
         if (!isTranslatePrompt(text)) {
           api.send({ type: 'cancel_generate' })
         }

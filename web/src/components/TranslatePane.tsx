@@ -105,7 +105,7 @@ export default function TranslatePane({
               className="tr-to-select"
               value={from}
               onChange={(e) => onTranslateFrom(e.target.value as Lang)}
-              title="Speech to recognize. Independent from Interview language."
+              title="Speech to recognize. Lock English to ignore other languages — they will not appear."
             >
               <option value="auto">Auto · detect</option>
               {TRANSLATE_LANGS.map((l) => (
@@ -142,7 +142,7 @@ export default function TranslatePane({
               compact
               title="No captions yet"
               sub={isWeb
-                ? 'F3 listens on the browser microphone. Lock From to one language if the room is mixed. F2 records a clip. Or type a line below.'
+                ? 'F3 listens on the browser microphone. Lock From to one language to ignore the rest — they will not appear. F2 records a clip. Or type a line below.'
                 : 'F3 listens to system audio. F2 records your microphone. Or type a line below.'}
               shortcuts={[
                 { key: 'F3', label: isWeb ? 'Listen' : 'System audio' },

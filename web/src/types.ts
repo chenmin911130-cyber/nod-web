@@ -101,7 +101,7 @@ export type EngineEvent =
   | { type: 'keys_status'; has_llm: boolean; has_stt: boolean }
   | { type: 'state'; state: string }
   | { type: 'status'; text: string }
-  | { type: 'partial'; text: string }
+  | { type: 'partial'; text: string; language?: string }
   | { type: 'question'; id: string; text: string; language?: string }
   | { type: 'chunk'; id: string; text: string }
   | { type: 'done'; id: string; stt: number; llm: number; ok: boolean }

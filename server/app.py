@@ -281,6 +281,17 @@ def clean_transcript(text: str, recent_finals=None, last_answer=None) -> tuple[s
     return t, ""
 
 
+_NON_EN_MARKS = re.compile(r"[¿¡ñßœæçàâèéêëîïôùûÿáíóúüäöãõìò]")
+_NON_EN_WORDS = re.compile(
+    r"\b(?:hola|gracias|buenos|bonjour|bonsoir|merci|salut|pourquoi|êtes|\bça\b|wie geht|"
+    r"nicht|danke|bitte|guten|você|não|olá|obrigado|perché|ciao|grazie|più|"
+    r"cómo|estás|usted|quién|dónde|también|comment ça|comment ca|como estas|"
+    r"qué tal|que tal)\b",
+    re.I,
+)
+_CJK_OR_HANGUL = re.compile(r"[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]")
+
+
 def detect_question_lang(text: str) -> str:
     """Guess speech language among the eight product languages."""
     t = text or ""
@@ -305,6 +316,31 @@ def detect_question_lang(text: str) -> str:
     if re.search(r"[ãõ]|você|não|olá", low):
         return "pt"
     return "en"
+
+
+def matches_locked_speech(text: str, locked: str | None, heard: str | None = None) -> bool:
+    """True if this transcript should be shown while Translate From is locked."""
+    if not locked:
+        return True
+    t = (text or "").strip()
+    if not t:
+        return False
+    if heard and heard != locked:
+        return False
+    guessed = detect_question_lang(t)
+    if locked == "en":
+        if _CJK_OR_HANGUL.search(t) or _NON_EN_MARKS.search(t) or _NON_EN_WORDS.search(t):
+            return False
+        return guessed == "en"
+    if locked == "zh":
+        if re.search(r"[\u3040-\u30FF\uac00-\ud7af]", t):
+            return False
+        return bool(re.search(r"[\u4e00-\u9fff]", t)) or guessed == "zh"
+    if locked == "ja":
+        return bool(re.search(r"[\u3040-\u30FF]", t)) or guessed == "ja"
+    if _CJK_OR_HANGUL.search(t):
+        return False
+    return guessed == locked
 
 
 def guard_question(text: str, recent_questions, last_answer=None) -> str:
@@ -731,18 +767,18 @@ class CloudListener:
             if not text:
                 return
             speechy = bool(re.search(r"[A-Za-z0-9\u00C0-\u024F\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]", text))
+            lang = heard_lang_from_turn(data)
             if data.get("end_of_turn"):
                 if data.get("turn_is_formatted") is False:
                     if speechy and self.on_partial:
-                        self.on_partial(text)
+                        self.on_partial(text, lang)
                     return
                 cleaned = text.strip()
                 if cleaned and cleaned != self._last_final:
                     self._last_final = cleaned
-                    lang = heard_lang_from_turn(data)
                     threading.Thread(target=self.on_final, args=(cleaned, lang), daemon=True).start()
             elif speechy and self.on_partial:
-                self.on_partial(text)
+                self.on_partial(text, lang)
         elif kind == "Error" and self.on_error:
             self.on_error(str(data.get("error") or message))
 
@@ -1012,7 +1048,7 @@ class Session:
             api_key=key,
             cfg=self._stt_cfg(),
             on_final=self._on_final,
-            on_partial=lambda text: self.emit({"type": "partial", "text": text}) if text else None,
+            on_partial=self._on_partial,
             on_error=lambda e: self.emit({"type": "error", "text": f"Transcription failed:{e}"}),
         )
         try:
@@ -1090,7 +1126,20 @@ class Session:
             self.emit({"type": "state", "state": "idle"})
             return
         heard = lang or detect_question_lang(cleaned)
-        if self._workspace in ("meeting", "translate"):
+        if self._workspace == "translate":
+            locked = self._effective_stt_lang()
+            if not matches_locked_speech(cleaned, locked, lang):
+                self.emit({"type": "partial", "text": ""})
+                self.emit({"type": "state", "state": "idle"})
+                return
+            qid = self.pipeline._new_qid()
+            ev: dict[str, Any] = {"type": "question", "id": qid, "text": cleaned}
+            if heard:
+                ev["language"] = heard
+            self.emit(ev)
+            self.emit({"type": "state", "state": "idle"})
+            return
+        if self._workspace == "meeting":
             qid = self.pipeline._new_qid()
             ev: dict[str, Any] = {"type": "question", "id": qid, "text": cleaned}
             if heard:
@@ -1146,11 +1195,29 @@ class Session:
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _on_partial(self, text: str, lang: str | None = None) -> None:
+        if not text:
+            return
+        if self._workspace == "translate":
+            locked = self._effective_stt_lang()
+            if locked and not matches_locked_speech(text, locked, lang):
+                self.emit({"type": "partial", "text": ""})
+                return
+        ev: dict[str, Any] = {"type": "partial", "text": text}
+        if lang:
+            ev["language"] = lang
+        self.emit(ev)
+
     def _on_final(self, text: str, lang: str | None = None) -> None:
         recent = [t for t, _ in self._recent_finals[-3:]]
         cleaned, _reason = clean_transcript(text, recent, self.pipeline._last_answer)
         if not cleaned:
             return
+        if self._workspace == "translate":
+            locked = self._effective_stt_lang()
+            if not matches_locked_speech(cleaned, locked, lang):
+                self.emit({"type": "partial", "text": ""})
+                return
         now = time.time()
         for t, ts in self._recent_finals:
             if now - ts < 5.0 and _ratio(cleaned.lower(), t.lower()) > 0.85:
