@@ -5,7 +5,7 @@ import {
   useAuth,
   useSignIn,
 } from '@clerk/clerk-react'
-import { api, getToken, setToken } from '../auth'
+import { api, setToken } from '../auth'
 import { track } from './track'
 import './Site.css'
 
@@ -36,15 +36,15 @@ export function ClerkExchange() {
 
   useEffect(() => {
     if (!isLoaded || !isSignedIn || ran.current) return
-    if (getToken()) {
-      ran.current = true
-      return
-    }
     ran.current = true
     void (async () => {
-      const sessionToken = await getClerkToken()
-      if (!sessionToken) return
-      await exchangeClerkSession(sessionToken)
+      try {
+        const sessionToken = await getClerkToken()
+        if (sessionToken) await exchangeClerkSession(sessionToken)
+      } catch {
+        ran.current = false
+        return
+      }
       const path = window.location.pathname.replace(/\/+$/, '') || '/'
       if (path === '/login' || path === '/signup' || path === '/sso-callback') {
         const next = new URLSearchParams(window.location.search).get('next') || '/app'
@@ -66,17 +66,28 @@ export function ClerkOneTap() {
 }
 
 export function GoogleButton({ next = '/app' }: { next?: string }) {
-  const { isLoaded, signIn } = useSignIn()
+  const { isLoaded, isSignedIn, getToken: getClerkToken } = useAuth()
+  const { signIn } = useSignIn()
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const hopped = useRef(false)
 
   const start = async () => {
-    if (!signIn) return
-    track('cta_google')
     setBusy(true)
     setErr('')
-    const complete = `/login?next=${encodeURIComponent(next)}`
     try {
+      if (isSignedIn) {
+        const sessionToken = await getClerkToken()
+        if (sessionToken) await exchangeClerkSession(sessionToken)
+        window.location.replace(next)
+        return
+      }
+      if (!signIn) {
+        setBusy(false)
+        return
+      }
+      track('cta_google')
+      const complete = `/login?next=${encodeURIComponent(next)}`
       if (typeof signIn.authenticateWithRedirect === 'function') {
         await signIn.authenticateWithRedirect({
           strategy: 'oauth_google',
@@ -102,12 +113,19 @@ export function GoogleButton({ next = '/app' }: { next?: string }) {
     }
   }
 
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn || hopped.current) return
+    hopped.current = true
+    void start()
+  }, [getClerkToken, isLoaded, isSignedIn, next])
+
   return (
     <div className="google-auth">
       <button className="button google-btn" type="button" onClick={() => void start()} disabled={!isLoaded || busy}>
         <GoogleMark />
-        {busy ? 'Opening Google…' : 'Continue with Google'}
+        {busy ? 'Opening workspace…' : isSignedIn ? 'Open workspace' : 'Continue with Google'}
       </button>
+      {isSignedIn && !err && <div className="site-ok">You're already signed in. Opening the workspace…</div>}
       {err && <div className="site-err">{err}</div>}
     </div>
   )

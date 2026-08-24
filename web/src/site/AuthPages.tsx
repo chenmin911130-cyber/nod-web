@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { api, setToken } from '../auth'
+import { api, fetchMe, setToken } from '../auth'
 import { track } from './track'
 import './Site.css'
 import NodMark from './NodMark'
@@ -45,6 +45,16 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const next = new URLSearchParams(location.search).get('next') || '/app'
+
+  useEffect(() => {
+    let cancelled = false
+    void fetchMe().then((me) => {
+      if (!cancelled && me) location.replace(next)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [next])
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -111,6 +121,16 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
   const [consent, setConsent] = useState(false)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    void fetchMe().then((me) => {
+      if (!cancelled && me) location.replace('/app')
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
