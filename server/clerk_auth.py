@@ -1,34 +1,99 @@
 from __future__ import annotations
 
+import base64
 import logging
 from functools import lru_cache
+from urllib.parse import urlparse
 
 import httpx
 import jwt
 from fastapi import HTTPException, Request
 from jwt import PyJWKClient
 
-from server.settings import CLERK_SECRET_KEY, PUBLIC_URL
+from server.settings import CLERK_PUBLISHABLE_KEY, CLERK_SECRET_KEY, PUBLIC_URL
 
 log = logging.getLogger("nod.clerk")
 
-AUTHORIZED_PARTIES = [
-    origin
-    for origin in (
-        PUBLIC_URL.rstrip("/"),
-        "http://127.0.0.1:5174",
-        "http://localhost:5174",
-        "http://127.0.0.1:9320",
-        "http://localhost:9320",
-    )
-    if origin
-]
+
+def _frontend_api() -> str:
+    """Hostname encoded in the Clerk publishable key, e.g. foo.clerk.accounts.dev."""
+    key = CLERK_PUBLISHABLE_KEY
+    if not key or "_" not in key:
+        return ""
+    try:
+        raw = key.split("_", 2)[2]
+        padded = raw + "=" * (-len(raw) % 4)
+        decoded = base64.b64decode(padded).decode("utf-8").rstrip("$").strip()
+        host = decoded.replace("https://", "").replace("http://", "").split("/")[0]
+        if "." not in host or " " in host or len(host) < 8:
+            return ""
+        return host
+    except Exception:
+        return ""
 
 
-def _azp_allowed(azp: str) -> bool:
-    if azp in AUTHORIZED_PARTIES:
+def _origin(url: str) -> str:
+    url = (url or "").strip().rstrip("/")
+    if not url:
+        return ""
+    if not url.startswith("http"):
+        url = "https://" + url
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _dev_origins() -> list[str]:
+    hosts = ("127.0.0.1", "localhost")
+    ports = (5173, 5174, 9320, 8080)
+    return [f"http://{host}:{port}" for host in hosts for port in ports]
+
+
+def _app_origins() -> set[str]:
+    origins = {origin for origin in (_origin(PUBLIC_URL), *_dev_origins()) if origin}
+    fapi = _frontend_api()
+    if fapi:
+        origins.add(f"https://{fapi}")
+    return origins
+
+
+def _azp_allowed(azp: str, request: Request | None, issuer: str) -> bool:
+    if not azp:
         return True
-    return azp.startswith("https://") and azp.endswith(".up.railway.app")
+    allowed = _app_origins()
+    issuer_origin = _origin(issuer)
+    if issuer_origin:
+        allowed.add(issuer_origin)
+    if request is not None:
+        req_origin = _origin(request.headers.get("origin") or "")
+        if req_origin:
+            allowed.add(req_origin)
+    if azp in allowed:
+        return True
+    if azp.startswith("https://") and azp.endswith(".up.railway.app"):
+        return True
+    if azp.startswith("https://") and (
+        azp.endswith(".clerk.accounts.dev") or azp.endswith(".accounts.dev")
+    ):
+        return True
+    parsed = urlparse(azp)
+    if parsed.hostname in {"localhost", "127.0.0.1"}:
+        return True
+    return False
+
+
+def _issuer_allowed(issuer: str) -> bool:
+    if not issuer:
+        return False
+    expected = _frontend_api()
+    host = urlparse(issuer).hostname or ""
+    if expected and (host == expected or issuer.rstrip("/") == f"https://{expected}"):
+        return True
+    if expected:
+        log.warning("clerk iss mismatch iss=%s expected=%s", host, expected)
+        return False
+    return "clerk" in issuer.lower() or host.endswith(".accounts.dev")
 
 
 @lru_cache(maxsize=8)
@@ -46,7 +111,7 @@ def _token_from_request(request: Request, body_token: str = "") -> str:
     return ""
 
 
-def verify_clerk_session(token: str) -> dict:
+def verify_clerk_session(token: str, request: Request | None = None) -> dict:
     if not CLERK_SECRET_KEY:
         raise HTTPException(503, "Google sign-in is not configured")
     if not token:
@@ -56,7 +121,7 @@ def verify_clerk_session(token: str) -> dict:
     except jwt.PyJWTError as exc:
         raise HTTPException(401, "Invalid Google session") from exc
     issuer = str(unverified.get("iss") or "")
-    if not issuer or "clerk" not in issuer.lower():
+    if not _issuer_allowed(issuer):
         raise HTTPException(401, "Invalid Google session")
     try:
         key = _jwks_client(issuer).get_signing_key_from_jwt(token)
@@ -68,8 +133,10 @@ def verify_clerk_session(token: str) -> dict:
         )
     except jwt.PyJWTError as exc:
         raise HTTPException(401, "Google session expired. Try again.") from exc
-    azp = str(payload.get("azp") or payload.get("aud") or "")
-    if azp and not _azp_allowed(azp):
+    azp = str(payload.get("azp") or "")
+    if isinstance(payload.get("aud"), str) and not azp:
+        azp = payload["aud"]
+    if azp and not _azp_allowed(azp, request, issuer):
         log.warning("clerk azp rejected: %s", azp)
         raise HTTPException(401, "Invalid Google session")
     if not payload.get("sub"):

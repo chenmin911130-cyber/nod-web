@@ -3,19 +3,31 @@ import {
   AuthenticateWithRedirectCallback,
   GoogleOneTap,
   useAuth,
+  useClerk,
   useSignIn,
 } from '@clerk/clerk-react'
-import { api, setToken } from '../auth'
+import { setToken } from '../auth'
 import { track } from './track'
 import './Site.css'
 
 async function exchangeClerkSession(sessionToken: string) {
-  const out = await api<{ token: string; user?: { created_at?: string | null } }>('/api/auth/clerk', {
+  const res = await fetch('/api/auth/clerk', {
     method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token: sessionToken }),
   })
-  setToken(out.token)
-  const created = out.user?.created_at ? Date.parse(out.user.created_at) : 0
+  const data = (await res.json().catch(() => ({}))) as {
+    token?: string
+    user?: { created_at?: string | null }
+    detail?: unknown
+  }
+  if (!res.ok || !data.token) {
+    const detail = data.detail
+    throw new Error(typeof detail === 'string' ? detail : 'Invalid Google session')
+  }
+  setToken(data.token)
+  const created = data.user?.created_at ? Date.parse(data.user.created_at) : 0
   if (created && Date.now() - created < 120_000) {
     track('signup_success', { method: 'google' })
   }
@@ -24,25 +36,43 @@ async function exchangeClerkSession(sessionToken: string) {
 export function ClerkChrome() {
   return (
     <>
+      <ClerkSignOutGate />
       <ClerkExchange />
       <ClerkOneTap />
     </>
   )
 }
 
+export function ClerkSignOutGate() {
+  const clerk = useClerk()
+  const ran = useRef(false)
+
+  useEffect(() => {
+    if (ran.current) return
+    if (new URLSearchParams(window.location.search).get('signout') !== '1') return
+    ran.current = true
+    void clerk.signOut({ redirectUrl: '/' })
+  }, [clerk])
+
+  return null
+}
+
 export function ClerkExchange() {
   const { isLoaded, isSignedIn, getToken: getClerkToken } = useAuth()
+  const clerk = useClerk()
   const ran = useRef(false)
 
   useEffect(() => {
     if (!isLoaded || !isSignedIn || ran.current) return
+    if (new URLSearchParams(window.location.search).get('signout') === '1') return
     ran.current = true
     void (async () => {
       try {
-        const sessionToken = await getClerkToken()
+        const sessionToken = await getClerkToken({ skipCache: true })
         if (sessionToken) await exchangeClerkSession(sessionToken)
       } catch {
         ran.current = false
+        await clerk.signOut().catch(() => undefined)
         return
       }
       const path = window.location.pathname.replace(/\/+$/, '') || '/'
@@ -51,7 +81,7 @@ export function ClerkExchange() {
         window.location.replace(next)
       }
     })()
-  }, [getClerkToken, isLoaded, isSignedIn])
+  }, [clerk, getClerkToken, isLoaded, isSignedIn])
 
   return null
 }
@@ -67,18 +97,19 @@ export function ClerkOneTap() {
 
 export function GoogleButton({ next = '/app' }: { next?: string }) {
   const { isLoaded, isSignedIn, getToken: getClerkToken } = useAuth()
+  const clerk = useClerk()
   const { signIn } = useSignIn()
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  const hopped = useRef(false)
 
   const start = async () => {
     setBusy(true)
     setErr('')
     try {
       if (isSignedIn) {
-        const sessionToken = await getClerkToken()
-        if (sessionToken) await exchangeClerkSession(sessionToken)
+        const sessionToken = await getClerkToken({ skipCache: true })
+        if (!sessionToken) throw new Error('Google session expired. Try again.')
+        await exchangeClerkSession(sessionToken)
         window.location.replace(next)
         return
       }
@@ -108,16 +139,11 @@ export function GoogleButton({ next = '/app' }: { next?: string }) {
       setErr('Google sign-in is unavailable in this build')
       setBusy(false)
     } catch (ex) {
+      await clerk.signOut().catch(() => undefined)
       setErr(ex instanceof Error ? ex.message : 'Google sign-in failed')
       setBusy(false)
     }
   }
-
-  useEffect(() => {
-    if (!isLoaded || !isSignedIn || hopped.current) return
-    hopped.current = true
-    void start()
-  }, [getClerkToken, isLoaded, isSignedIn, next])
 
   return (
     <div className="google-auth">
@@ -125,7 +151,7 @@ export function GoogleButton({ next = '/app' }: { next?: string }) {
         <GoogleMark />
         {busy ? 'Opening workspace…' : isSignedIn ? 'Open workspace' : 'Continue with Google'}
       </button>
-      {isSignedIn && !err && <div className="site-ok">You're already signed in. Opening the workspace…</div>}
+      {isSignedIn && !err && <div className="site-ok">You're already signed in with Google.</div>}
       {err && <div className="site-err">{err}</div>}
     </div>
   )

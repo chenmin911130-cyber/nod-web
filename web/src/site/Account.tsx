@@ -111,15 +111,16 @@ export default function AccountPage() {
               className="button button-ghost"
               type="button"
               onClick={() => {
-                logout()
-                const clerk = (window as unknown as { Clerk?: { signOut?: () => Promise<unknown> } }).Clerk
-                if (clerk?.signOut) {
-                  void clerk.signOut().finally(() => {
-                    location.href = '/'
-                  })
-                  return
-                }
-                location.href = '/'
+                void logout().finally(() => {
+                  const clerk = (window as unknown as { Clerk?: { signOut?: () => Promise<unknown> } }).Clerk
+                  if (clerk?.signOut) {
+                    void clerk.signOut().finally(() => {
+                      location.href = '/'
+                    })
+                    return
+                  }
+                  location.href = '/?signout=1'
+                })
               }}
             >
               Sign out

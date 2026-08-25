@@ -12,7 +12,30 @@ if PUBLIC_URL and not PUBLIC_URL.startswith("http"):
 if not PUBLIC_URL:
     PUBLIC_URL = "http://127.0.0.1:9320"
 
-AUTH_SECRET = (os.environ.get("AUTH_SECRET") or "").strip() or secrets.token_hex(32)
+def _load_auth_secret() -> str:
+    env = (os.environ.get("AUTH_SECRET") or "").strip()
+    if env:
+        return env
+    # No env var: persist a generated secret next to the database so JWTs
+    # survive restarts (on Railway DATA_DIR is the mounted /data volume).
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    path = DATA_DIR / "auth_secret.key"
+    try:
+        existing = path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+    except OSError:
+        pass
+    secret = secrets.token_hex(32)
+    path.write_text(secret, encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return secret
+
+
+AUTH_SECRET = _load_auth_secret()
 AUTH_DISABLED = os.environ.get("AUTH_DISABLED", "").strip().lower() in ("1", "true", "yes")
 COOKIE_NAME = "nod_session"
 TOKEN_DAYS = 14

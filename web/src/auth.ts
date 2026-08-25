@@ -81,7 +81,8 @@ export async function fetchMe(): Promise<Me | null> {
   }
 }
 
-export function logout(): void {
+export async function logout(): Promise<void> {
   setToken('')
-  void api('/api/auth/logout', { method: 'POST' }).catch(() => undefined)
+  // keepalive lets the request finish even if the page navigates right after.
+  await api('/api/auth/logout', { method: 'POST', keepalive: true }).catch(() => undefined)
 }

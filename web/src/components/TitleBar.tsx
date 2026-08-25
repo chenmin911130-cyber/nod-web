@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { AudioSource, Lang, ModelDef, PairLang, WorkspaceMode } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import { isWeb } from '../platform'
+import { logout } from '../auth'
 import OpacityBar from './OpacityBar'
 
 interface Props {
@@ -331,6 +332,24 @@ export default function TitleBar(props: Props) {
                       }}
                     >
                       Compact view
+                    </button>
+                  </>
+                )}
+                {isWeb && (
+                  <>
+                    <a className="tb-menu-action" href="/account">
+                      Account
+                    </a>
+                    <button
+                      className="tb-menu-action"
+                      onClick={() => {
+                        setMenuOpen(false)
+                        void logout().finally(() => {
+                          location.href = '/?signout=1'
+                        })
+                      }}
+                    >
+                      Sign out
                     </button>
                   </>
                 )}

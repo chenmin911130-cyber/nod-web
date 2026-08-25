@@ -3085,6 +3085,10 @@ html.nod-web .ov-root {
   background: rgba(34, 211, 238, 0.08);
 }
 
+a.tb-menu-action {
+  text-decoration: none;
+}
+
 .status-toast {
   position: absolute;
   top: 66px;

@@ -143,7 +143,7 @@ def clerk_login(request: Request, response: Response, body: ClerkIn | None = Non
     from server.clerk_auth import _token_from_request, clerk_profile, verify_clerk_session
 
     token = _token_from_request(request, body.token if body else "")
-    payload = verify_clerk_session(token)
+    payload = verify_clerk_session(token, request)
     clerk_id = str(payload["sub"])
     email, name = clerk_profile(clerk_id)
     with db_session() as db:
