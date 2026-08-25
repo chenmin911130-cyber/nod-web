@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AudioSource, Lang, ModelDef, PairLang, WorkspaceMode } from '../types'
 import { TRANSLATE_LANGS } from '../types'
-import { LISTENING_MODES, type ListeningMode } from '../listening'
 import { isWeb } from '../platform'
 import { logout } from '../auth'
 import OpacityBar from './OpacityBar'
@@ -27,10 +26,6 @@ interface Props {
   onStealth: (on: boolean) => void
   onFullScreen: () => void
   quotaLabel?: string
-  listeningMode?: ListeningMode
-  onListeningMode?: (mode: ListeningMode) => void
-  liveAnswer?: boolean
-  onLiveAnswer?: (on: boolean) => void
 }
 
 const LANGS: Array<{ label: string; value: Lang; name: string }> = [
@@ -39,9 +34,9 @@ const LANGS: Array<{ label: string; value: Lang; name: string }> = [
 ]
 
 const MODES: Array<{ id: WorkspaceMode; label: string }> = [
-  { id: 'meeting', label: 'Listen' },
+  { id: 'interview', label: 'AI Listening Assistant' },
+  { id: 'meeting', label: 'Meeting' },
   { id: 'translate', label: 'Translate' },
-  { id: 'interview', label: 'Interview' },
 ]
 
 function shortModelLabel(label: string): string {
@@ -186,23 +181,6 @@ export default function TitleBar(props: Props) {
       </div>
 
       <div className="titlebar-right no-drag">
-        {mode === 'meeting' && props.listeningMode && props.onListeningMode && (
-          <label className="listen-mode">
-            <span className="sr-only">Listening mode</span>
-            <select
-              className="combo combo-listen"
-              value={props.listeningMode}
-              onChange={(e) => props.onListeningMode?.(e.target.value as ListeningMode)}
-              title="What are you listening to?"
-            >
-              {LISTENING_MODES.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
         {mode !== 'translate' && (
         <div className="lang-pills" ref={langRef}>
           <button
@@ -213,7 +191,7 @@ export default function TitleBar(props: Props) {
             aria-label="Speech language"
             title={
               currentLang.value === 'auto'
-                ? 'Auto: hear among supported languages. Interview answers match the question. Translate To still picks the caption language.'
+                ? 'Auto: hear among supported languages. Answers match the question. Translate To still picks the caption language.'
                 : mode === 'interview'
                   ? `Force ${currentLang.name} speech and answers`
                   : `Lock speech recognition to ${currentLang.name}. Translate To still picks the caption language.`

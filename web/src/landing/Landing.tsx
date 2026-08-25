@@ -4,39 +4,32 @@ import { applySeo, track } from '../site/track'
 import { COPY, type Locale } from './copy'
 import './Landing.css'
 
-type ConsoleMode = 'lecture' | 'meeting' | 'conversation' | 'presentation'
+type ConsoleMode = 'interview' | 'meeting' | 'translate'
 
 const MODES: Record<
   ConsoleMode,
   { label: string; hear: string; live: string; answerLabel: string; answer: string }
 > = {
-  lecture: {
-    label: 'LECTURE · NOTES',
-    hear: '“Gradient descent updates weights against the loss.”',
-    live: 'Concept: gradient descent · Definition queued',
-    answerLabel: 'REVISION',
-    answer: 'Loss measures error. Descent steps downhill. Revision: write the update rule from memory.',
+  interview: {
+    label: 'LISTENING · AUTO',
+    hear: '“Walk me through a time you solved a hard problem.”',
+    live: 'Matching language… the answer follows the question.',
+    answerLabel: 'SPEAKABLE ANSWER',
+    answer: 'Lead with the result, then one project: the judgment, the action, and the impact.',
   },
   meeting: {
     label: 'MEETING · LIVE TRANSCRIPT',
     hear: '“Let’s kick off the customer pilot on Tuesday.”',
-    live: 'Decision: pilot starts Tuesday · owner TBD',
-    answerLabel: 'NOTES',
-    answer: 'Confirm the start date. Next: name an owner and send the prep list.',
+    live: 'Flagged: customer pilot / Tuesday / owner TBD',
+    answerLabel: 'MINUTES',
+    answer: 'Confirm the start date. Next: name an owner and send the prep list. Export as PDF.',
   },
-  conversation: {
-    label: 'CONVERSATION · FOLLOW',
-    hear: '“Maya can send the invoice before Friday.”',
-    live: 'Name: Maya · Date: Friday · Follow-up: invoice',
-    answerLabel: 'KEEP',
-    answer: 'Maya owns the invoice. Due before Friday. Ask Nod if you missed the amount.',
-  },
-  presentation: {
-    label: 'PRESENTATION · STRUCTURE',
-    hear: '“The bottleneck is not the model. It is the handoff.”',
-    live: 'Argument: handoff cost beats model quality',
-    answerLabel: 'TAKEAWAY',
-    answer: 'Main claim: process, not the model. Example: two extra reviews. Question: who owns the handoff?',
+  translate: {
+    label: 'TRANSLATE · EN → CH',
+    hear: '“Let’s make the next step clear for everyone.”',
+    live: '让我们把下一步向所有人说明清楚。',
+    answerLabel: 'CAPTION',
+    answer: 'Eight target languages. Queue, retry, or pass through if it is already in the target language.',
   },
 }
 
@@ -76,7 +69,7 @@ function DemoVideo({ caption }: { caption: string }) {
 }
 
 export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabled?: boolean }) {
-  const [mode, setMode] = useState<ConsoleMode>('lecture')
+  const [mode, setMode] = useState<ConsoleMode>('interview')
   const [navOpen, setNavOpen] = useState(false)
   const [signedIn, setSignedIn] = useState(false)
   const priced = useRef(false)
@@ -96,7 +89,6 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
       lang: t.htmlLang,
       image: `${origin}/og.png`,
     })
-    track('landing_view', { locale })
     void fetchMe().then((me) => setSignedIn(Boolean(me)))
     const observer = new IntersectionObserver(
       (entries) => {
@@ -181,11 +173,11 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
             <div className="reveal visible">
               <div className="eyebrow">{t.eyebrow}</div>
               <h1>
-                {t.heroLine1}
+                Hear it.
                 <br />
-                {t.heroLine2}
+                Keep it.
                 <br />
-                <span className="underline">{t.heroLine3}</span>
+                <span className="underline">Speak the next line.</span>
               </h1>
               <p className="hero-copy">{t.heroCopy}</p>
               <div className="hero-actions">
@@ -196,7 +188,6 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
                   {t.seeHow}
                 </a>
               </div>
-              <p className="hero-note">{t.desktopCta}</p>
               {!signedIn && <p className="hero-note">{t.startFreeNote}</p>}
               <div className="signal-row">
                 <span>
@@ -211,14 +202,14 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
             <div className="live-console reveal visible" aria-label={t.consoleAria}>
               <div className="console-top">
                 <div className="workspace-tabs">
-                  {(['lecture', 'meeting', 'conversation', 'presentation'] as const).map((id) => (
+                  {(['interview', 'meeting', 'translate'] as const).map((id) => (
                     <button
                       key={id}
                       type="button"
                       className={mode === id ? 'active' : ''}
                       onClick={() => setMode(id)}
                     >
-                      {id[0].toUpperCase() + id.slice(1)}
+                      {id === 'interview' ? 'Listening' : id[0].toUpperCase() + id.slice(1)}
                     </button>
                   ))}
                 </div>
@@ -310,18 +301,18 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
               <p>{t.wsP}</p>
             </div>
             <DemoVideo caption={t.demoCaption} />
-            <div className="workspace-grid scenes">
+            <div className="workspace-grid">
               <article className="work-card interview reveal">
                 <div className="card-top">
                   <span className="mode-symbol">⌁</span>
-                  <span className="tag">LECTURE</span>
+                  <span className="tag">LISTENING</span>
                 </div>
-                <h3>Lecture</h3>
-                <p>{t.lectureP}</p>
+                <h3>AI Listening Assistant</h3>
+                <p>{t.interviewP}</p>
                 <ul className="feature-list">
-                  <li>{t.lectureF1}</li>
-                  <li>{t.lectureF2}</li>
-                  <li>{t.lectureF3}</li>
+                  <li>{t.interviewF1}</li>
+                  <li>{t.interviewF2}</li>
+                  <li>{t.interviewF3}</li>
                 </ul>
               </article>
               <article className="work-card meeting reveal">
@@ -340,42 +331,15 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
               <article className="work-card translate reveal">
                 <div className="card-top">
                   <span className="mode-symbol">文</span>
-                  <span className="tag">CONVERSATION</span>
+                  <span className="tag">TRANSLATE</span>
                 </div>
-                <h3>Conversation</h3>
-                <p>{t.conversationP}</p>
+                <h3>Translate</h3>
+                <p>{t.translateP}</p>
                 <ul className="feature-list">
-                  <li>{t.conversationF1}</li>
-                  <li>{t.conversationF2}</li>
-                  <li>{t.conversationF3}</li>
+                  <li>{t.translateF1}</li>
+                  <li>{t.translateF2}</li>
+                  <li>{t.translateF3}</li>
                 </ul>
-              </article>
-              <article className="work-card presentation reveal">
-                <div className="card-top">
-                  <span className="mode-symbol">◇</span>
-                  <span className="tag">PRESENTATION</span>
-                </div>
-                <h3>Presentation</h3>
-                <p>{t.presentationP}</p>
-                <ul className="feature-list">
-                  <li>{t.presentationF1}</li>
-                  <li>{t.presentationF2}</li>
-                  <li>{t.presentationF3}</li>
-                </ul>
-              </article>
-            </div>
-            <div className="core-grid reveal">
-              <article>
-                <h3>{t.coreAskH}</h3>
-                <p>{t.coreAskP}</p>
-              </article>
-              <article>
-                <h3>{t.coreMemH}</h3>
-                <p>{t.coreMemP}</p>
-              </article>
-              <article>
-                <h3>{t.coreDeskH}</h3>
-                <p>{t.coreDeskP}</p>
               </article>
             </div>
           </div>

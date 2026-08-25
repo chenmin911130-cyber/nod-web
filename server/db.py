@@ -54,8 +54,7 @@ class UsageSession(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    mode: Mapped[str] = mapped_column(String(32), default="meeting")
-    listening_mode: Mapped[str] = mapped_column(String(32), default="meeting")
+    mode: Mapped[str] = mapped_column(String(32), default="interview")
     title: Mapped[str] = mapped_column(String(200), default="")
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -63,21 +62,6 @@ class UsageSession(Base):
     llm_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     llm_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0)
-
-
-class TranscriptSegment(Base):
-    __tablename__ = "transcript_segments"
-
-    id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    session_id: Mapped[str] = mapped_column(ForeignKey("usage_sessions.id"), index=True)
-    speaker: Mapped[str] = mapped_column(String(80), default="")
-    start_time: Mapped[str] = mapped_column(String(32), default="")
-    end_time: Mapped[str] = mapped_column(String(32), default="")
-    original_text: Mapped[str] = mapped_column(Text, default="")
-    translated_text: Mapped[str] = mapped_column(Text, default="")
-    confidence: Mapped[float] = mapped_column(Float, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class HistoryItem(Base):
@@ -172,7 +156,6 @@ def init_db() -> None:
     Base.metadata.create_all(engine)
     _add_column_if_missing("users", "clerk_id", "VARCHAR(64) DEFAULT ''")
     _add_column_if_missing("users", "stt_limit_seconds", "INTEGER")
-    _add_column_if_missing("usage_sessions", "listening_mode", "VARCHAR(32) DEFAULT 'meeting'")
 
 
 @contextmanager

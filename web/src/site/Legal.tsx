@@ -41,7 +41,7 @@ export function PrivacyPage() {
       <ul>
         <li>Account data: email, name, password hash, plan, and billing identifiers from Stripe if you pay.</li>
         <li>Usage data: session times, workspace mode, estimated transcription seconds, token counts, and cost estimates.</li>
-        <li>Content you generate in the product: questions, transcript lines, answers, notes, and captions, stored so you can review and search sessions.</li>
+        <li>Content you generate in the product: questions, transcripts, answers, summaries, and captions, stored so you can review history.</li>
         <li>Feedback you send through the product.</li>
       </ul>
       <h2>Audio</h2>
@@ -86,7 +86,7 @@ export function TermsPage() {
       <ul>
         <li>You must have the right to record or transcribe the room you are in. Many places require consent from everyone present.</li>
         <li>
-          Interview is for rehearsal, spoken-answer practice, and post-session reflection. You are responsible for accuracy and for
+          AI Listening Assistant is for rehearsal, spoken-answer practice, and post-session reflection. You are responsible for accuracy and for
           following interviewer and platform rules.
         </li>
         <li>Do not use Nod to break the law, harass people, or overload the service.</li>
@@ -122,7 +122,7 @@ export function ConsentPage() {
       <ul>
         <li>This confirmation appears the first time you enable the microphone — including on the free trial.</li>
         <li>Tell participants you are using a transcription tool, if the law or the room requires it.</li>
-        <li>Use Interview for rehearsal, spoken-answer practice, and post-session reflection — not as a hidden prompt in a live interview if that violates the employer’s rules.</li>
+        <li>Use AI Listening Assistant for rehearsal, spoken-answer practice, and post-session reflection — not as a hidden prompt in a live interview if that violates the employer’s rules.</li>
         <li>You can withdraw by signing out and deleting your account. That does not erase provider logs they already hold.</li>
       </ul>
       <p>

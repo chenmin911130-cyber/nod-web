@@ -2479,11 +2479,12 @@ html.nod-web .ov-root {
 }
 
 .mode-pill {
-  min-width: 84px;
+  min-width: 0;
   height: 30px;
-  padding: 0 14px;
+  padding: 0 12px;
   border-radius: 999px;
-  font-size: 13px;
+  font-size: 12.5px;
+  white-space: nowrap;
 }
 
 .mode-pill.active {
@@ -2934,63 +2935,6 @@ html.nod-web .ov-root {
 .lang-select-btn:hover,
 .lang-select-btn.open {
   background: rgba(34, 211, 238, 0.26);
-}
-
-.listen-mode {
-  display: flex;
-  align-items: center;
-}
-
-.combo-listen {
-  height: 26px;
-  max-width: 148px;
-  padding: 0 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(34, 211, 238, 0.18);
-  background: rgba(4, 8, 16, 0.72);
-  color: #e8eef8;
-  font: 600 11.5px inherit;
-}
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.ask-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 0 8px;
-}
-
-.ask-chip {
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(34, 211, 238, 0.18);
-  background: transparent;
-  color: #c9d6ea;
-  font: 600 11px inherit;
-  cursor: pointer;
-}
-
-.ask-chip:hover {
-  background: rgba(34, 211, 238, 0.08);
-}
-
-.meet-caption {
-  display: block;
-  margin-top: 4px;
-  color: #8fb4c8;
-  font-size: 12.5px;
 }
 
 .lang-select-btn svg {

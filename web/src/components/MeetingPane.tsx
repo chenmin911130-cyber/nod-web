@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MeetingLine } from '../types'
-import type { ListeningMode } from '../listening'
-import { LISTENING_MODES } from '../listening'
 import type { AttachPayload, LocalAttach } from '../attach'
 import { toPayload } from '../attach'
 import { AnswerContent } from './AnswerContent'
@@ -10,16 +8,12 @@ import EmptyState from './EmptyState'
 
 interface Props {
   lines: MeetingLine[]
-  captions?: Record<string, string>
-  showCaptions?: boolean
-  onToggleCaptions?: (on: boolean) => void
-  listeningMode?: ListeningMode
   partial: string
   summary: string
   busy: boolean
   elapsedLabel: string
   listening: boolean
-  onGenerate: (note?: string, files?: AttachPayload[], intent?: 'notes' | 'ask') => void
+  onGenerate: (note?: string, files?: AttachPayload[]) => void
 }
 
 function Sparkle() {
@@ -31,43 +25,24 @@ function Sparkle() {
   )
 }
 
-const CHIPS = [
-  { label: 'Summarize', text: 'Summarize this session.' },
-  { label: 'Key points', text: 'What are the key points?' },
-  { label: 'Action items', text: 'List action items, owners, and deadlines if they were said.' },
-]
-
-export default function MeetingPane({
-  lines,
-  captions = {},
-  showCaptions = false,
-  onToggleCaptions,
-  listeningMode = 'meeting',
-  partial,
-  summary,
-  busy,
-  elapsedLabel,
-  listening,
-  onGenerate,
-}: Props) {
+export default function MeetingPane({ lines, partial, summary, busy, elapsedLabel, listening, onGenerate }: Props) {
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<LocalAttach[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const modeLabel = LISTENING_MODES.find((m) => m.id === listeningMode)?.label ?? 'Meeting'
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'auto' })
   }, [lines, partial])
 
-  const submit = (intent: 'notes' | 'ask' = 'ask') => {
+  const submit = () => {
     if (busy) return
     const t = input.trim()
     if (!t && files.length === 0) {
-      onGenerate(undefined, undefined, 'notes')
+      onGenerate()
       return
     }
-    onGenerate(t || undefined, files.length ? toPayload(files) : undefined, intent)
+    onGenerate(t || undefined, files.length ? toPayload(files) : undefined)
     setInput('')
     setFiles([])
   }
@@ -78,21 +53,15 @@ export default function MeetingPane({
     <div className="main meeting-main">
       <div className="meet-transcript">
         <div className="kicker-row">
-          <div className="kicker">Live transcript · {modeLabel}</div>
+          <div className="kicker">Transcript</div>
           <div className="meet-timer">{listening ? elapsedLabel : elapsedLabel === '00:00:00' ? '' : elapsedLabel}</div>
         </div>
-        {onToggleCaptions && (
-          <label className="site-check" style={{ margin: '0 0 8px', fontSize: 12, color: '#9bb0c8' }}>
-            <input type="checkbox" checked={showCaptions} onChange={(e) => onToggleCaptions(e.target.checked)} />
-            <span>Optional translation</span>
-          </label>
-        )}
         <div className="meet-scroll" ref={scrollRef}>
           {empty ? (
             <EmptyState
               compact
-              title="What are you listening to?"
-              sub="Choose a mode or start listening. Transcript stays on the left."
+              title="No transcript yet"
+              sub="Click Start Meeting to capture the call"
               shortcuts={[{ key: 'F3', label: 'Start' }]}
             />
           ) : (
@@ -102,7 +71,6 @@ export default function MeetingPane({
                 <span className="meet-text">
                   {ln.marked && <span className="meet-flag">Action · </span>}
                   {ln.text}
-                  {showCaptions && captions[ln.id] ? <span className="meet-caption">{captions[ln.id]}</span> : null}
                 </span>
               </div>
             ))
@@ -118,45 +86,31 @@ export default function MeetingPane({
       </div>
 
       <div className="meet-summary">
-        <div className="kicker">AI notes · {modeLabel}</div>
+        <div className="kicker">Summary</div>
         <div className="meet-summary-body">
           {summary ? (
             <AnswerContent answer={summary} base="ms" />
           ) : (
             <div className="answer-empty">
-              {busy ? 'Writing notes…' : 'Generate notes for this mode, or ask Nod about what you heard.'}
+              {busy ? 'Generating summary…' : 'Generate a bullet summary from the transcript.'}
             </div>
           )}
         </div>
       </div>
 
-      <div className="ask-chips">
-        {CHIPS.map((chip) => (
-          <button
-            key={chip.label}
-            type="button"
-            className="ask-chip"
-            disabled={busy}
-            onClick={() => onGenerate(chip.text, undefined, 'ask')}
-          >
-            {chip.label}
-          </button>
-        ))}
-      </div>
-
       <PromptAttach files={files} onChange={setFiles} disabled={busy}>
         <input
           className="prompt-input"
-          placeholder="Ask Nod anything about what you heard..."
+          placeholder="Add note or ask anything"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') submit('ask')
+            if (e.key === 'Enter') submit()
           }}
         />
-        <button className="gen-btn" onClick={() => submit(input.trim() || files.length ? 'ask' : 'notes')} disabled={busy}>
+        <button className="gen-btn" onClick={submit} disabled={busy}>
           <Sparkle />
-          {input.trim() || files.length ? 'Ask Nod' : 'Notes'}
+          Generate
         </button>
       </PromptAttach>
     </div>
