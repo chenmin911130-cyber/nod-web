@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +27,7 @@ from openai import OpenAI
 from server.admin import router as admin_router
 from server.commerce import router as commerce_router
 from server.db import init_db
+from server.headers import CloudflareOriginMiddleware, SecurityHeadersMiddleware
 from server.logging_setup import backup_now, setup_logging
 from server.settings import AUTH_DISABLED, CLERK_PUBLISHABLE_KEY, COOKIE_NAME, PUBLIC_URL, QUOTA_DISABLED
 from server.security import user_from_token
@@ -1315,7 +1316,11 @@ _origins = [
     "http://localhost:9320",
 ]
 if PUBLIC_URL:
-    _origins.append(PUBLIC_URL.rstrip("/"))
+    _origin = PUBLIC_URL.rstrip("/")
+    _origins.append(_origin)
+    _host = urlparse(_origin).hostname or ""
+    if _host.count(".") == 1:
+        _origins.append(f"{urlparse(_origin).scheme}://www.{_host}")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
@@ -1323,6 +1328,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(CloudflareOriginMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(commerce_router)
 app.include_router(admin_router)
 
@@ -1342,6 +1349,8 @@ def health():
 
 @app.get("/api/config")
 def api_config():
+    # Public on purpose: the landing page bootstraps Clerk from this payload.
+    # clerk_publishable_key is designed to be public (pk_*). No secrets here.
     return JSONResponse(public_config(CFG))
 
 
