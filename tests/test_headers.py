@@ -52,10 +52,12 @@ class SecurityHeadersTests(unittest.TestCase):
 
     def test_origin_lock_off_by_default(self):
         os.environ.pop("REQUIRE_CLOUDFLARE", None)
+        os.environ.pop("ORIGIN_SECRET", None)
         client = TestClient(_app())
         self.assertEqual(client.get("/").status_code, 200)
 
     def test_origin_lock_blocks_direct_except_health(self):
+        os.environ.pop("ORIGIN_SECRET", None)
         os.environ["REQUIRE_CLOUDFLARE"] = "1"
         self.addCleanup(lambda: os.environ.pop("REQUIRE_CLOUDFLARE", None))
         client = TestClient(_app())
@@ -65,6 +67,16 @@ class SecurityHeadersTests(unittest.TestCase):
         self.assertEqual(health.status_code, 200)
         allowed = client.get("/", headers={"cf-ray": "abc-SFO"})
         self.assertEqual(allowed.status_code, 200)
+
+    def test_origin_secret_beats_spoofed_cf_ray(self):
+        os.environ["ORIGIN_SECRET"] = "origin-test-secret"
+        os.environ.pop("REQUIRE_CLOUDFLARE", None)
+        self.addCleanup(lambda: os.environ.pop("ORIGIN_SECRET", None))
+        client = TestClient(_app())
+        self.assertEqual(client.get("/", headers={"cf-ray": "spoofed"}).status_code, 403)
+        self.assertEqual(client.get("/api/health").status_code, 200)
+        self.assertEqual(client.get("/", headers={"x-nod-origin": "wrong"}).status_code, 403)
+        self.assertEqual(client.get("/", headers={"x-nod-origin": "origin-test-secret"}).status_code, 200)
 
 
 if __name__ == "__main__":

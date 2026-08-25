@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+ORIGIN_HEADER = b"x-nod-origin"
 
 HSTS = "max-age=63072000; includeSubDomains; preload"
 
@@ -58,12 +62,36 @@ def cloudflare_required() -> bool:
     return os.environ.get("REQUIRE_CLOUDFLARE", "").strip().lower() in ("1", "true", "yes")
 
 
+def origin_secret() -> bytes:
+    return os.environ.get("ORIGIN_SECRET", "").strip().encode("utf-8")
+
+
 def _header_map(scope: Scope) -> dict[bytes, bytes]:
     return {k.lower(): v for k, v in (scope.get("headers") or [])}
 
 
 def is_health_path(path: str) -> bool:
     return path.rstrip("/") == "/api/health"
+
+
+def origin_allowed(scope: Scope) -> bool:
+    """
+    Railway sits in front of the container, so Cloudflare IP allowlists
+    cannot be enforced here. A shared origin secret (injected by a
+    Cloudflare request-header rule) is the lock that cannot be spoofed
+    by Host-headering the old Railway IP. CF-Ray is a weaker fallback.
+    """
+    path = scope.get("path") or ""
+    if is_health_path(path):
+        return True
+    headers = _header_map(scope)
+    secret = origin_secret()
+    if secret:
+        offered = headers.get(ORIGIN_HEADER) or b""
+        return hmac.compare_digest(hashlib.sha256(offered).digest(), hashlib.sha256(secret).digest())
+    if cloudflare_required():
+        return bool(headers.get(b"cf-ray"))
+    return True
 
 
 class SecurityHeadersMiddleware:
@@ -93,31 +121,25 @@ class SecurityHeadersMiddleware:
 
 class CloudflareOriginMiddleware:
     """
-    Optional origin lock. Off unless REQUIRE_CLOUDFLARE=1.
+    Origin lock. Off until ORIGIN_SECRET or REQUIRE_CLOUDFLARE is set.
 
-    Only checks that the request already passed through Cloudflare (CF-Ray).
-    Railway health checks stay open. Do not enable until the zone is orange-clouded
-    or /api/health is the only public probe Railway needs.
+    Railway health checks stay open. WebSocket upgrades are checked too —
+    the handshake is ASGI type websocket, not http.
     """
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not cloudflare_required():
+        if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
-
-        path = scope.get("path") or ""
-        if is_health_path(path):
+        if origin_allowed(scope):
             await self.app(scope, receive, send)
             return
-
-        headers = _header_map(scope)
-        if headers.get(b"cf-ray"):
-            await self.app(scope, receive, send)
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 4403})
             return
-
         body = b'{"detail":"Direct origin access is blocked"}'
         await send(
             {
