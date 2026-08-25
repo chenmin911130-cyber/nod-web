@@ -1,12 +1,12 @@
 import { createRoot } from 'react-dom/client'
-import { fetchMe } from './auth'
+import { ensureLocalGuest, fetchMe } from './auth'
 
 const rootEl = document.getElementById('root')
 
 async function boot() {
   if (!rootEl) return
   const path = window.location.pathname + window.location.search
-  const me = await fetchMe()
+  const me = (await fetchMe()) || (await ensureLocalGuest())
   if (!me) {
     window.location.replace(`/login?next=${encodeURIComponent(path || '/app')}`)
     return

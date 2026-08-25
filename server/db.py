@@ -62,6 +62,8 @@ class UsageSession(Base):
     llm_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     llm_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0)
+    audio_key: Mapped[str] = mapped_column(String(400), default="")
+    notes_key: Mapped[str] = mapped_column(String(400), default="")
 
 
 class HistoryItem(Base):
@@ -156,6 +158,8 @@ def init_db() -> None:
     Base.metadata.create_all(engine)
     _add_column_if_missing("users", "clerk_id", "VARCHAR(64) DEFAULT ''")
     _add_column_if_missing("users", "stt_limit_seconds", "INTEGER")
+    _add_column_if_missing("usage_sessions", "audio_key", "VARCHAR(400) DEFAULT ''")
+    _add_column_if_missing("usage_sessions", "notes_key", "VARCHAR(400) DEFAULT ''")
 
 
 @contextmanager

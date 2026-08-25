@@ -9,7 +9,7 @@
   },
   "llm": {
     "model": "deepseek-v4-flash",
-    "max_tokens": 300,
+    "max_tokens": 1600,
     "temperature": 0.5,
     "provider": "deepseek"
   },

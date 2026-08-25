@@ -281,12 +281,77 @@ def list_history(user_id: str, limit: int = 40) -> list[dict]:
                     "llm_tokens": s.llm_input_tokens + s.llm_output_tokens,
                     "cost_usd": round(s.estimated_cost_usd, 4),
                     "items": [{"kind": i.kind, "text": i.text, "at": i.created_at.isoformat() if i.created_at else None} for i in items],
+                    "files": _session_files(s),
                 }
             )
         return out
 
 
+def _session_files(s: UsageSession) -> list[dict]:
+    files = []
+    if s.audio_key:
+        files.append({"kind": "audio", "name": "audio.wav", "href": f"/api/account/files/{s.id}/audio"})
+    if s.notes_key:
+        files.append({"kind": "notes", "name": "notes.txt", "href": f"/api/account/files/{s.id}/notes"})
+    return files
+
+
+def set_session_file(session_id: str, *, audio_key: str | None = None, notes_key: str | None = None) -> None:
+    with db_session() as db:
+        row = db.get(UsageSession, session_id)
+        if not row:
+            return
+        if audio_key:
+            row.audio_key = audio_key
+        if notes_key:
+            row.notes_key = notes_key
+
+
+def session_file_url(user_id: str, session_id: str, kind: str) -> str:
+    from server.r2 import presign
+
+    with db_session() as db:
+        row = db.get(UsageSession, session_id)
+        if not row or row.user_id != user_id:
+            return ""
+        key = row.audio_key if kind == "audio" else row.notes_key if kind == "notes" else ""
+    return presign(key) if key else ""
+
+
+def write_session_notes(user_id: str, session_id: str) -> None:
+    from server.r2 import enabled, put_bytes
+
+    if not enabled() or not session_id:
+        return
+    with db_session() as db:
+        session = db.get(UsageSession, session_id)
+        if not session or session.user_id != user_id:
+            return
+        items = db.execute(
+            select(HistoryItem)
+            .where(HistoryItem.session_id == session_id)
+            .order_by(HistoryItem.created_at.asc())
+            .limit(400)
+        ).scalars().all()
+        title = session.title or "Nod session"
+        mode = session.mode
+        started = session.started_at.isoformat() if session.started_at else ""
+    lines = [f"# {title}", "", f"Mode: {mode}", f"Started: {started}", ""]
+    for item in items:
+        label = (item.kind or "note").upper()
+        lines.append(f"## {label}")
+        lines.append(item.text.strip())
+        lines.append("")
+    body = "\n".join(lines).strip() + "\n"
+    key = f"users/{user_id}/sessions/{session_id}/notes.txt"
+    if put_bytes(key, body.encode("utf-8"), "text/plain; charset=utf-8"):
+        set_session_file(session_id, notes_key=key)
+
+
 def delete_user_data(user_id: str) -> None:
+    from server.r2 import delete_prefix
+
+    delete_prefix(f"users/{user_id}/")
     with db_session() as db:
         db.execute(delete(HistoryItem).where(HistoryItem.user_id == user_id))
         db.execute(delete(UsageSession).where(UsageSession.user_id == user_id))

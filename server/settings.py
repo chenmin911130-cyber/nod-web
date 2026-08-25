@@ -55,6 +55,10 @@ SMTP_PASSWORD = (os.environ.get("SMTP_PASSWORD") or "").strip()
 MAIL_FROM = (os.environ.get("MAIL_FROM") or "Nod <noreply@localhost>").strip()
 
 SENTRY_DSN = (os.environ.get("SENTRY_DSN") or "").strip()
+R2_ACCOUNT_ID = (os.environ.get("R2_ACCOUNT_ID") or "").strip()
+R2_ACCESS_KEY_ID = (os.environ.get("R2_ACCESS_KEY_ID") or "").strip()
+R2_SECRET_ACCESS_KEY = (os.environ.get("R2_SECRET_ACCESS_KEY") or "").strip()
+R2_BUCKET = (os.environ.get("R2_BUCKET") or "").strip()
 ADMIN_TOKEN = (os.environ.get("ADMIN_TOKEN") or "leonardo").strip()
 ADMIN_COOKIE = "nod_admin"
 

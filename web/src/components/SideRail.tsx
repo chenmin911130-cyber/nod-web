@@ -15,6 +15,7 @@ interface Props {
   onExport: () => void
   onBilingual: () => void
   meetingPaused?: boolean
+  onClose?: () => void
 }
 
 function MicIcon() {
@@ -157,6 +158,11 @@ export default function SideRail(props: Props) {
 
   return (
     <div className="side-rail">
+      {props.onClose && (
+        <button className="rail-close" type="button" onClick={props.onClose} title="Hide sidebar">
+          <span aria-hidden="true">×</span>
+        </button>
+      )}
       <button
         className={`rail-primary${primaryOn ? ' active' : ''}`}
         onClick={props.onPrimary}
@@ -194,6 +200,10 @@ export default function SideRail(props: Props) {
           <button className="rail-icon-btn" onClick={props.onClear} title="Clear history (F4)">
             <TrashIcon />
             <span>Clear</span>
+          </button>
+          <button className="rail-icon-btn" onClick={props.onExport} title="Export answers as PDF">
+            <PdfIcon />
+            <span>Export PDF</span>
           </button>
         </>
       )}

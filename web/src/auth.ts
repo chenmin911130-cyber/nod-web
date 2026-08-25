@@ -73,11 +73,50 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
   return data
 }
 
+export function isLocalHost(): boolean {
+  return location.hostname === '127.0.0.1' || location.hostname === 'localhost'
+}
+
 export async function fetchMe(): Promise<Me | null> {
   try {
     return await api<Me>('/api/me')
   } catch {
     return null
+  }
+}
+
+export async function ensureLocalGuest(): Promise<Me | null> {
+  if (!isLocalHost()) return null
+  try {
+    const out = await api<{ token?: string; user?: Me }>('/api/auth/local-guest', { method: 'POST' })
+    if (out.token) setToken(out.token)
+    return out.user || (await fetchMe())
+  } catch {
+    return {
+      id: 'local-guest',
+      email: 'local@nod.test',
+      name: 'Local test',
+      plan: 'free',
+      plan_name: 'Free',
+      subscription_status: 'none',
+      consent: true,
+      created_at: null,
+      usage: {
+        ok: true,
+        stt_seconds: 0,
+        stt_limit: 0,
+        llm_tokens: 0,
+        llm_limit: 0,
+        sessions: 0,
+        session_limit: 0,
+        daily_cost_usd: 0,
+        daily_cost_limit: 0,
+        quota_disabled: true,
+      },
+      plans: [],
+      stripe_enabled: false,
+      quota_disabled: true,
+    }
   }
 }
 

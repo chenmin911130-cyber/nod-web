@@ -2630,6 +2630,7 @@ html.nod-web .ov-root {
 }
 
 .side-rail {
+  position: relative;
   width: 118px;
   gap: 14px;
   padding: 18px 10px 14px;
@@ -2743,6 +2744,84 @@ html.nod-web .ov-root {
 .workspace {
   padding: 12px 14px 8px;
   gap: 14px;
+  position: relative;
+}
+
+.rail-slot {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.rail-hotzone {
+  display: none;
+}
+
+.workspace.study {
+  gap: 0;
+}
+
+.workspace.study .rail-slot {
+  width: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: width 0.22s ease, opacity 0.18s ease;
+}
+
+.workspace.study.rail-on {
+  gap: 14px;
+}
+
+.workspace.study.rail-on .rail-slot {
+  width: 118px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.workspace.study .rail-hotzone {
+  display: block;
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 20px;
+  z-index: 4;
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.14), transparent);
+}
+
+.workspace.study.rail-on .rail-hotzone {
+  display: none;
+}
+
+.workspace.study .question,
+.workspace.study .qblock-text,
+.workspace.study .empty-title {
+  font-size: 36px;
+}
+
+.side-rail:has(.rail-close) {
+  padding-top: 28px;
+}
+
+.rail-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #dbe7f7;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.rail-close:hover {
+  background: rgba(34, 211, 238, 0.22);
+  color: #f8fafc;
 }
 
 .main {
@@ -3253,6 +3332,16 @@ a.tb-menu-action {
     gap: 10px;
   }
 
+  .workspace.study.rail-on .rail-slot {
+    width: 96px;
+  }
+
+  .workspace.study .question,
+  .workspace.study .qblock-text,
+  .workspace.study .empty-title {
+    font-size: 28px;
+  }
+
   .main {
     padding: 14px 16px 12px;
   }
@@ -3373,6 +3462,32 @@ a.tb-menu-action {
     flex-direction: column;
     padding: 8px 8px 0;
     gap: 8px;
+  }
+
+  .workspace.study,
+  .workspace.study.rail-on {
+    gap: 8px;
+  }
+
+  .workspace.study .rail-slot,
+  .workspace.study.rail-on .rail-slot {
+    width: 100%;
+    opacity: 1;
+    pointer-events: auto;
+    overflow: visible;
+    order: 2;
+  }
+
+  .workspace.study .rail-hotzone,
+  .workspace.study.rail-on .rail-hotzone,
+  .rail-close {
+    display: none;
+  }
+
+  .workspace.study .question,
+  .workspace.study .qblock-text,
+  .workspace.study .empty-title {
+    font-size: 20px;
   }
 
   .side-rail {

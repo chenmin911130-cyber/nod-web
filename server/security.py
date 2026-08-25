@@ -91,6 +91,12 @@ def user_from_token(token: str) -> User | None:
         return user
 
 
+def is_local_request(request: Request) -> bool:
+    host = ((request.client.host if request.client else "") or "").strip()
+    header = (request.headers.get("host") or "").split(":", 1)[0].strip().lower()
+    return host in {"127.0.0.1", "::1", "localhost"} and header in {"127.0.0.1", "localhost"}
+
+
 def current_user(
     request: Request,
     nod_session: str | None = Cookie(default=None, alias=COOKIE_NAME),

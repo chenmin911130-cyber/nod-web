@@ -23,8 +23,14 @@ export function installWebApi(): void {
   let ws: WebSocket | null = null
   let reconnectTimer = 0
 
+  const pending: EngineMsg[] = []
   const sendJson = (msg: EngineMsg) => {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg))
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(msg))
+      return
+    }
+    pending.push(msg)
+    emit({ type: 'status', text: 'Connecting to Nod…' })
   }
 
   const syncMic = async (run?: string) => {
@@ -47,6 +53,12 @@ export function installWebApi(): void {
     const socket = new WebSocket(wsUrl())
     ws = socket
     socket.binaryType = 'arraybuffer'
+    socket.onopen = () => {
+      while (pending.length) {
+        const msg = pending.shift()
+        if (msg) socket.send(JSON.stringify(msg))
+      }
+    }
     socket.onmessage = (ev) => {
       if (typeof ev.data !== 'string') return
       try {
@@ -109,16 +121,9 @@ export function installWebApi(): void {
     openExternal: (url) => {
       window.open(url, '_blank', 'noopener')
     },
-    exportPdf: async ({ html, title }) => {
-      const w = window.open('', '_blank', 'noopener')
-      if (!w) return ''
-      w.document.open()
-      w.document.write(html)
-      w.document.title = title || 'Nod Export'
-      w.document.close()
-      w.focus()
-      w.print()
-      return 'print'
+    exportPdf: async ({ title, blocks }) => {
+      const { downloadPdf } = await import('./pdf')
+      return downloadPdf(title || 'Nod', blocks || [{ kind: 'p', text: 'Empty export.' }])
     },
   }
 

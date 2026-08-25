@@ -9,6 +9,7 @@ import logging
 import os
 import queue
 import re
+import tempfile
 import threading
 import time
 import uuid
@@ -136,7 +137,7 @@ def load_config() -> dict[str, Any]:
             "jd": "",
             "style": "简洁结构化：先给结论，再 2-3 点展开；行为题用 STAR；语言口语化、可直接照着念。",
         },
-        "llm": {"model": "deepseek-v4-flash", "max_tokens": 400, "temperature": 0.5, "provider": "deepseek"},
+        "llm": {"model": "deepseek-v4-flash", "max_tokens": 1600, "temperature": 0.5, "provider": "deepseek"},
         "stt": {"model": STT_CLOUD, "language": None, "vocabulary": []},
         "audio": {"source": "mic"},
         "ui": {"opacity": 88, "translate_from": "auto", "translate_to": "zh"},
@@ -635,8 +636,10 @@ class Pipeline:
             self.emit(ev)
         t0 = time.time()
         llm = self.cfg.get("llm") or {}
-        max_tokens = llm.get("max_tokens", 600)
-        if mode == "summary":
+        max_tokens = int(llm.get("max_tokens") or 800)
+        if mode == "ask":
+            max_tokens = max(max_tokens, 1600)
+        elif mode == "summary":
             max_tokens = max(max_tokens, 1200)
         elif mode == "translate":
             max_tokens = max(max_tokens, 800)
@@ -653,13 +656,23 @@ class Pipeline:
             if self._provider == "deepseek":
                 kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
             stream = self.client.chat.completions.create(**kwargs)
+            reasoning = ""
             for ch in stream:
                 if seq != self._gen_seq or self._cancel.is_set():
                     return
+                if not ch.choices:
+                    continue
                 delta = ch.choices[0].delta
-                if delta.content:
-                    answer += delta.content
-                    self.emit({"type": "chunk", "id": qid, "text": delta.content})
+                piece = getattr(delta, "content", None) or ""
+                if piece:
+                    answer += piece
+                    self.emit({"type": "chunk", "id": qid, "text": piece})
+                think = getattr(delta, "reasoning_content", None) or ""
+                if think:
+                    reasoning += think
+            if not answer and reasoning:
+                answer = reasoning
+                self.emit({"type": "chunk", "id": qid, "text": reasoning})
         except Exception as e:
             if seq != self._gen_seq:
                 return
@@ -687,6 +700,13 @@ class Pipeline:
             if not internal:
                 save_history(self.user_id, self.usage_session_id, kind_q, self._strip_nod_tag(t), qid)
             save_history(self.user_id, self.usage_session_id, "answer" if mode == "ask" else mode, answer, qid)
+            if mode in ("ask", "summary", "translate", "notes"):
+                try:
+                    from server.meter import write_session_notes
+
+                    write_session_notes(self.user_id, self.usage_session_id)
+                except Exception:
+                    logging.getLogger("nod").exception("r2 notes upload failed")
             if not ok:
                 self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "llm"})
         self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": True})
@@ -828,6 +848,70 @@ class Session:
         self._recent_finals: list[tuple[str, float]] = []
         self._mic_muted = False
         self._workspace = "interview"
+        self._archive_fp = None
+        self._archive_path: str | None = None
+        self._archive_bytes = 0
+
+    def _archive_append(self, pcm: bytes) -> None:
+        from server.r2 import MAX_AUDIO_BYTES, enabled
+
+        if not enabled() or not self.user_id or not pcm:
+            return
+        if self._archive_bytes >= MAX_AUDIO_BYTES:
+            return
+        if self._archive_fp is None:
+            fd, path = tempfile.mkstemp(prefix="nod-pcm-", suffix=".pcm")
+            self._archive_path = path
+            self._archive_fp = os.fdopen(fd, "wb")
+        take = pcm[: MAX_AUDIO_BYTES - self._archive_bytes]
+        if take:
+            self._archive_fp.write(take)
+            self._archive_bytes += len(take)
+
+    def _flush_cloud_archive(self, final: bool = False) -> None:
+        from server.r2 import enabled, pcm_to_wav, put_bytes
+        from server.meter import set_session_file, write_session_notes
+
+        if not enabled() or not self.user_id or not self.usage_session_id:
+            if final:
+                self._archive_close(unlink=True)
+            return
+        path = self._archive_path
+        if self._archive_fp:
+            try:
+                self._archive_fp.flush()
+            except Exception:
+                pass
+        if path and self._archive_bytes > SR * 2:
+            try:
+                wav = pcm_to_wav(Path(path).read_bytes())
+                key = f"users/{self.user_id}/sessions/{self.usage_session_id}/audio.wav"
+                if put_bytes(key, wav, "audio/wav"):
+                    set_session_file(self.usage_session_id, audio_key=key)
+            except Exception:
+                logging.getLogger("nod").exception("r2 audio upload failed")
+        try:
+            write_session_notes(self.user_id, self.usage_session_id)
+        except Exception:
+            logging.getLogger("nod").exception("r2 notes upload failed")
+        if final:
+            self._archive_close(unlink=True)
+
+    def _archive_close(self, unlink: bool = False) -> None:
+        if self._archive_fp:
+            try:
+                self._archive_fp.close()
+            except Exception:
+                pass
+            self._archive_fp = None
+        path = self._archive_path
+        self._archive_path = None
+        self._archive_bytes = 0
+        if unlink and path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
     def start(self) -> None:
         st = self.pipeline.key_status()
@@ -839,6 +923,7 @@ class Session:
     def close(self) -> None:
         self._stop_listening()
         self.pipeline._cancel.set()
+        self._flush_cloud_archive(final=True)
         if self.usage_session_id:
             from server.meter import close_usage_session
 
@@ -897,10 +982,12 @@ class Session:
                     return
         if self._manual:
             self._manual_buf.extend(pcm)
+            self._archive_append(pcm)
             if time.time() - self._manual_started > MANUAL_MAX_SEC:
                 self._stop_manual()
             return
         if self._listener:
+            self._archive_append(pcm)
             self._listener.push_pcm(pcm)
 
     def dispatch(self, msg: dict) -> None:
@@ -1075,6 +1162,7 @@ class Session:
                 pass
         self.emit({"type": "state", "state": "idle"})
         self.emit({"type": "status", "text": STATUS_READY})
+        self._flush_cloud_archive(final=False)
 
     def manual(self) -> None:
         if self._mic_muted:

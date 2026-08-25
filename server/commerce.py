@@ -6,17 +6,19 @@ from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from server.db import AuditLog, Feedback, Order, ResetToken, User, db_session, utcnow
 from server.mailer import send_reset_email
-from server.meter import delete_user_data, list_history, plan_of, usage_snapshot
+from server.meter import delete_user_data, list_history, plan_of, session_file_url, usage_snapshot
 from server.security import (
     cookie_kwargs,
     current_user,
     hash_password,
     hash_token,
+    is_local_request,
     issue_jwt,
     new_id,
     optional_user,
@@ -87,6 +89,37 @@ def _set_session(response: Response, request: Request, user: User) -> str:
     https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
     response.set_cookie(value=token, **cookie_kwargs(https))
     return token
+
+
+LOCAL_TEST_EMAIL = "local@nod.test"
+
+
+def _ensure_local_user() -> User:
+    with db_session() as db:
+        user = db.execute(select(User).where(User.email == LOCAL_TEST_EMAIL)).scalar_one_or_none()
+        if user is None:
+            user = User(
+                id=new_id(),
+                email=LOCAL_TEST_EMAIL,
+                name="Local test",
+                password_hash="",
+                recording_consent_at=utcnow(),
+            )
+            db.add(user)
+            db.flush()
+        elif user.recording_consent_at is None:
+            user.recording_consent_at = utcnow()
+        db.expunge(user)
+        return user
+
+
+@router.post("/api/auth/local-guest")
+def local_guest(request: Request, response: Response):
+    if not is_local_request(request):
+        raise HTTPException(404, "Not found")
+    user = _ensure_local_user()
+    token = _set_session(response, request, user)
+    return {"ok": True, "token": token, "user": _public_user(user)}
 
 
 @router.post("/api/auth/register")
@@ -216,7 +249,14 @@ def reset(body: ResetIn, request: Request, response: Response):
 
 
 @router.get("/api/me")
-def me(user: User = Depends(current_user)):
+def me(request: Request, user: User | None = Depends(optional_user)):
+    if user is None:
+        from server.settings import AUTH_DISABLED
+
+        if AUTH_DISABLED or is_local_request(request):
+            user = _ensure_local_user()
+        else:
+            raise HTTPException(status_code=401, detail="Please sign in")
     return _public_user(user)
 
 
@@ -263,6 +303,16 @@ def funnel_event(request: Request, body: EventIn):
 @router.get("/api/account/history")
 def history(user: User = Depends(current_user)):
     return {"ok": True, "sessions": list_history(user.id)}
+
+
+@router.get("/api/account/files/{session_id}/{kind}")
+def download_session_file(session_id: str, kind: str, user: User = Depends(current_user)):
+    if kind not in ("audio", "notes"):
+        raise HTTPException(404, "Unknown file")
+    url = session_file_url(user.id, session_id, kind)
+    if not url:
+        raise HTTPException(404, "File not found")
+    return RedirectResponse(url, status_code=302)
 
 
 @router.delete("/api/account")

@@ -12,6 +12,7 @@ interface Props {
   turns: Turn[]
   busy: boolean
   onAsk: (text: string, files?: AttachPayload[]) => void
+  onCompose?: (on: boolean) => void
 }
 
 function Sparkle() {
@@ -23,7 +24,7 @@ function Sparkle() {
   )
 }
 
-export default function AnswerPane({ currentQ, partial, turns, busy, onAsk }: Props) {
+export default function AnswerPane({ currentQ, partial, turns, busy, onAsk, onCompose }: Props) {
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<LocalAttach[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -66,7 +67,7 @@ export default function AnswerPane({ currentQ, partial, turns, busy, onAsk }: Pr
       {isEmpty ? (
         <EmptyState
           title="Waiting for the next question"
-          sub="Click Start Listening, or type a question"
+          sub="Type a question to open the sidebar, or hover the left edge to start listening"
           shortcuts={[
             { key: 'F2', label: 'Record' },
             { key: 'F3', label: 'Listen' },
@@ -97,12 +98,25 @@ export default function AnswerPane({ currentQ, partial, turns, busy, onAsk }: Pr
         </button>
       )}
 
-      <PromptAttach files={files} onChange={setFiles} disabled={busy}>
+      <PromptAttach
+        files={files}
+        onChange={(next) => {
+          setFiles(next)
+          onCompose?.(input.trim().length > 0 || next.length > 0)
+        }}
+        disabled={busy}
+      >
         <input
           className="prompt-input"
           placeholder="Type a question."
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            setInput(e.target.value)
+            onCompose?.(e.target.value.trim().length > 0 || files.length > 0)
+          }}
+          onBlur={() => {
+            if (!input.trim() && files.length === 0) onCompose?.(false)
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') submit()
           }}

@@ -125,6 +125,8 @@ type Action =
   | { type: 'fill_translate'; id: string; translation: string; passthrough?: boolean }
   | { type: 'retry_translate'; id: string }
   | { type: 'fail_translate'; id: string }
+  | { type: 'ask_start' }
+  | { type: 'expect_meeting_ask' }
 
 function formatClock(): string {
   const d = new Date()
@@ -246,6 +248,18 @@ function reducer(state: AppState, action: Action): AppState {
           const ts = formatClock()
           const heard = parseHeardLang(ev.language, text)
           if (state.workspaceMode === 'meeting') {
+            if (state.summaryAskId === '__pending__') {
+              return {
+                ...state,
+                summaryAskId: qid,
+                meetingSummary: '',
+                currentQ: text,
+                currentQId: qid,
+                partial: '',
+                busy: true,
+                heardLang: heard ?? state.heardLang,
+              }
+            }
             const meetingLines = [...state.meetingLines, { id: qid, ts: formatTs(state.meetingStartedAt), text }]
             return { ...state, meetingLines, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
           }
@@ -281,7 +295,7 @@ function reducer(state: AppState, action: Action): AppState {
             return { ...state, translatePairs, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
           }
           const turns = [...state.turns, { id: qid, q: text, a: '' }]
-          return { ...state, turns, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
+          return { ...state, turns, currentQ: text, currentQId: qid, partial: '', busy: true, heardLang: heard ?? state.heardLang }
         }
         case 'chunk': {
           let meetingSummary = state.meetingSummary
@@ -317,7 +331,9 @@ function reducer(state: AppState, action: Action): AppState {
         case 'error':
           return { ...state, status: ev.text, busy: false }
         case 'auth_required':
-          window.location.replace('/login?next=/app')
+          if (location.hostname !== '127.0.0.1' && location.hostname !== 'localhost') {
+            window.location.replace('/login?next=/app')
+          }
           return state
         case 'quota':
           return {
@@ -417,6 +433,10 @@ function reducer(state: AppState, action: Action): AppState {
       )
       return { ...state, translatePairs, translateBindId: action.id }
     }
+    case 'ask_start':
+      return { ...state, busy: true, status: 'Asking…' }
+    case 'expect_meeting_ask':
+      return { ...state, summaryAskId: '__pending__', busy: true, status: 'Asking…' }
     case 'fail_translate': {
       const translatePairs = state.translatePairs.map((p) =>
         p.id === action.id ? { ...p, failed: true } : p,
@@ -434,10 +454,6 @@ function formatElapsed(ms: number): string {
   const m = Math.floor((sec % 3600) / 60)
   const s = sec % 60
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 function targetName(lang: PairLang): string {
@@ -527,6 +543,9 @@ export default function App() {
   const consentRef = useRef<boolean | null>(null)
   const [consentOpen, setConsentOpen] = useState(false)
   const pendingMic = useRef<(() => void) | null>(null)
+  const [composeOpen, setComposeOpen] = useState(false)
+  const [railHover, setRailHover] = useState(false)
+  const [railDismissed, setRailDismissed] = useState(false)
 
   useEffect(() => {
     void fetchMe().then((me) => {
@@ -740,6 +759,7 @@ export default function App() {
     dispatch({ type: 'clear' })
   }, [])
   const handleAsk = useCallback((text: string, files?: AttachPayload[]) => {
+    dispatch({ type: 'ask_start' })
     window.api.send({ type: 'ask', text, files })
   }, [])
 
@@ -872,6 +892,9 @@ export default function App() {
     }
     window.api.send({ type: 'set_workspace', mode })
     dispatch({ type: 'workspace', mode })
+    setComposeOpen(false)
+    setRailHover(false)
+    setRailDismissed(false)
     dispatch({ type: 'engine', ev: { type: 'status', text: `Mode · ${mode[0].toUpperCase()}${mode.slice(1)}` } })
   }, [])
 
@@ -1024,6 +1047,7 @@ export default function App() {
   const handleGenerateSummary = useCallback((note?: string, files?: AttachPayload[]) => {
     const s = stateRef.current
     if (note || files?.length) {
+      dispatch({ type: 'expect_meeting_ask' })
       window.api.send({ type: 'ask', text: note || 'Please review the attached files.', files })
       return
     }
@@ -1058,69 +1082,64 @@ export default function App() {
 
   const handleExportPdf = useCallback(async () => {
     const s = stateRef.current
+    const when = new Date().toLocaleString()
+    const blocks: Array<{ kind: 'h1' | 'h2' | 'p' | 'meta'; text: string }> = []
+    let title = 'Nod'
+
     if (s.workspaceMode === 'translate') {
-      const pairs = s.translatePairs
-      const from = 'Auto'
-      const to = langTag(s.translateTo)
-      const html = `<!doctype html><html><head><meta charset="utf-8"><title>Nod Translate</title>
-<style>
-  body { font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; color: #102033; padding: 28px; }
-  h1 { font-size: 22px; margin: 0 0 6px; }
-  .sub { color: #5b6b80; font-size: 12px; margin-bottom: 22px; }
-  table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; font-size: 12px; letter-spacing: 1.2px; text-transform: uppercase; color: #0e7490; padding: 0 12px 8px 0; }
-  td { vertical-align: top; padding: 8px 12px 8px 0; line-height: 1.5; border-top: 1px solid #e6eef6; }
-  .ts { color: #0e7490; font-weight: 700; width: 48px; }
-</style></head><body>
-<h1>Nod captions</h1>
-<div class="sub">${from} → ${to} · Exported ${new Date().toLocaleString()}</div>
-<table>
-  <tr><th></th><th>${from}</th><th>${to}</th></tr>
-  ${pairs.length
-    ? pairs.map((p) => `<tr><td class="ts">${escapeHtml(p.ts)}</td><td>${escapeHtml(p.original)}</td><td>${escapeHtml(p.translation)}</td></tr>`).join('')
-    : '<tr><td colspan="3">No captions yet.</td></tr>'}
-</table>
-</body></html>`
-      try {
-        const dest = await window.api.exportPdf({ title: 'Nod Translate', html })
-        if (!dest) {
-          dispatch({ type: 'engine', ev: { type: 'status', text: 'Export cancelled' } })
-          return
+      title = 'Nod captions'
+      blocks.push({ kind: 'h1', text: 'Nod captions' })
+      blocks.push({ kind: 'meta', text: `Auto → ${langTag(s.translateTo)} · ${when}` })
+      if (s.translatePairs.length === 0) {
+        blocks.push({ kind: 'p', text: 'No captions yet.' })
+      } else {
+        for (const p of s.translatePairs) {
+          blocks.push({ kind: 'p', text: `${p.ts}  ${p.original || '—'}` })
+          blocks.push({ kind: 'p', text: `     ${p.translation || '…'}` })
         }
-        dispatch({ type: 'engine', ev: { type: 'status', text: `Exported PDF · ${dest}` } })
-      } catch (err) {
-        dispatch({ type: 'engine', ev: { type: 'status', text: `PDF export failed: ${err instanceof Error ? err.message : String(err)}` } })
       }
-      return
+    } else if (s.workspaceMode === 'interview') {
+      title = 'Nod answers'
+      blocks.push({ kind: 'h1', text: 'Nod answers' })
+      blocks.push({ kind: 'meta', text: `Exported ${when}` })
+      if (s.turns.length === 0) {
+        blocks.push({ kind: 'p', text: 'No answers yet.' })
+      } else {
+        s.turns.forEach((turn, i) => {
+          blocks.push({ kind: 'h2', text: `Question ${i + 1}` })
+          blocks.push({ kind: 'p', text: turn.q || '—' })
+          blocks.push({ kind: 'h2', text: 'Answer' })
+          blocks.push({ kind: 'p', text: turn.a || '…' })
+        })
+      }
+    } else {
+      title = 'Nod meeting notes'
+      const lines = s.meetingLines
+      const actions = lines.filter((ln) => ln.marked)
+      blocks.push({ kind: 'h1', text: 'Nod meeting notes' })
+      blocks.push({ kind: 'meta', text: `Exported ${when}` })
+      blocks.push({ kind: 'h2', text: 'Live transcript' })
+      if (lines.length === 0) blocks.push({ kind: 'p', text: 'No transcript lines.' })
+      else {
+        for (const ln of lines) {
+          blocks.push({ kind: 'p', text: `${ln.ts}  ${ln.marked ? 'Action · ' : ''}${ln.text}` })
+        }
+      }
+      if (actions.length) {
+        blocks.push({ kind: 'h2', text: 'Marked actions' })
+        for (const ln of actions) blocks.push({ kind: 'p', text: `${ln.ts}  ${ln.text}` })
+      }
+      blocks.push({ kind: 'h2', text: 'Summary' })
+      blocks.push({ kind: 'p', text: s.meetingSummary || 'No summary generated.' })
     }
-    const lines = s.meetingLines
-    const actions = lines.filter((ln) => ln.marked)
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Nod Meeting</title>
-<style>
-  body { font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; color: #102033; padding: 28px; }
-  h1 { font-size: 22px; margin: 0 0 6px; }
-  .sub { color: #5b6b80; font-size: 12px; margin-bottom: 22px; }
-  h2 { font-size: 13px; letter-spacing: 1.4px; text-transform: uppercase; color: #0e7490; margin: 22px 0 10px; }
-  .ln { margin: 0 0 8px; line-height: 1.5; }
-  .ts { color: #0e7490; font-weight: 700; margin-right: 8px; }
-  .flag { color: #b45309; font-weight: 700; }
-  .sum { white-space: pre-wrap; line-height: 1.55; }
-</style></head><body>
-<h1>Nod meeting notes</h1>
-<div class="sub">Exported ${new Date().toLocaleString()}</div>
-<h2>Live transcript</h2>
-${lines.length ? lines.map((ln) => `<div class="ln"><span class="ts">${escapeHtml(ln.ts)}</span>${ln.marked ? '<span class="flag">Action · </span>' : ''}${escapeHtml(ln.text)}</div>`).join('') : '<p>No transcript lines.</p>'}
-${actions.length ? `<h2>Marked actions</h2>${actions.map((ln) => `<div class="ln"><span class="ts">${escapeHtml(ln.ts)}</span>${escapeHtml(ln.text)}</div>`).join('')}` : ''}
-<h2>Summary</h2>
-<div class="sum">${s.meetingSummary ? escapeHtml(s.meetingSummary) : 'No summary generated.'}</div>
-</body></html>`
+
     try {
-      const dest = await window.api.exportPdf({ title: 'Nod Meeting', html })
+      const dest = await window.api.exportPdf({ title, blocks })
       if (!dest) {
         dispatch({ type: 'engine', ev: { type: 'status', text: 'Export cancelled' } })
         return
       }
-      dispatch({ type: 'engine', ev: { type: 'status', text: `Exported PDF · ${dest}` } })
+      dispatch({ type: 'engine', ev: { type: 'status', text: `Downloaded ${dest}` } })
     } catch (err) {
       dispatch({ type: 'engine', ev: { type: 'status', text: `PDF export failed: ${err instanceof Error ? err.message : String(err)}` } })
     }
@@ -1179,6 +1198,13 @@ ${actions.length ? `<h2>Marked actions</h2>${actions.map((ln) => `<div class="ln
 
   const listening = state.run === 'listen' || state.run === 'record'
   const elapsedLabel = formatElapsed(state.meetingElapsedMs)
+  const study = state.workspaceMode === 'interview'
+  const hideRail = () => {
+    setRailDismissed(true)
+    setComposeOpen(false)
+    setRailHover(false)
+  }
+  const railOn = !study || (!railDismissed && (composeOpen || railHover || state.busy || listening))
 
   return (
     <div className="app">
@@ -1210,27 +1236,48 @@ ${actions.length ? `<h2>Marked actions</h2>${actions.map((ln) => `<div class="ln
               : 'Account'
         }
       />
-      <div className="workspace">
-        <SideRail
-          mode={state.workspaceMode}
-          run={state.run}
-          autoOn={state.autoOn}
-          bilingual={state.bilingual}
-          onPrimary={handlePrimary}
-          onRecord={handleRecord}
-          onCopy={copyLatest}
-          onClear={handleClear}
-          onPause={handlePause}
-          onMark={handleMark}
-          onExport={() => { void handleExportPdf() }}
-          onBilingual={() => dispatch({ type: 'bilingual', on: !state.bilingual })}
-          meetingPaused={
-            state.workspaceMode === 'meeting'
-            && !listening
-            && state.meetingStartedAt != null
-            && !state.meetingEnded
-          }
-        />
+      <div className={`workspace${study ? ' study' : ''}${study && railOn ? ' rail-on' : ''}`}>
+        {study && (
+          <div
+            className="rail-hotzone"
+            onMouseEnter={() => {
+              setRailDismissed(false)
+              setRailHover(true)
+            }}
+            title="Show controls"
+          />
+        )}
+        <div
+          className="rail-slot"
+          onMouseEnter={() => {
+            if (!study) return
+            setRailDismissed(false)
+            setRailHover(true)
+          }}
+          onMouseLeave={() => study && setRailHover(false)}
+        >
+          <SideRail
+            mode={state.workspaceMode}
+            run={state.run}
+            autoOn={state.autoOn}
+            bilingual={state.bilingual}
+            onPrimary={handlePrimary}
+            onRecord={handleRecord}
+            onCopy={copyLatest}
+            onClear={handleClear}
+            onPause={handlePause}
+            onMark={handleMark}
+            onExport={() => { void handleExportPdf() }}
+            onBilingual={() => dispatch({ type: 'bilingual', on: !state.bilingual })}
+            onClose={study ? hideRail : undefined}
+            meetingPaused={
+              state.workspaceMode === 'meeting'
+              && !listening
+              && state.meetingStartedAt != null
+              && !state.meetingEnded
+            }
+          />
+        </div>
         {state.workspaceMode === 'meeting' ? (
           <MeetingPane
             lines={state.meetingLines}
@@ -1265,6 +1312,14 @@ ${actions.length ? `<h2>Marked actions</h2>${actions.map((ln) => `<div class="ln
             turns={state.turns}
             busy={state.busy}
             onAsk={handleAsk}
+            onCompose={(on) => {
+              if (on) {
+                setRailDismissed(false)
+                setComposeOpen(true)
+                return
+              }
+              setComposeOpen(false)
+            }}
           />
         )}
       </div>
