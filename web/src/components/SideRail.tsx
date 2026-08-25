@@ -116,9 +116,9 @@ function MoreIcon() {
 
 function primaryLabel(mode: WorkspaceMode, listening: boolean, paused = false): string {
   if (mode === 'meeting') {
-    if (listening) return 'Stop Meeting'
-    if (paused) return 'Resume Meeting'
-    return 'Start Meeting'
+    if (listening) return 'Stop Listening'
+    if (paused) return 'Resume Listening'
+    return 'Start Listening'
   }
   if (mode === 'translate') return listening ? 'Stop Listen' : 'Start Listen'
   return listening ? 'Stop Listening' : 'Start Listening'

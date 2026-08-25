@@ -1,4 +1,5 @@
 export type TrackEvent =
+  | 'landing_view'
   | 'cta_hero_start'
   | 'cta_google'
   | 'cta_signup_email'
@@ -6,6 +7,12 @@ export type TrackEvent =
   | 'scroll_pricing'
   | 'open_privacy'
   | 'signup_success'
+  | 'assistant_opened'
+  | 'mode_selected'
+  | 'listening_started'
+  | 'notes_generated'
+  | 'ask_nod_used'
+  | 'session_completed'
 
 type TrackProps = Record<string, string | number | boolean | undefined>
 

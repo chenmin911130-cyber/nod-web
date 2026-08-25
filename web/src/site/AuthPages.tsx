@@ -101,7 +101,7 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
             </label>
             {err && <div className="site-err">{err}</div>}
             <button className="button button-primary" type="submit" disabled={busy}>
-              {busy ? 'Opening workspace…' : 'Sign in and open workspace'}
+              {busy ? 'Opening workspace…' : 'Sign in and start listening'}
             </button>
           </form>
           <div className="site-links">
@@ -159,7 +159,7 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
           <div className="eyebrow">REGISTER</div>
           <Funnel current="account" />
           <h1>Create your account</h1>
-          <p>Google or email — both start the same free trial. No card required. 20 minutes of transcription included.</p>
+          <p>Continue with Google, or use email. Same free trial. No card required. 20 minutes of transcription included.</p>
           {clerkEnabled && (
             <>
               <Suspense fallback={null}>
@@ -190,7 +190,7 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
             </label>
             {err && <div className="site-err">{err}</div>}
             <button className="button button-primary" type="submit" disabled={busy}>
-              {busy ? 'Opening workspace…' : 'Create account and open workspace'}
+              {busy ? 'Opening workspace…' : 'Create account and start listening'}
             </button>
           </form>
           <div className="site-links">

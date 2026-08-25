@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import Landing from '../landing/Landing'
 import AdminPage from './Admin'
 import AccountPage from './Account'
+import SessionsPage from './Sessions'
 import { ForgotPage, LoginPage, ResetPage, SignupPage } from './AuthPages'
 import { ConsentPage, PrivacyPage, TermsPage } from './Legal'
 import '../landing/Landing.css'
@@ -30,6 +31,8 @@ export default function Site({ clerkEnabled = false }: { clerkEnabled?: boolean 
       <ResetPage />
     ) : path === '/account' ? (
       <AccountPage />
+    ) : path === '/sessions' ? (
+      <SessionsPage />
     ) : path === '/privacy' ? (
       <PrivacyPage />
     ) : path === '/terms' ? (

@@ -41,7 +41,7 @@ export function PrivacyPage() {
       <ul>
         <li>Account data: email, name, password hash, plan, and billing identifiers from Stripe if you pay.</li>
         <li>Usage data: session times, workspace mode, estimated transcription seconds, token counts, and cost estimates.</li>
-        <li>Content you generate in the product: questions, transcripts, answers, summaries, and captions, stored so you can review history.</li>
+        <li>Content you generate in the product: questions, transcript lines, answers, notes, and captions, stored so you can review and search sessions.</li>
         <li>Feedback you send through the product.</li>
       </ul>
       <h2>Audio</h2>

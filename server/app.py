@@ -535,20 +535,43 @@ class Pipeline:
 
     def _strip_nod_tag(self, question: str) -> str:
         text = question or ""
-        if text.startswith("[NOD_TRANSLATE") or text.startswith("[NOD_SUMMARY"):
+        if text.startswith(("[NOD_TRANSLATE", "[NOD_SUMMARY", "[NOD_NOTES", "[NOD_ASK")):
             nl = text.find("\n")
             if nl >= 0:
                 return text[nl + 1:].strip()
         return text
 
+    def _notes_mode(self, question: str) -> str:
+        t = (question or "").lstrip()
+        if t.startswith("[NOD_NOTES:"):
+            end = t.find("]")
+            if end > 11:
+                return t[11:end].strip() or "general"
+        return "general"
+
     def _is_internal(self, question: str, mode: str) -> bool:
-        if mode == "translate":
+        if mode in ("translate", "notes", "ask_nod", "summary"):
             return True
         t = (question or "").lstrip()
-        return t.startswith(("[NOD_TRANSLATE", "Translate to "))
+        return t.startswith(("[NOD_TRANSLATE", "[NOD_NOTES", "[NOD_ASK", "[NOD_SUMMARY", "Translate to "))
 
     def _build_messages(self, question: str, mode: str = "auto") -> list[dict]:
+        raw = question or ""
         question = self._strip_nod_tag(question)
+        if mode == "ask_nod" or raw.lstrip().startswith("[NOD_ASK]"):
+            from server.listening import ASK_NOD_SYSTEM
+
+            return [
+                {"role": "system", "content": ASK_NOD_SYSTEM},
+                {"role": "user", "content": question},
+            ]
+        if mode == "notes" or raw.lstrip().startswith("[NOD_NOTES"):
+            from server.listening import notes_system
+
+            return [
+                {"role": "system", "content": notes_system(self._notes_mode(raw))},
+                {"role": "user", "content": question},
+            ]
         if mode == "summary" or question.startswith("Summarize the following meeting transcript"):
             return [
                 {
@@ -636,7 +659,7 @@ class Pipeline:
         t0 = time.time()
         llm = self.cfg.get("llm") or {}
         max_tokens = llm.get("max_tokens", 600)
-        if mode == "summary":
+        if mode in ("summary", "notes", "ask_nod"):
             max_tokens = max(max_tokens, 1200)
         elif mode == "translate":
             max_tokens = max(max_tokens, 800)
@@ -673,7 +696,7 @@ class Pipeline:
             self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
             return
         self._last_answer = answer[-400:]
-        if mode not in ("translate", "summary"):
+        if mode not in ("translate", "summary", "notes", "ask_nod"):
             self._qa_history.append({"qid": qid, "q": self._strip_nod_tag(t), "a": answer})
             self._qa_history = self._qa_history[-6:]
         if self.user_id:
@@ -683,7 +706,7 @@ class Pipeline:
             out = max(1, len(answer) // 4)
             ok, snap = consume_llm(self.user_id, self.usage_session_id, inp, out)
             self.emit({"type": "quota", **snap})
-            kind_q = "transcript" if mode in ("translate", "summary") else "question"
+            kind_q = "transcript" if mode in ("translate", "summary", "notes", "ask_nod") else "question"
             if not internal:
                 save_history(self.user_id, self.usage_session_id, kind_q, self._strip_nod_tag(t), qid)
             save_history(self.user_id, self.usage_session_id, "answer" if mode == "ask" else mode, answer, qid)
@@ -827,7 +850,7 @@ class Session:
         self._pending_wait: tuple[str | None, float, str | None] = (None, 0.0, None)
         self._recent_finals: list[tuple[str, float]] = []
         self._mic_muted = False
-        self._workspace = "interview"
+        self._workspace = "meeting"
 
     def start(self) -> None:
         st = self.pipeline.key_status()
@@ -912,7 +935,7 @@ class Session:
         elif mtype == "ask":
             self.ask(msg.get("text", ""), msg.get("files"), msg.get("mode") or "ask")
         elif mtype == "set_workspace":
-            self.set_workspace(msg.get("mode") or "interview")
+            self.set_workspace(msg.get("mode") or "meeting")
         elif mtype == "set_llm":
             self.set_llm(msg.get("provider", "deepseek"), msg.get("model", ""))
         elif mtype == "set_lang":
@@ -995,7 +1018,7 @@ class Session:
 
     def set_workspace(self, mode: str) -> None:
         if mode not in ("interview", "meeting", "translate"):
-            mode = "interview"
+            mode = "meeting"
         prev = self._workspace
         prev_lang = self._effective_stt_lang(prev)
         self._workspace = mode
@@ -1166,15 +1189,19 @@ class Session:
         if not self._ensure_usage():
             return
         body = text
-        if body.startswith("[NOD_TRANSLATE") or body.startswith("[NOD_SUMMARY"):
+        if body.startswith(("[NOD_TRANSLATE", "[NOD_SUMMARY", "[NOD_NOTES", "[NOD_ASK")):
             nl = body.find("\n")
             body = body[nl + 1:].strip() if nl >= 0 else body
+        if mode == "ask" and (text.lstrip().startswith("[NOD_NOTES") or text.lstrip().startswith("[NOD_SUMMARY")):
+            mode = "notes" if text.lstrip().startswith("[NOD_NOTES") else "summary"
+        if mode == "ask" and text.lstrip().startswith("[NOD_ASK]"):
+            mode = "ask_nod"
         if mode == "ask" and body.startswith("Summarize the following meeting transcript"):
             mode = "summary"
         if mode == "ask" and body.startswith("Translate to "):
             mode = "translate"
         if self._busy:
-            if mode in ("translate", "summary"):
+            if mode in ("translate", "summary", "notes", "ask_nod"):
                 self._pending_asks.append((text, mode))
                 return
             self.emit({"type": "status", "text": "Still working, please wait"})
@@ -1240,9 +1267,10 @@ class Session:
             qev["id"] = self.pipeline._new_qid()
             self.emit(qev)
             if self.user_id and self.usage_session_id:
-                from server.meter import save_history
+                from server.meter import save_history, save_segment
 
                 save_history(self.user_id, self.usage_session_id, "transcript", cleaned, qev["id"])
+                save_segment(self.user_id, self.usage_session_id, cleaned, qev["id"])
             return
         recent_qs = [h["q"] for h in self.pipeline._qa_history]
         verdict = guard_question(cleaned, recent_qs, self.pipeline._last_answer)
@@ -1420,6 +1448,7 @@ def robots():
             "Allow: /",
             "Disallow: /app",
             "Disallow: /account",
+            "Disallow: /sessions",
             "Disallow: /admin",
             "Disallow: /api/",
             f"Sitemap: {base}/sitemap.xml",

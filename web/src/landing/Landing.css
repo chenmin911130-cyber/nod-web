@@ -789,6 +789,41 @@ html.nod-site {
   gap: 16px;
 }
 
+.workspace-grid.scenes {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.work-card.presentation:before {
+  background: radial-gradient(circle, #9b8cff, transparent 68%);
+}
+
+.core-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-top: 22px;
+}
+
+.core-grid article {
+  padding: 20px 22px;
+  border: 1px solid #233c56;
+  border-radius: 18px;
+  background: rgba(14, 29, 49, 0.6);
+}
+
+.core-grid h3 {
+  margin: 0 0 0.55rem;
+  font-size: 1.15rem;
+  letter-spacing: -0.04em;
+}
+
+.core-grid p {
+  margin: 0;
+  color: #a8bdd0;
+  line-height: 1.65;
+  font-size: 0.9rem;
+}
+
 .work-card {
   min-height: 395px;
   padding: 24px;
@@ -1336,6 +1371,8 @@ html.nod-site {
 
   .problem-grid,
   .workspace-grid,
+  .workspace-grid.scenes,
+  .core-grid,
   .use-case-grid,
   .privacy-grid {
     grid-template-columns: 1fr;

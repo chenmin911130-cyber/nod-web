@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AudioSource, Lang, ModelDef, PairLang, WorkspaceMode } from '../types'
 import { TRANSLATE_LANGS } from '../types'
+import { LISTENING_MODES, type ListeningMode } from '../listening'
 import { isWeb } from '../platform'
 import { logout } from '../auth'
 import OpacityBar from './OpacityBar'
@@ -26,6 +27,10 @@ interface Props {
   onStealth: (on: boolean) => void
   onFullScreen: () => void
   quotaLabel?: string
+  listeningMode?: ListeningMode
+  onListeningMode?: (mode: ListeningMode) => void
+  liveAnswer?: boolean
+  onLiveAnswer?: (on: boolean) => void
 }
 
 const LANGS: Array<{ label: string; value: Lang; name: string }> = [
@@ -34,9 +39,9 @@ const LANGS: Array<{ label: string; value: Lang; name: string }> = [
 ]
 
 const MODES: Array<{ id: WorkspaceMode; label: string }> = [
-  { id: 'interview', label: 'Interview' },
-  { id: 'meeting', label: 'Meeting' },
+  { id: 'meeting', label: 'Listen' },
   { id: 'translate', label: 'Translate' },
+  { id: 'interview', label: 'Interview' },
 ]
 
 function shortModelLabel(label: string): string {
@@ -181,6 +186,23 @@ export default function TitleBar(props: Props) {
       </div>
 
       <div className="titlebar-right no-drag">
+        {mode === 'meeting' && props.listeningMode && props.onListeningMode && (
+          <label className="listen-mode">
+            <span className="sr-only">Listening mode</span>
+            <select
+              className="combo combo-listen"
+              value={props.listeningMode}
+              onChange={(e) => props.onListeningMode?.(e.target.value as ListeningMode)}
+              title="What are you listening to?"
+            >
+              {LISTENING_MODES.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {mode !== 'translate' && (
         <div className="lang-pills" ref={langRef}>
           <button

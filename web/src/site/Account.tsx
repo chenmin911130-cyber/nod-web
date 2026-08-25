@@ -104,8 +104,11 @@ export default function AccountPage() {
             Nod
           </a>
           <div className="header-actions">
+            <a className="button button-ghost" href="/sessions">
+              Sessions
+            </a>
             <a className="button button-ghost" href="/app">
-              Workspace
+              Start listening
             </a>
             <button
               className="button button-ghost"

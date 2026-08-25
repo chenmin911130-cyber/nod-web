@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select
 
-from server.db import Feedback, GlobalDay, HistoryItem, UsageDay, UsageSession, User, db_session, utcnow
+from server.db import Feedback, GlobalDay, HistoryItem, TranscriptSegment, UsageDay, UsageSession, User, db_session, utcnow
 from server.security import new_id
 from server.settings import (
     GLOBAL_DAILY_BUDGET_USD,
@@ -154,8 +154,9 @@ def open_usage_session(user_id: str, mode: str) -> tuple[str | None, dict]:
             UsageSession(
                 id=sid,
                 user_id=user_id,
-                mode=mode or "interview",
-                title=f"{(mode or 'interview').title()} · {utcnow().strftime('%b %d %H:%M')}",
+                mode=mode or "meeting",
+                listening_mode="meeting" if mode == "meeting" else (mode or "meeting"),
+                title=f"{(mode or 'meeting').title()} · {utcnow().strftime('%b %d %H:%M')}",
             )
         )
     snap = usage_snapshot(user_id)
@@ -233,6 +234,49 @@ def consume_llm(
     return bool(snap.get("ok")), snap
 
 
+def save_segment(
+    user_id: str,
+    session_id: str | None,
+    original_text: str,
+    qid: str = "",
+    start_time: str = "",
+    translated_text: str = "",
+) -> None:
+    if not session_id or not (original_text or "").strip():
+        return
+    with db_session() as db:
+        db.add(
+            TranscriptSegment(
+                id=qid or new_id(),
+                user_id=user_id,
+                session_id=session_id,
+                speaker="",
+                start_time=start_time,
+                original_text=original_text[:8000],
+                translated_text=(translated_text or "")[:8000],
+            )
+        )
+
+
+def list_segments(user_id: str, session_id: str) -> list[dict]:
+    with db_session() as db:
+        rows = db.execute(
+            select(TranscriptSegment)
+            .where(TranscriptSegment.user_id == user_id, TranscriptSegment.session_id == session_id)
+            .order_by(TranscriptSegment.created_at.asc())
+            .limit(400)
+        ).scalars().all()
+        return [
+            {
+                "id": r.id,
+                "start_time": r.start_time,
+                "original_text": r.original_text,
+                "translated_text": r.translated_text,
+            }
+            for r in rows
+        ]
+
+
 def save_history(user_id: str, session_id: str | None, kind: str, text: str, qid: str = "") -> None:
     if not session_id or not (text or "").strip():
         return
@@ -274,6 +318,7 @@ def list_history(user_id: str, limit: int = 40) -> list[dict]:
                 {
                     "id": s.id,
                     "mode": s.mode,
+                    "listening_mode": getattr(s, "listening_mode", "") or s.mode,
                     "title": s.title,
                     "started_at": s.started_at.isoformat() if s.started_at else None,
                     "ended_at": s.ended_at.isoformat() if s.ended_at else None,
@@ -288,6 +333,7 @@ def list_history(user_id: str, limit: int = 40) -> list[dict]:
 
 def delete_user_data(user_id: str) -> None:
     with db_session() as db:
+        db.execute(delete(TranscriptSegment).where(TranscriptSegment.user_id == user_id))
         db.execute(delete(HistoryItem).where(HistoryItem.user_id == user_id))
         db.execute(delete(UsageSession).where(UsageSession.user_id == user_id))
         db.execute(delete(UsageDay).where(UsageDay.user_id == user_id))

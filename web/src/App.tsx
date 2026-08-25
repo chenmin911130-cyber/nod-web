@@ -12,6 +12,8 @@ import StatusToast from './components/StatusToast'
 import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
 import { api as authApi, fetchMe } from './auth'
+import { askNodPrefix, notesPromptPrefix, persistListeningMode, readListeningMode, type ListeningMode } from './listening'
+import { track } from './site/track'
 
 const PLACEHOLDER = 'Waiting for the next question…'
 const STATUS_READY = 'Ready · F2 record / F3 listen / F4 clear'
@@ -80,7 +82,7 @@ const initial: AppState = {
   autoOn: false,
   models: [],
   keys: { hasLlm: true, hasStt: true },
-  workspaceMode: 'interview',
+  workspaceMode: 'meeting',
   meetingLines: [],
   meetingSummary: '',
   meetingStartedAt: null,
@@ -170,7 +172,12 @@ function applyTranslateChunk(pairs: TranslatePair[], bindId: string, chunk: stri
 }
 
 function isSummaryPrompt(text: string): boolean {
-  return text.startsWith(SUMMARY_PREFIX) || text.startsWith('[NOD_SUMMARY]')
+  return (
+    text.startsWith(SUMMARY_PREFIX) ||
+    text.startsWith('[NOD_SUMMARY]') ||
+    text.startsWith('[NOD_NOTES') ||
+    text.startsWith('[NOD_ASK]')
+  )
 }
 
 function reducer(state: AppState, action: Action): AppState {
@@ -527,8 +534,13 @@ export default function App() {
   const consentRef = useRef<boolean | null>(null)
   const [consentOpen, setConsentOpen] = useState(false)
   const pendingMic = useRef<(() => void) | null>(null)
+  const [listeningMode, setListeningMode] = useState<ListeningMode>(readListeningMode)
+  const listeningModeRef = useRef(listeningMode)
+  listeningModeRef.current = listeningMode
+  const [listenCaption, setListenCaption] = useState(false)
 
   useEffect(() => {
+    track('assistant_opened')
     void fetchMe().then((me) => {
       const ok = me ? Boolean(me.consent) : true
       consentRef.current = ok
@@ -872,7 +884,8 @@ export default function App() {
     }
     window.api.send({ type: 'set_workspace', mode })
     dispatch({ type: 'workspace', mode })
-    dispatch({ type: 'engine', ev: { type: 'status', text: `Mode · ${mode[0].toUpperCase()}${mode.slice(1)}` } })
+    track('mode_selected', { workspace: mode, listening: listeningModeRef.current })
+    dispatch({ type: 'engine', ev: { type: 'status', text: mode === 'meeting' ? 'Mode · Listen' : `Mode · ${mode[0].toUpperCase()}${mode.slice(1)}` } })
   }, [])
 
   const handlePrimary = useCallback(() => {
@@ -886,7 +899,8 @@ export default function App() {
       if (s.run === 'listen' || s.run === 'record') {
         window.api.send({ type: 'toggle_listen' })
         dispatch({ type: 'meeting_ended' })
-        dispatch({ type: 'engine', ev: { type: 'status', text: 'Meeting stopped' } })
+        track('session_completed', { mode: listeningModeRef.current })
+        dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped' } })
         return
       }
       if (s.meetingEnded || s.meetingStartedAt == null) {
@@ -894,7 +908,10 @@ export default function App() {
       } else {
         dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
       }
-      guardMic(() => window.api.send({ type: 'toggle_listen' }))
+      guardMic(() => {
+        track('listening_started', { mode: listeningModeRef.current })
+        window.api.send({ type: 'toggle_listen' })
+      })
       return
     }
     if (s.run === 'record') return
@@ -984,13 +1001,13 @@ export default function App() {
   }, [])
 
   const pumpTranslate = useCallback(() => {
-    if (stateRef.current.workspaceMode !== 'translate') return
+    if (stateRef.current.workspaceMode !== 'translate' && !listenCaption) return
     if (inflightTranslate.current) return
     const next = stateRef.current.translatePairs.find(
       (p) => !p.translation && !p.failed && !askedTranslate.current.has(p.id) && !isTranslatePrompt(p.original),
     )
     if (next) askTranslate(next.original, next.id)
-  }, [askTranslate])
+  }, [askTranslate, listenCaption])
   pumpTranslateRef.current = pumpTranslate
 
   const handleTranslateTyped = useCallback((text: string, files?: AttachPayload[]) => {
@@ -1017,24 +1034,40 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (state.workspaceMode !== 'translate') return
+    if (state.workspaceMode !== 'translate' && !listenCaption) return
     pumpTranslate()
-  }, [state.translatePairs, state.workspaceMode, pumpTranslate])
+  }, [state.translatePairs, state.workspaceMode, listenCaption, pumpTranslate])
 
-  const handleGenerateSummary = useCallback((note?: string, files?: AttachPayload[]) => {
+  useEffect(() => {
+    if (!listenCaption || state.workspaceMode !== 'meeting') return
+    const existing = new Set(state.translatePairs.map((p) => p.id))
+    for (const line of state.meetingLines) {
+      if (existing.has(line.id) || askedTranslate.current.has(line.id)) continue
+      dispatch({ type: 'seed_translate', text: line.text, id: line.id })
+    }
+  }, [listenCaption, state.meetingLines, state.workspaceMode, state.translatePairs])
+
+  const handleGenerateSummary = useCallback((note?: string, files?: AttachPayload[], intent: 'notes' | 'ask' = 'notes') => {
     const s = stateRef.current
+    const body = s.meetingLines.map((ln) => `[${ln.ts}${ln.marked ? ' ACTION' : ''}] ${ln.text}`).join('\n')
     if (note || files?.length) {
-      window.api.send({ type: 'ask', text: note || 'Please review the attached files.', files })
+      track('ask_nod_used', { mode: listeningModeRef.current })
+      const context = body.trim()
+        ? `${askNodPrefix()}\nTranscript:\n${body}\n\nNotes:\n${s.meetingSummary || '(none)'}\n\nQuestion: ${note || 'Review the attachments.'}`
+        : note || 'Please review the attached files.'
+      window.api.send({ type: 'ask', mode: 'ask_nod', text: context, files })
       return
     }
-    const body = s.meetingLines.map((ln) => `[${ln.ts}${ln.marked ? ' ACTION' : ''}] ${ln.text}`).join('\n')
     if (!body.trim()) {
       dispatch({ type: 'engine', ev: { type: 'status', text: 'No transcript to summarize yet.' } })
       return
     }
+    const mode = listeningModeRef.current
+    track(intent === 'ask' ? 'ask_nod_used' : 'notes_generated', { mode })
     window.api.send({
       type: 'ask',
-      text: `${SUMMARY_PREFIX} as concise bullet points. Only the bullets:\n\n${body}`,
+      mode: 'notes',
+      text: `${notesPromptPrefix(mode)}\n${SUMMARY_PREFIX} for a ${mode.replace('_', ' ')} session. Only the notes:\n\n${body}`,
     })
   }, [])
 
@@ -1202,6 +1235,12 @@ ${actions.length ? `<h2>Marked actions</h2>${actions.map((ln) => `<div class="ln
         onSystemMuted={handleSystemMuted}
         onStealth={handleStealth}
         onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
+        listeningMode={listeningMode}
+        onListeningMode={(mode) => {
+          persistListeningMode(mode)
+          setListeningMode(mode)
+          track('mode_selected', { listening: mode })
+        }}
         quotaLabel={
           state.quota?.quota_disabled
             ? 'Test · unlimited'
@@ -1234,6 +1273,10 @@ ${actions.length ? `<h2>Marked actions</h2>${actions.map((ln) => `<div class="ln
         {state.workspaceMode === 'meeting' ? (
           <MeetingPane
             lines={state.meetingLines}
+            captions={Object.fromEntries(state.translatePairs.map((p) => [p.id, p.translation]))}
+            showCaptions={listenCaption}
+            onToggleCaptions={setListenCaption}
+            listeningMode={listeningMode}
             partial={state.partial}
             summary={state.meetingSummary}
             busy={state.busy}

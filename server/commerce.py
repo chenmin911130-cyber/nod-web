@@ -265,6 +265,16 @@ def history(user: User = Depends(current_user)):
     return {"ok": True, "sessions": list_history(user.id)}
 
 
+@router.get("/api/account/history/{sid}")
+def history_one(sid: str, user: User = Depends(current_user)):
+    from server.meter import list_segments
+
+    sessions = [row for row in list_history(user.id, 80) if row["id"] == sid]
+    if not sessions:
+        raise HTTPException(404, "Session not found")
+    return {"ok": True, "session": sessions[0], "segments": list_segments(user.id, sid)}
+
+
 @router.delete("/api/account")
 def delete_account(user: User = Depends(current_user), response: Response = None):
     delete_user_data(user.id)
