@@ -31,7 +31,7 @@ from server.db import init_db
 from server.headers import CloudflareOriginMiddleware, SecurityHeadersMiddleware
 from server.logging_setup import backup_now, setup_logging
 from server.settings import AUTH_DISABLED, CLERK_PUBLISHABLE_KEY, COOKIE_NAME, PUBLIC_URL, QUOTA_DISABLED
-from server.ratelimit import MAX_WS_FRAME, WS_FRAMES_PER_SEC, allow, ws_client_ip, ws_connect, ws_disconnect
+from server.ratelimit import MAX_WS_FRAME, ws_client_ip, ws_connect, ws_disconnect
 from server.security import is_local_scope, user_from_token
 
 SR = 16000
@@ -296,10 +296,8 @@ def _meeting_should_hold(text: str) -> bool:
     t = (text or "").strip()
     if not t or _meeting_line_complete(t):
         return False
-    if len(t) < 18:
-        return True
-    low = t.lower()
-    return t.endswith(("，", ",", "、")) or low.endswith((" and", " or", " but", " the"))
+    # Only glue tiny cut-offs. Longer fragments go to the transcript immediately.
+    return len(t) < 8
 
 
 def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
@@ -319,11 +317,10 @@ def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
     if boost:
         params.append(("word_boost", ",".join(boost)))
         params.append(("boost_param", "medium"))
-    params.append(("speech_threshold", "2"))
     return ASSEMBLYAI_WS + "?" + urlencode(params)
 
 
-def clean_transcript(text: str, recent_finals=None, last_answer=None) -> tuple[str, str]:
+def clean_transcript(text: str, recent_finals=None, last_answer=None, keep_fillers=False) -> tuple[str, str]:
     t = (text or "").strip()
     t = re.sub(r"[.?!。！？]{2,}", lambda m: m.group(0)[0], t)
     t = re.sub(r"\s+", " ", t)
@@ -335,7 +332,7 @@ def clean_transcript(text: str, recent_finals=None, last_answer=None) -> tuple[s
         return "", "hallucination"
     if len(t) < 60 and any(s in low for s in _STT_STATUS_WORDS):
         return "", "status text"
-    if low in _STT_SOCIAL_WORDS:
+    if not keep_fillers and low in _STT_SOCIAL_WORDS:
         return "", "social phrase"
     if recent_finals:
         for prev in recent_finals[-2:]:
@@ -900,7 +897,7 @@ class CloudListener:
         self.on_final = on_final
         self.on_partial = on_partial
         self.on_error = on_error
-        self._q: queue.Queue[bytes] = queue.Queue(maxsize=80)
+        self._q: queue.Queue[bytes] = queue.Queue(maxsize=240)
         self._stop = threading.Event()
         self._ready = threading.Event()
         self._fail: list[str] = []
@@ -917,7 +914,14 @@ class CloudListener:
         try:
             self._q.put_nowait(pcm)
         except queue.Full:
-            pass
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                self._q.put_nowait(pcm)
+            except queue.Full:
+                pass
 
     def start(self) -> None:
         import websocket
@@ -1039,6 +1043,7 @@ class Session:
         self._archive_bytes = 0
         self._archive_total = 0
         self._archive_part = 1
+        self._consent_ok: bool | None = None
 
     def _archive_prefix(self) -> str:
         return f"users/{self.user_id}/sessions/{self.usage_session_id}/audio/"
@@ -1054,9 +1059,12 @@ class Session:
     def _has_consent(self) -> bool:
         if not self.user_id:
             return True
+        if self._consent_ok is True:
+            return True
         from server.meter import has_recording_consent
 
-        return has_recording_consent(self.user_id)
+        self._consent_ok = has_recording_consent(self.user_id)
+        return self._consent_ok
 
     def _ensure_consent(self) -> bool:
         if self._has_consent():
@@ -1320,12 +1328,10 @@ class Session:
     def _stt_cfg(self) -> dict[str, Any]:
         cfg = dict(self.cfg)
         stt = dict(cfg.get("stt") or {})
-        stt["language"] = self._effective_stt_lang() or (
-            None if self._workspace == "translate" else self._follow_lang
-        )
+        stt["language"] = self._effective_stt_lang()
         stt["auto_langs"] = list(_TRANSLATE_LANGS if self._workspace == "translate" else _STT_AUTO_LANGS)
         if self._workspace == "meeting":
-            stt["max_turn_silence"] = "1600"
+            stt["max_turn_silence"] = "1200"
         cfg["stt"] = stt
         return cfg
 
@@ -1341,7 +1347,9 @@ class Session:
         self._start_listening(resume=True)
 
     def _speech_filter_lang(self) -> str | None:
-        return self._effective_stt_lang() or self._follow_lang
+        # Auto follow is a status hint only. Filtering on it drops the other
+        # language in a bilingual room — the core product is "record what was said".
+        return self._effective_stt_lang()
 
     def _remember_final(self, text: str) -> None:
         self._recent_finals.append((text, time.time()))
@@ -1421,7 +1429,7 @@ class Session:
             if _meeting_should_hold(cleaned):
                 self._pending_wait = (cleaned, now, lang)
                 self._cancel_meeting_timer()
-                timer = threading.Timer(2.2, self._flush_meeting_hold)
+                timer = threading.Timer(1.0, self._flush_meeting_hold)
                 timer.daemon = True
                 self._meeting_flush_timer = timer
                 timer.start()
@@ -1576,7 +1584,12 @@ class Session:
             self.emit({"type": "error", "text": f"Transcription failed:{e}"})
             self.emit({"type": "state", "state": "idle"})
             return
-        cleaned, _ = clean_transcript(text or "", None, self.pipeline._last_answer)
+        cleaned, _ = clean_transcript(
+            text or "",
+            None,
+            self.pipeline._last_answer,
+            keep_fillers=self._workspace in ("meeting", "translate"),
+        )
         if not cleaned:
             self.emit({"type": "status", "text": STATUS_EMPTY})
             self.emit({"type": "state", "state": "idle"})
@@ -1676,7 +1689,12 @@ class Session:
 
     def _on_final(self, text: str, lang: str | None = None) -> None:
         recent = [t for t, _ in self._recent_finals[-3:]]
-        cleaned, _reason = clean_transcript(text, recent, self.pipeline._last_answer)
+        cleaned, _reason = clean_transcript(
+            text,
+            recent,
+            self.pipeline._last_answer,
+            keep_fillers=self._workspace in ("meeting", "translate"),
+        )
         if not cleaned:
             return
         if not self._speech_allowed(cleaned, lang):
@@ -1882,8 +1900,6 @@ async def ws_endpoint(ws: WebSocket):
             text = message.get("text")
             if data:
                 if len(data) > MAX_WS_FRAME:
-                    continue
-                if not allow(f"ws-bin:{ip}", WS_FRAMES_PER_SEC, 1.0):
                     continue
                 session.push_pcm(data)
             elif text:

@@ -7,6 +7,7 @@ from starlette.testclient import TestClient
 from server.headers import origin_allowed
 from server.mailer import send_reset_email
 from server.ratelimit import allow
+from server.app import _meeting_should_hold, clean_transcript
 from server.settings import DAILY_STT_SECONDS
 
 
@@ -24,6 +25,20 @@ class OriginLockTests(unittest.TestCase):
         self.addCleanup(lambda: os.environ.pop("REQUIRE_CLOUDFLARE", None))
         self.assertFalse(origin_allowed(scope))
         self.assertTrue(origin_allowed({"path": "/api/health", "headers": []}))
+
+
+class TranscriptKeepTests(unittest.TestCase):
+    def test_meeting_keeps_short_fillers(self):
+        text, reason = clean_transcript("好的", keep_fillers=True)
+        self.assertEqual(text, "好的")
+        self.assertEqual(reason, "")
+        dropped, why = clean_transcript("好的", keep_fillers=False)
+        self.assertEqual(dropped, "")
+        self.assertEqual(why, "social phrase")
+
+    def test_meeting_does_not_hold_normal_lines(self):
+        self.assertFalse(_meeting_should_hold("我们今天下午三点开会"))
+        self.assertTrue(_meeting_should_hold("那个"))
 
 
 class QuotaSettingsTests(unittest.TestCase):
