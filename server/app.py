@@ -290,10 +290,10 @@ def _stt_prompt(cfg: dict[str, Any]) -> str:
             return f"{name} meeting."
         return f"{name} conversation."
     if scene == "lecture":
-        return "Multilingual lecture in English and Mandarin. People switch languages mid-sentence."
+        return "Mandarin, English, and Japanese lecture. People switch languages mid-sentence."
     if scene == "interview":
-        return "Multilingual job interview in English and Mandarin. People switch languages mid-sentence."
-    return "Multilingual conversation in English and Mandarin. People switch languages mid-sentence."
+        return "Mandarin, English, and Japanese job interview. People switch languages mid-sentence."
+    return "Mandarin, English, and Japanese conversation. People switch languages mid-sentence."
 
 
 def _stt_max_speakers(cfg: dict[str, Any]) -> int | None:
@@ -325,6 +325,14 @@ def _same_speech_script(left: str, right: str) -> bool:
     a = _speech_script(left)
     b = _speech_script(right)
     return not a or not b or a == b
+
+
+def heard_lang_from_text(text: str, heard: str | None = None) -> str | None:
+    """Prefer the script on the page over AssemblyAI's language tag."""
+    script = _speech_script(text)
+    if script:
+        return script
+    return heard or detect_question_lang(text) or None
 
 
 def _join_speech_frags(left: str, right: str) -> str:
@@ -401,9 +409,8 @@ def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
         ("max_turn_silence", silence),
     ]
     lang = _normalize_any_lang(stt.get("language"))
-    auto_langs = stt.get("auto_langs") or _STT_AUTO_LANGS
-    for code in ((lang,) if lang else auto_langs):
-        params.append(("language_codes", code))
+    if lang:
+        params.append(("language_codes", lang))
     params.append(("prompt", _stt_prompt(cfg)))
     keyterms = _stt_keyterms(cfg)
     if keyterms:
@@ -1510,9 +1517,9 @@ class Session:
             self._pending_speaker = None
 
     def _emit_meeting_line(self, cleaned: str, lang: str | None, speaker: str | None = None) -> None:
-        heard = lang or detect_question_lang(cleaned)
+        heard = heard_lang_from_text(cleaned, lang)
         for piece in split_code_switched(cleaned):
-            piece_heard = detect_question_lang(piece) or heard
+            piece_heard = heard_lang_from_text(piece, heard)
             self._maybe_follow_speech(piece, piece_heard)
             self._remember_final(piece)
             qev: dict[str, Any] = {"type": "question", "id": self.pipeline._new_qid(), "text": piece}
@@ -1836,14 +1843,14 @@ class Session:
         for t, ts in self._recent_finals:
             if now - ts < 5.0 and _ratio(cleaned.lower(), t.lower()) > 0.85:
                 return
-        heard = lang or detect_question_lang(cleaned)
+        heard = heard_lang_from_text(cleaned, lang)
         if self._workspace == "translate":
             # 不取消在途翻译：取消会让被中断的句子等 25s 超时重试（双倍 token + 字幕卡死）。
             # 新 final 照常入队，前端 pump 一次只发一条，翻译自然串行。
             self._pending = None
             self._pending_wait = (None, 0.0, None)
             for piece in split_code_switched(cleaned):
-                piece_heard = detect_question_lang(piece) or heard
+                piece_heard = heard_lang_from_text(piece, heard)
                 self._maybe_follow_speech(piece, piece_heard)
                 self._remember_final(piece)
                 ev: dict[str, Any] = {"type": "question", "id": self.pipeline._new_qid(), "text": piece}

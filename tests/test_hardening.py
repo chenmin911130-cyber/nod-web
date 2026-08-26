@@ -9,7 +9,6 @@ from server.mailer import send_reset_email
 from server.ratelimit import allow
 from server.app import (
     ASSEMBLYAI_MODEL,
-    _STT_AUTO_LANGS,
     _join_speech_frags,
     _meeting_should_hold,
     _same_speech_script,
@@ -64,14 +63,15 @@ class TranscriptKeepTests(unittest.TestCase):
         self.assertTrue(parts[0].startswith("It's a little surprise"))
         self.assertTrue(parts[1].startswith("对"))
 
-    def test_auto_stt_lists_english_first(self):
-        self.assertEqual(_STT_AUTO_LANGS[0], "en")
+    def test_auto_omits_language_codes(self):
         url = assemblyai_ws_url({"stt": {}})
-        self.assertIn("language_codes=en", url)
-        en = url.index("language_codes=en")
-        zh = url.index("language_codes=zh")
-        self.assertLess(en, zh)
+        self.assertNotIn("language_codes=", url)
         self.assertIn("prompt=", url)
+
+    def test_locked_language_still_sent(self):
+        url = assemblyai_ws_url({"stt": {"language": "zh"}})
+        self.assertIn("language_codes=zh", url)
+        self.assertNotIn("language_codes=en", url)
 
     def test_streaming_uses_pro_model_and_keyterms(self):
         self.assertEqual(ASSEMBLYAI_MODEL, "universal-3-5-pro")
