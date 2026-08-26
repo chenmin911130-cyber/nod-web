@@ -7,7 +7,15 @@ from starlette.testclient import TestClient
 from server.headers import origin_allowed
 from server.mailer import send_reset_email
 from server.ratelimit import allow
-from server.app import _meeting_should_hold, clean_transcript
+from server.app import (
+    _STT_AUTO_LANGS,
+    _join_speech_frags,
+    _meeting_should_hold,
+    _same_speech_script,
+    assemblyai_ws_url,
+    clean_transcript,
+    split_code_switched,
+)
 from server.settings import DAILY_STT_SECONDS
 
 
@@ -39,6 +47,30 @@ class TranscriptKeepTests(unittest.TestCase):
     def test_meeting_does_not_hold_normal_lines(self):
         self.assertFalse(_meeting_should_hold("我们今天下午三点开会"))
         self.assertTrue(_meeting_should_hold("那个"))
+
+    def test_does_not_glue_english_onto_chinese(self):
+        self.assertFalse(_same_speech_script("所以你可以不用谈论它了。", "That's a last-minute notification."))
+        self.assertEqual(
+            _join_speech_frags("所以你可以不用谈论它了。", "That's a last-minute notification."),
+            "所以你可以不用谈论它了。",
+        )
+
+    def test_splits_mixed_utterance_on_sentence_boundary(self):
+        parts = split_code_switched(
+            "It's a little surprise. 对，那刚刚好好David给我发了一个他新的PPT。"
+        )
+        self.assertEqual(len(parts), 2)
+        self.assertTrue(parts[0].startswith("It's a little surprise"))
+        self.assertTrue(parts[1].startswith("对"))
+
+    def test_auto_stt_lists_english_first(self):
+        self.assertEqual(_STT_AUTO_LANGS[0], "en")
+        url = assemblyai_ws_url({"stt": {}})
+        self.assertIn("language_codes=en", url)
+        en = url.index("language_codes=en")
+        zh = url.index("language_codes=zh")
+        self.assertLess(en, zh)
+        self.assertIn("prompt=", url)
 
 
 class QuotaSettingsTests(unittest.TestCase):

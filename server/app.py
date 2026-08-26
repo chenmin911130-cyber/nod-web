@@ -161,7 +161,8 @@ def load_config() -> dict[str, Any]:
 
 
 _TRANSLATE_LANGS = ("zh", "ja", "en", "it", "es", "fr", "de", "pt")
-_STT_AUTO_LANGS = ("zh", "ja", "en")
+# English first so mixed rooms do not collapse English into Chinese.
+_STT_AUTO_LANGS = ("en", "zh", "ja")
 _LANG_NAMES = {
     "zh": "Chinese",
     "ja": "Japanese",
@@ -263,12 +264,34 @@ def _stt_boost_words(cfg: dict[str, Any]) -> list[str]:
     return words[:50]
 
 
+def _speech_script(text: str) -> str:
+    t = text or ""
+    han = len(re.findall(r"[\u4e00-\u9fff]", t))
+    kana = len(re.findall(r"[\u3040-\u30FF]", t))
+    latin = len(re.findall(r"[A-Za-z]", t))
+    if kana >= 2 and kana >= han:
+        return "ja"
+    if han >= 2 and han >= latin:
+        return "zh"
+    if latin >= 3:
+        return "en"
+    return ""
+
+
+def _same_speech_script(left: str, right: str) -> bool:
+    a = _speech_script(left)
+    b = _speech_script(right)
+    return not a or not b or a == b
+
+
 def _join_speech_frags(left: str, right: str) -> str:
     a = (left or "").strip()
     b = (right or "").strip()
     if not a:
         return b
     if not b:
+        return a
+    if not _same_speech_script(a, b):
         return a
     if b.startswith(a):
         return b
@@ -281,6 +304,28 @@ def _join_speech_frags(left: str, right: str) -> str:
     if a.endswith(("，", "、", ",", "—", "-")):
         return a + b if re.search(r"^[\u4e00-\u9fff\u3040-\u30FF]", b) else f"{a} {b}".strip()
     return f"{a} {b}".strip()
+
+
+def split_code_switched(text: str) -> list[str]:
+    """Keep spoken languages on separate lines. Never rewrite one language into another."""
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    parts = [p.strip() for p in re.split(r"(?<=[。！？.!?])\s+", raw) if p.strip()]
+    if len(parts) <= 1:
+        return [raw]
+    out: list[str] = []
+    buf = parts[0]
+    for part in parts[1:]:
+        if _same_speech_script(buf, part):
+            joiner = "" if buf.endswith(("。", "！", "？", ".", "!", "?", "…")) else " "
+            buf = f"{buf}{joiner}{part}"
+        else:
+            out.append(buf)
+            buf = part
+    if buf:
+        out.append(buf)
+    return out or [raw]
 
 
 def _meeting_line_complete(text: str) -> bool:
@@ -313,6 +358,11 @@ def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
     auto_langs = stt.get("auto_langs") or _STT_AUTO_LANGS
     for code in ((lang,) if lang else auto_langs):
         params.append(("language_codes", code))
+    if not lang:
+        params.append((
+            "prompt",
+            "Multilingual conversation in English and Mandarin. Speakers switch languages mid-sentence.",
+        ))
     boost = _stt_boost_words(cfg)
     if boost:
         params.append(("word_boost", ",".join(boost)))
@@ -1402,16 +1452,18 @@ class Session:
 
     def _emit_meeting_line(self, cleaned: str, lang: str | None) -> None:
         heard = lang or detect_question_lang(cleaned)
-        self._maybe_follow_speech(cleaned, heard)
-        self._remember_final(cleaned)
-        qev: dict[str, Any] = {"type": "question", "id": self.pipeline._new_qid(), "text": cleaned}
-        if heard:
-            qev["language"] = heard
-        self.emit(qev)
-        if self.user_id and self.usage_session_id:
-            from server.meter import save_history
+        for piece in split_code_switched(cleaned):
+            piece_heard = detect_question_lang(piece) or heard
+            self._maybe_follow_speech(piece, piece_heard)
+            self._remember_final(piece)
+            qev: dict[str, Any] = {"type": "question", "id": self.pipeline._new_qid(), "text": piece}
+            if piece_heard:
+                qev["language"] = piece_heard
+            self.emit(qev)
+            if self.user_id and self.usage_session_id:
+                from server.meter import save_history
 
-            save_history(self.user_id, self.usage_session_id, "transcript", cleaned, qev["id"])
+                save_history(self.user_id, self.usage_session_id, "transcript", piece, qev["id"])
 
     def _hold_or_emit_meeting(self, cleaned: str, lang: str | None) -> None:
         leftover: tuple[str, str | None] | None = None
@@ -1419,7 +1471,7 @@ class Session:
         with self._meeting_lock:
             ptxt, pts, plang = self._pending_wait
             now = time.time()
-            if ptxt and now - pts < 2.8:
+            if ptxt and now - pts < 2.8 and _same_speech_script(ptxt, cleaned):
                 cleaned = _join_speech_frags(ptxt, cleaned)
                 lang = plang or lang
                 self._pending_wait = (None, 0.0, None)
@@ -1705,18 +1757,19 @@ class Session:
             if now - ts < 5.0 and _ratio(cleaned.lower(), t.lower()) > 0.85:
                 return
         heard = lang or detect_question_lang(cleaned)
-        qev: dict[str, Any] = {"type": "question", "id": "", "text": cleaned}
-        if heard:
-            qev["language"] = heard
         if self._workspace == "translate":
             # 不取消在途翻译：取消会让被中断的句子等 25s 超时重试（双倍 token + 字幕卡死）。
             # 新 final 照常入队，前端 pump 一次只发一条，翻译自然串行。
             self._pending = None
             self._pending_wait = (None, 0.0, None)
-            self._maybe_follow_speech(cleaned, heard)
-            self._remember_final(cleaned)
-            qev["id"] = self.pipeline._new_qid()
-            self.emit(qev)
+            for piece in split_code_switched(cleaned):
+                piece_heard = detect_question_lang(piece) or heard
+                self._maybe_follow_speech(piece, piece_heard)
+                self._remember_final(piece)
+                ev: dict[str, Any] = {"type": "question", "id": self.pipeline._new_qid(), "text": piece}
+                if piece_heard:
+                    ev["language"] = piece_heard
+                self.emit(ev)
             return
         if self._workspace == "meeting":
             self._hold_or_emit_meeting(cleaned, lang)
@@ -1725,9 +1778,14 @@ class Session:
         verdict = guard_question(cleaned, recent_qs, self.pipeline._last_answer)
         if verdict == "wait":
             ptxt, pts, plang = self._pending_wait
-            if ptxt and time.time() - pts < 2.0:
+            if ptxt and time.time() - pts < 2.0 and _same_speech_script(ptxt, cleaned):
                 self._pending_wait = (None, 0.0, None)
                 self._on_final(f"{ptxt} {cleaned}", plang or lang)
+            elif ptxt:
+                leftover, leftover_lang = ptxt, plang
+                self._pending_wait = (None, 0.0, None)
+                self._on_final(leftover, leftover_lang)
+                self._on_final(cleaned, lang)
             else:
                 self._pending_wait = (cleaned, time.time(), lang)
                 self.emit({"type": "status", "text": STATUS_WAIT_MORE})
