@@ -246,22 +246,65 @@ def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _stt_boost_words(cfg: dict[str, Any]) -> list[str]:
-    words = list(_STT_BOOST_FIXED)
-    seen = {w.lower() for w in words}
+def _stt_add_keyterm(terms: list[str], seen: set[str], raw: Any) -> None:
+    tok = str(raw or "").strip()
+    if not tok or len(tok) > 50 or len(tok.split()) > 6:
+        return
+    key = tok.lower()
+    if key in seen:
+        return
+    seen.add(key)
+    terms.append(tok)
+
+
+def _stt_keyterms(cfg: dict[str, Any]) -> list[str]:
+    """Universal-3.5 Pro uses keyterms_prompt. word_boost silently falls back to Universal-2."""
+    terms: list[str] = []
+    seen: set[str] = set()
+    for tok in _STT_BOOST_FIXED:
+        _stt_add_keyterm(terms, seen, tok)
     p = cfg.get("profile") or {}
+    for extra in (p.get("name"), p.get("company"), p.get("target_role")):
+        _stt_add_keyterm(terms, seen, extra)
     for text in (p.get("resume_summary") or "", p.get("jd") or ""):
         for tok in re.split(r"[，。、,.;；:：\s()（）/+\\-]+", text):
             tok = tok.strip()
-            if len(tok) >= 2 and re.search(r"[A-Za-z]", tok) and tok.lower() not in seen:
-                words.append(tok)
-                seen.add(tok.lower())
+            if len(tok) >= 2 and re.search(r"[A-Za-z]", tok):
+                _stt_add_keyterm(terms, seen, tok)
     for tok in (cfg.get("stt") or {}).get("vocabulary") or []:
-        tok = str(tok).strip()
-        if len(tok) >= 2 and tok.lower() not in seen:
-            words.append(tok)
-            seen.add(tok.lower())
-    return words[:50]
+        _stt_add_keyterm(terms, seen, tok)
+    return terms[:100]
+
+
+def _stt_prompt(cfg: dict[str, Any]) -> str:
+    stt = cfg.get("stt") or {}
+    scene = str(stt.get("listen_scene") or "").strip().lower()
+    lang = _normalize_any_lang(stt.get("language"))
+    if lang:
+        name = _LANG_NAMES.get(lang, lang)
+        if scene == "lecture":
+            return f"{name} lecture."
+        if scene == "interview":
+            return f"{name} job interview."
+        if scene == "meeting":
+            return f"{name} meeting."
+        return f"{name} conversation."
+    if scene == "lecture":
+        return "Multilingual lecture in English and Mandarin. People switch languages mid-sentence."
+    if scene == "interview":
+        return "Multilingual job interview in English and Mandarin. People switch languages mid-sentence."
+    return "Multilingual conversation in English and Mandarin. People switch languages mid-sentence."
+
+
+def _stt_max_speakers(cfg: dict[str, Any]) -> int | None:
+    raw = (cfg.get("stt") or {}).get("speakers_expected")
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if n < 1:
+        return None
+    return min(10, max(2, n + 1))
 
 
 def _speech_script(text: str) -> str:
@@ -351,22 +394,25 @@ def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
     params = [
         ("sample_rate", str(SR)),
         ("speech_model", ASSEMBLYAI_MODEL),
+        ("speech_models", ASSEMBLYAI_MODEL),
         ("format_turns", "true"),
+        ("punctuate", "true"),
+        ("format_text", "true"),
         ("max_turn_silence", silence),
     ]
     lang = _normalize_any_lang(stt.get("language"))
     auto_langs = stt.get("auto_langs") or _STT_AUTO_LANGS
     for code in ((lang,) if lang else auto_langs):
         params.append(("language_codes", code))
-    if not lang:
-        params.append((
-            "prompt",
-            "Multilingual conversation in English and Mandarin. Speakers switch languages mid-sentence.",
-        ))
-    boost = _stt_boost_words(cfg)
-    if boost:
-        params.append(("word_boost", ",".join(boost)))
-        params.append(("boost_param", "medium"))
+    params.append(("prompt", _stt_prompt(cfg)))
+    keyterms = _stt_keyterms(cfg)
+    if keyterms:
+        params.append(("keyterms_prompt", json.dumps(keyterms, ensure_ascii=False)))
+    if stt.get("speaker_labels"):
+        params.append(("speaker_labels", "true"))
+        cap = _stt_max_speakers(cfg)
+        if cap:
+            params.append(("max_speakers", str(cap)))
     return ASSEMBLYAI_WS + "?" + urlencode(params)
 
 
@@ -1024,17 +1070,19 @@ class CloudListener:
                 return
             speechy = bool(re.search(r"[A-Za-z0-9\u00C0-\u024F\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]", text))
             lang = heard_lang_from_turn(data)
+            speaker = data.get("speaker_label") or data.get("speaker")
+            speaker = str(speaker).strip() if speaker else None
             if data.get("end_of_turn"):
                 if data.get("turn_is_formatted") is False:
                     if speechy and self.on_partial:
-                        self.on_partial(text, lang)
+                        self.on_partial(text, lang, speaker)
                     return
                 cleaned = text.strip()
                 if cleaned and cleaned != self._last_final:
                     self._last_final = cleaned
-                    threading.Thread(target=self.on_final, args=(cleaned, lang), daemon=True).start()
+                    threading.Thread(target=self.on_final, args=(cleaned, lang, speaker), daemon=True).start()
             elif speechy and self.on_partial:
-                self.on_partial(text, lang)
+                self.on_partial(text, lang, speaker)
         elif kind == "Error" and self.on_error:
             self.on_error(str(data.get("error") or message))
 
@@ -1088,6 +1136,7 @@ class Session:
         self._recent_finals: list[tuple[str, float]] = []
         self._mic_muted = False
         self._workspace = "interview"
+        self._pending_speaker: str | None = None
         self._archive_fp = None
         self._archive_path: str | None = None
         self._archive_bytes = 0
@@ -1299,7 +1348,7 @@ class Session:
         elif mtype == "ask":
             self.ask(msg.get("text", ""), msg.get("files"), msg.get("mode") or "ask")
         elif mtype == "set_workspace":
-            self.set_workspace(msg.get("mode") or "interview")
+            self.set_workspace(msg.get("mode") or "interview", msg.get("scene"), msg.get("speakers_expected"))
         elif mtype == "set_llm":
             self.set_llm(msg.get("provider", "deepseek"), msg.get("model", ""))
         elif mtype == "set_lang":
@@ -1380,8 +1429,17 @@ class Session:
         stt = dict(cfg.get("stt") or {})
         stt["language"] = self._effective_stt_lang()
         stt["auto_langs"] = list(_TRANSLATE_LANGS if self._workspace == "translate" else _STT_AUTO_LANGS)
+        scene = str(stt.get("listen_scene") or "").strip().lower()
+        if scene not in ("meeting", "lecture", "interview"):
+            scene = "interview" if self._workspace == "interview" else "meeting"
+        stt["listen_scene"] = scene
         if self._workspace == "meeting":
             stt["max_turn_silence"] = "1200"
+            stt["speaker_labels"] = True
+            if not stt.get("speakers_expected") and scene == "interview":
+                stt["speakers_expected"] = 2
+        else:
+            stt["speaker_labels"] = False
         cfg["stt"] = stt
         return cfg
 
@@ -1448,9 +1506,10 @@ class Session:
             ptxt, _pts, plang = self._pending_wait
             self._pending_wait = (None, 0.0, None)
         if ptxt:
-            self._emit_meeting_line(ptxt, plang)
+            self._emit_meeting_line(ptxt, plang, self._pending_speaker)
+            self._pending_speaker = None
 
-    def _emit_meeting_line(self, cleaned: str, lang: str | None) -> None:
+    def _emit_meeting_line(self, cleaned: str, lang: str | None, speaker: str | None = None) -> None:
         heard = lang or detect_question_lang(cleaned)
         for piece in split_code_switched(cleaned):
             piece_heard = detect_question_lang(piece) or heard
@@ -1459,14 +1518,16 @@ class Session:
             qev: dict[str, Any] = {"type": "question", "id": self.pipeline._new_qid(), "text": piece}
             if piece_heard:
                 qev["language"] = piece_heard
+            if speaker:
+                qev["speaker"] = speaker
             self.emit(qev)
             if self.user_id and self.usage_session_id:
                 from server.meter import save_history
 
                 save_history(self.user_id, self.usage_session_id, "transcript", piece, qev["id"])
 
-    def _hold_or_emit_meeting(self, cleaned: str, lang: str | None) -> None:
-        leftover: tuple[str, str | None] | None = None
+    def _hold_or_emit_meeting(self, cleaned: str, lang: str | None, speaker: str | None = None) -> None:
+        leftover: tuple[str, str | None, str | None] | None = None
         hold_now = False
         with self._meeting_lock:
             ptxt, pts, plang = self._pending_wait
@@ -1474,12 +1535,16 @@ class Session:
             if ptxt and now - pts < 2.8 and _same_speech_script(ptxt, cleaned):
                 cleaned = _join_speech_frags(ptxt, cleaned)
                 lang = plang or lang
+                speaker = self._pending_speaker or speaker
                 self._pending_wait = (None, 0.0, None)
+                self._pending_speaker = None
             elif ptxt:
-                leftover = (ptxt, plang)
+                leftover = (ptxt, plang, self._pending_speaker)
                 self._pending_wait = (None, 0.0, None)
+                self._pending_speaker = None
             if _meeting_should_hold(cleaned):
                 self._pending_wait = (cleaned, now, lang)
+                self._pending_speaker = speaker
                 self._cancel_meeting_timer()
                 timer = threading.Timer(1.0, self._flush_meeting_hold)
                 timer.daemon = True
@@ -1489,30 +1554,43 @@ class Session:
             else:
                 self._cancel_meeting_timer()
         if leftover:
-            self._emit_meeting_line(leftover[0], leftover[1])
+            self._emit_meeting_line(leftover[0], leftover[1], leftover[2])
         if hold_now:
             ev: dict[str, Any] = {"type": "partial", "text": cleaned}
             if lang:
                 ev["language"] = lang
+            if speaker:
+                ev["speaker"] = speaker
             self.emit(ev)
             return
-        self._emit_meeting_line(cleaned, lang)
+        self._emit_meeting_line(cleaned, lang, speaker)
 
-    def set_workspace(self, mode: str) -> None:
+    def set_workspace(self, mode: str, scene: Any = None, speakers_expected: Any = None) -> None:
         if mode not in ("interview", "meeting", "translate"):
             mode = "interview"
         prev = self._workspace
         prev_lang = self._effective_stt_lang(prev)
+        prev_url = assemblyai_ws_url(self._stt_cfg()) if self._listener else ""
         self._workspace = mode
+        if str(scene or "").strip().lower() in ("meeting", "lecture", "interview"):
+            self.cfg.setdefault("stt", {})["listen_scene"] = str(scene).strip().lower()
+        if speakers_expected is not None:
+            try:
+                n = int(speakers_expected)
+                if 1 <= n <= 10:
+                    self.cfg.setdefault("stt", {})["speakers_expected"] = n
+            except (TypeError, ValueError):
+                pass
         self._pending = None
         self._pending_asks = []
         # 丢弃 hold 住的半句会议内容（不 flush）：模式切换后 emit 的 question 事件
         # 会被前端路由到新 workspace（如 translate 下变成垃圾翻译对）
         self._cancel_meeting_timer()
         self._pending_wait = (None, 0.0, None)
+        self._pending_speaker = None
         if mode == "translate" and prev != "translate":
             self.cancel_generate()
-        if self._listener and prev_lang != self._effective_stt_lang():
+        if self._listener and (prev_lang != self._effective_stt_lang() or prev_url != assemblyai_ws_url(self._stt_cfg())):
             self._restart_listener()
 
     def set_llm(self, provider: str, model: str) -> None:
@@ -1728,7 +1806,7 @@ class Session:
         locked = self._speech_filter_lang()
         return matches_locked_speech(text, locked, lang)
 
-    def _on_partial(self, text: str, lang: str | None = None) -> None:
+    def _on_partial(self, text: str, lang: str | None = None, speaker: str | None = None) -> None:
         if not text:
             return
         if not self._speech_allowed(text, lang):
@@ -1737,9 +1815,11 @@ class Session:
         ev: dict[str, Any] = {"type": "partial", "text": text}
         if lang:
             ev["language"] = lang
+        if speaker:
+            ev["speaker"] = speaker
         self.emit(ev)
 
-    def _on_final(self, text: str, lang: str | None = None) -> None:
+    def _on_final(self, text: str, lang: str | None = None, speaker: str | None = None) -> None:
         recent = [t for t, _ in self._recent_finals[-3:]]
         cleaned, _reason = clean_transcript(
             text,
@@ -1769,10 +1849,12 @@ class Session:
                 ev: dict[str, Any] = {"type": "question", "id": self.pipeline._new_qid(), "text": piece}
                 if piece_heard:
                     ev["language"] = piece_heard
+                if speaker:
+                    ev["speaker"] = speaker
                 self.emit(ev)
             return
         if self._workspace == "meeting":
-            self._hold_or_emit_meeting(cleaned, lang)
+            self._hold_or_emit_meeting(cleaned, lang, speaker)
             return
         recent_qs = [h["q"] for h in self.pipeline._qa_history]
         verdict = guard_question(cleaned, recent_qs, self.pipeline._last_answer)

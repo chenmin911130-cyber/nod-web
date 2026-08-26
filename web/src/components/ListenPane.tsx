@@ -566,7 +566,10 @@ export default function ListenPane(props: Props) {
                       key={line.id || `${line.ts}-${i}`}
                       className={`listen-line${props.listening && i === props.lines.length - 1 && !props.partial ? ' live' : ''}`}
                     >
-                      <div className="listen-ts">{line.ts}</div>
+                      <div className="listen-ts">
+                        {line.ts}
+                        {line.speaker ? <span className="listen-spk">{line.speaker}</span> : null}
+                      </div>
                       <div>
                         <div className="listen-orig">{line.text}</div>
                         {props.translateOn && (

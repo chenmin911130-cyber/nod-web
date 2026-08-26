@@ -47,6 +47,7 @@ export interface MeetingLine {
   marked?: boolean
   at?: number
   translation?: string
+  speaker?: string
 }
 
 export interface TranslatePair {
@@ -121,8 +122,8 @@ export type EngineEvent =
   | { type: 'keys_status'; has_llm: boolean; has_stt: boolean }
   | { type: 'state'; state: string }
   | { type: 'status'; text: string }
-  | { type: 'partial'; text: string; language?: string }
-  | { type: 'question'; id: string; text: string; language?: string }
+  | { type: 'partial'; text: string; language?: string; speaker?: string }
+  | { type: 'question'; id: string; text: string; language?: string; speaker?: string }
   | { type: 'chunk'; id: string; text: string }
   | { type: 'done'; id: string; stt: number; llm: number; ok: boolean }
   | { type: 'error'; text: string }
@@ -136,7 +137,7 @@ export type EngineMsg =
   | { type: 'toggle_listen' }
   | { type: 'auth'; token: string }
   | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; mode?: string }
-  | { type: 'set_workspace'; mode: WorkspaceMode }
+  | { type: 'set_workspace'; mode: WorkspaceMode; scene?: 'meeting' | 'lecture' | 'interview'; speakers_expected?: number }
   | { type: 'set_llm'; provider: string; model: string }
   | { type: 'set_lang'; language: string | null }
   | { type: 'set_source'; source: string }

@@ -333,6 +333,7 @@ function reducer(state: AppState, action: Action): AppState {
               ts: formatTs(state.meetingStartedAt),
               text,
               at: Date.now(),
+              speaker: ev.speaker,
             }]
             return { ...state, meetingLines, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
           }
@@ -843,7 +844,7 @@ export default function App() {
       const s = stateRef.current
       api.send({ type: 'set_translate_from', language: s.translateFrom === 'auto' ? null : s.translateFrom })
       api.send({ type: 'set_translate_to', lang: s.translateTo })
-      api.send({ type: 'set_workspace', mode: s.workspaceMode })
+      api.send({ type: 'set_workspace', mode: s.workspaceMode, scene: s.listenScene })
       if (s.workspaceMode !== 'translate') {
         api.send({ type: 'set_lang', language: s.lang === 'auto' ? null : s.lang })
       }
@@ -1168,7 +1169,7 @@ export default function App() {
     } else {
       window.api.send({ type: 'set_lang', language: s.lang === 'auto' ? null : s.lang })
     }
-    window.api.send({ type: 'set_workspace', mode })
+    window.api.send({ type: 'set_workspace', mode, scene: s.listenScene })
     dispatch({ type: 'workspace', mode })
     setComposeOpen(false)
     setRailHover(false)
@@ -1211,7 +1212,7 @@ export default function App() {
     }
     if (s.run === 'record') return
     guardMic(() => {
-      window.api.send({ type: 'set_workspace', mode: 'translate' })
+      window.api.send({ type: 'set_workspace', mode: 'translate', scene: stateRef.current.listenScene })
       window.api.send({ type: 'set_translate_from', language: s.translateFrom === 'auto' ? null : s.translateFrom })
       window.api.send({ type: 'set_translate_to', lang: s.translateTo })
       window.api.send({ type: 'toggle_listen' })
@@ -1394,7 +1395,7 @@ export default function App() {
       window.api.send({ type: 'ask', mode: 'summary', text: note || 'Please review the attached files.', files })
       return
     }
-    const body = s.meetingLines.slice(-500).map((ln) => `[${ln.ts}${ln.marked ? ' ACTION' : ''}] ${ln.text}`).join('\n')
+    const body = s.meetingLines.slice(-500).map((ln) => `[${ln.ts}${ln.speaker ? ` ${ln.speaker}` : ''}${ln.marked ? ' ACTION' : ''}] ${ln.text}`).join('\n')
     if (!body.trim()) {
       dispatch({ type: 'engine', ev: { type: 'status', text: 'No transcript to summarize yet.' } })
       return
@@ -1519,7 +1520,7 @@ export default function App() {
       if (lines.length === 0) blocks.push({ kind: 'p', text: 'No transcript lines.' })
       else {
         for (const ln of lines) {
-          blocks.push({ kind: 'p', text: `${ln.ts}  ${ln.text}` })
+          blocks.push({ kind: 'p', text: `${ln.ts}${ln.speaker ? ` ${ln.speaker}` : ''}  ${ln.text}` })
           if (s.translateOn && ln.translation) blocks.push({ kind: 'p', text: `     ${ln.translation}` })
         }
       }
@@ -1747,6 +1748,7 @@ export default function App() {
               dispatch({ type: 'listen_scene', scene })
               if (scene === 'interview') handleMode('interview')
               else if (state.workspaceMode !== 'meeting') handleMode('meeting')
+              else window.api.send({ type: 'set_workspace', mode: 'meeting', scene })
             }}
             onTranslate={(on) => {
               dispatch({ type: 'translate_on', on })

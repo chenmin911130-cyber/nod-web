@@ -8,6 +8,7 @@ from server.headers import origin_allowed
 from server.mailer import send_reset_email
 from server.ratelimit import allow
 from server.app import (
+    ASSEMBLYAI_MODEL,
     _STT_AUTO_LANGS,
     _join_speech_frags,
     _meeting_should_hold,
@@ -71,6 +72,29 @@ class TranscriptKeepTests(unittest.TestCase):
         zh = url.index("language_codes=zh")
         self.assertLess(en, zh)
         self.assertIn("prompt=", url)
+
+    def test_streaming_uses_pro_model_and_keyterms(self):
+        self.assertEqual(ASSEMBLYAI_MODEL, "universal-3-5-pro")
+        url = assemblyai_ws_url({"stt": {"vocabulary": ["Lisinopril", "ECG"]}})
+        self.assertIn("speech_model=universal-3-5-pro", url)
+        self.assertIn("speech_models=universal-3-5-pro", url)
+        self.assertIn("format_turns=true", url)
+        self.assertIn("punctuate=true", url)
+        self.assertIn("format_text=true", url)
+        self.assertIn("keyterms_prompt=", url)
+        self.assertNotIn("word_boost=", url)
+        self.assertIn("Lisinopril", url)
+
+    def test_meeting_enables_speaker_labels(self):
+        url = assemblyai_ws_url({
+            "stt": {
+                "speaker_labels": True,
+                "speakers_expected": 3,
+                "listen_scene": "meeting",
+            }
+        })
+        self.assertIn("speaker_labels=true", url)
+        self.assertIn("max_speakers=4", url)
 
 
 class QuotaSettingsTests(unittest.TestCase):

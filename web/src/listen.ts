@@ -204,7 +204,7 @@ export function lastTwoMinutes(lines: MeetingLine[], now = Date.now()): MeetingL
 export function transcriptBlock(lines: MeetingLine[], bilingual = false): string {
   return lines
     .map((line) => {
-      const head = `${line.ts}  ${line.text}`
+      const head = `${line.ts}${line.speaker ? ` ${line.speaker}` : ''}  ${line.text}`
       return bilingual && line.translation ? `${head}\n       ${line.translation}` : head
     })
     .join('\n')

@@ -4146,6 +4146,15 @@ a.tb-menu-action {
   font-variant-numeric: tabular-nums;
 }
 
+.listen-spk {
+  display: block;
+  margin-top: 2px;
+  color: #c9a227;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
 .listen-orig {
   color: #d7e2f4;
   font-size: 13.5px;
