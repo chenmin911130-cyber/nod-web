@@ -195,16 +195,75 @@ export function visibleSections(scene: ListenScene, doc: NotesDoc): Array<{ id: 
     .map((section) => ({ ...section, title: sectionTitle(scene, section.id) }))
 }
 
+export function speakerLabel(scene: ListenScene, index: number): string {
+  if (scene === 'lecture') {
+    if (index === 0) return 'Lecturer'
+    return index === 1 ? 'Audience' : `Audience ${index}`
+  }
+  if (scene === 'interview') {
+    if (index === 0) return 'Interviewer'
+    if (index === 1) return 'Candidate'
+    return `Speaker ${index + 1}`
+  }
+  if (index === 0) return 'Host'
+  return index === 1 ? 'Guest' : `Guest ${index}`
+}
+
+export function bindSpeakerName(
+  names: Record<string, string>,
+  speakerId: string | undefined,
+  scene: ListenScene,
+): Record<string, string> {
+  const id = (speakerId || '').trim()
+  if (!id || names[id]) return names
+  const index = Object.keys(names).length
+  const used = new Set(Object.values(names))
+  let label = speakerLabel(scene, index)
+  if (used.has(label)) label = `${label} ${index + 1}`
+  return { ...names, [id]: label }
+}
+
+export function resolveSpeakerName(names: Record<string, string>, speakerId?: string): string {
+  const id = (speakerId || '').trim()
+  if (!id) return ''
+  return names[id] || id
+}
+
+export function promoteLectureSpeakers(
+  lines: MeetingLine[],
+  names: Record<string, string>,
+  locked: Record<string, boolean>,
+): Record<string, string> {
+  const counts = new Map<string, number>()
+  for (const line of lines) {
+    const id = (line.speaker || '').trim()
+    if (!id) continue
+    counts.set(id, (counts.get(id) || 0) + 1)
+  }
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  if (!ranked.length || ranked[0][1] < 3) return names
+  const next = { ...names }
+  ranked.forEach(([id], i) => {
+    if (!locked[id]) next[id] = speakerLabel('lecture', i)
+  })
+  return next
+}
+
 export function lastTwoMinutes(lines: MeetingLine[], now = Date.now()): MeetingLine[] {
   const cutoff = now - 120_000
   const windowed = lines.filter((line) => (line.at ?? 0) >= cutoff)
   return windowed.length ? windowed : lines.slice(-8)
 }
 
-export function transcriptBlock(lines: MeetingLine[], bilingual = false): string {
+export function transcriptBlock(
+  lines: MeetingLine[],
+  bilingual = false,
+  names: Record<string, string> = {},
+): string {
   return lines
     .map((line) => {
-      const head = `${line.ts}${line.speaker ? ` ${line.speaker}` : ''}  ${line.text}`
+      const who = resolveSpeakerName(names, line.speaker)
+      const head = `${line.ts}${who ? ` ${who}` : ''}  ${line.text}`
       return bilingual && line.translation ? `${head}\n       ${line.translation}` : head
     })
     .join('\n')
@@ -233,14 +292,20 @@ export function askContext(lines: MeetingLine[], ended: boolean, now = Date.now(
   return windowed.length ? windowed : lines.slice(-80)
 }
 
-export function askPrompt(lines: MeetingLine[], question: string, outLang: Lang = 'zh', bilingual = false): string {
+export function askPrompt(
+  lines: MeetingLine[],
+  question: string,
+  outLang: Lang = 'zh',
+  bilingual = false,
+  names: Record<string, string> = {},
+): string {
   const ask = question.trim()
   return (
     `${nodTag('ASK', outLang, bilingual)}\n` +
     outLangRule(outLang, 'answer', bilingual) +
     `Listener question: ${ask}\n` +
     `Transcript (use when relevant; if empty, say you have not heard enough yet and still answer what you can):\n` +
-    `${transcriptBlock(lines, bilingual) || '(empty)'}`
+    `${transcriptBlock(lines, bilingual, names) || '(empty)'}`
   )
 }
 
@@ -248,8 +313,14 @@ export function isAskPrompt(text: string): boolean {
   return (text || '').trim().startsWith('[NOD_ASK')
 }
 
-export function catchupPrompt(lines: MeetingLine[], question = '', outLang: Lang = 'zh', bilingual = false): string {
-  const body = transcriptBlock(lines, bilingual)
+export function catchupPrompt(
+  lines: MeetingLine[],
+  question = '',
+  outLang: Lang = 'zh',
+  bilingual = false,
+  names: Record<string, string> = {},
+): string {
+  const body = transcriptBlock(lines, bilingual, names)
   const ask = question.trim()
   return (
     `${nodTag('CATCH', outLang, bilingual)}\n` +
@@ -260,7 +331,13 @@ export function catchupPrompt(lines: MeetingLine[], question = '', outLang: Lang
   )
 }
 
-export function notesPrompt(scene: ListenScene, lines: MeetingLine[], outLang: Lang = 'zh', bilingual = false): string {
+export function notesPrompt(
+  scene: ListenScene,
+  lines: MeetingLine[],
+  outLang: Lang = 'zh',
+  bilingual = false,
+  names: Record<string, string> = {},
+): string {
   const follow =
     scene === 'lecture'
       ? 'followUps = homework / reading'
@@ -276,7 +353,7 @@ export function notesPrompt(scene: ListenScene, lines: MeetingLine[], outLang: L
     `Empty arrays when the transcript has nothing. ${follow}. ` +
     (scene === 'lecture' ? 'revisionNotes = exam / formula items. ' : 'revisionNotes usually []. ') +
     (scene === 'interview' ? 'takeaways = questions asked and what they cared about. ' : 'takeaways usually []. ') +
-    `Transcript:\n${transcriptBlock(lines, bilingual) || '(empty)'}`
+    `Transcript:\n${transcriptBlock(lines, bilingual, names) || '(empty)'}`
   )
 }
 

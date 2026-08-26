@@ -105,6 +105,9 @@ export interface AppState {
   catchAskId: string
   notesRaw: string
   notesAskId: string
+  speakerNames: Record<string, string>
+  speakerNameLocked: Record<string, boolean>
+  partialSpeaker: string
   quota: {
     ok: boolean
     stt_seconds: number

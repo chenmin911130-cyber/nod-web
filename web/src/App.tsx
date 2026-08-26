@@ -15,12 +15,15 @@ import { api as authApi, fetchMe } from './auth'
 import {
   askContext,
   askPrompt,
+  bindSpeakerName,
   isAskPrompt,
   isCatchPrompt,
   isNotesPrompt,
   notesPrompt,
   exportNoteSections,
   parseNotes,
+  promoteLectureSpeakers,
+  resolveSpeakerName,
   type ListenScene,
 } from './listen'
 
@@ -133,6 +136,9 @@ const initial: AppState = {
   catchAskId: '',
   notesRaw: '',
   notesAskId: '',
+  speakerNames: {},
+  speakerNameLocked: {},
+  partialSpeaker: '',
   quota: null as { stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; ok: boolean; quota_disabled?: boolean } | null,
 }
 
@@ -172,6 +178,7 @@ type Action =
   | { type: 'listen_new' }
   | { type: 'expect_catch'; title?: string; kind?: 'catch' | 'ask'; question?: string }
   | { type: 'expect_notes' }
+  | { type: 'rename_speaker'; id: string; name: string }
 
 function formatClock(): string {
   const d = new Date()
@@ -279,10 +286,16 @@ function reducer(state: AppState, action: Action): AppState {
           if (state.workspaceMode === 'translate' && state.translateFrom !== 'auto') {
             const heard = parseHeardLang(ev.language, text)
             if (text && !matchesLockedFrom(text, state.translateFrom, heard)) {
-              return { ...state, partial: '' }
+              return { ...state, partial: '', partialSpeaker: '' }
             }
           }
-          return { ...state, partial: hasSpeechContent(text) ? text : '' }
+          const spoken = hasSpeechContent(text)
+          return {
+            ...state,
+            partial: spoken ? text : '',
+            partialSpeaker: spoken ? (ev.speaker || state.partialSpeaker) : '',
+            speakerNames: spoken ? bindSpeakerName(state.speakerNames, ev.speaker, state.listenScene) : state.speakerNames,
+          }
         }
         case 'question': {
           const qid = ev.id ?? ''
@@ -328,6 +341,8 @@ function reducer(state: AppState, action: Action): AppState {
           const ts = formatClock()
           const heard = parseHeardLang(ev.language, text)
           if (state.workspaceMode === 'meeting') {
+            const scene = state.listenScene
+            let speakerNames = bindSpeakerName(state.speakerNames, ev.speaker, scene)
             const meetingLines = [...state.meetingLines, {
               id: qid,
               ts: formatTs(state.meetingStartedAt),
@@ -335,7 +350,19 @@ function reducer(state: AppState, action: Action): AppState {
               at: Date.now(),
               speaker: ev.speaker,
             }]
-            return { ...state, meetingLines, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
+            if (scene === 'lecture') {
+              speakerNames = promoteLectureSpeakers(meetingLines, speakerNames, state.speakerNameLocked)
+            }
+            return {
+              ...state,
+              meetingLines,
+              speakerNames,
+              currentQ: text,
+              currentQId: qid,
+              partial: '',
+              partialSpeaker: '',
+              heardLang: heard ?? state.heardLang,
+            }
           }
           if (state.workspaceMode === 'translate') {
             if (isTranslatePrompt(text)) {
@@ -504,6 +531,9 @@ function reducer(state: AppState, action: Action): AppState {
         meetingStartedAt: null,
         meetingElapsedMs: 0,
         meetingEnded: false,
+        speakerNames: {},
+        speakerNameLocked: {},
+        partialSpeaker: '',
         translatePairs: [],
         translateAskId: '',
         translateBindId: '',
@@ -520,11 +550,24 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, listenScene: action.scene }
     case 'translate_on':
       return { ...state, translateOn: action.on }
+    case 'rename_speaker': {
+      const id = action.id.trim()
+      const name = action.name.trim()
+      if (!id || !name) return state
+      return {
+        ...state,
+        speakerNames: { ...state.speakerNames, [id]: name },
+        speakerNameLocked: { ...state.speakerNameLocked, [id]: true },
+      }
+    }
     case 'listen_new':
       return {
         ...state,
         meetingLines: [],
         meetingSummary: '',
+        speakerNames: {},
+        speakerNameLocked: {},
+        partialSpeaker: '',
         catchNotes: [],
         catchPendingTitle: '',
         notesRaw: '',
@@ -1395,7 +1438,10 @@ export default function App() {
       window.api.send({ type: 'ask', mode: 'summary', text: note || 'Please review the attached files.', files })
       return
     }
-    const body = s.meetingLines.slice(-500).map((ln) => `[${ln.ts}${ln.speaker ? ` ${ln.speaker}` : ''}${ln.marked ? ' ACTION' : ''}] ${ln.text}`).join('\n')
+    const body = s.meetingLines.slice(-500).map((ln) => {
+      const who = resolveSpeakerName(s.speakerNames, ln.speaker)
+      return `[${ln.ts}${who ? ` ${who}` : ''}${ln.marked ? ' ACTION' : ''}] ${ln.text}`
+    }).join('\n')
     if (!body.trim()) {
       dispatch({ type: 'engine', ev: { type: 'status', text: 'No transcript to summarize yet.' } })
       return
@@ -1416,7 +1462,7 @@ export default function App() {
     }
     killInflightTranslation()
     dispatch({ type: 'expect_notes' })
-    window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, s.meetingLines.slice(-500), s.notesLang, s.translateOn), mode: 'notes' })
+    window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, s.meetingLines.slice(-500), s.notesLang, s.translateOn, s.speakerNames), mode: 'notes' })
   }, [])
   generateNotesRef.current = generateNotes
 
@@ -1432,7 +1478,7 @@ export default function App() {
     dispatch({ type: 'expect_catch', kind: 'ask', title: 'Ask', question })
     window.api.send({
       type: 'ask',
-      text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, s.translateOn),
+      text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, s.translateOn, s.speakerNames),
       mode: 'listen_ask',
     })
   }, [])
@@ -1520,7 +1566,8 @@ export default function App() {
       if (lines.length === 0) blocks.push({ kind: 'p', text: 'No transcript lines.' })
       else {
         for (const ln of lines) {
-          blocks.push({ kind: 'p', text: `${ln.ts}${ln.speaker ? ` ${ln.speaker}` : ''}  ${ln.text}` })
+          const who = resolveSpeakerName(s.speakerNames, ln.speaker)
+          blocks.push({ kind: 'p', text: `${ln.ts}${who ? ` ${who}` : ''}  ${ln.text}` })
           if (s.translateOn && ln.translation) blocks.push({ kind: 'p', text: `     ${ln.translation}` })
         }
       }
@@ -1718,6 +1765,9 @@ export default function App() {
             translateTo={state.translateTo}
             notesLang={state.notesLang}
             lines={state.meetingLines}
+            speakerNames={state.speakerNames}
+            partialSpeaker={state.partialSpeaker}
+            onRenameSpeaker={(id, name) => dispatch({ type: 'rename_speaker', id, name })}
             partial={state.partial}
             elapsedLabel={elapsedLabel}
             listening={listening}

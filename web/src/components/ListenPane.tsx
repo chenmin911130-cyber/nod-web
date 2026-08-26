@@ -5,6 +5,7 @@ import {
   LISTEN_SCENES,
   parseBiLines,
   parseNotes,
+  resolveSpeakerName,
   sceneLabel,
   visibleSections,
   type ListenScene,
@@ -17,6 +18,9 @@ interface Props {
   translateTo: PairLang
   notesLang: Lang
   lines: MeetingLine[]
+  speakerNames: Record<string, string>
+  partialSpeaker?: string
+  onRenameSpeaker: (id: string, name: string) => void
   partial: string
   elapsedLabel: string
   listening: boolean
@@ -393,6 +397,54 @@ function useStackedLayout() {
   return stacked
 }
 
+function SpeakerName({
+  speakerId,
+  label,
+  onRename,
+}: {
+  speakerId: string
+  label: string
+  onRename: (id: string, name: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(label)
+  useEffect(() => {
+    if (!editing) setDraft(label)
+  }, [editing, label])
+  const commit = () => {
+    const next = draft.trim()
+    if (next && next !== label) onRename(speakerId, next)
+    setEditing(false)
+  }
+  if (editing) {
+    return (
+      <input
+        className="listen-spk-input"
+        value={draft}
+        autoFocus
+        maxLength={24}
+        aria-label="Rename speaker"
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit()
+          if (e.key === 'Escape') setEditing(false)
+        }}
+      />
+    )
+  }
+  return (
+    <button
+      type="button"
+      className="listen-spk"
+      title="Click to name this voice"
+      onClick={() => setEditing(true)}
+    >
+      {label}
+    </button>
+  )
+}
+
 export default function ListenPane(props: Props) {
   const [input, setInput] = useState('')
   const [notesOpen, setNotesOpen] = useState(false)
@@ -568,7 +620,13 @@ export default function ListenPane(props: Props) {
                     >
                       <div className="listen-ts">
                         {line.ts}
-                        {line.speaker ? <span className="listen-spk">{line.speaker}</span> : null}
+                        {line.speaker ? (
+                          <SpeakerName
+                            speakerId={line.speaker}
+                            label={resolveSpeakerName(props.speakerNames, line.speaker)}
+                            onRename={props.onRenameSpeaker}
+                          />
+                        ) : null}
                       </div>
                       <div>
                         <div className="listen-orig">{line.text}</div>
@@ -581,7 +639,14 @@ export default function ListenPane(props: Props) {
                 )}
                 {props.partial && (
                   <div className="listen-line live">
-                    <div className="listen-ts">live</div>
+                    <div className="listen-ts">
+                      live
+                      {props.partialSpeaker ? (
+                        <span className="listen-spk">
+                          {resolveSpeakerName(props.speakerNames, props.partialSpeaker) || props.partialSpeaker}
+                        </span>
+                      ) : null}
+                    </div>
                     <div className="listen-orig">{props.partial}</div>
                   </div>
                 )}
