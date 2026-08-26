@@ -127,13 +127,14 @@ export type EngineEvent =
   | { type: 'done'; id: string; stt: number; llm: number; ok: boolean }
   | { type: 'error'; text: string }
   | { type: 'auth_required' }
-  | { type: 'quota'; ok: boolean; reason?: string; plan?: string; plan_name?: string; stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; sessions?: number; session_limit?: number; daily_cost_usd?: number; daily_cost_limit?: number; quota_disabled?: boolean }
+  | { type: 'quota'; ok: boolean; reason?: string; plan?: string; plan_name?: string; stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; sessions?: number; session_limit?: number; daily_cost_usd?: number; daily_cost_limit?: number; daily_stt_seconds?: number; daily_stt_limit?: number; quota_disabled?: boolean }
   | { type: 'quota_exceeded'; reason: string }
 
 // 前端 → 引擎
 export type EngineMsg =
   | { type: 'manual' }
   | { type: 'toggle_listen' }
+  | { type: 'auth'; token: string }
   | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; mode?: string }
   | { type: 'set_workspace'; mode: WorkspaceMode }
   | { type: 'set_llm'; provider: string; model: string }

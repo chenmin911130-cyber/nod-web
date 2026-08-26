@@ -24,6 +24,10 @@ function fmtMin(sec: number) {
   return `${Math.max(0, Math.round((sec / 60) * 10) / 10)} min`
 }
 
+function fmtHours(sec: number) {
+  return `${Math.max(0, Math.round((sec / 3600) * 10) / 10)} h`
+}
+
 export default function AccountPage() {
   const [me, setMe] = useState<Me | null>(null)
   const [sessions, setSessions] = useState<SessionRow[]>([])
@@ -138,21 +142,17 @@ export default function AccountPage() {
             {paid === '1' ? ' · Payment received. Refresh if the plan has not updated yet.' : ''}
             {me.quota_disabled || u.quota_disabled
               ? ' · Testing: transcription, generation, and daily caps are not enforced unless an admin sets a monthly time cap.'
-              : u.stt_limit_seconds != null
-                ? ` · ${fmtMin(u.stt_limit)} of live transcription this month. Listening pauses when the cap is reached.`
-                : me.plan === 'pro'
-                ? ' · Cancel anytime from Manage billing. Hitting a cap pauses listening and generation until the month resets.'
-                : ' · Trial needs no card. Generation tokens are limited. Upgrade anytime — cancel Pro from this page after checkout.'}
+              : ` · ${fmtHours(u.daily_stt_limit || 2 * 3600)} of live transcription each day. Listening pauses when the daily cap is reached.`}
           </p>
           <div className="quota-grid">
             <div className="quota-card">
-              <span>Transcription left</span>
-              <b>{fmtMin(Math.max(0, u.stt_limit - u.stt_seconds))}</b>
+              <span>Listening left today</span>
+              <b>{fmtHours(Math.max(0, (u.daily_stt_limit || 2 * 3600) - (u.daily_stt_seconds || 0)))}</b>
               <span>
-                {fmtMin(u.stt_seconds)} / {fmtMin(u.stt_limit)} this month
+                {fmtHours(u.daily_stt_seconds || 0)} / {fmtHours(u.daily_stt_limit || 2 * 3600)} today
               </span>
               <div className="bar">
-                <i style={{ width: `${pct(u.stt_seconds, u.stt_limit)}%` }} />
+                <i style={{ width: `${pct(u.daily_stt_seconds || 0, u.daily_stt_limit || 2 * 3600)}%` }} />
               </div>
             </div>
             <div className="quota-card">

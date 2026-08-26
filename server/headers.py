@@ -76,10 +76,10 @@ def is_health_path(path: str) -> bool:
 
 def origin_allowed(scope: Scope) -> bool:
     """
-    Railway sits in front of the container, so Cloudflare IP allowlists
+    Railway sits in front of the container, so     Cloudflare IP allowlists
     cannot be enforced here. A shared origin secret (injected by a
-    Cloudflare request-header rule) is the lock that cannot be spoofed
-    by Host-headering the old Railway IP. CF-Ray is a weaker fallback.
+    Cloudflare request-header rule) is the lock. CF-Ray alone is not
+    accepted — it can be forged on a direct origin request.
     """
     path = scope.get("path") or ""
     if is_health_path(path):
@@ -89,8 +89,10 @@ def origin_allowed(scope: Scope) -> bool:
     if secret:
         offered = headers.get(ORIGIN_HEADER) or b""
         return hmac.compare_digest(hashlib.sha256(offered).digest(), hashlib.sha256(secret).digest())
+    # CF-Ray is trivial to forge on a direct origin hit. If the lock is on,
+    # require ORIGIN_SECRET — do not fall back to a spoofable header.
     if cloudflare_required():
-        return bool(headers.get(b"cf-ray"))
+        return False
     return True
 
 

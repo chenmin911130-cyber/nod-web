@@ -31,6 +31,7 @@ from server.db import init_db
 from server.headers import CloudflareOriginMiddleware, SecurityHeadersMiddleware
 from server.logging_setup import backup_now, setup_logging
 from server.settings import AUTH_DISABLED, CLERK_PUBLISHABLE_KEY, COOKIE_NAME, PUBLIC_URL, QUOTA_DISABLED
+from server.ratelimit import MAX_WS_FRAME, WS_FRAMES_PER_SEC, allow, ws_client_ip, ws_connect, ws_disconnect
 from server.security import is_local_scope, user_from_token
 
 SR = 16000
@@ -1050,10 +1051,26 @@ class Session:
         self._archive_fp = os.fdopen(fd, "wb")
         self._archive_bytes = 0
 
+    def _has_consent(self) -> bool:
+        if not self.user_id:
+            return True
+        from server.meter import has_recording_consent
+
+        return has_recording_consent(self.user_id)
+
+    def _ensure_consent(self) -> bool:
+        if self._has_consent():
+            return True
+        self.emit({"type": "error", "text": "Recording consent is required before listening."})
+        self.emit({"type": "status", "text": "Consent required"})
+        return False
+
     def _archive_append(self, pcm: bytes) -> None:
         from server.r2 import MAX_AUDIO_BYTES, PART_BYTES, enabled
 
         if not enabled() or not self.user_id or not pcm:
+            return
+        if not self._has_consent():
             return
         offset = 0
         while offset < len(pcm) and self._archive_total < MAX_AUDIO_BYTES:
@@ -1161,6 +1178,8 @@ class Session:
     def _ensure_usage(self) -> bool:
         if not self.user_id:
             return True
+        if not self._ensure_consent():
+            return False
         from server.meter import open_usage_session, usage_snapshot
 
         if self.usage_session_id:
@@ -1181,6 +1200,8 @@ class Session:
 
     def push_pcm(self, pcm: bytes) -> None:
         if self._mic_muted or not pcm:
+            return
+        if self.user_id and not self._has_consent():
             return
         if self.user_id:
             self._pcm_unmetered += len(pcm)
@@ -1254,6 +1275,8 @@ class Session:
             self.set_translate_to(msg.get("lang") or "zh")
         elif mtype == "ping":
             self.emit({"type": "pong"})
+        elif mtype == "auth":
+            return
         else:
             self.emit({"type": "error", "text": f"Unknown command: {mtype}"})
 
@@ -1459,6 +1482,8 @@ class Session:
             self.emit({"type": "status", "text": "Stop recording before enabling Auto"})
             return
         if not self._listener:
+            if not self._ensure_consent():
+                return
             if not self._ensure_usage():
                 return
             self._start_listening()
@@ -1515,6 +1540,8 @@ class Session:
             return
         if self._listener:
             self.emit({"type": "status", "text": "Turn off Auto before recording"})
+            return
+        if not self._ensure_consent():
             return
         if not self._ensure_usage():
             return
@@ -1788,21 +1815,45 @@ def api_config():
     return JSONResponse(public_config(CFG))
 
 
+async def _user_from_ws_auth(ws: WebSocket):
+    try:
+        message = await asyncio.wait_for(ws.receive(), timeout=4)
+    except (asyncio.TimeoutError, WebSocketDisconnect):
+        return None
+    text = message.get("text") if message else None
+    if not text:
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if payload.get("type") != "auth":
+        return None
+    return user_from_token((payload.get("token") or "").strip())
+
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
-    token = (ws.query_params.get("token") or "").strip() or (ws.cookies.get(COOKIE_NAME) or "").strip()
-    user = user_from_token(token) if token else None
+    raw_headers = {k.decode("latin1"): v.decode("latin1") for k, v in (ws.scope.get("headers") or [])}
+    ip = ws_client_ip(ws.client.host if ws.client else "", raw_headers)
+    if not ws_connect(ip):
+        await ws.close(code=4408)
+        return
+    cookie_token = (ws.cookies.get(COOKIE_NAME) or "").strip()
+    user = user_from_token(cookie_token) if cookie_token else None
     local = is_local_scope(ws.client.host if ws.client else "", ws.headers.get("host") or "")
     if user is None and local:
         from server.commerce import _ensure_local_user
 
         user = _ensure_local_user()
-    if not AUTH_DISABLED and user is None:
-        await ws.accept()
-        await ws.send_text(json.dumps({"type": "auth_required"}))
-        await ws.close(code=4401)
-        return
     await ws.accept()
+    if not AUTH_DISABLED and user is None:
+        user = await _user_from_ws_auth(ws)
+        if user is None:
+            await ws.send_text(json.dumps({"type": "auth_required"}))
+            await ws.close(code=4401)
+            ws_disconnect(ip)
+            return
     loop = asyncio.get_running_loop()
     out: asyncio.Queue[str] = asyncio.Queue()
 
@@ -1830,8 +1881,14 @@ async def ws_endpoint(ws: WebSocket):
             data = message.get("bytes")
             text = message.get("text")
             if data:
+                if len(data) > MAX_WS_FRAME:
+                    continue
+                if not allow(f"ws-bin:{ip}", WS_FRAMES_PER_SEC, 1.0):
+                    continue
                 session.push_pcm(data)
             elif text:
+                if len(text) > 200_000:
+                    continue
                 try:
                     session.dispatch(json.loads(text))
                 except json.JSONDecodeError:
@@ -1841,6 +1898,7 @@ async def ws_endpoint(ws: WebSocket):
     finally:
         send_task.cancel()
         session.close()
+        ws_disconnect(ip)
 
 
 HTML_NO_CACHE = {

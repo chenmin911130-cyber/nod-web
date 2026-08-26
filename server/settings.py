@@ -87,32 +87,33 @@ STT_USD_PER_MINUTE = float(os.environ.get("STT_USD_PER_MINUTE") or "0.01")
 LLM_USD_PER_1K_IN = float(os.environ.get("LLM_USD_PER_1K_IN") or "0.00014")
 LLM_USD_PER_1K_OUT = float(os.environ.get("LLM_USD_PER_1K_OUT") or "0.00028")
 GLOBAL_DAILY_BUDGET_USD = float(os.environ.get("GLOBAL_DAILY_BUDGET_USD") or "25")
-# Test phase: limits off unless QUOTA_DISABLED=0
-QUOTA_DISABLED = os.environ.get("QUOTA_DISABLED", "1").strip().lower() in ("1", "true", "yes")
+# Off unless QUOTA_DISABLED=1. Daily STT is the spend control (2 hours).
+QUOTA_DISABLED = os.environ.get("QUOTA_DISABLED", "0").strip().lower() in ("1", "true", "yes")
+DAILY_STT_SECONDS = max(60, int(float(os.environ.get("DAILY_STT_SECONDS") or str(2 * 3600))))
 MAX_AUDIO_HOURS = max(0.5, float(os.environ.get("MAX_AUDIO_HOURS") or "8"))
 
 PLANS: dict[str, dict] = {
     "free": {
         "id": "free",
         "name": "Trial",
-        "stt_seconds": 20 * 60,
+        "stt_seconds": 2 * 3600 * 31,
         "llm_tokens": 100_000,
-        "sessions": 20,
-        "daily_cost_usd": 1.5,
+        "sessions": 60,
+        "daily_cost_usd": 2.0,
         "price_cents": 0,
         "interval": None,
-        "blurb": "Free trial. Enough for a real interview, meeting, or caption session.",
+        "blurb": "Free trial. Two hours of live transcription each day.",
     },
     "pro": {
         "id": "pro",
         "name": "Pro",
-        "stt_seconds": 8 * 3600,
+        "stt_seconds": 2 * 3600 * 31,
         "llm_tokens": 2_000_000,
         "sessions": 1000,
         "daily_cost_usd": 12.0,
         "price_cents": 1200,
         "interval": "month",
-        "blurb": "Eight hours of live transcription and a higher generation cap each month.",
+        "blurb": "Two hours of live transcription each day and a higher generation cap.",
     },
 }
 

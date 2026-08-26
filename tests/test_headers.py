@@ -65,8 +65,8 @@ class SecurityHeadersTests(unittest.TestCase):
         self.assertEqual(blocked.status_code, 403)
         health = client.get("/api/health")
         self.assertEqual(health.status_code, 200)
-        allowed = client.get("/", headers={"cf-ray": "abc-SFO"})
-        self.assertEqual(allowed.status_code, 200)
+        spoofed = client.get("/", headers={"cf-ray": "abc-SFO"})
+        self.assertEqual(spoofed.status_code, 403)
 
     def test_origin_secret_beats_spoofed_cf_ray(self):
         os.environ["ORIGIN_SECRET"] = "origin-test-secret"

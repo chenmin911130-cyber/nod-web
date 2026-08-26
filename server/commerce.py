@@ -25,6 +25,7 @@ from server.security import (
     valid_email,
     verify_password,
 )
+from server.ratelimit import rate_limit
 from server.settings import CLERK_PUBLISHABLE_KEY, MAIL_FROM, PLANS, PUBLIC_URL, STRIPE_PRICE_PRO, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 
 log = logging.getLogger("nod.api")
@@ -123,7 +124,12 @@ def local_guest(request: Request, response: Response):
 
 
 @router.post("/api/auth/register")
-def register(body: RegisterIn, request: Request, response: Response):
+def register(
+    body: RegisterIn,
+    request: Request,
+    response: Response,
+    _: None = Depends(rate_limit("register", 8, 60)),
+):
     email = body.email.strip().lower()
     if not valid_email(email):
         raise HTTPException(400, "Enter a valid email")
@@ -139,7 +145,7 @@ def register(body: RegisterIn, request: Request, response: Response):
             name=(body.name or "").strip()[:120],
             plan="free",
             subscription_status="trialing",
-            recording_consent_at=None,
+            recording_consent_at=utcnow() if body.consent else None,
         )
         db.add(user)
         db.flush()
@@ -150,7 +156,12 @@ def register(body: RegisterIn, request: Request, response: Response):
 
 
 @router.post("/api/auth/login")
-def login(body: LoginIn, request: Request, response: Response):
+def login(
+    body: LoginIn,
+    request: Request,
+    response: Response,
+    _: None = Depends(rate_limit("login", 10, 60)),
+):
     email = body.email.strip().lower()
     with db_session() as db:
         user = db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
@@ -172,7 +183,12 @@ def logout(response: Response):
 
 
 @router.post("/api/auth/clerk")
-def clerk_login(request: Request, response: Response, body: ClerkIn | None = None):
+def clerk_login(
+    request: Request,
+    response: Response,
+    body: ClerkIn | None = None,
+    _: None = Depends(rate_limit("clerk", 20, 60)),
+):
     from server.clerk_auth import _token_from_request, clerk_profile, verify_clerk_session
 
     token = _token_from_request(request, body.token if body else "")
@@ -208,7 +224,7 @@ def clerk_login(request: Request, response: Response, body: ClerkIn | None = Non
 
 
 @router.post("/api/auth/forgot")
-def forgot(body: ForgotIn):
+def forgot(body: ForgotIn, _: None = Depends(rate_limit("forgot", 5, 60))):
     email = body.email.strip().lower()
     with db_session() as db:
         user = db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
@@ -230,7 +246,12 @@ def forgot(body: ForgotIn):
 
 
 @router.post("/api/auth/reset")
-def reset(body: ResetIn, request: Request, response: Response):
+def reset(
+    body: ResetIn,
+    request: Request,
+    response: Response,
+    _: None = Depends(rate_limit("reset", 8, 60)),
+):
     if len(body.password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters")
     th = hash_token(body.token.strip())
@@ -289,7 +310,7 @@ class EventIn(BaseModel):
 
 
 @router.post("/api/events")
-def funnel_event(request: Request, body: EventIn):
+def funnel_event(request: Request, body: EventIn, _: None = Depends(rate_limit("events", 40, 60))):
     name = (body.name or "").strip()[:64]
     if name not in ALLOWED_EVENTS:
         return {"ok": False}
@@ -441,7 +462,11 @@ async def stripe_webhook(request: Request):
 
 
 @router.post("/api/feedback")
-def feedback(body: FeedbackIn, user: User | None = Depends(optional_user)):
+def feedback(
+    body: FeedbackIn,
+    user: User | None = Depends(optional_user),
+    _: None = Depends(rate_limit("feedback", 5, 60)),
+):
     with db_session() as db:
         db.add(
             Feedback(

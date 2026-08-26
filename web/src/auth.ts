@@ -13,6 +13,8 @@ export type Quota = {
   session_limit: number
   daily_cost_usd: number
   daily_cost_limit: number
+  daily_stt_seconds?: number
+  daily_stt_limit?: number
   consent?: boolean
   quota_disabled?: boolean
   stt_limit_seconds?: number | null

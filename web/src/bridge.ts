@@ -1,17 +1,10 @@
 import type { Api, AppConfig, EngineEvent, EngineMsg } from './types'
+import { getToken } from './auth'
 import { MicCapture } from './audio'
 
 function wsUrl(): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const token = (() => {
-    try {
-      return localStorage.getItem('nod_token') || ''
-    } catch {
-      return ''
-    }
-  })()
-  const q = token ? `?token=${encodeURIComponent(token)}` : ''
-  return `${proto}//${location.host}/ws${q}`
+  return `${proto}//${location.host}/ws`
 }
 
 export function installWebApi(): void {
@@ -55,6 +48,8 @@ export function installWebApi(): void {
     ws = socket
     socket.binaryType = 'arraybuffer'
     socket.onopen = () => {
+      const token = getToken()
+      if (token) socket.send(JSON.stringify({ type: 'auth', token }))
       while (pending.length) {
         const msg = pending.shift()
         if (msg) socket.send(JSON.stringify(msg))

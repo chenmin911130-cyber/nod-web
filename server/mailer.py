@@ -74,7 +74,7 @@ def send_reset_email(to: str, token: str) -> bool:
     )
     sent = send_mail(to, "Reset your Nod password", html, text)
     if not sent:
-        log.info("password reset link for %s: %s", to, link)
+        log.info("password reset email was not sent for %s", to)
     return sent
 
 

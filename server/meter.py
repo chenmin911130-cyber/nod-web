@@ -7,6 +7,7 @@ from sqlalchemy import delete, func, select
 from server.db import Feedback, GlobalDay, HistoryItem, UsageDay, UsageSession, User, db_session, utcnow
 from server.security import new_id
 from server.settings import (
+    DAILY_STT_SECONDS,
     GLOBAL_DAILY_BUDGET_USD,
     LLM_USD_PER_1K_IN,
     LLM_USD_PER_1K_OUT,
@@ -97,13 +98,17 @@ def usage_snapshot(user_id: str) -> dict:
         glob = db.get(GlobalDay, _day())
         tokens = int(inp) + int(out)
         daily_cost = float(day_row.cost_usd) if day_row else 0.0
+        daily_stt = float(day_row.stt_seconds) if day_row else 0.0
         global_cost = float(glob.cost_usd) if glob else 0.0
         reason = ""
         ok = True
         cap = stt_limit_seconds(user)
+        daily_stt_limit = None if QUOTA_DISABLED else DAILY_STT_SECONDS
         if cap is not None and float(stt) >= cap:
             ok, reason = False, "stt"
         if not QUOTA_DISABLED:
+            if ok and daily_stt_limit is not None and daily_stt >= daily_stt_limit:
+                ok, reason = False, "daily_stt"
             if ok and tokens >= plan["llm_tokens"]:
                 ok, reason = False, "llm"
             if daily_cost >= plan["daily_cost_usd"]:
@@ -113,12 +118,14 @@ def usage_snapshot(user_id: str) -> dict:
         return {
             "ok": ok,
             "reason": reason,
-            "quota_disabled": cap is None,
+            "quota_disabled": QUOTA_DISABLED,
             "plan": plan["id"],
             "plan_name": plan["name"],
             "stt_seconds": round(float(stt), 2),
             "stt_limit": cap if cap is not None else plan["stt_seconds"],
             "stt_limit_seconds": cap,
+            "daily_stt_seconds": round(daily_stt, 2),
+            "daily_stt_limit": daily_stt_limit or 0,
             "llm_tokens": tokens,
             "llm_limit": plan["llm_tokens"],
             "sessions": int(sessions),
@@ -129,6 +136,12 @@ def usage_snapshot(user_id: str) -> dict:
             "global_cost_limit": GLOBAL_DAILY_BUDGET_USD,
             "consent": bool(user.recording_consent_at),
         }
+
+
+def has_recording_consent(user_id: str) -> bool:
+    with db_session() as db:
+        user = db.get(User, user_id)
+        return bool(user and user.recording_consent_at and user.deleted_at is None)
 
 
 def can_start_session(user_id: str) -> tuple[bool, dict]:

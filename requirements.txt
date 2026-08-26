@@ -11,3 +11,4 @@ httpx==0.28.1
 stripe==11.4.1
 sentry-sdk[fastapi]==2.19.2
 boto3>=1.35.0
+pytest==8.3.4
