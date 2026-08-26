@@ -34,11 +34,11 @@ def plan_of(user: User) -> dict:
 
 def stt_limit_seconds(user: User) -> int | None:
     """Monthly transcription cap in seconds. None means unlimited."""
+    if QUOTA_DISABLED:
+        return None
     raw = getattr(user, "stt_limit_seconds", None)
     if raw is not None:
         return max(0, int(raw))
-    if QUOTA_DISABLED:
-        return None
     return int(plan_of(user)["stt_seconds"])
 
 
