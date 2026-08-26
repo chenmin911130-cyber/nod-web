@@ -306,10 +306,10 @@ def history(user: User = Depends(current_user)):
 
 
 @router.get("/api/account/files/{session_id}/{kind}")
-def download_session_file(session_id: str, kind: str, user: User = Depends(current_user)):
+def download_session_file(session_id: str, kind: str, part: str | None = None, user: User = Depends(current_user)):
     if kind not in ("audio", "notes"):
         raise HTTPException(404, "Unknown file")
-    url = session_file_url(user.id, session_id, kind)
+    url = session_file_url(user.id, session_id, kind, part)
     if not url:
         raise HTTPException(404, "File not found")
     return RedirectResponse(url, status_code=302)

@@ -5,12 +5,14 @@ import struct
 from functools import lru_cache
 from typing import Any
 
-from server.settings import R2_ACCESS_KEY_ID, R2_ACCOUNT_ID, R2_BUCKET, R2_SECRET_ACCESS_KEY
+from server.settings import MAX_AUDIO_HOURS, R2_ACCESS_KEY_ID, R2_ACCOUNT_ID, R2_BUCKET, R2_SECRET_ACCESS_KEY
 
 log = logging.getLogger("nod.r2")
 
 SAMPLE_RATE = 16000
-MAX_AUDIO_SECONDS = 45 * 60
+PART_SECONDS = 30 * 60
+MAX_AUDIO_SECONDS = int(MAX_AUDIO_HOURS * 3600)
+PART_BYTES = SAMPLE_RATE * 2 * PART_SECONDS
 MAX_AUDIO_BYTES = SAMPLE_RATE * 2 * MAX_AUDIO_SECONDS
 
 
@@ -69,6 +71,23 @@ def presign(key: str, expires: int = 3600) -> str:
         Params={"Bucket": R2_BUCKET, "Key": key},
         ExpiresIn=expires,
     )
+
+
+def list_keys(prefix: str) -> list[str]:
+    if not enabled() or not prefix:
+        return []
+    keys: list[str] = []
+    token = None
+    while True:
+        kwargs: dict[str, Any] = {"Bucket": R2_BUCKET, "Prefix": prefix}
+        if token:
+            kwargs["ContinuationToken"] = token
+        listing = _client().list_objects_v2(**kwargs)
+        keys.extend(obj["Key"] for obj in listing.get("Contents") or [])
+        if not listing.get("IsTruncated"):
+            break
+        token = listing.get("NextContinuationToken")
+    return keys
 
 
 def delete_key(key: str) -> None:

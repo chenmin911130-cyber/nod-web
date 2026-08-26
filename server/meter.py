@@ -288,8 +288,17 @@ def list_history(user_id: str, limit: int = 40) -> list[dict]:
 
 
 def _session_files(s: UsageSession) -> list[dict]:
+    from server.r2 import list_keys
+
     files = []
-    if s.audio_key:
+    key = s.audio_key or ""
+    if key.endswith("/"):
+        for item in list_keys(key):
+            name = item.rsplit("/", 1)[-1]
+            if not name:
+                continue
+            files.append({"kind": "audio", "name": name, "href": f"/api/account/files/{s.id}/audio?part={name}"})
+    elif key:
         files.append({"kind": "audio", "name": "audio.wav", "href": f"/api/account/files/{s.id}/audio"})
     if s.notes_key:
         files.append({"kind": "notes", "name": "notes.txt", "href": f"/api/account/files/{s.id}/notes"})
@@ -307,14 +316,23 @@ def set_session_file(session_id: str, *, audio_key: str | None = None, notes_key
             row.notes_key = notes_key
 
 
-def session_file_url(user_id: str, session_id: str, kind: str) -> str:
-    from server.r2 import presign
+def session_file_url(user_id: str, session_id: str, kind: str, part: str | None = None) -> str:
+    from server.r2 import list_keys, presign
 
     with db_session() as db:
         row = db.get(UsageSession, session_id)
         if not row or row.user_id != user_id:
             return ""
         key = row.audio_key if kind == "audio" else row.notes_key if kind == "notes" else ""
+    if not key:
+        return ""
+    if kind == "audio" and key.endswith("/"):
+        keys = list_keys(key)
+        if part:
+            safe = part.replace("\\", "/").split("/")[-1]
+            key = next((item for item in keys if item.rsplit("/", 1)[-1] == safe), "")
+        else:
+            key = keys[0] if keys else ""
     return presign(key) if key else ""
 
 

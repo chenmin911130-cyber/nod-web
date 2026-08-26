@@ -68,6 +68,7 @@ LLM_USD_PER_1K_OUT = float(os.environ.get("LLM_USD_PER_1K_OUT") or "0.00028")
 GLOBAL_DAILY_BUDGET_USD = float(os.environ.get("GLOBAL_DAILY_BUDGET_USD") or "25")
 # Test phase: limits off unless QUOTA_DISABLED=0
 QUOTA_DISABLED = os.environ.get("QUOTA_DISABLED", "1").strip().lower() in ("1", "true", "yes")
+MAX_AUDIO_HOURS = max(0.5, float(os.environ.get("MAX_AUDIO_HOURS") or "8"))
 
 PLANS: dict[str, dict] = {
     "free": {

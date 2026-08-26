@@ -12,6 +12,7 @@ type SessionRow = {
   llm_tokens: number
   cost_usd: number
   items: Array<{ kind: string; text: string }>
+  files?: Array<{ kind: string; name: string; href: string }>
 }
 
 function pct(used: number, limit: number) {
@@ -198,7 +199,7 @@ export default function AccountPage() {
         <div className="site-card" style={{ marginTop: 18 }}>
           <div className="eyebrow">HISTORY</div>
           <h1>Your sessions</h1>
-          <p>Transcripts and answers stored on your account. Audio is not kept after transcription.</p>
+          <p>Transcripts and answers stay on your account. If cloud audio storage is on, long sessions are saved as 30-minute WAV parts, up to 8 hours.</p>
           <div className="history-list">
             {sessions.length === 0 && <p>No sessions yet. Open the workspace to start one.</p>}
             {sessions.map((s) => (
@@ -209,6 +210,15 @@ export default function AccountPage() {
                 </small>
                 <h3>{s.title || 'Session'}</h3>
                 <p>{s.items.slice(0, 2).map((i) => i.text).join(' / ').slice(0, 220)}</p>
+                {s.files && s.files.length > 0 && (
+                  <p>
+                    {s.files.map((file) => (
+                      <a key={file.href} href={file.href} style={{ marginRight: 12 }}>
+                        {file.name}
+                      </a>
+                    ))}
+                  </p>
+                )}
               </article>
             ))}
           </div>

@@ -963,46 +963,82 @@ class Session:
         self._archive_fp = None
         self._archive_path: str | None = None
         self._archive_bytes = 0
+        self._archive_total = 0
+        self._archive_part = 1
+
+    def _archive_prefix(self) -> str:
+        return f"users/{self.user_id}/sessions/{self.usage_session_id}/audio/"
+
+    def _archive_open_part(self) -> None:
+        if self._archive_fp is not None:
+            return
+        fd, path = tempfile.mkstemp(prefix="nod-pcm-", suffix=".pcm")
+        self._archive_path = path
+        self._archive_fp = os.fdopen(fd, "wb")
+        self._archive_bytes = 0
 
     def _archive_append(self, pcm: bytes) -> None:
-        from server.r2 import MAX_AUDIO_BYTES, enabled
+        from server.r2 import MAX_AUDIO_BYTES, PART_BYTES, enabled
 
         if not enabled() or not self.user_id or not pcm:
             return
-        if self._archive_bytes >= MAX_AUDIO_BYTES:
-            return
-        if self._archive_fp is None:
-            fd, path = tempfile.mkstemp(prefix="nod-pcm-", suffix=".pcm")
-            self._archive_path = path
-            self._archive_fp = os.fdopen(fd, "wb")
-        take = pcm[: MAX_AUDIO_BYTES - self._archive_bytes]
-        if take:
+        offset = 0
+        while offset < len(pcm) and self._archive_total < MAX_AUDIO_BYTES:
+            self._archive_open_part()
+            if not self._archive_fp:
+                return
+            room = min(PART_BYTES - self._archive_bytes, MAX_AUDIO_BYTES - self._archive_total, len(pcm) - offset)
+            if room <= 0:
+                self._archive_rotate()
+                continue
+            take = pcm[offset : offset + room]
             self._archive_fp.write(take)
             self._archive_bytes += len(take)
+            self._archive_total += len(take)
+            offset += len(take)
+            if self._archive_bytes >= PART_BYTES:
+                self._archive_rotate()
 
-    def _flush_cloud_archive(self, final: bool = False) -> None:
-        from server.r2 import enabled, pcm_to_wav, put_bytes
-        from server.meter import set_session_file, write_session_notes
+    def _upload_current_part(self) -> None:
+        from server.r2 import pcm_to_wav, put_bytes
+        from server.meter import set_session_file
 
-        if not enabled() or not self.user_id or not self.usage_session_id:
-            if final:
-                self._archive_close(unlink=True)
-            return
         path = self._archive_path
+        if not path or not self.user_id or not self.usage_session_id or self._archive_bytes <= SR * 2:
+            return
         if self._archive_fp:
             try:
                 self._archive_fp.flush()
             except Exception:
                 pass
-        if path and self._archive_bytes > SR * 2:
-            try:
-                wav = pcm_to_wav(Path(path).read_bytes())
-                key = f"users/{self.user_id}/sessions/{self.usage_session_id}/audio.wav"
-                if put_bytes(key, wav, "audio/wav"):
-                    set_session_file(self.usage_session_id, audio_key=key)
-            except Exception:
-                logging.getLogger("nod").exception("r2 audio upload failed")
+        wav = pcm_to_wav(Path(path).read_bytes())
+        prefix = self._archive_prefix()
+        key = f"{prefix}part-{self._archive_part:03d}.wav"
+        if put_bytes(key, wav, "audio/wav"):
+            set_session_file(self.usage_session_id, audio_key=prefix)
+
+    def _archive_rotate(self) -> None:
         try:
+            self._upload_current_part()
+        except Exception:
+            logging.getLogger("nod").exception("r2 audio part upload failed")
+        self._archive_close(unlink=True)
+        self._archive_part += 1
+
+    def _flush_cloud_archive(self, final: bool = False) -> None:
+        from server.r2 import enabled
+
+        if not enabled() or not self.user_id or not self.usage_session_id:
+            if final:
+                self._archive_close(unlink=True)
+            return
+        try:
+            self._upload_current_part()
+        except Exception:
+            logging.getLogger("nod").exception("r2 audio upload failed")
+        try:
+            from server.meter import write_session_notes
+
             write_session_notes(self.user_id, self.usage_session_id)
         except Exception:
             logging.getLogger("nod").exception("r2 notes upload failed")
