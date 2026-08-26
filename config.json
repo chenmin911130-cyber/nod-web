@@ -8,7 +8,7 @@
     "style": "简洁结构化：先给结论，再 2-3 点展开；行为题用 STAR 结构；语言口语化、可直接照着念；中文提问用中文答，英文提问用英文答。"
   },
   "llm": {
-    "model": "deepseek-v4-flash",
+    "model": "deepseek-v4-flash-vision-exp",
     "max_tokens": 1600,
     "temperature": 0.5,
     "provider": "deepseek"
@@ -43,7 +43,12 @@
   },
   "models": [
     {
-      "label": "DeepSeek V4 Flash · 极速推荐",
+      "label": "DeepSeek Flash Vision · 识图",
+      "provider": "deepseek",
+      "model": "deepseek-v4-flash-vision-exp"
+    },
+    {
+      "label": "DeepSeek V4 Flash · 极速",
       "provider": "deepseek",
       "model": "deepseek-v4-flash"
     },

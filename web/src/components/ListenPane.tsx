@@ -1,0 +1,673 @@
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import type { CatchNote, MeetingLine, PairLang } from '../types'
+import { TRANSLATE_LANGS } from '../types'
+import {
+  LISTEN_SCENES,
+  parseNotes,
+  sceneLabel,
+  visibleSections,
+  type ListenScene,
+  type NotesSectionId,
+} from '../listen'
+
+interface Props {
+  scene: ListenScene
+  translateOn: boolean
+  translateTo: PairLang
+  lines: MeetingLine[]
+  partial: string
+  elapsedLabel: string
+  listening: boolean
+  ended: boolean
+  catchNotes: CatchNote[]
+  notesRaw: string
+  busy: boolean
+  qa?: boolean
+  qaSlot?: ReactNode
+  onScene: (scene: ListenScene) => void
+  onTranslate: (on: boolean) => void
+  onTranslateTo: (lang: PairLang) => void
+  onCatchUp: () => void
+  onAsk: (text: string) => void
+}
+
+const NOTES_W_MIN = 28
+const NOTES_W_MAX = 72
+const NOTES_W_DEFAULT: Record<ListenScene, number> = {
+  meeting: 42,
+  lecture: 54,
+  interview: 42,
+}
+
+function notesWKey(scene: ListenScene) {
+  return `nod-notes-w-${scene}`
+}
+
+function readNotesW(scene: ListenScene) {
+  try {
+    const n = Number(localStorage.getItem(notesWKey(scene)))
+    if (Number.isFinite(n) && n >= NOTES_W_MIN && n <= NOTES_W_MAX) return n
+  } catch {
+    /* ignore */
+  }
+  return NOTES_W_DEFAULT[scene]
+}
+
+function writeNotesW(scene: ListenScene, n: number) {
+  try {
+    localStorage.setItem(notesWKey(scene), String(Math.round(n * 10) / 10))
+  } catch {
+    /* ignore */
+  }
+}
+
+function Chevron() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+      <path d="M2.2 3.4 5 6.4 7.8 3.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function SceneMark({ scene, size = 22 }: { scene: ListenScene; size?: number }) {
+  const common = {
+    className: 'listen-scene-mark',
+    width: size,
+    height: size,
+    viewBox: '0 0 22 22',
+    fill: 'none',
+    'aria-hidden': true as const,
+  }
+  if (scene === 'lecture') {
+    return (
+      <svg {...common}>
+        <path d="M3.6 8.6 11 5.4 18.4 8.6 11 11.8 3.6 8.6z" stroke="#22d3ee" strokeWidth="1.4" strokeLinejoin="round" />
+        <path d="M6.2 10.2v4.2c1.6 1.1 3.4 1.6 4.8 1.6s3.2-.5 4.8-1.6v-4.2" stroke="#7f92b2" strokeWidth="1.35" strokeLinecap="round" />
+        <path d="M18.4 8.6v6.4" stroke="#67e8f9" strokeWidth="1.35" strokeLinecap="round" />
+      </svg>
+    )
+  }
+  if (scene === 'interview') {
+    return (
+      <svg {...common}>
+        <circle cx="7.2" cy="7" r="2.15" stroke="#22d3ee" strokeWidth="1.4" />
+        <path d="M3.8 15.6c.3-2.4 1.7-3.6 3.4-3.6s3.1 1.2 3.4 3.6" stroke="#22d3ee" strokeWidth="1.35" strokeLinecap="round" />
+        <rect x="13.1" y="5.4" width="4.4" height="7.2" rx="2.2" stroke="#67e8f9" strokeWidth="1.4" />
+        <path d="M12.4 10.2h-.6a2.6 2.6 0 0 0 0 4.2h.6M15.3 14.8v1.6M13.6 17h3.4" stroke="#7f92b2" strokeWidth="1.25" strokeLinecap="round" />
+      </svg>
+    )
+  }
+  return (
+    <svg {...common}>
+      <circle cx="7.4" cy="7.2" r="2.05" stroke="#22d3ee" strokeWidth="1.4" />
+      <circle cx="14.6" cy="7.2" r="2.05" stroke="#67e8f9" strokeWidth="1.4" />
+      <path d="M4.2 15.8c.35-2.35 1.7-3.5 3.2-3.5s2.85 1.15 3.2 3.5" stroke="#22d3ee" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M11.4 15.8c.35-2.35 1.7-3.5 3.2-3.5s2.85 1.15 3.2 3.5" stroke="#67e8f9" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M3.4 17.6h15.2" stroke="#7f92b2" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function TranslateIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+      <path d="M1 18.8 6.6 3.4 12.2 18.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M2.9 13.2h7.4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <text
+        x="10.6"
+        y="19.2"
+        fill="currentColor"
+        fontSize="14.5"
+        fontWeight="700"
+        fontFamily="Microsoft YaHei UI, Microsoft YaHei, PingFang SC, Noto Sans SC, sans-serif"
+      >
+        文
+      </text>
+    </svg>
+  )
+}
+
+function NotesIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+      <rect x="3.6" y="3.2" width="14.8" height="15.6" rx="2.4" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M6.8 8.2h8.4M6.8 11.6h6.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function LangSelect({
+  value,
+  onChange,
+}: {
+  value: PairLang
+  onChange: (lang: PairLang) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const boxRef = useRef<HTMLDivElement>(null)
+  const current = TRANSLATE_LANGS.find((l) => l.id === value)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!boxRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  return (
+    <div className={`listen-lang-box${open ? ' open' : ''}`} ref={boxRef}>
+      <button
+        type="button"
+        className={`listen-icon-btn${open ? ' on' : ''}`}
+        title={current ? `Notes language · ${current.name}` : 'Choose notes language'}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="listen-lang-tag">{current?.tag ?? '—'}</span>
+      </button>
+      {open && (
+        <div className="listen-lang-menu" role="listbox">
+          {TRANSLATE_LANGS.map((lang) => (
+            <button
+              key={lang.id}
+              type="button"
+              role="option"
+              aria-selected={lang.id === value}
+              className={lang.id === value ? 'on' : ''}
+              onClick={() => {
+                onChange(lang.id)
+                setOpen(false)
+              }}
+            >
+              <b>{lang.tag}</b>
+              <span>{lang.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SceneSelect({ scene, onScene }: { scene: ListenScene; onScene: (scene: ListenScene) => void }) {
+  const [open, setOpen] = useState(false)
+  const boxRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!boxRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  return (
+    <div className={`listen-scene${open ? ' open' : ''}`} ref={boxRef}>
+      <span className="listen-scene-kicker" title={sceneLabel(scene)}>
+        <SceneMark scene={scene} />
+      </span>
+      <button
+        type="button"
+        className="listen-scene-btn"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {sceneLabel(scene)}
+        <Chevron />
+      </button>
+      {open && (
+        <div className="listen-scene-menu" role="listbox">
+          {LISTEN_SCENES.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="option"
+              aria-selected={scene === item.id}
+              className={scene === item.id ? 'on' : ''}
+              onClick={() => {
+                onScene(item.id)
+                setOpen(false)
+              }}
+            >
+              <SceneMark scene={item.id} size={20} />
+              <b>{item.label}</b>
+              <span>
+                {item.id === 'meeting'
+                  ? 'Decisions and action items'
+                  : item.id === 'lecture'
+                    ? 'Revision notes and homework'
+                    : 'Live Q&A, same as before'}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function LectureStudy({
+  sections,
+}: {
+  sections: Array<{ id: NotesSectionId; title: string; items: string[] }>
+}) {
+  const byId = (id: NotesSectionId) => sections.find((row) => row.id === id)
+  const overview = byId('summary')
+  const concepts = byId('keyPoints')
+  const details = byId('importantDetails')
+  const revise = byId('revisionNotes')
+  const homework = byId('followUps')
+
+  return (
+    <div className="lec-sheet">
+      {overview && (
+        <div className="lec-overview">
+          <h3>{overview.title}</h3>
+          <p>{overview.items[0]}</p>
+        </div>
+      )}
+      {concepts && (
+        <div className="lec-block">
+          <h3>{concepts.title}</h3>
+          <ol className="lec-concepts">
+            {concepts.items.map((item, i) => (
+              <li key={item}>
+                <b>{i + 1}</b>
+                <span>{item}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+      {revise && (
+        <div className="lec-block">
+          <h3>{revise.title}</h3>
+          <div className="lec-revise">
+            {revise.items.map((item) => (
+              <div className="lec-flash" key={item}>
+                {item}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {details && (
+        <div className="lec-block">
+          <h3>{details.title}</h3>
+          <ul>
+            {details.items.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {homework && (
+        <div className="lec-hw">
+          <h3>{homework.title}</h3>
+          <ul>
+            {homework.items.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MeetingNotes({
+  sections,
+}: {
+  sections: Array<{ id: NotesSectionId; title: string; items: string[] }>
+}) {
+  return (
+    <>
+      {sections.map((section) => (
+        <div className="listen-block" key={section.id}>
+          <h3>{section.title}</h3>
+          {section.id === 'summary' ? (
+            <p>{section.items[0]}</p>
+          ) : (
+            <ul>
+              {section.items.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+    </>
+  )
+}
+
+function useStackedLayout() {
+  const [stacked, setStacked] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 980px)').matches,
+  )
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 980px)')
+    const sync = () => setStacked(mq.matches)
+    sync()
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  }, [])
+  return stacked
+}
+
+export default function ListenPane(props: Props) {
+  const [input, setInput] = useState('')
+  const [notesOpen, setNotesOpen] = useState(false)
+  const [mobilePane, setMobilePane] = useState<'live' | 'notes'>('live')
+  const [notesW, setNotesW] = useState(() => readNotesW(props.scene))
+  const [dragging, setDragging] = useState(false)
+  const stacked = useStackedLayout()
+  const leftRef = useRef<HTMLDivElement>(null)
+  const rightRef = useRef<HTMLDivElement>(null)
+  const splitRef = useRef<HTMLDivElement>(null)
+  const notesWRef = useRef(notesW)
+  notesWRef.current = notesW
+  const notes = parseNotes(props.notesRaw)
+  const sections = visibleSections(props.scene, notes)
+  const lecture = props.scene === 'lecture'
+
+  useEffect(() => {
+    setNotesW(readNotesW(props.scene))
+  }, [props.scene])
+
+  useEffect(() => {
+    if (props.catchNotes.length || (props.ended && (props.notesRaw || props.busy))) {
+      setNotesOpen(true)
+      setMobilePane('notes')
+    }
+  }, [props.catchNotes, props.ended, props.notesRaw, props.busy])
+
+  useEffect(() => {
+    leftRef.current?.scrollTo({ top: leftRef.current.scrollHeight })
+  }, [props.lines, props.partial])
+
+  useEffect(() => {
+    rightRef.current?.scrollTo({ top: rightRef.current.scrollHeight })
+  }, [props.catchNotes, props.notesRaw])
+
+  const onResizeStart = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    setDragging(true)
+  }
+
+  const onResizeMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return
+    const box = splitRef.current?.getBoundingClientRect()
+    if (!box?.width) return
+    const next = Math.min(NOTES_W_MAX, Math.max(NOTES_W_MIN, ((box.right - e.clientX) / box.width) * 100))
+    setNotesW(next)
+  }
+
+  const onResizeEnd = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+    setDragging(false)
+    writeNotesW(props.scene, notesWRef.current)
+  }
+
+  const openNotes = () => {
+    setNotesOpen(true)
+    setMobilePane('notes')
+  }
+
+  const submit = () => {
+    const text = input.trim()
+    if (!text || props.busy) return
+    openNotes()
+    props.onAsk(text)
+    setInput('')
+  }
+
+  const stackedPane = !notesOpen || mobilePane === 'live' ? 'live' : 'notes'
+
+  return (
+    <div className={`listen-main scene-${props.scene}${props.translateOn ? ' tr-on' : ' tr-off'}${props.ended ? ' ended' : ''}${props.qa ? ' qa' : ''}`}>
+      <div className="listen-controls">
+        {!props.qa && (
+          <button
+            type="button"
+            className={`listen-icon-btn listen-side-left${props.translateOn ? ' on' : ''}`}
+            role="switch"
+            aria-checked={props.translateOn}
+            title={props.translateOn ? 'Translate on' : 'Translate off'}
+            onClick={() => props.onTranslate(!props.translateOn)}
+          >
+            <TranslateIcon />
+          </button>
+        )}
+        <SceneSelect scene={props.scene} onScene={props.onScene} />
+        {!props.qa && (
+          <div className="listen-tools">
+            <LangSelect value={props.translateTo} onChange={props.onTranslateTo} />
+            <button
+              type="button"
+              className={`listen-icon-btn${notesOpen ? ' on' : ''}`}
+              title={notesOpen ? 'Hide notes' : 'Show notes'}
+              onClick={() => {
+                if (stacked) {
+                  if (notesOpen && stackedPane === 'notes') {
+                    setNotesOpen(false)
+                    setMobilePane('live')
+                  } else {
+                    openNotes()
+                  }
+                } else {
+                  setNotesOpen((v) => !v)
+                }
+              }}
+            >
+              <NotesIcon />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {!props.qa && (
+        <div className="listen-mobile-tabs" role="tablist" aria-label="Live or notes">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={stackedPane === 'live'}
+            className={stackedPane === 'live' ? 'on' : ''}
+            onClick={() => setMobilePane('live')}
+          >
+            Live
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={stackedPane === 'notes'}
+            className={stackedPane === 'notes' ? 'on' : ''}
+            onClick={openNotes}
+          >
+            Notes
+          </button>
+        </div>
+      )}
+
+      {props.qa ? (
+        <div className="listen-qa">{props.qaSlot}</div>
+      ) : (
+        <>
+          <div
+            ref={splitRef}
+            className={`listen-split${notesOpen ? ' notes-on' : ''}${dragging ? ' dragging' : ''}${stacked ? ` stacked show-${stackedPane}` : ''}`}
+            style={notesOpen ? { ['--notes-w' as string]: `${notesW}%` } : undefined}
+          >
+            <section className="listen-pane">
+              <div className="listen-kicker">
+                {lecture ? 'Classroom' : 'Transcript'}
+                <span className={`listen-timer${props.listening ? ' live' : ''}`}>{props.elapsedLabel}</span>
+                {props.listening && !notesOpen && (
+                  <button
+                    type="button"
+                    className="listen-catch"
+                    disabled={props.busy || props.lines.length === 0}
+                    onClick={() => {
+                      openNotes()
+                      props.onCatchUp()
+                    }}
+                  >
+                    Catch up
+                  </button>
+                )}
+              </div>
+              <div className="listen-scroll" ref={leftRef}>
+                {props.lines.length === 0 && !props.partial ? (
+                  <div className="listen-empty">
+                    {lecture
+                      ? 'Start listening. This side is the lecture stream. Study notes open when you miss a stretch or stop the class.'
+                      : 'Start listening. The left side keeps what was said. Translate stays off until you need it.'}
+                  </div>
+                ) : (
+                  props.lines.map((line, i) => (
+                    <div
+                      key={line.id || `${line.ts}-${i}`}
+                      className={`listen-line${props.listening && i === props.lines.length - 1 && !props.partial ? ' live' : ''}`}
+                    >
+                      <div className="listen-ts">{line.ts}</div>
+                      <div>
+                        <div className="listen-orig">{line.text}</div>
+                        {props.translateOn && (
+                          <div className="listen-tr">{line.translation || (props.busy ? '…' : '')}</div>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+                {props.partial && (
+                  <div className="listen-line live">
+                    <div className="listen-ts">live</div>
+                    <div className="listen-orig">{props.partial}</div>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <div
+              className="listen-resize"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize notes"
+              aria-valuemin={NOTES_W_MIN}
+              aria-valuemax={NOTES_W_MAX}
+              aria-valuenow={Math.round(notesW)}
+              onPointerDown={onResizeStart}
+              onPointerMove={onResizeMove}
+              onPointerUp={onResizeEnd}
+              onPointerCancel={onResizeEnd}
+              onDoubleClick={() => {
+                const next = NOTES_W_DEFAULT[props.scene]
+                setNotesW(next)
+                writeNotesW(props.scene, next)
+              }}
+            />
+
+            <section className="listen-pane listen-notes">
+              <div className="listen-note-head">
+                <div className="listen-kicker" style={{ padding: 0 }}>
+                  {lecture ? 'Study notes' : `Notes · ${sceneLabel(props.scene)}`}
+                </div>
+                {props.listening && (
+                  <button
+                    type="button"
+                    className="listen-catch"
+                    disabled={props.busy || props.lines.length === 0}
+                    onClick={() => {
+                      openNotes()
+                      props.onCatchUp()
+                    }}
+                  >
+                    Catch up
+                  </button>
+                )}
+                {props.ended && <span className="listen-hint">{lecture ? 'Class ended' : 'Session ended'}</span>}
+                <button
+                  type="button"
+                  className="listen-notes-close"
+                  title="Hide notes"
+                  onClick={() => {
+                    setNotesOpen(false)
+                    setMobilePane('live')
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="listen-scroll" ref={rightRef}>
+                {props.listening && props.catchNotes.length === 0 && (
+                  <div className="listen-empty">
+                    {lecture ? (
+                      <>
+                        In class. Missed a concept? Tap <b>Catch up</b>. The lecture keeps going. A study sheet waits until you stop.
+                      </>
+                    ) : (
+                      <>
+                        Listening. If a stretch just flew by, tap <b>Catch up</b>. Listening does not stop. Full notes wait until you end the session.
+                      </>
+                    )}
+                  </div>
+                )}
+                {props.catchNotes.map((note, i) => (
+                  <div className="listen-card" key={note.id || `${note.title}-${i}`}>
+                    <div className="listen-tag">{note.title}</div>
+                    <p>{note.text || (props.busy && i === props.catchNotes.length - 1 ? '…' : '')}</p>
+                    {props.listening && i === props.catchNotes.length - 1 && note.title.startsWith('Catch up') && (
+                      <p className="listen-hint">
+                        {lecture
+                          ? 'Still in class. Older cards stay so you can scroll back.'
+                          : 'Still listening. Older cards stay here so you can scroll back.'}
+                      </p>
+                    )}
+                  </div>
+                ))}
+                {props.ended && !sections.length && !props.busy && (
+                  <div className="listen-empty">
+                    {lecture
+                      ? 'Stop listening after some speech to build a study sheet — concepts, formulas, and homework.'
+                      : 'Stop listening after some speech to generate scene notes.'}
+                  </div>
+                )}
+                {props.ended && props.busy && !sections.length && (
+                  <div className="listen-empty">{lecture ? 'Writing the study sheet…' : 'Writing notes…'}</div>
+                )}
+                {props.ended && lecture && sections.length > 0 && <LectureStudy sections={sections} />}
+                {props.ended && !lecture && sections.length > 0 && <MeetingNotes sections={sections} />}
+              </div>
+            </section>
+          </div>
+
+          <div className="listen-prompt">
+            <input
+              value={input}
+              placeholder={
+                lecture
+                  ? 'Ask about this concept, formula, or example'
+                  : 'Ask about what you just heard, or add a note'
+              }
+              onChange={(e) => {
+                setInput(e.target.value)
+                if (e.target.value.trim()) openNotes()
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submit()
+              }}
+            />
+            <button type="button" className="listen-go" disabled={props.busy || !input.trim()} onClick={submit}>
+              Ask
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}

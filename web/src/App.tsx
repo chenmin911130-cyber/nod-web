@@ -1,17 +1,27 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import type { AttachPayload } from './attach'
-import type { AppConfig, AppState, AudioSource, EngineEvent, Lang, PairLang, TranslatePair, ViewMode, WorkspaceMode } from './types'
+import type { AppConfig, AppState, AudioSource, EngineEvent, Lang, MeetingLine, PairLang, TranslatePair, ViewMode, WorkspaceMode } from './types'
 import { TRANSLATE_LANGS } from './types'
 import { isWeb } from './platform'
 import TitleBar from './components/TitleBar'
 import SideRail from './components/SideRail'
 import AnswerPane from './components/AnswerPane'
-import MeetingPane from './components/MeetingPane'
+import ListenPane from './components/ListenPane'
 import TranslatePane from './components/TranslatePane'
 import StatusToast from './components/StatusToast'
 import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
 import { api as authApi, fetchMe } from './auth'
+import {
+  catchupPrompt,
+  isCatchPrompt,
+  isNotesPrompt,
+  lastTwoMinutes,
+  notesPrompt,
+  exportNoteSections,
+  parseNotes,
+  type ListenScene,
+} from './listen'
 
 const PLACEHOLDER = 'Waiting for the next question…'
 const STATUS_READY = 'Ready · F2 record / F3 listen / F4 clear'
@@ -80,7 +90,7 @@ const initial: AppState = {
   autoOn: false,
   models: [],
   keys: { hasLlm: true, hasStt: true },
-  workspaceMode: 'interview',
+  workspaceMode: 'meeting',
   meetingLines: [],
   meetingSummary: '',
   meetingStartedAt: null,
@@ -95,6 +105,13 @@ const initial: AppState = {
   translateAskId: '',
   translateBindId: '',
   summaryAskId: '',
+  listenScene: 'meeting' as ListenScene,
+  translateOn: false,
+  catchNotes: [],
+  catchPendingTitle: '',
+  catchAskId: '',
+  notesRaw: '',
+  notesAskId: '',
   quota: null as { stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; ok: boolean; quota_disabled?: boolean } | null,
 }
 
@@ -127,6 +144,11 @@ type Action =
   | { type: 'fail_translate'; id: string }
   | { type: 'ask_start' }
   | { type: 'expect_meeting_ask' }
+  | { type: 'listen_scene'; scene: ListenScene }
+  | { type: 'translate_on'; on: boolean }
+  | { type: 'listen_new' }
+  | { type: 'expect_catch'; title?: string }
+  | { type: 'expect_notes' }
 
 function formatClock(): string {
   const d = new Date()
@@ -157,6 +179,16 @@ function isTranslatePrompt(text: string): boolean {
 function translateBindFromPrompt(text: string): string {
   const m = /^\[NOD_TRANSLATE:([^\]]+)\]/.exec(text)
   return m?.[1] ?? ''
+}
+
+function applyLineTranslation(lines: MeetingLine[], bindId: string, chunk: string): MeetingLine[] {
+  if (!lines.length || !chunk) return lines
+  let idx = bindId ? lines.findIndex((line) => line.id === bindId) : -1
+  if (idx < 0) idx = lines.findIndex((line) => !line.translation)
+  if (idx < 0) return lines
+  const next = lines.slice()
+  next[idx] = { ...next[idx], translation: (next[idx].translation || '') + chunk }
+  return next
 }
 
 function applyTranslateChunk(pairs: TranslatePair[], bindId: string, chunk: string): TranslatePair[] {
@@ -245,6 +277,26 @@ function reducer(state: AppState, action: Action): AppState {
           if (isSummaryPrompt(text)) {
             return { ...state, summaryAskId: qid, meetingSummary: '', partial: '', busy: true }
           }
+          if (isCatchPrompt(text) || state.catchAskId === '__pending__') {
+            return {
+              ...state,
+              catchAskId: qid,
+              catchNotes: [
+                ...state.catchNotes,
+                {
+                  id: qid,
+                  title: state.catchPendingTitle || 'Catch up · last 2 min',
+                  text: '',
+                },
+              ],
+              catchPendingTitle: '',
+              partial: '',
+              busy: true,
+            }
+          }
+          if (isNotesPrompt(text) || state.notesAskId === '__pending__') {
+            return { ...state, notesAskId: qid, notesRaw: '', partial: '', busy: true }
+          }
           const ts = formatClock()
           const heard = parseHeardLang(ev.language, text)
           if (state.workspaceMode === 'meeting') {
@@ -260,7 +312,12 @@ function reducer(state: AppState, action: Action): AppState {
                 heardLang: heard ?? state.heardLang,
               }
             }
-            const meetingLines = [...state.meetingLines, { id: qid, ts: formatTs(state.meetingStartedAt), text }]
+            const meetingLines = [...state.meetingLines, {
+              id: qid,
+              ts: formatTs(state.meetingStartedAt),
+              text,
+              at: Date.now(),
+            }]
             return { ...state, meetingLines, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
           }
           if (state.workspaceMode === 'translate') {
@@ -301,8 +358,19 @@ function reducer(state: AppState, action: Action): AppState {
           let meetingSummary = state.meetingSummary
           let translatePairs = state.translatePairs
           let translateAskId = state.translateAskId
+          let catchNotes = state.catchNotes
+          let notesRaw = state.notesRaw
+          let meetingLines = state.meetingLines
           if (ev.id && ev.id === state.summaryAskId) {
             meetingSummary += ev.text
+          }
+          if (ev.id && ev.id === state.catchAskId) {
+            catchNotes = catchNotes.map((note) =>
+              note.id === ev.id ? { ...note, text: note.text + (ev.text ?? '') } : note,
+            )
+          }
+          if (ev.id && ev.id === state.notesAskId) {
+            notesRaw += ev.text ?? ''
           }
           if (state.translateBindId && ev.id) {
             translateAskId = ev.id
@@ -310,24 +378,33 @@ function reducer(state: AppState, action: Action): AppState {
           const translateChunk =
             Boolean(state.translateBindId) ||
             (Boolean(translateAskId) && ev.id === translateAskId)
-          if (translateChunk && state.translatePairs.length) {
+          if (translateChunk && state.translateOn && meetingLines.length) {
+            meetingLines = applyLineTranslation(meetingLines, state.translateBindId, ev.text ?? '')
+          } else if (translateChunk && state.translatePairs.length) {
             translatePairs = applyTranslateChunk(translatePairs, state.translateBindId, ev.text ?? '')
           }
           if (state.workspaceMode !== 'interview' || state.turns.length === 0) {
-            return { ...state, meetingSummary, translatePairs, translateAskId }
+            return { ...state, meetingSummary, translatePairs, translateAskId, catchNotes, notesRaw, meetingLines }
           }
           const turns = state.turns.slice()
           const last = turns[turns.length - 1]
-          if (ev.id && last.id !== ev.id && ev.id !== translateAskId && ev.id !== state.summaryAskId) {
-            return { ...state, meetingSummary, translatePairs, translateAskId }
+          if (
+            ev.id
+            && last.id !== ev.id
+            && ev.id !== translateAskId
+            && ev.id !== state.summaryAskId
+            && ev.id !== state.catchAskId
+            && ev.id !== state.notesAskId
+          ) {
+            return { ...state, meetingSummary, translatePairs, translateAskId, catchNotes, notesRaw, meetingLines }
           }
           if (!ev.id || last.id === ev.id) {
             turns[turns.length - 1] = { ...last, a: last.a + ev.text }
           }
-          return { ...state, turns, meetingSummary, translatePairs, translateAskId }
+          return { ...state, turns, meetingSummary, translatePairs, translateAskId, catchNotes, notesRaw, meetingLines }
         }
         case 'done':
-          return { ...state, busy: false, translateAskId: '', summaryAskId: '' }
+          return { ...state, busy: false, translateAskId: '', summaryAskId: '', catchAskId: '', notesAskId: '' }
         case 'error':
           return { ...state, status: ev.text, busy: false }
         case 'auth_required':
@@ -390,9 +467,46 @@ function reducer(state: AppState, action: Action): AppState {
         translateAskId: '',
         translateBindId: '',
         summaryAskId: '',
+        catchNotes: [],
+        catchPendingTitle: '',
+        catchAskId: '',
+        notesRaw: '',
+        notesAskId: '',
       }
     case 'workspace':
       return { ...state, workspaceMode: action.mode, view: 'workspace' }
+    case 'listen_scene':
+      return { ...state, listenScene: action.scene }
+    case 'translate_on':
+      return { ...state, translateOn: action.on }
+    case 'listen_new':
+      return {
+        ...state,
+        meetingLines: [],
+        meetingSummary: '',
+        catchNotes: [],
+        catchPendingTitle: '',
+        notesRaw: '',
+        catchAskId: '',
+        notesAskId: '',
+        meetingEnded: false,
+        meetingStartedAt: Date.now(),
+        meetingElapsedMs: 0,
+        translateAskId: '',
+        translateBindId: '',
+      }
+    case 'expect_catch':
+      return {
+        ...state,
+        catchAskId: '__pending__',
+        catchPendingTitle: action.title || 'Catch up · last 2 min',
+        busy: true,
+        status: action.title && action.title !== 'Catch up · last 2 min' ? 'Answering…' : 'Catching up…',
+        translateBindId: '',
+        translateAskId: '',
+      }
+    case 'expect_notes':
+      return { ...state, notesAskId: '__pending__', notesRaw: '', busy: true, status: 'Writing notes…', translateBindId: '', translateAskId: '' }
     case 'translate_from':
       return { ...state, translateFrom: action.lang }
     case 'translate_to':
@@ -538,6 +652,8 @@ export default function App() {
   const translateFiles = useRef<Map<string, AttachPayload[]>>(new Map())
   const translateTimer = useRef(0)
   const pumpTranslateRef = useRef<() => void>(() => {})
+  const generateNotesRef = useRef<() => void>(() => {})
+  const exportAfterNotes = useRef(false)
   const tickRef = useRef(0)
   const [consent, setConsent] = useState<boolean | null>(null)
   const consentRef = useRef<boolean | null>(null)
@@ -546,6 +662,17 @@ export default function App() {
   const [composeOpen, setComposeOpen] = useState(false)
   const [railHover, setRailHover] = useState(false)
   const [railDismissed, setRailDismissed] = useState(false)
+  const [clearOpen, setClearOpen] = useState(false)
+  const requestClearRef = useRef<() => void>(() => {})
+
+  useEffect(() => {
+    if (!clearOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setClearOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [clearOpen])
 
   useEffect(() => {
     void fetchMe().then((me) => {
@@ -618,6 +745,12 @@ export default function App() {
     const offEvent = api.onEvent((e) => {
       if (e.type === 'ready') syncWorkspace()
       dispatch({ type: 'engine', ev: e })
+      if (e.type === 'question' && stateRef.current.workspaceMode === 'meeting' && stateRef.current.translateOn) {
+        const text = e.text ?? ''
+        if (!isTranslatePrompt(text) && !isCatchPrompt(text) && !isNotesPrompt(text) && !isSummaryPrompt(text)) {
+          queueMicrotask(() => pumpTranslateRef.current())
+        }
+      }
       if (e.type === 'question' && stateRef.current.workspaceMode === 'translate') {
         const text = e.text ?? ''
         const s = stateRef.current
@@ -659,13 +792,7 @@ export default function App() {
       const mode = stateRef.current.workspaceMode
       if (k === 'f2') guardMic(() => api.send({ type: 'manual' }))
       else if (k === 'f3') guardMic(() => api.send({ type: 'toggle_listen' }))
-      else if (k === 'f4') {
-        askedTranslate.current.clear()
-        releaseTranslateGate()
-        translateRetries.current.clear()
-        api.send({ type: 'clear' })
-        dispatch({ type: 'clear' })
-      }
+      else if (k === 'f4') requestClearRef.current()
       else if (k === 'f8' && mode === 'interview') {
         const v = stateRef.current.view
         dispatch({ type: 'view', view: v === 'workspace' ? 'fullscreen' : 'workspace' })
@@ -738,26 +865,38 @@ export default function App() {
       }
       if (k === 'a') guardMic(() => window.api.send({ type: 'toggle_listen' }))
       else if (k === 'c') copyLatest()
-      else if (k === 'x') {
-        askedTranslate.current.clear()
-        releaseTranslateGate()
-        translateRetries.current.clear()
-        window.api.send({ type: 'clear' })
-        dispatch({ type: 'clear' })
-      }
+      else if (k === 'x') requestClearRef.current()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [copyLatest])
 
-  const handleClear = useCallback(() => {
+  const doClear = useCallback(() => {
     askedTranslate.current.clear()
     window.api.send({ type: 'cancel_generate' })
     releaseTranslateGate()
     translateRetries.current.clear()
     window.api.send({ type: 'clear' })
     dispatch({ type: 'clear' })
+    setClearOpen(false)
   }, [])
+
+  const handleClear = useCallback(() => {
+    const s = stateRef.current
+    const empty =
+      s.meetingLines.length === 0 &&
+      s.turns.length === 0 &&
+      s.translatePairs.length === 0 &&
+      !s.notesRaw.trim() &&
+      !s.catchNotes.some((note) => note.text.trim()) &&
+      !s.partial.trim()
+    if (empty) {
+      doClear()
+      return
+    }
+    setClearOpen(true)
+  }, [doClear])
+  requestClearRef.current = handleClear
   const handleAsk = useCallback((text: string, files?: AttachPayload[]) => {
     dispatch({ type: 'ask_start' })
     window.api.send({ type: 'ask', text, files })
@@ -768,6 +907,10 @@ export default function App() {
     dispatch({ type: 'opacity', value: n })
   }, [])
 
+  useEffect(() => {
+    window.api.setOpacity(state.opacity)
+  }, [state.opacity])
+
   const handlePinned = useCallback((b: boolean) => {
     window.api.setPinned(b)
     dispatch({ type: 'pinned', value: b })
@@ -776,6 +919,10 @@ export default function App() {
   const handleMicMuted = useCallback((muted: boolean) => {
     window.api.send({ type: 'set_mic_muted', muted })
     dispatch({ type: 'mic_muted', muted })
+    dispatch({
+      type: 'engine',
+      ev: { type: 'status', text: muted ? 'Microphone muted' : 'Microphone on' },
+    })
   }, [])
 
   const handleStealth = useCallback((on: boolean) => {
@@ -796,6 +943,16 @@ export default function App() {
   const handleLang = useCallback((lang: Lang) => {
     window.api.send({ type: 'set_lang', language: lang === 'auto' ? null : lang })
     dispatch({ type: 'lang', lang })
+    dispatch({
+      type: 'engine',
+      ev: {
+        type: 'status',
+        text:
+          lang === 'auto'
+            ? 'Speech recognition · Auto · all supported languages'
+            : `Speech recognition · ${targetName(lang)} only`,
+      },
+    })
   }, [])
 
   const handleTranslateFrom = useCallback((lang: Lang) => {
@@ -895,7 +1052,18 @@ export default function App() {
     setComposeOpen(false)
     setRailHover(false)
     setRailDismissed(false)
-    dispatch({ type: 'engine', ev: { type: 'status', text: `Mode · ${mode[0].toUpperCase()}${mode.slice(1)}` } })
+    dispatch({
+      type: 'engine',
+      ev: {
+        type: 'status',
+        text:
+          mode === 'translate'
+            ? 'Mode · Translate'
+            : mode === 'interview'
+              ? 'Mode · Q&A'
+              : 'Mode · AI Listening Assistant',
+      },
+    })
   }, [])
 
   const handlePrimary = useCallback(() => {
@@ -909,11 +1077,12 @@ export default function App() {
       if (s.run === 'listen' || s.run === 'record') {
         window.api.send({ type: 'toggle_listen' })
         dispatch({ type: 'meeting_ended' })
-        dispatch({ type: 'engine', ev: { type: 'status', text: 'Meeting stopped' } })
+        dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped' } })
+        queueMicrotask(() => generateNotesRef.current())
         return
       }
       if (s.meetingEnded || s.meetingStartedAt == null) {
-        dispatch({ type: 'meeting_clock', startedAt: Date.now(), elapsedMs: 0 })
+        dispatch({ type: 'listen_new' })
       } else {
         dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
       }
@@ -958,9 +1127,12 @@ export default function App() {
       type: 'engine',
       ev: {
         type: 'status',
-        text: s.translateFrom !== 'auto' && s.translateFrom === lang
-          ? `Translate to ${targetName(lang)} · same as From`
-          : `Translate to ${targetName(lang)}`,
+        text:
+          s.workspaceMode === 'translate'
+            ? s.translateFrom !== 'auto' && s.translateFrom === lang
+              ? `Translate to ${targetName(lang)} · same as From`
+              : `Translate to ${targetName(lang)}`
+            : `Notes language · ${targetName(lang)}`,
       },
     })
     queueMicrotask(() => pumpTranslateRef.current())
@@ -1007,9 +1179,15 @@ export default function App() {
   }, [])
 
   const pumpTranslate = useCallback(() => {
-    if (stateRef.current.workspaceMode !== 'translate') return
+    const s = stateRef.current
     if (inflightTranslate.current) return
-    const next = stateRef.current.translatePairs.find(
+    if (s.workspaceMode === 'meeting' && s.translateOn) {
+      const next = s.meetingLines.find((line) => !line.translation && !askedTranslate.current.has(line.id))
+      if (next) askTranslate(next.text, next.id)
+      return
+    }
+    if (s.workspaceMode !== 'translate') return
+    const next = s.translatePairs.find(
       (p) => !p.translation && !p.failed && !askedTranslate.current.has(p.id) && !isTranslatePrompt(p.original),
     )
     if (next) askTranslate(next.original, next.id)
@@ -1040,9 +1218,13 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    if (state.workspaceMode === 'meeting' && state.translateOn) {
+      pumpTranslate()
+      return
+    }
     if (state.workspaceMode !== 'translate') return
     pumpTranslate()
-  }, [state.translatePairs, state.workspaceMode, pumpTranslate])
+  }, [state.translatePairs, state.meetingLines, state.translateOn, state.workspaceMode, pumpTranslate])
 
   const handleGenerateSummary = useCallback((note?: string, files?: AttachPayload[]) => {
     const s = stateRef.current
@@ -1060,6 +1242,38 @@ export default function App() {
       type: 'ask',
       text: `${SUMMARY_PREFIX} as concise bullet points. Only the bullets:\n\n${body}`,
     })
+  }, [])
+
+  const generateNotes = useCallback(() => {
+    const s = stateRef.current
+    if (!s.meetingLines.length) {
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'No transcript to note yet.' } })
+      return
+    }
+    dispatch({ type: 'expect_notes' })
+    window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, s.meetingLines, s.translateTo), mode: 'notes' })
+  }, [])
+  generateNotesRef.current = generateNotes
+
+  const handleCatchUp = useCallback(() => {
+    const s = stateRef.current
+    const windowed = lastTwoMinutes(s.meetingLines)
+    if (!windowed.length) {
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'Nothing to catch up yet.' } })
+      return
+    }
+    dispatch({
+      type: 'expect_catch',
+      title: 'Catch up · last 2 min',
+    })
+    window.api.send({ type: 'ask', text: catchupPrompt(windowed, '', s.translateTo), mode: 'catchup' })
+  }, [])
+
+  const handleListenAsk = useCallback((text: string) => {
+    const s = stateRef.current
+    const windowed = s.meetingEnded ? s.meetingLines : lastTwoMinutes(s.meetingLines)
+    dispatch({ type: 'expect_catch', title: text })
+    window.api.send({ type: 'ask', text: catchupPrompt(windowed, text, s.translateTo), mode: 'catchup' })
   }, [])
 
   const copyPairField = useCallback((pair: TranslatePair, field: 'original' | 'translation') => {
@@ -1080,7 +1294,7 @@ export default function App() {
     queueMicrotask(() => pumpTranslateRef.current())
   }, [])
 
-  const handleExportPdf = useCallback(async () => {
+  const writePdf = useCallback(async () => {
     const s = stateRef.current
     const when = new Date().toLocaleString()
     const blocks: Array<{ kind: 'h1' | 'h2' | 'p' | 'meta'; text: string }> = []
@@ -1112,25 +1326,43 @@ export default function App() {
           blocks.push({ kind: 'p', text: turn.a || '…' })
         })
       }
+      const interviewNotes = parseNotes(s.notesRaw)
+      for (const section of exportNoteSections('interview', interviewNotes)) {
+        blocks.push({ kind: 'h2', text: section.title })
+        if (section.items.length) {
+          for (const item of section.items) blocks.push({ kind: 'p', text: item })
+        } else {
+          blocks.push({ kind: 'p', text: '—' })
+        }
+      }
     } else {
-      title = 'Nod meeting notes'
+      const scene = s.listenScene[0].toUpperCase() + s.listenScene.slice(1)
+      title = `Nod ${scene} notes`
       const lines = s.meetingLines
-      const actions = lines.filter((ln) => ln.marked)
-      blocks.push({ kind: 'h1', text: 'Nod meeting notes' })
+      const doc = parseNotes(s.notesRaw)
+      blocks.push({ kind: 'h1', text: `Nod ${scene} notes` })
       blocks.push({ kind: 'meta', text: `Exported ${when}` })
-      blocks.push({ kind: 'h2', text: 'Live transcript' })
+      for (const section of exportNoteSections(s.listenScene, doc)) {
+        blocks.push({ kind: 'h2', text: section.title })
+        if (section.items.length) {
+          for (const item of section.items) blocks.push({ kind: 'p', text: item })
+        } else {
+          blocks.push({ kind: 'p', text: '—' })
+        }
+      }
+      for (const note of s.catchNotes) {
+        if (!note.text.trim()) continue
+        blocks.push({ kind: 'h2', text: note.title })
+        blocks.push({ kind: 'p', text: note.text.trim() })
+      }
+      blocks.push({ kind: 'h2', text: 'Transcript' })
       if (lines.length === 0) blocks.push({ kind: 'p', text: 'No transcript lines.' })
       else {
         for (const ln of lines) {
-          blocks.push({ kind: 'p', text: `${ln.ts}  ${ln.marked ? 'Action · ' : ''}${ln.text}` })
+          blocks.push({ kind: 'p', text: `${ln.ts}  ${ln.text}` })
+          if (s.translateOn && ln.translation) blocks.push({ kind: 'p', text: `     ${ln.translation}` })
         }
       }
-      if (actions.length) {
-        blocks.push({ kind: 'h2', text: 'Marked actions' })
-        for (const ln of actions) blocks.push({ kind: 'p', text: `${ln.ts}  ${ln.text}` })
-      }
-      blocks.push({ kind: 'h2', text: 'Summary' })
-      blocks.push({ kind: 'p', text: s.meetingSummary || 'No summary generated.' })
     }
 
     try {
@@ -1144,6 +1376,29 @@ export default function App() {
       dispatch({ type: 'engine', ev: { type: 'status', text: `PDF export failed: ${err instanceof Error ? err.message : String(err)}` } })
     }
   }, [])
+
+  const handleExportPdf = useCallback(() => {
+    const s = stateRef.current
+    const listenSurface = s.workspaceMode === 'meeting' || s.workspaceMode === 'interview'
+    const needsNotes = listenSurface && s.meetingLines.length > 0 && !s.notesRaw.trim()
+    if (needsNotes) {
+      exportAfterNotes.current = true
+      if (s.busy) {
+        dispatch({ type: 'engine', ev: { type: 'status', text: 'Waiting for notes, then exporting PDF…' } })
+        return
+      }
+      generateNotes()
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'Summarizing all sections, then exporting PDF…' } })
+      return
+    }
+    void writePdf()
+  }, [generateNotes, writePdf])
+
+  useEffect(() => {
+    if (!exportAfterNotes.current || state.busy) return
+    exportAfterNotes.current = false
+    void writePdf()
+  }, [state.busy, state.notesRaw, writePdf])
 
   // Meeting elapsed clock
   useEffect(() => {
@@ -1210,31 +1465,23 @@ export default function App() {
     <div className="app">
       <TitleBar
         mode={state.workspaceMode}
-        models={state.models}
-        llm={state.llm}
         lang={state.lang}
         heardLang={state.heardLang}
         source={state.source}
         opacity={state.opacity}
         pinned={state.pinned}
         systemMuted={state.systemMuted}
+        micMuted={state.micMuted}
         stealth={state.stealth}
         onMode={handleMode}
-        onModel={handleModel}
         onLang={handleLang}
         onSource={handleSource}
         onOpacity={handleOpacity}
         onPinned={handlePinned}
         onSystemMuted={handleSystemMuted}
+        onMicMuted={handleMicMuted}
         onStealth={handleStealth}
         onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
-        quotaLabel={
-          state.quota?.quota_disabled
-            ? 'Test · unlimited'
-            : state.quota
-              ? `${Math.max(0, Math.round((state.quota.stt_limit - state.quota.stt_seconds) / 60))}m left`
-              : 'Account'
-        }
       />
       <div className={`workspace${study ? ' study' : ''}${study && railOn ? ' rail-on' : ''}`}>
         {study && (
@@ -1278,17 +1525,7 @@ export default function App() {
             }
           />
         </div>
-        {state.workspaceMode === 'meeting' ? (
-          <MeetingPane
-            lines={state.meetingLines}
-            partial={state.partial}
-            summary={state.meetingSummary}
-            busy={state.busy}
-            elapsedLabel={elapsedLabel}
-            listening={listening}
-            onGenerate={handleGenerateSummary}
-          />
-        ) : state.workspaceMode === 'translate' ? (
+        {state.workspaceMode === 'translate' ? (
           <TranslatePane
             pairs={state.translatePairs}
             partial={state.partial}
@@ -1306,24 +1543,68 @@ export default function App() {
             onRetry={handleRetryTranslate}
           />
         ) : (
-          <AnswerPane
-            currentQ={state.currentQ}
+          <ListenPane
+            scene={state.workspaceMode === 'interview' ? 'interview' : state.listenScene}
+            translateOn={state.translateOn}
+            translateTo={state.translateTo}
+            lines={state.meetingLines}
             partial={state.partial}
-            turns={state.turns}
+            elapsedLabel={elapsedLabel}
+            listening={listening}
+            ended={state.meetingEnded}
+            catchNotes={state.catchNotes}
+            notesRaw={state.notesRaw}
             busy={state.busy}
-            onAsk={handleAsk}
-            onCompose={(on) => {
-              if (on) {
-                setRailDismissed(false)
-                setComposeOpen(true)
-                return
-              }
-              setComposeOpen(false)
+            qa={state.workspaceMode === 'interview'}
+            qaSlot={
+              <AnswerPane
+                currentQ={state.currentQ}
+                partial={state.partial}
+                turns={state.turns}
+                busy={state.busy}
+                onAsk={handleAsk}
+                onCompose={(on) => {
+                  if (on) {
+                    setRailDismissed(false)
+                    setComposeOpen(true)
+                    return
+                  }
+                  setComposeOpen(false)
+                }}
+              />
+            }
+            onScene={(scene) => {
+              dispatch({ type: 'listen_scene', scene })
+              if (scene === 'interview') handleMode('interview')
+              else if (state.workspaceMode !== 'meeting') handleMode('meeting')
             }}
+            onTranslate={(on) => {
+              dispatch({ type: 'translate_on', on })
+              if (on) queueMicrotask(() => pumpTranslateRef.current())
+            }}
+            onTranslateTo={handleTranslateTo}
+            onCatchUp={handleCatchUp}
+            onAsk={handleListenAsk}
           />
         )}
       </div>
       <StatusToast text={state.status} />
+      {clearOpen && (
+        <div className="consent-mask" onClick={() => setClearOpen(false)}>
+          <div className="consent-card confirm-card" role="dialog" aria-labelledby="clear-title" onClick={(e) => e.stopPropagation()}>
+            <h2 id="clear-title">Clear this session?</h2>
+            <p>This removes the transcript, notes, and answers on screen. You cannot undo it.</p>
+            <div className="confirm-actions">
+              <button className="confirm-keep" type="button" onClick={() => setClearOpen(false)} autoFocus>
+                Keep
+              </button>
+              <button className="confirm-clear" type="button" onClick={doClear}>
+                Clear
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {consentOpen && (
         <div className="consent-mask">
           <div className="consent-card">

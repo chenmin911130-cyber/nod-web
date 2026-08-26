@@ -4,34 +4,8 @@ import { applySeo, track } from '../site/track'
 import { COPY, type Locale } from './copy'
 import './Landing.css'
 
-type ConsoleMode = 'interview' | 'meeting' | 'translate'
-
-const MODES: Record<
-  ConsoleMode,
-  { label: string; hear: string; live: string; answerLabel: string; answer: string }
-> = {
-  interview: {
-    label: 'LISTENING · AUTO',
-    hear: '“Walk me through a time you solved a hard problem.”',
-    live: 'Matching language… the answer follows the question.',
-    answerLabel: 'SPEAKABLE ANSWER',
-    answer: 'Lead with the result, then one project: the judgment, the action, and the impact.',
-  },
-  meeting: {
-    label: 'MEETING · LIVE TRANSCRIPT',
-    hear: '“Let’s kick off the customer pilot on Tuesday.”',
-    live: 'Flagged: customer pilot / Tuesday / owner TBD',
-    answerLabel: 'MINUTES',
-    answer: 'Confirm the start date. Next: name an owner and send the prep list. Export as PDF.',
-  },
-  translate: {
-    label: 'TRANSLATE · EN → CH',
-    hear: '“Let’s make the next step clear for everyone.”',
-    live: '让我们把下一步向所有人说明清楚。',
-    answerLabel: 'CAPTION',
-    answer: 'Eight target languages. Queue, retry, or pass through if it is already in the target language.',
-  },
-}
+type AskId = '1' | '2' | '3' | '4'
+type NoteKind = 'meeting' | 'lecture'
 
 function NodLogo() {
   return (
@@ -49,35 +23,22 @@ function NodLogo() {
   )
 }
 
-function DemoVideo({ caption }: { caption: string }) {
-  const [ok, setOk] = useState(false)
-  return (
-    <div className={`demo-video-wrap${ok ? ' on' : ''}`}>
-      <video
-        className="demo-video"
-        src="/demo.mp4"
-        poster="/og.png"
-        controls
-        playsInline
-        preload="metadata"
-        onLoadedData={() => setOk(true)}
-        onError={() => setOk(false)}
-      />
-      {ok ? <p className="demo-caption">{caption}</p> : null}
-    </div>
-  )
-}
-
 export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabled?: boolean }) {
-  const [mode, setMode] = useState<ConsoleMode>('interview')
+  const [ask, setAsk] = useState<AskId>('1')
+  const [noteKind, setNoteKind] = useState<NoteKind>('meeting')
   const [navOpen, setNavOpen] = useState(false)
   const [signedIn, setSignedIn] = useState(false)
   const priced = useRef(false)
   const t = COPY[locale]
-  const demo = MODES[mode]
   const primaryHref = signedIn ? '/app' : '/signup'
-  const primaryLabel = signedIn ? t.enterWorkspace : t.startFreeLong
+  const primaryLabel = signedIn ? t.enterWorkspace : t.startFree
   const home = locale === 'zh' ? '/zh' : '/'
+  const askMap = {
+    '1': { q: t.ask1, a: t.askA1 },
+    '2': { q: t.ask2, a: t.askA2 },
+    '3': { q: t.ask3, a: t.askA3 },
+    '4': { q: t.ask4, a: t.askA4 },
+  } as const
 
   useEffect(() => {
     const origin = window.location.origin.replace(/\/+$/, '')
@@ -122,11 +83,11 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
             Nod
           </a>
           <nav className="desktop-nav">
-            <a href="#workspaces" onClick={closeNav}>
-              {t.navWorkspaces}
+            <a href="#live" onClick={closeNav}>
+              {t.navHow}
             </a>
-            <a href="#who" onClick={closeNav}>
-              {t.navWho}
+            <a href="#situations" onClick={closeNav}>
+              {t.navSituations}
             </a>
             <a href="#pilot" onClick={closeNav}>
               {t.navPricing}
@@ -152,7 +113,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
               </a>
             )}
             <a className="button button-primary" href={primaryHref} onClick={onHeaderCta}>
-              {signedIn ? t.enterWorkspace : t.startFree}
+              {primaryLabel}
             </a>
             <button
               className="mobile-toggle"
@@ -168,255 +129,198 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
       </header>
 
       <main id="top">
-        <section className="hero">
-          <div className="shell hero-grid">
-            <div className="reveal visible">
-              <div className="eyebrow">{t.eyebrow}</div>
-              <h1>
-                Hear it.
-                <br />
-                Keep it.
-                <br />
-                <span className="underline">Speak the next line.</span>
-              </h1>
-              <p className="hero-copy">{t.heroCopy}</p>
-              <div className="hero-actions">
-                <a className="button button-primary" href={primaryHref} onClick={onHeroCta}>
-                  {primaryLabel}
-                </a>
-                <a className="button button-ghost" href="#workspaces">
-                  {t.seeHow}
-                </a>
-              </div>
-              {!signedIn && <p className="hero-note">{t.startFreeNote}</p>}
-              <div className="signal-row">
-                <span>
-                  <i className="dot" />
-                  {t.step1}
-                </span>
-                <span>{t.step2}</span>
-                <span>{t.step3}</span>
-              </div>
+        <section className="hero hero-value">
+          <div className="shell hero-center reveal visible">
+            <p className="hero-brand">{t.heroBrand}</p>
+            <div className="eyebrow">{t.heroProduct}</div>
+            <h1>
+              {t.heroH1a}
+              <br />
+              {t.heroH1b}
+              <br />
+              <span className="underline">{t.heroH1c}</span>
+            </h1>
+            <p className="hero-copy">{t.heroCopy}</p>
+            <div className="hero-actions">
+              <a className="button button-primary" href={primaryHref} onClick={onHeroCta}>
+                {primaryLabel}
+              </a>
+              <a className="button button-ghost" href="#desktop">
+                {t.downloadDesktop}
+              </a>
             </div>
-
-            <div className="live-console reveal visible" aria-label={t.consoleAria}>
-              <div className="console-top">
-                <div className="workspace-tabs">
-                  {(['interview', 'meeting', 'translate'] as const).map((id) => (
-                    <button
-                      key={id}
-                      type="button"
-                      className={mode === id ? 'active' : ''}
-                      onClick={() => setMode(id)}
-                    >
-                      {id === 'interview' ? 'Listening' : id[0].toUpperCase() + id.slice(1)}
-                    </button>
-                  ))}
-                </div>
-                <div className="window-controls">
-                  <i />
-                  <i />
-                  <i />
-                </div>
-              </div>
-              <div className="console-main">
-                <aside className="console-rail">
-                  <div className="mic">⌁</div>
-                  <div className="rail-line" />
-                  <div className="rail-text">LISTENING</div>
-                </aside>
-                <div className="console-content">
-                  <div className="console-mode">{demo.label}</div>
-                  <div className="caption">
-                    <b>YOU HEAR</b>
-                    <span>{demo.hear}</span>
-                  </div>
-                  <div className="caption muted">
-                    <b>LIVE</b>
-                    <span>{demo.live}</span>
-                  </div>
-                  <div className="answer">
-                    <small>{demo.answerLabel}</small>
-                    {demo.answer}
-                  </div>
-                  <div className="live-bar" />
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <div className="proof">
-          <div className="shell proof-inner">
-            <p className="mono">{t.proofKicker}</p>
-            <div className="proof-list">
+            {!signedIn && <p className="hero-note">{t.startFreeNote}</p>}
+            <div className="hero-proof">
               <span>{t.proof1}</span>
               <span>{t.proof2}</span>
               <span>{t.proof3}</span>
               <span>{t.proof4}</span>
+              <span>{t.proof5}</span>
             </div>
           </div>
-        </div>
+        </section>
 
-        <section className="problem">
+        <section className="live-now" id="live">
           <div className="shell">
             <div className="section-head reveal">
-              <div className="eyebrow">{t.whyEyebrow}</div>
-              <h2>
-                {t.whyH2a}
-                <br />
-                {t.whyH2b}
-              </h2>
-              <p>{t.whyP}</p>
+              <div className="eyebrow">{t.liveEyebrow}</div>
+              <h2>{t.liveH}</h2>
+              <p>{t.liveP}</p>
             </div>
-            <div className="problem-grid reveal">
-              <article className="problem-card">
-                <span className="index">{t.prepIndex}</span>
-                <h3>{t.prepH}</h3>
-                <p>{t.prepP}</p>
+            <div className="live-split reveal" aria-label={t.consoleAria}>
+              <article>
+                <span className="pane-kicker">{t.liveLeft}</span>
+                <strong>{t.liveWho}</strong>
+                <p>{t.liveLine}</p>
               </article>
-              <article className="problem-card">
-                <span className="index">{t.rememberIndex}</span>
-                <h3>{t.rememberH}</h3>
-                <p>{t.rememberP}</p>
-              </article>
-              <article className="problem-card">
-                <span className="index">{t.understandIndex}</span>
-                <h3>{t.understandH}</h3>
-                <p>{t.understandP}</p>
+              <article>
+                <span className="pane-kicker">{t.liveRight}</span>
+                <strong>{t.liveWho}</strong>
+                <p>{t.liveTr}</p>
               </article>
             </div>
           </div>
         </section>
 
-        <section className="workspaces" id="workspaces">
+        <section className="ask-now">
           <div className="shell">
             <div className="section-head reveal">
-              <div className="eyebrow">{t.wsEyebrow}</div>
-              <h2>
-                {t.wsH2a}
-                <br />
-                {t.wsH2b}
-              </h2>
-              <p>{t.wsP}</p>
+              <div className="eyebrow">{t.askEyebrow}</div>
+              <h2>{t.askH}</h2>
+              <p>{t.askP}</p>
             </div>
-            <DemoVideo caption={t.demoCaption} />
-            <div className="workspace-grid">
-              <article className="work-card interview reveal">
-                <div className="card-top">
-                  <span className="mode-symbol">⌁</span>
-                  <span className="tag">LISTENING</span>
-                </div>
-                <h3>AI Listening Assistant</h3>
-                <p>{t.interviewP}</p>
-                <ul className="feature-list">
-                  <li>{t.interviewF1}</li>
-                  <li>{t.interviewF2}</li>
-                  <li>{t.interviewF3}</li>
-                </ul>
-              </article>
-              <article className="work-card meeting reveal">
-                <div className="card-top">
-                  <span className="mode-symbol">≋</span>
-                  <span className="tag">MEETING</span>
-                </div>
-                <h3>Meeting</h3>
-                <p>{t.meetingP}</p>
-                <ul className="feature-list">
-                  <li>{t.meetingF1}</li>
-                  <li>{t.meetingF2}</li>
-                  <li>{t.meetingF3}</li>
-                </ul>
-              </article>
-              <article className="work-card translate reveal">
-                <div className="card-top">
-                  <span className="mode-symbol">文</span>
-                  <span className="tag">TRANSLATE</span>
-                </div>
-                <h3>Translate</h3>
-                <p>{t.translateP}</p>
-                <ul className="feature-list">
-                  <li>{t.translateF1}</li>
-                  <li>{t.translateF2}</li>
-                  <li>{t.translateF3}</li>
-                </ul>
-              </article>
-            </div>
-          </div>
-        </section>
-
-        <section className="flow">
-          <div className="shell flow-layout">
-            <div className="flow-copy reveal">
-              <div className="eyebrow">{t.flowEyebrow}</div>
-              <h2>
-                {t.flowH2a}
-                <br />
-                {t.flowH2b}
-              </h2>
-              <p>{t.flowP}</p>
-            </div>
-            <div className="flow-stages reveal">
-              <div className="flow-stage">
-                <strong>01</strong>
-                <div>
-                  <h3>{t.flow1H}</h3>
-                  <p>{t.flow1P}</p>
-                </div>
-                <span className="arrow">→</span>
+            <div className="ask-board reveal">
+              <div className="ask-chips">
+                {(['1', '2', '3', '4'] as const).map((id) => (
+                  <button key={id} type="button" className={ask === id ? 'on' : ''} onClick={() => setAsk(id)}>
+                    {askMap[id].q}
+                  </button>
+                ))}
               </div>
-              <div className="flow-stage">
-                <strong>02</strong>
-                <div>
-                  <h3>{t.flow2H}</h3>
-                  <p>{t.flow2P}</p>
-                </div>
-                <span className="arrow">→</span>
-              </div>
-              <div className="flow-stage">
-                <strong>03</strong>
-                <div>
-                  <h3>{t.flow3H}</h3>
-                  <p>{t.flow3P}</p>
-                </div>
-                <span className="arrow">→</span>
-              </div>
-              <div className="flow-stage">
-                <strong>04</strong>
-                <div>
-                  <h3>{t.flow4H}</h3>
-                  <p>{t.flow4P}</p>
-                </div>
-                <span className="arrow">↗</span>
+              <div className="ask-reply">
+                <small>NOD</small>
+                <p>{askMap[ask].a}</p>
               </div>
             </div>
           </div>
         </section>
 
-        <section className="audience" id="who">
+        <section className="notes-now">
           <div className="shell">
             <div className="section-head reveal">
-              <div className="eyebrow">{t.whoEyebrow}</div>
-              <h2>{t.whoH2}</h2>
-              <p>{t.whoP}</p>
+              <div className="eyebrow">{t.notesEyebrow}</div>
+              <h2>{t.notesH}</h2>
+              <p>{t.notesP}</p>
             </div>
-            <div className="audience-grid reveal">
-              <article className="audience-main">
-                <h3>{t.whoMainH}</h3>
-                <p>{t.whoMainP}</p>
-              </article>
-              <div className="audience-side">
-                <article className="audience-mini">
-                  <span>{t.whoRemote}</span>
-                  <h4>{t.whoRemoteH}</h4>
-                  <p>{t.whoRemoteP}</p>
-                </article>
-                <article className="audience-mini">
-                  <span>{t.whoLive}</span>
-                  <h4>{t.whoLiveH}</h4>
-                  <p>{t.whoLiveP}</p>
-                </article>
+            <div className="notes-board reveal">
+              <div className="seg">
+                <button type="button" className={noteKind === 'meeting' ? 'on' : ''} onClick={() => setNoteKind('meeting')}>
+                  {t.notesMeeting}
+                </button>
+                <button type="button" className={noteKind === 'lecture' ? 'on' : ''} onClick={() => setNoteKind('lecture')}>
+                  {t.notesLecture}
+                </button>
               </div>
+              {noteKind === 'meeting' ? (
+                <div className="notes-grid">
+                  <article><h3>{t.notesSummary}</h3><p>{t.notesMeetSummary}</p></article>
+                  <article><h3>{t.notesKeyPoints}</h3><p>{t.notesMeetPoints}</p></article>
+                  <article><h3>{t.notesDecisions}</h3><p>{t.notesMeetDecisions}</p></article>
+                  <article><h3>{t.notesActions}</h3><p>{t.notesMeetActions}</p></article>
+                  <article><h3>{t.notesDetails}</h3><p>{t.notesMeetDetails}</p></article>
+                  <article><h3>{t.notesFollowups}</h3><p>{t.notesMeetFollow}</p></article>
+                </div>
+              ) : (
+                <div className="notes-grid">
+                  <article><h3>{t.notesSummary}</h3><p>{t.notesLecSummary}</p></article>
+                  <article><h3>{t.notesKeyPoints}</h3><p>{t.notesLecPoints}</p></article>
+                  <article><h3>{t.notesConcepts}</h3><p>{t.notesLecConcepts}</p></article>
+                  <article><h3>{t.notesRevision}</h3><p>{t.notesLecRevision}</p></article>
+                  <article><h3>{t.notesDetails}</h3><p>{t.notesLecDetails}</p></article>
+                </div>
+              )}
+              <p className="notes-hint">{noteKind === 'meeting' ? t.notesMeetingHint : t.notesLectureHint}</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="use-cases" id="situations">
+          <div className="shell">
+            <div className="section-head reveal">
+              <div className="eyebrow">{t.sitEyebrow}</div>
+              <h2>{t.sitH}</h2>
+            </div>
+            <div className="situation-grid reveal">
+              <article className="use-case-card">
+                <span className="use-case-icon">01</span>
+                <h3>{t.sitLecture}</h3>
+                <p>{t.sitLectureP}</p>
+              </article>
+              <article className="use-case-card">
+                <span className="use-case-icon">02</span>
+                <h3>{t.sitMeeting}</h3>
+                <p>{t.sitMeetingP}</p>
+              </article>
+              <article className="use-case-card">
+                <span className="use-case-icon">03</span>
+                <h3>{t.sitConversation}</h3>
+                <p>{t.sitConversationP}</p>
+              </article>
+              <article className="use-case-card">
+                <span className="use-case-icon">04</span>
+                <h3>{t.sitPresentation}</h3>
+                <p>{t.sitPresentationP}</p>
+              </article>
+            </div>
+            <aside className="more-use reveal">
+              <span className="mono">{t.sitMore}</span>
+              <div>
+                <h3>{t.sitInterview}</h3>
+                <p>{t.sitInterviewP}</p>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section className="memory-now" id="memory">
+          <div className="shell memory-layout">
+            <div className="section-head reveal">
+              <div className="eyebrow">{t.memEyebrow}</div>
+              <h2>{t.memH}</h2>
+              <p>{t.memP}</p>
+            </div>
+            <div className="memory-card reveal">
+              <label>
+                <span>SEARCH</span>
+                <strong>{t.memQuery}</strong>
+              </label>
+              <div className="ask-reply">
+                <small>NOD</small>
+                <p>{t.memAnswer}</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="platforms" id="desktop">
+          <div className="shell">
+            <div className="section-head reveal">
+              <div className="eyebrow">{t.platEyebrow}</div>
+              <h2>{t.platH}</h2>
+            </div>
+            <div className="platform-grid reveal">
+              <article>
+                <h3>{t.platWeb}</h3>
+                <p>{t.platWebP}</p>
+                <a className="button button-primary" href={primaryHref} onClick={onHeroCta}>
+                  {primaryLabel}
+                </a>
+              </article>
+              <article>
+                <h3>{t.platDesk}</h3>
+                <p>{t.platDeskP}</p>
+                <p className="desktop-status">{t.platDeskNote}</p>
+              </article>
             </div>
           </div>
         </section>
@@ -431,7 +335,6 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
                 {t.priceH2b}
               </h2>
               <p>{t.priceP}</p>
-              <p className="desktop-status">{t.desktopNote}</p>
               <div className="checks">
                 <div className="check">
                   <i>✓</i>
@@ -529,7 +432,6 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
         <section className="cta">
           <div className="shell">
             <div className="cta-box reveal">
-              <div className="eyebrow">{t.ctaEyebrow}</div>
               <h2>
                 {t.ctaH2a}
                 <br />
@@ -540,11 +442,6 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
                 <a className="button button-primary" href={primaryHref} onClick={() => track('cta_hero_start', { place: 'footer' })}>
                   {primaryLabel}
                 </a>
-                {!signedIn && (
-                  <a className="button button-ghost" href="/login">
-                    {t.navSignIn}
-                  </a>
-                )}
               </div>
               {!signedIn && <p className="hero-note">{t.startFreeNote}</p>}
             </div>
@@ -569,9 +466,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
             <a href={t.langSwitchHref} hrefLang={locale === 'zh' ? 'en' : 'zh-Hans'}>
               {t.langSwitch}
             </a>
-            <a href="/privacy">
-              {t.navPrivacy}
-            </a>
+            <a href="/privacy">{t.navPrivacy}</a>
             <a href="/terms">Terms</a>
             <a href="/signup">{t.footerRegister}</a>
             <a href={signedIn ? '/app' : '/login?next=/app'}>{t.footerWorkspace}</a>

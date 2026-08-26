@@ -117,9 +117,9 @@ function MoreIcon() {
 
 function primaryLabel(mode: WorkspaceMode, listening: boolean, paused = false): string {
   if (mode === 'meeting') {
-    if (listening) return 'Stop Meeting'
-    if (paused) return 'Resume Meeting'
-    return 'Start Meeting'
+    if (listening) return 'Stop Listening'
+    if (paused) return 'Resume Listening'
+    return 'Start Listening'
   }
   if (mode === 'translate') return listening ? 'Stop Listen' : 'Start Listen'
   return listening ? 'Stop Listening' : 'Start Listening'
@@ -210,15 +210,15 @@ export default function SideRail(props: Props) {
 
       {mode === 'meeting' && (
         <>
-          <button className="rail-icon-btn" onClick={props.onPause} disabled={!listening} title="Pause meeting">
-            <PauseIcon />
-            <span>Pause</span>
+          <button className="rail-icon-btn" onClick={props.onCopy} title="Copy last transcript line">
+            <CopyIcon />
+            <span>Copy</span>
           </button>
-          <button className="rail-icon-btn" onClick={props.onMark} title="Mark last line as action">
-            <FlagIcon />
-            <span>Mark Action</span>
+          <button className="rail-icon-btn" onClick={props.onClear} title="Clear transcript (F4)">
+            <TrashIcon />
+            <span>Clear</span>
           </button>
-          <button className="rail-icon-btn" onClick={props.onExport} title="Export transcript + summary as PDF">
+          <button className="rail-icon-btn" onClick={props.onExport} title="Summarize all sections and export PDF">
             <PdfIcon />
             <span>Export PDF</span>
           </button>

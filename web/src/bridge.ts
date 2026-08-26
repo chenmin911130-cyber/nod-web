@@ -24,6 +24,7 @@ export function installWebApi(): void {
   let reconnectTimer = 0
 
   const pending: EngineMsg[] = []
+  let micMuted = false
   const sendJson = (msg: EngineMsg) => {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(msg))
@@ -80,11 +81,15 @@ export function installWebApi(): void {
   }
 
   mic.onPcm = (buf) => {
+    if (micMuted) return
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(buf)
   }
 
   const api: Api = {
-    send: (msg) => sendJson(msg),
+    send: (msg) => {
+      if (msg.type === 'set_mic_muted') micMuted = Boolean(msg.muted)
+      sendJson(msg)
+    },
     onEvent: (cb) => {
       eventListeners.add(cb)
       return () => eventListeners.delete(cb)

@@ -137,7 +137,7 @@ def load_config() -> dict[str, Any]:
             "jd": "",
             "style": "简洁结构化：先给结论，再 2-3 点展开；行为题用 STAR；语言口语化、可直接照着念。",
         },
-        "llm": {"model": "deepseek-v4-flash", "max_tokens": 1600, "temperature": 0.5, "provider": "deepseek"},
+        "llm": {"model": "deepseek-v4-flash-vision-exp", "max_tokens": 1600, "temperature": 0.5, "provider": "deepseek"},
         "stt": {"model": STT_CLOUD, "language": None, "vocabulary": []},
         "audio": {"source": "mic"},
         "ui": {"opacity": 88, "translate_from": "auto", "translate_to": "zh"},
@@ -206,8 +206,8 @@ def heard_lang_from_turn(data: dict[str, Any]) -> str | None:
 def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
     return {
         "llm": {
-            "provider": cfg.get("llm", {}).get("provider", "deepseek"),
-            "model": cfg.get("llm", {}).get("model", ""),
+            "provider": "",
+            "model": "",
         },
         "stt": {"language": _normalize_stt_lang(cfg.get("stt", {}).get("language"))},
         "audio": {"source": "mic"},
@@ -216,7 +216,7 @@ def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
             "translate_from": _normalize_translate_from(cfg.get("ui", {}).get("translate_from")) or "auto",
             "translate_to": _normalize_translate_to(cfg.get("ui", {}).get("translate_to")),
         },
-        "models": cfg.get("models") or [],
+        "models": [],
         "auth_required": not AUTH_DISABLED,
         "clerk_publishable_key": CLERK_PUBLISHABLE_KEY,
     }
@@ -395,11 +395,22 @@ def attachments_to_prompt(files) -> str:
             except Exception as e:
                 body = f"[Could not read {name}: {e}]"
         elif mime.startswith("image/"):
-            body = f"[Image attached: {name}]"
+            body = f"[Image attached: {name}. The model can see this image.]"
         else:
             body = f"[Attached file: {name}]"
         blocks.append(f"--- Attached: {name} ---\n{body}")
     return "\n\n".join(blocks)
+
+
+def attachment_images(files) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for item in files or []:
+        mime = (item or {}).get("mime") or ""
+        data = (item or {}).get("data") or ""
+        name = (item or {}).get("name") or "image"
+        if mime.startswith("image/") and data:
+            out.append({"name": name, "mime": mime, "data": data})
+    return out[:4]
 
 
 def assemblyai_transcribe_pcm(api_key: str, pcm: bytes, cfg: dict[str, Any], timeout: float = 18.0) -> tuple[str, str | None]:
@@ -476,7 +487,7 @@ class Pipeline:
         self._keys = dict(keys)
         self.emit = emit
         self._provider = cfg["llm"].get("provider", "deepseek")
-        self._model = cfg["llm"].get("model", "deepseek-v4-flash")
+        self._model = cfg["llm"].get("model", "deepseek-v4-flash-vision-exp")
         self.client = self._make_client()
         self._qa_history: list[dict] = []
         self._last_answer = ""
@@ -534,21 +545,59 @@ class Pipeline:
             f"Answer in {name} only. Do not switch language except for proper nouns and tech terms."
         )
 
+    def _out_lang_from_tag(self, question: str) -> str | None:
+        text = (question or "").lstrip()
+        if text.startswith("[NOD_CATCH:"):
+            return _normalize_stt_lang(text[11:].split("]", 1)[0])
+        if text.startswith("[NOD_NOTES:"):
+            inner = text[11:].split("]", 1)[0]
+            parts = [p for p in inner.split(":") if p]
+            return _normalize_stt_lang(parts[-1]) if parts else None
+        return None
+
+    def _output_lang_rule(self, lang: str | None) -> str:
+        if not lang:
+            return ""
+        name = _LANG_NAMES.get(lang, "English")
+        return (
+            f"\nOUTPUT LANGUAGE (hard rule): Write every sentence in {name} only. "
+            "Do not follow the transcript language or any listener question language."
+        )
+
     def _strip_nod_tag(self, question: str) -> str:
         text = question or ""
-        if text.startswith("[NOD_TRANSLATE") or text.startswith("[NOD_SUMMARY"):
+        if text.startswith(("[NOD_TRANSLATE", "[NOD_SUMMARY", "[NOD_CATCH", "[NOD_NOTES")):
             nl = text.find("\n")
             if nl >= 0:
                 return text[nl + 1:].strip()
         return text
 
     def _is_internal(self, question: str, mode: str) -> bool:
-        if mode == "translate":
+        if mode in ("translate", "summary", "catchup", "notes"):
             return True
         t = (question or "").lstrip()
-        return t.startswith(("[NOD_TRANSLATE", "Translate to "))
+        return t.startswith(("[NOD_TRANSLATE", "[NOD_SUMMARY", "[NOD_CATCH", "[NOD_NOTES", "Translate to "))
+
+    def _with_images(self, messages: list[dict], images: list[dict[str, str]] | None) -> list[dict]:
+        if not images:
+            return messages
+        last = dict(messages[-1])
+        text = last.get("content") if isinstance(last.get("content"), str) else ""
+        parts: list[dict[str, Any]] = [{"type": "text", "text": text}]
+        for img in images:
+            mime = img.get("mime") or "image/png"
+            if not mime.startswith("image/"):
+                mime = "image/png"
+            parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{img.get('data') or ''}"},
+            })
+        last["content"] = parts
+        return [*messages[:-1], last]
 
     def _build_messages(self, question: str, mode: str = "auto") -> list[dict]:
+        out_lang = self._out_lang_from_tag(question)
+        out_rule = self._output_lang_rule(out_lang)
         question = self._strip_nod_tag(question)
         if mode == "summary" or question.startswith("Summarize the following meeting transcript"):
             return [
@@ -571,6 +620,38 @@ class Pipeline:
                         "You are a translator for live captions.\n"
                         "Output ONLY the translation — no quotes, labels, notes, or preamble.\n"
                         "Preserve names, numbers, and meaning. If the text is already in the target language, return it unchanged."
+                    ),
+                },
+                {"role": "user", "content": question},
+            ]
+        if mode == "catchup" or question.startswith("Catch the listener up"):
+            return [
+                {
+                    "role": "system",
+                    "content": (
+                        "You help someone who missed the last minute or two of a live conversation.\n"
+                        "Cover ONLY the recent stretch they pasted. Listening is still going — do not write a full-session recap.\n"
+                        "6-10 short sentences or bullets. Name decisions, numbers, and owners only if they were said.\n"
+                        "If they asked a question, answer it from this stretch first."
+                        + out_rule
+                    ),
+                },
+                {"role": "user", "content": question},
+            ]
+        if mode == "notes" or question.startswith("Write structured notes"):
+            return [
+                {
+                    "role": "system",
+                    "content": (
+                        "You write structured listening notes after a session ends.\n"
+                        "Return JSON only. No markdown fence.\n"
+                        "Keys: summary (string), takeaways, keyPoints, decisions, actionItems, "
+                        "importantDetails, followUps, revisionNotes.\n"
+                        "Lists are arrays of short strings. actionItems is an array of objects "
+                        "{\"text\":\"...\",\"owner\":\"...\"} — omit owner if nobody was named.\n"
+                        "Use empty arrays when the transcript has nothing for that key. Do not invent."
+                        + out_rule
+                    ),
                     ),
                 },
                 {"role": "user", "content": question},
@@ -605,7 +686,7 @@ class Pipeline:
             {"role": "user", "content": f"Interviewer question: {question}\n\n{lang_line}\n\nAnswer:"},
         ]
 
-    def process_text(self, question: str, mode: str = "ask", heard_lang: str | None = None) -> None:
+    def process_text(self, question: str, mode: str = "ask", heard_lang: str | None = None, images: list | None = None) -> None:
         t = (question or "").strip()
         self._heard_lang = _normalize_stt_lang(heard_lang)
         if not t:
@@ -639,15 +720,15 @@ class Pipeline:
         max_tokens = int(llm.get("max_tokens") or 800)
         if mode == "ask":
             max_tokens = max(max_tokens, 1600)
-        elif mode == "summary":
-            max_tokens = max(max_tokens, 1200)
+        elif mode in ("summary", "notes", "catchup"):
+            max_tokens = max(max_tokens, 1600)
         elif mode == "translate":
             max_tokens = max(max_tokens, 800)
         answer = ""
         try:
             kwargs: dict[str, Any] = dict(
                 model=self._model,
-                messages=self._build_messages(t, mode),
+                messages=self._with_images(self._build_messages(t, mode), images),
                 max_tokens=max_tokens,
                 stream=True,
             )
@@ -686,7 +767,7 @@ class Pipeline:
             self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
             return
         self._last_answer = answer[-400:]
-        if mode not in ("translate", "summary"):
+        if mode not in ("translate", "summary", "catchup", "notes"):
             self._qa_history.append({"qid": qid, "q": self._strip_nod_tag(t), "a": answer})
             self._qa_history = self._qa_history[-6:]
         if self.user_id:
@@ -1006,7 +1087,10 @@ class Session:
             lang = _normalize_stt_lang(msg.get("language"))
             prev = self._effective_stt_lang()
             self.cfg.setdefault("stt", {})["language"] = lang
-            self.emit({"type": "status", "text": f"Language: {_LANG_NAMES.get(lang or '', 'Auto')}"})
+            if lang:
+                self.emit({"type": "status", "text": f"Speech recognition · {_LANG_NAMES.get(lang, lang)} only"})
+            else:
+                self.emit({"type": "status", "text": "Speech recognition · Auto · all supported languages"})
             if self._workspace != "translate" and self._listener and prev != lang:
                 self._restart_listener()
         elif mtype == "set_translate_from":
@@ -1215,12 +1299,11 @@ class Session:
             self.emit({"type": "state", "state": "idle"})
             return
         heard = lang or detect_question_lang(cleaned)
+        if not self._speech_allowed(cleaned, lang or heard):
+            self.emit({"type": "partial", "text": ""})
+            self.emit({"type": "state", "state": "idle"})
+            return
         if self._workspace == "translate":
-            locked = self._effective_stt_lang()
-            if not matches_locked_speech(cleaned, locked, lang):
-                self.emit({"type": "partial", "text": ""})
-                self.emit({"type": "state", "state": "idle"})
-                return
             qid = self.pipeline._new_qid()
             ev: dict[str, Any] = {"type": "question", "id": qid, "text": cleaned}
             if heard:
@@ -1246,23 +1329,30 @@ class Session:
 
     def ask(self, text, files=None, mode="ask") -> None:
         extra = attachments_to_prompt(files)
+        images = attachment_images(files)
         text = (text or "").strip()
         if extra:
             text = f"{extra}\n\n{text}".strip() if text else extra
-        if not text:
+        if not text and not images:
             return
+        if not text:
+            text = "Please review the attached images."
         if not self._ensure_usage():
             return
         body = text
-        if body.startswith("[NOD_TRANSLATE") or body.startswith("[NOD_SUMMARY"):
+        if body.startswith(("[NOD_TRANSLATE", "[NOD_SUMMARY", "[NOD_CATCH", "[NOD_NOTES")):
             nl = body.find("\n")
             body = body[nl + 1:].strip() if nl >= 0 else body
         if mode == "ask" and body.startswith("Summarize the following meeting transcript"):
             mode = "summary"
         if mode == "ask" and body.startswith("Translate to "):
             mode = "translate"
+        if mode == "ask" and (body.startswith("Catch the listener up") or text.lstrip().startswith("[NOD_CATCH")):
+            mode = "catchup"
+        if mode == "ask" and (body.startswith("Write structured notes") or text.lstrip().startswith("[NOD_NOTES")):
+            mode = "notes"
         if self._busy:
-            if mode in ("translate", "summary"):
+            if mode in ("translate", "summary", "catchup", "notes"):
                 self._pending_asks.append((text, mode))
                 return
             self.emit({"type": "status", "text": "Still working, please wait"})
@@ -1273,7 +1363,7 @@ class Session:
 
         def work():
             try:
-                self.pipeline.process_text(text, mode)
+                self.pipeline.process_text(text, mode, images=images)
             finally:
                 self._busy = False
                 listening = self._listener is not None
@@ -1284,14 +1374,16 @@ class Session:
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _speech_allowed(self, text: str, lang: str | None = None) -> bool:
+        locked = self._effective_stt_lang()
+        return matches_locked_speech(text, locked, lang)
+
     def _on_partial(self, text: str, lang: str | None = None) -> None:
         if not text:
             return
-        if self._workspace == "translate":
-            locked = self._effective_stt_lang()
-            if locked and not matches_locked_speech(text, locked, lang):
-                self.emit({"type": "partial", "text": ""})
-                return
+        if not self._speech_allowed(text, lang):
+            self.emit({"type": "partial", "text": ""})
+            return
         ev: dict[str, Any] = {"type": "partial", "text": text}
         if lang:
             ev["language"] = lang
@@ -1302,11 +1394,9 @@ class Session:
         cleaned, _reason = clean_transcript(text, recent, self.pipeline._last_answer)
         if not cleaned:
             return
-        if self._workspace == "translate":
-            locked = self._effective_stt_lang()
-            if not matches_locked_speech(cleaned, locked, lang):
-                self.emit({"type": "partial", "text": ""})
-                return
+        if not self._speech_allowed(cleaned, lang):
+            self.emit({"type": "partial", "text": ""})
+            return
         now = time.time()
         for t, ts in self._recent_finals:
             if now - ts < 5.0 and _ratio(cleaned.lower(), t.lower()) > 0.85:

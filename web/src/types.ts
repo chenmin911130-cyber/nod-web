@@ -1,5 +1,6 @@
 export type RunState = 'idle' | 'record' | 'listen' | 'think'
 export type Turn = { id: string; q: string; a: string }
+export type CatchNote = { id: string; title: string; text: string }
 export type ViewMode = 'workspace' | 'focus' | 'fullscreen'
 export type AudioSource = 'system' | 'both' | 'mic'
 export type WorkspaceMode = 'interview' | 'meeting' | 'translate'
@@ -36,6 +37,8 @@ export interface MeetingLine {
   ts: string
   text: string
   marked?: boolean
+  at?: number
+  translation?: string
 }
 
 export interface TranslatePair {
@@ -85,6 +88,13 @@ export interface AppState {
   translateAskId: string
   translateBindId: string
   summaryAskId: string
+  listenScene: 'meeting' | 'lecture' | 'interview'
+  translateOn: boolean
+  catchNotes: CatchNote[]
+  catchPendingTitle: string
+  catchAskId: string
+  notesRaw: string
+  notesAskId: string
   quota: {
     ok: boolean
     stt_seconds: number

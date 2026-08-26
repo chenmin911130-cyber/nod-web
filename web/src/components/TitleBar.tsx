@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AudioSource, Lang, ModelDef, PairLang, WorkspaceMode } from '../types'
+import type { AudioSource, Lang, PairLang, WorkspaceMode } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import { isWeb } from '../platform'
 import { logout } from '../auth'
@@ -7,43 +7,34 @@ import OpacityBar from './OpacityBar'
 
 interface Props {
   mode: WorkspaceMode
-  models: ModelDef[]
-  llm: { provider: string; model: string }
   lang: Lang
   heardLang?: PairLang | null
   source: AudioSource
   opacity: number
   pinned: boolean
   systemMuted: boolean
+  micMuted: boolean
   stealth: boolean
   onMode: (mode: WorkspaceMode) => void
-  onModel: (provider: string, model: string) => void
   onLang: (lang: Lang) => void
   onSource: (s: AudioSource) => void
   onOpacity: (n: number) => void
   onPinned: (b: boolean) => void
   onSystemMuted: (muted: boolean) => void
+  onMicMuted: (muted: boolean) => void
   onStealth: (on: boolean) => void
   onFullScreen: () => void
-  quotaLabel?: string
 }
 
 const LANGS: Array<{ label: string; value: Lang; name: string }> = [
-  { label: 'Auto', value: 'auto', name: 'Auto' },
-  ...TRANSLATE_LANGS.map((l) => ({ label: l.tag, value: l.id as Lang, name: l.name })),
+  { label: 'Auto', value: 'auto', name: 'All supported languages' },
+  ...TRANSLATE_LANGS.map((l) => ({ label: l.tag, value: l.id as Lang, name: `${l.name} only` })),
 ]
 
 const MODES: Array<{ id: WorkspaceMode; label: string }> = [
-  { id: 'interview', label: 'AI Listening Assistant' },
-  { id: 'meeting', label: 'Meeting' },
+  { id: 'meeting', label: 'AI Listening Assistant' },
   { id: 'translate', label: 'Translate' },
 ]
-
-function shortModelLabel(label: string): string {
-  const cleaned = label.replace(/\s*[·•|].*$/, '').trim()
-  const shortened = cleaned.replace(/\bV\d+\b/gi, '').replace(/\s+/g, ' ').trim()
-  return shortened || label
-}
 
 function NodLogo() {
   return (
@@ -107,12 +98,11 @@ function SourceOffIcon() {
   )
 }
 
-function MoreIcon() {
+function SettingsIcon() {
   return (
-    <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor" aria-hidden="true">
-      <circle cx="4.5" cy="10" r="1.55" />
-      <circle cx="10" cy="10" r="1.55" />
-      <circle cx="15.5" cy="10" r="1.55" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   )
 }
@@ -126,8 +116,7 @@ function Chevron() {
 }
 
 export default function TitleBar(props: Props) {
-  const { mode, models, llm, lang, heardLang, source, opacity, pinned, systemMuted, stealth } = props
-  const curIdx = models.findIndex((m) => m.provider === llm.provider && m.model === llm.model)
+  const { mode, lang, heardLang, source, opacity, pinned, systemMuted, micMuted, stealth } = props
   const [menuOpen, setMenuOpen] = useState(false)
   const [langOpen, setLangOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -167,17 +156,21 @@ export default function TitleBar(props: Props) {
       )}
 
       <div className="mode-pills no-drag" role="tablist" aria-label="Workspace mode">
-        {MODES.map((m) => (
+        {MODES.map((m) => {
+          const selected = (mode === 'interview' ? 'meeting' : mode) === m.id
+          return (
           <button
             key={m.id}
             role="tab"
-            aria-selected={mode === m.id}
-            className={`mode-pill${mode === m.id ? ' active' : ''}`}
+            aria-selected={selected}
+            className={`mode-pill${selected ? ' active' : ''}`}
             onClick={() => props.onMode(m.id)}
           >
-            {m.label}
+            <span className="mode-pill-full">{m.label}</span>
+            <span className="mode-pill-short">{m.id === 'meeting' ? 'Listen' : 'Translate'}</span>
           </button>
-        ))}
+          )
+        })}
       </div>
 
       <div className="titlebar-right no-drag">
@@ -188,13 +181,11 @@ export default function TitleBar(props: Props) {
             className={`lang-select-btn${langOpen ? ' open' : ''}`}
             aria-haspopup="listbox"
             aria-expanded={langOpen}
-            aria-label="Speech language"
+            aria-label="Speech recognition language"
             title={
               currentLang.value === 'auto'
-                ? 'Auto: hear among supported languages. Answers match the question. Translate To still picks the caption language.'
-                : mode === 'interview'
-                  ? `Force ${currentLang.name} speech and answers`
-                  : `Lock speech recognition to ${currentLang.name}. Translate To still picks the caption language.`
+                ? 'Speech recognition · Auto. Hears all supported languages.'
+                : `Speech recognition · ${currentLang.name.replace(/ only$/, '')} only. Other languages are ignored.`
             }
             onClick={() => {
               setLangOpen((v) => !v)
@@ -205,7 +196,8 @@ export default function TitleBar(props: Props) {
             <Chevron />
           </button>
           {langOpen && (
-            <div className="lang-menu" role="listbox" aria-label="Speech language">
+            <div className="lang-menu" role="listbox" aria-label="Speech recognition language">
+              <div className="lang-menu-hint">Speech recognition</div>
               {LANGS.map((l) => (
                 <button
                   key={l.value}
@@ -229,17 +221,24 @@ export default function TitleBar(props: Props) {
 
         <div className="tb-icons">
           {isWeb ? (
-            <span className="tb-icon src-btn on" title="Browser microphone → AssemblyAI cloud STT">
-              <SourceIcon />
-            </span>
+            <button
+              type="button"
+              className={`tb-icon src-btn${micMuted ? ' muted' : ' on'}`}
+              onClick={() => props.onMicMuted(!micMuted)}
+              title={micMuted ? 'Unmute microphone' : 'Mute microphone'}
+              aria-label={micMuted ? 'Unmute microphone' : 'Mute microphone'}
+              aria-pressed={!micMuted}
+            >
+              {micMuted ? <SourceOffIcon /> : <SourceIcon />}
+            </button>
           ) : (
             <button
               className={`tb-icon src-btn${source === 'both' ? ' on' : ' muted'}`}
               onClick={() => props.onSource(source === 'both' ? 'system' : 'both')}
               title={
                 source === 'both'
-                  ? 'Microphone on — click to turn off'
-                  : 'Microphone off — click to capture your mic'
+                  ? 'Microphone on — click to mute'
+                  : 'Microphone muted — click to unmute'
               }
             >
               {source === 'both' ? <SourceIcon /> : <SourceOffIcon />}
@@ -270,12 +269,6 @@ export default function TitleBar(props: Props) {
             </button>
           )}
 
-          {isWeb && (
-            <a className="lang-pill" href="/account" title="Account and remaining quota">
-              {props.quotaLabel || 'Account'}
-            </a>
-          )}
-
           <div className="tb-more" ref={menuRef}>
             <button
               className={`tb-icon more-btn${menuOpen ? ' on' : ''}`}
@@ -286,27 +279,10 @@ export default function TitleBar(props: Props) {
               title="Settings"
               aria-expanded={menuOpen}
             >
-              <MoreIcon />
+              <SettingsIcon />
             </button>
             {menuOpen && (
               <div className="tb-menu">
-                <label className="tb-menu-row">
-                  <span>Model</span>
-                  <select
-                    className="combo combo-model"
-                    value={curIdx >= 0 ? String(curIdx) : '0'}
-                    onChange={(e) => {
-                      const m = models[Number(e.target.value)]
-                      if (m) props.onModel(m.provider, m.model)
-                    }}
-                  >
-                    {models.map((m, i) => (
-                      <option key={`${m.provider}/${m.model}`} value={String(i)}>
-                        {shortModelLabel(m.label)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
                 <div className="tb-menu-row tb-menu-opacity">
                   <span>Opacity</span>
                   <OpacityBar value={opacity} onChange={props.onOpacity} />

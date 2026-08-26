@@ -81,7 +81,7 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
           <div className="eyebrow">ACCOUNT</div>
           <Funnel current="account" />
           <h1>Sign in to Nod</h1>
-          <p>AI Listening Assistant, Meeting, and Translate need an account. Continue with Google, or use email. Google is optional.</p>
+          <p>Nod needs an account before it can listen, translate, and summarize. Continue with Google, or use email. Google is optional.</p>
           {clerkEnabled && (
             <>
               <Suspense fallback={null}>
