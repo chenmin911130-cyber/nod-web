@@ -652,7 +652,6 @@ class Pipeline:
                         "Use empty arrays when the transcript has nothing for that key. Do not invent."
                         + out_rule
                     ),
-                    ),
                 },
                 {"role": "user", "content": question},
             ]
