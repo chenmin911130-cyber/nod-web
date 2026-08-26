@@ -1,8 +1,45 @@
-import type { MeetingLine, PairLang } from './types'
+import type { Lang, MeetingLine, PairLang } from './types'
 import { TRANSLATE_LANGS } from './types'
 
 function langName(lang: PairLang): string {
   return TRANSLATE_LANGS.find((item) => item.id === lang)?.name ?? 'Chinese'
+}
+
+function outLangRule(outLang: Lang, kind: 'answer' | 'catch-up' | 'json', bilingual = false): string {
+  if (bilingual) {
+    const name = outLang === 'auto' ? 'the listener notes language, or Chinese if unclear' : langName(outLang)
+    if (kind === 'json') {
+      return (
+        `BILINGUAL (hard rule): Every JSON string value has TWO lines. Line 1 is the transcript / source language. ` +
+        `Line 2 starts with ">> " then the ${name} translation. Never output only one language.\n`
+      )
+    }
+    return (
+      `BILINGUAL (hard rule): Every sentence or bullet has TWO lines. ` +
+      `Line 1 is the transcript / source language. Line 2 starts with ">> " then the ${name} translation. ` +
+      `Never output only one language.\n`
+    )
+  }
+  if (outLang === 'auto') {
+    if (kind === 'json') {
+      return 'OUTPUT LANGUAGE (hard rule): Write every JSON string in the language of the transcript. If the transcript mixes languages, follow the majority language. Do not force one language.\n'
+    }
+    return 'OUTPUT LANGUAGE (hard rule): Write in the language of the listener question if it is clear; otherwise follow the transcript. Do not force one language.\n'
+  }
+  const name = langName(outLang)
+  if (kind === 'json') {
+    return `OUTPUT LANGUAGE (hard rule): Every JSON string value must be in ${name} only. Do not follow the transcript language.\n`
+  }
+  if (kind === 'catch-up') {
+    return `OUTPUT LANGUAGE (hard rule): Write the entire catch-up in ${name} only. Do not follow the transcript language.\n`
+  }
+  return `OUTPUT LANGUAGE (hard rule): Write the entire answer in ${name} only. Do not follow the transcript language.\n`
+}
+
+function nodTag(kind: 'ASK' | 'CATCH' | 'NOTES', outLang: Lang, bilingual: boolean, scene?: ListenScene): string {
+  const extra = bilingual ? ':bi' : ''
+  if (kind === 'NOTES') return `[NOD_NOTES:${scene}:${outLang}${extra}]`
+  return `[NOD_${kind}:${outLang}${extra}]`
 }
 
 export type ListenScene = 'meeting' | 'lecture' | 'interview'
@@ -162,8 +199,29 @@ export function lastTwoMinutes(lines: MeetingLine[], now = Date.now()): MeetingL
   return windowed.length ? windowed : lines.slice(-8)
 }
 
-export function transcriptBlock(lines: MeetingLine[]): string {
-  return lines.map((line) => `${line.ts}  ${line.text}`).join('\n')
+export function transcriptBlock(lines: MeetingLine[], bilingual = false): string {
+  return lines
+    .map((line) => {
+      const head = `${line.ts}  ${line.text}`
+      return bilingual && line.translation ? `${head}\n       ${line.translation}` : head
+    })
+    .join('\n')
+}
+
+export type BiLine = { src: string; tr?: string }
+
+export function parseBiLines(text: string): BiLine[] {
+  const out: BiLine[] = []
+  for (const raw of (text || '').split(/\n/)) {
+    const line = raw.trim()
+    if (!line) continue
+    if (/^>>\s*/.test(line) && out.length) {
+      out[out.length - 1].tr = line.replace(/^>>\s*/, '')
+    } else {
+      out.push({ src: line })
+    }
+  }
+  return out.length ? out : text.trim() ? [{ src: text.trim() }] : []
 }
 
 export function askContext(lines: MeetingLine[], ended: boolean, now = Date.now()): MeetingLine[] {
@@ -173,15 +231,14 @@ export function askContext(lines: MeetingLine[], ended: boolean, now = Date.now(
   return windowed.length ? windowed : lines.slice(-80)
 }
 
-export function askPrompt(lines: MeetingLine[], question: string, outLang: PairLang = 'zh'): string {
-  const name = langName(outLang)
+export function askPrompt(lines: MeetingLine[], question: string, outLang: Lang = 'zh', bilingual = false): string {
   const ask = question.trim()
   return (
-    `[NOD_ASK:${outLang}]\n` +
-    `OUTPUT LANGUAGE (hard rule): Write the entire answer in ${name} only. Do not follow the transcript language.\n` +
+    `${nodTag('ASK', outLang, bilingual)}\n` +
+    outLangRule(outLang, 'answer', bilingual) +
     `Listener question: ${ask}\n` +
     `Transcript (use when relevant; if empty, say you have not heard enough yet and still answer what you can):\n` +
-    `${transcriptBlock(lines) || '(empty)'}`
+    `${transcriptBlock(lines, bilingual) || '(empty)'}`
   )
 }
 
@@ -189,21 +246,19 @@ export function isAskPrompt(text: string): boolean {
   return (text || '').trim().startsWith('[NOD_ASK')
 }
 
-export function catchupPrompt(lines: MeetingLine[], question = '', outLang: PairLang = 'zh'): string {
-  const body = transcriptBlock(lines)
+export function catchupPrompt(lines: MeetingLine[], question = '', outLang: Lang = 'zh', bilingual = false): string {
+  const body = transcriptBlock(lines, bilingual)
   const ask = question.trim()
-  const name = langName(outLang)
   return (
-    `[NOD_CATCH:${outLang}]\n` +
-    `OUTPUT LANGUAGE (hard rule): Write the entire catch-up in ${name} only. Do not follow the transcript language.\n` +
+    `${nodTag('CATCH', outLang, bilingual)}\n` +
+    outLangRule(outLang, 'catch-up', bilingual) +
     'Catch the listener up on ONLY this recent stretch. Listening is still going. Do not recap the whole session.\n' +
     (ask ? `Listener question: ${ask}\n` : '') +
     `Recent transcript (~2 minutes):\n${body || '(empty)'}`
   )
 }
 
-export function notesPrompt(scene: ListenScene, lines: MeetingLine[], outLang: PairLang = 'zh'): string {
-  const name = langName(outLang)
+export function notesPrompt(scene: ListenScene, lines: MeetingLine[], outLang: Lang = 'zh', bilingual = false): string {
   const follow =
     scene === 'lecture'
       ? 'followUps = homework / reading'
@@ -211,15 +266,15 @@ export function notesPrompt(scene: ListenScene, lines: MeetingLine[], outLang: P
         ? 'followUps = thank-you note / materials to send'
         : 'followUps = next check-ins'
   return (
-    `[NOD_NOTES:${scene}:${outLang}]\n` +
-    `OUTPUT LANGUAGE (hard rule): Every JSON string value must be in ${name} only. Do not follow the transcript language.\n` +
+    `${nodTag('NOTES', outLang, bilingual, scene)}\n` +
+    outLangRule(outLang, 'json', bilingual) +
     `Write structured notes for a ${scene}. Use only the transcript. Do not invent names, numbers, or commitments.\n` +
     'Return JSON only with keys: summary (string), takeaways, keyPoints, decisions, actionItems, importantDetails, followUps, revisionNotes.\n' +
     'Lists are string arrays. actionItems is [{text, owner}] — owner only if spoken.\n' +
     `Empty arrays when the transcript has nothing. ${follow}. ` +
     (scene === 'lecture' ? 'revisionNotes = exam / formula items. ' : 'revisionNotes usually []. ') +
     (scene === 'interview' ? 'takeaways = questions asked and what they cared about. ' : 'takeaways usually []. ') +
-    `Transcript:\n${transcriptBlock(lines) || '(empty)'}`
+    `Transcript:\n${transcriptBlock(lines, bilingual) || '(empty)'}`
   )
 }
 

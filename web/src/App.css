@@ -4243,6 +4243,23 @@ a.tb-menu-action {
   line-height: 1.4;
 }
 
+.listen-bi {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.listen-bi-row p {
+  margin: 8px 0 0;
+}
+
+.listen-note-tr {
+  color: #9eb0cc;
+  font-size: 12.5px;
+  line-height: 1.45;
+  margin-top: 3px;
+}
+
 .listen-block {
   margin: 0 0 16px;
 }

@@ -89,6 +89,7 @@ export interface AppState {
   translatePairs: TranslatePair[]
   translateFrom: Lang
   translateTo: PairLang
+  notesLang: Lang
   heardLang: PairLang | null
   bilingual: boolean
   translateAskId: string

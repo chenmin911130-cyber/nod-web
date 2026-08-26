@@ -31,6 +31,7 @@ const STATUS_READY = 'Ready · F2 record / F3 listen / F4 clear'
 const TRANSLATE_PREFIX = 'Translate to '
 const SUMMARY_PREFIX = 'Summarize the following meeting transcript'
 const TRANSLATE_PAIR_KEY = 'nod_translate_pair'
+const NOTES_LANG_KEY = 'nod_notes_lang'
 
 function isPairLang(value: unknown): value is PairLang {
   return TRANSLATE_LANGS.some((l) => l.id === value)
@@ -49,6 +50,24 @@ function readStoredPair(): { from: Lang; to: PairLang } | null {
     return { from: parsed.from, to: parsed.to }
   } catch {
     return null
+  }
+}
+
+function readStoredNotesLang(): Lang | null {
+  try {
+    const raw = localStorage.getItem(NOTES_LANG_KEY)
+    if (raw === 'auto' || isPairLang(raw)) return raw
+  } catch {
+    /* ignore */
+  }
+  return null
+}
+
+function persistNotesLang(lang: Lang) {
+  try {
+    localStorage.setItem(NOTES_LANG_KEY, lang)
+  } catch {
+    /* ignore */
   }
 }
 
@@ -103,6 +122,7 @@ const initial: AppState = {
   translatePairs: [],
   translateFrom: storedPair?.from ?? 'auto',
   translateTo: storedPair?.to ?? 'zh',
+  notesLang: readStoredNotesLang() ?? storedPair?.to ?? 'zh',
   heardLang: null,
   bilingual: true,
   translateAskId: '',
@@ -135,6 +155,7 @@ type Action =
   | { type: 'workspace'; mode: WorkspaceMode }
   | { type: 'translate_from'; lang: Lang }
   | { type: 'translate_to'; lang: PairLang }
+  | { type: 'notes_lang'; lang: Lang }
   | { type: 'bilingual'; on: boolean }
   | { type: 'mark_action' }
   | { type: 'meeting_clock'; startedAt: number | null; elapsedMs: number }
@@ -553,7 +574,9 @@ function reducer(state: AppState, action: Action): AppState {
     case 'translate_from':
       return { ...state, translateFrom: action.lang }
     case 'translate_to':
-      return { ...state, translateTo: action.lang }
+      return { ...state, translateTo: action.lang, notesLang: action.lang }
+    case 'notes_lang':
+      return { ...state, notesLang: action.lang }
     case 'bilingual':
       return { ...state, bilingual: action.on }
     case 'mark_action': {
@@ -1157,9 +1180,22 @@ export default function App() {
     dispatch({ type: 'mark_action' })
   }, [])
 
-  const handleTranslateTo = useCallback((lang: PairLang) => {
-    if (lang === stateRef.current.translateTo) return
+  const handleTranslateTo = useCallback((lang: Lang) => {
     const s = stateRef.current
+    if (lang === 'auto') {
+      if (s.notesLang === 'auto' && s.lang === 'auto') return
+      persistNotesLang('auto')
+      window.api.send({ type: 'set_lang', language: null })
+      dispatch({ type: 'lang', lang: 'auto' })
+      dispatch({ type: 'notes_lang', lang: 'auto' })
+      dispatch({
+        type: 'engine',
+        ev: { type: 'status', text: 'Auto · recognize all languages · notes follow speech' },
+      })
+      return
+    }
+    if (lang === s.translateTo && s.notesLang === lang) return
+    persistNotesLang(lang)
     persistTranslatePair(s.translateFrom, lang)
     const stuck = inflightTranslate.current
     window.api.send({ type: 'cancel_generate' })
@@ -1294,7 +1330,7 @@ export default function App() {
       return
     }
     dispatch({ type: 'expect_notes' })
-    window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, s.meetingLines, s.translateTo), mode: 'notes' })
+    window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, s.meetingLines, s.notesLang, s.translateOn), mode: 'notes' })
   }, [])
   generateNotesRef.current = generateNotes
 
@@ -1309,7 +1345,7 @@ export default function App() {
       type: 'expect_catch',
       title: 'Catch up · last 2 min',
     })
-    window.api.send({ type: 'ask', text: catchupPrompt(windowed, '', s.translateTo), mode: 'catchup' })
+    window.api.send({ type: 'ask', text: catchupPrompt(windowed, '', s.notesLang, s.translateOn), mode: 'catchup' })
   }, [])
 
   const handleListenAsk = useCallback((text: string) => {
@@ -1319,7 +1355,7 @@ export default function App() {
     dispatch({ type: 'expect_catch', kind: 'ask', title: 'Ask', question })
     window.api.send({
       type: 'ask',
-      text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.translateTo),
+      text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, s.translateOn),
       mode: 'listen_ask',
     })
   }, [])
@@ -1595,6 +1631,7 @@ export default function App() {
             scene={state.workspaceMode === 'interview' ? 'interview' : state.listenScene}
             translateOn={state.translateOn}
             translateTo={state.translateTo}
+            notesLang={state.notesLang}
             lines={state.meetingLines}
             partial={state.partial}
             elapsedLabel={elapsedLabel}

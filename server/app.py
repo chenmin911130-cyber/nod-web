@@ -545,22 +545,37 @@ class Pipeline:
             f"Answer in {name} only. Do not switch language except for proper nouns and tech terms."
         )
 
-    def _out_lang_from_tag(self, question: str) -> str | None:
-        text = (question or "").lstrip()
-        if text.startswith("[NOD_CATCH:"):
-            return _normalize_stt_lang(text[11:].split("]", 1)[0])
-        if text.startswith("[NOD_ASK:"):
-            return _normalize_stt_lang(text[9:].split("]", 1)[0])
-        if text.startswith("[NOD_NOTES:"):
-            inner = text[11:].split("]", 1)[0]
-            parts = [p for p in inner.split(":") if p]
-            return _normalize_stt_lang(parts[-1]) if parts else None
-        return None
+    def _tag_inner(self, question: str) -> str:
+        first = (question or "").lstrip().split("\n", 1)[0]
+        if not first.startswith("[NOD_") or "]" not in first:
+            return ""
+        return first[1:first.index("]")]
 
-    def _output_lang_rule(self, lang: str | None) -> str:
+    def _bilingual_from_tag(self, question: str) -> bool:
+        return ":bi" in self._tag_inner(question).split("]")[0]
+
+    def _out_lang_from_tag(self, question: str) -> str | None:
+        inner = self._tag_inner(question)
+        if not inner.startswith(("NOD_CATCH:", "NOD_ASK:", "NOD_NOTES:")):
+            return None
+        parts = [p for p in inner.split(":")[1:] if p and p != "bi"]
+        if not parts:
+            return None
+        last = parts[-1]
+        if last == "auto":
+            return None
+        return _normalize_stt_lang(last)
+
+    def _output_lang_rule(self, lang: str | None, bilingual: bool = False) -> str:
+        name = _LANG_NAMES.get(lang or "", "the notes language, or Chinese if unclear")
+        if bilingual:
+            return (
+                f"\nBILINGUAL (hard rule): Every sentence or bullet has TWO lines. "
+                f"Line 1 is the transcript / source language. Line 2 starts with '>> ' then the {name} translation. "
+                "Never output only one language."
+            )
         if not lang:
             return ""
-        name = _LANG_NAMES.get(lang, "English")
         return (
             f"\nOUTPUT LANGUAGE (hard rule): Write every sentence in {name} only. "
             "Do not follow the transcript language or any listener question language."
@@ -599,7 +614,7 @@ class Pipeline:
 
     def _build_messages(self, question: str, mode: str = "auto") -> list[dict]:
         out_lang = self._out_lang_from_tag(question)
-        out_rule = self._output_lang_rule(out_lang)
+        out_rule = self._output_lang_rule(out_lang, self._bilingual_from_tag(question))
         question = self._strip_nod_tag(question)
         if mode == "summary" or question.startswith("Summarize the following meeting transcript"):
             return [

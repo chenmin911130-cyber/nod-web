@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import type { CatchNote, MeetingLine, PairLang } from '../types'
+import type { CatchNote, Lang, MeetingLine, PairLang } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import {
   LISTEN_SCENES,
+  parseBiLines,
   parseNotes,
   sceneLabel,
   visibleSections,
@@ -14,6 +15,7 @@ interface Props {
   scene: ListenScene
   translateOn: boolean
   translateTo: PairLang
+  notesLang: Lang
   lines: MeetingLine[]
   partial: string
   elapsedLabel: string
@@ -26,7 +28,7 @@ interface Props {
   qaSlot?: ReactNode
   onScene: (scene: ListenScene) => void
   onTranslate: (on: boolean) => void
-  onTranslateTo: (lang: PairLang) => void
+  onTranslateTo: (lang: Lang) => void
   onCatchUp: () => void
   onAsk: (text: string) => void
 }
@@ -136,16 +138,21 @@ function NotesIcon() {
   )
 }
 
+const NOTES_LANGS: Array<{ id: Lang; tag: string; name: string }> = [
+  { id: 'auto', tag: 'AU', name: 'Auto · all languages' },
+  ...TRANSLATE_LANGS,
+]
+
 function LangSelect({
   value,
   onChange,
 }: {
-  value: PairLang
-  onChange: (lang: PairLang) => void
+  value: Lang
+  onChange: (lang: Lang) => void
 }) {
   const [open, setOpen] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
-  const current = TRANSLATE_LANGS.find((l) => l.id === value)
+  const current = NOTES_LANGS.find((l) => l.id === value)
 
   useEffect(() => {
     if (!open) return
@@ -161,16 +168,22 @@ function LangSelect({
       <button
         type="button"
         className={`listen-icon-btn${open ? ' on' : ''}`}
-        title={current ? `Notes language · ${current.name}` : 'Choose notes language'}
+        title={
+          value === 'auto'
+            ? 'Speech recognition · Auto. Hears all supported languages. Notes follow the speech.'
+            : current
+              ? `Notes language · ${current.name}`
+              : 'Choose notes language'
+        }
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="listen-lang-tag">{current?.tag ?? '—'}</span>
+        <span className="listen-lang-tag">{current?.tag ?? 'AU'}</span>
       </button>
       {open && (
         <div className="listen-lang-menu" role="listbox">
-          {TRANSLATE_LANGS.map((lang) => (
+          {NOTES_LANGS.map((lang) => (
             <button
               key={lang.id}
               type="button"
@@ -251,10 +264,28 @@ function SceneSelect({ scene, onScene }: { scene: ListenScene; onScene: (scene: 
   )
 }
 
+function BiText({ text, bilingual }: { text: string; bilingual: boolean }) {
+  if (!text) return null
+  if (!bilingual) return <p>{text}</p>
+  const blocks = parseBiLines(text)
+  return (
+    <div className="listen-bi">
+      {blocks.map((block, i) => (
+        <div className="listen-bi-row" key={`${block.src}-${i}`}>
+          <p>{block.src}</p>
+          {block.tr ? <p className="listen-note-tr">{block.tr}</p> : null}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function LectureStudy({
   sections,
+  bilingual,
 }: {
   sections: Array<{ id: NotesSectionId; title: string; items: string[] }>
+  bilingual: boolean
 }) {
   const byId = (id: NotesSectionId) => sections.find((row) => row.id === id)
   const overview = byId('summary')
@@ -268,7 +299,7 @@ function LectureStudy({
       {overview && (
         <div className="lec-overview">
           <h3>{overview.title}</h3>
-          <p>{overview.items[0]}</p>
+          <BiText text={overview.items[0]} bilingual={bilingual} />
         </div>
       )}
       {concepts && (
@@ -278,7 +309,7 @@ function LectureStudy({
             {concepts.items.map((item, i) => (
               <li key={item}>
                 <b>{i + 1}</b>
-                <span>{item}</span>
+                <span><BiText text={item} bilingual={bilingual} /></span>
               </li>
             ))}
           </ol>
@@ -290,7 +321,7 @@ function LectureStudy({
           <div className="lec-revise">
             {revise.items.map((item) => (
               <div className="lec-flash" key={item}>
-                {item}
+                <BiText text={item} bilingual={bilingual} />
               </div>
             ))}
           </div>
@@ -301,7 +332,7 @@ function LectureStudy({
           <h3>{details.title}</h3>
           <ul>
             {details.items.map((item) => (
-              <li key={item}>{item}</li>
+              <li key={item}><BiText text={item} bilingual={bilingual} /></li>
             ))}
           </ul>
         </div>
@@ -311,7 +342,7 @@ function LectureStudy({
           <h3>{homework.title}</h3>
           <ul>
             {homework.items.map((item) => (
-              <li key={item}>{item}</li>
+              <li key={item}><BiText text={item} bilingual={bilingual} /></li>
             ))}
           </ul>
         </div>
@@ -322,8 +353,10 @@ function LectureStudy({
 
 function MeetingNotes({
   sections,
+  bilingual,
 }: {
   sections: Array<{ id: NotesSectionId; title: string; items: string[] }>
+  bilingual: boolean
 }) {
   return (
     <>
@@ -331,11 +364,11 @@ function MeetingNotes({
         <div className="listen-block" key={section.id}>
           <h3>{section.title}</h3>
           {section.id === 'summary' ? (
-            <p>{section.items[0]}</p>
+            <BiText text={section.items[0]} bilingual={bilingual} />
           ) : (
             <ul>
               {section.items.map((item) => (
-                <li key={item}>{item}</li>
+                <li key={item}><BiText text={item} bilingual={bilingual} /></li>
               ))}
             </ul>
           )}
@@ -447,7 +480,7 @@ export default function ListenPane(props: Props) {
         <SceneSelect scene={props.scene} onScene={props.onScene} />
         {!props.qa && (
           <div className="listen-tools">
-            <LangSelect value={props.translateTo} onChange={props.onTranslateTo} />
+            <LangSelect value={props.notesLang} onChange={props.onTranslateTo} />
             <button
               type="button"
               className={`listen-icon-btn${notesOpen ? ' on' : ''}`}
@@ -621,7 +654,10 @@ export default function ListenPane(props: Props) {
                   <div className={`listen-card${note.kind === 'ask' ? ' ask' : ''}`} key={note.id || `${note.title}-${i}`}>
                     <div className="listen-tag">{note.kind === 'ask' ? 'Ask' : note.title}</div>
                     {note.question ? <p className="listen-q">{note.question}</p> : null}
-                    <p>{note.text || (props.busy && i === props.catchNotes.length - 1 ? '…' : '')}</p>
+                    <BiText
+                      text={note.text || (props.busy && i === props.catchNotes.length - 1 ? '…' : '')}
+                      bilingual={props.translateOn}
+                    />
                     {props.listening && i === props.catchNotes.length - 1 && note.kind !== 'ask' && note.title.startsWith('Catch up') && (
                       <p className="listen-hint">
                         {lecture
@@ -641,8 +677,12 @@ export default function ListenPane(props: Props) {
                 {props.ended && props.busy && !sections.length && (
                   <div className="listen-empty">{lecture ? 'Writing the study sheet…' : 'Writing notes…'}</div>
                 )}
-                {props.ended && lecture && sections.length > 0 && <LectureStudy sections={sections} />}
-                {props.ended && !lecture && sections.length > 0 && <MeetingNotes sections={sections} />}
+                {props.ended && lecture && sections.length > 0 && (
+                  <LectureStudy sections={sections} bilingual={props.translateOn} />
+                )}
+                {props.ended && !lecture && sections.length > 0 && (
+                  <MeetingNotes sections={sections} bilingual={props.translateOn} />
+                )}
               </div>
             </section>
           </div>
