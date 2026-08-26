@@ -604,24 +604,25 @@ export default function ListenPane(props: Props) {
                 </button>
               </div>
               <div className="listen-scroll" ref={rightRef}>
-                {props.listening && props.catchNotes.length === 0 && (
+                {props.catchNotes.length === 0 && !props.ended && (
                   <div className="listen-empty">
                     {lecture ? (
                       <>
-                        In class. Missed a concept? Tap <b>Catch up</b>. The lecture keeps going. A study sheet waits until you stop.
+                        Ask anything in the box below — the answer lands here. Missed a stretch? Tap <b>Catch up</b>. A study sheet waits until you stop.
                       </>
                     ) : (
                       <>
-                        Listening. If a stretch just flew by, tap <b>Catch up</b>. Listening does not stop. Full notes wait until you end the session.
+                        Ask anything in the box below — the answer lands here. Missed a stretch? Tap <b>Catch up</b>. Full notes wait until you end the session.
                       </>
                     )}
                   </div>
                 )}
                 {props.catchNotes.map((note, i) => (
-                  <div className="listen-card" key={note.id || `${note.title}-${i}`}>
-                    <div className="listen-tag">{note.title}</div>
+                  <div className={`listen-card${note.kind === 'ask' ? ' ask' : ''}`} key={note.id || `${note.title}-${i}`}>
+                    <div className="listen-tag">{note.kind === 'ask' ? 'Ask' : note.title}</div>
+                    {note.question ? <p className="listen-q">{note.question}</p> : null}
                     <p>{note.text || (props.busy && i === props.catchNotes.length - 1 ? '…' : '')}</p>
-                    {props.listening && i === props.catchNotes.length - 1 && note.title.startsWith('Catch up') && (
+                    {props.listening && i === props.catchNotes.length - 1 && note.kind !== 'ask' && note.title.startsWith('Catch up') && (
                       <p className="listen-hint">
                         {lecture
                           ? 'Still in class. Older cards stay so you can scroll back.'
@@ -649,11 +650,7 @@ export default function ListenPane(props: Props) {
           <div className="listen-prompt">
             <input
               value={input}
-              placeholder={
-                lecture
-                  ? 'Ask about this concept, formula, or example'
-                  : 'Ask about what you just heard, or add a note'
-              }
+              placeholder="Ask anything — the answer shows in Notes"
               onChange={(e) => {
                 setInput(e.target.value)
                 if (e.target.value.trim()) openNotes()

@@ -549,6 +549,8 @@ class Pipeline:
         text = (question or "").lstrip()
         if text.startswith("[NOD_CATCH:"):
             return _normalize_stt_lang(text[11:].split("]", 1)[0])
+        if text.startswith("[NOD_ASK:"):
+            return _normalize_stt_lang(text[9:].split("]", 1)[0])
         if text.startswith("[NOD_NOTES:"):
             inner = text[11:].split("]", 1)[0]
             parts = [p for p in inner.split(":") if p]
@@ -566,17 +568,17 @@ class Pipeline:
 
     def _strip_nod_tag(self, question: str) -> str:
         text = question or ""
-        if text.startswith(("[NOD_TRANSLATE", "[NOD_SUMMARY", "[NOD_CATCH", "[NOD_NOTES")):
+        if text.startswith(("[NOD_TRANSLATE", "[NOD_SUMMARY", "[NOD_CATCH", "[NOD_ASK", "[NOD_NOTES")):
             nl = text.find("\n")
             if nl >= 0:
                 return text[nl + 1:].strip()
         return text
 
     def _is_internal(self, question: str, mode: str) -> bool:
-        if mode in ("translate", "summary", "catchup", "notes"):
+        if mode in ("translate", "summary", "catchup", "notes", "listen_ask"):
             return True
         t = (question or "").lstrip()
-        return t.startswith(("[NOD_TRANSLATE", "[NOD_SUMMARY", "[NOD_CATCH", "[NOD_NOTES", "Translate to "))
+        return t.startswith(("[NOD_TRANSLATE", "[NOD_SUMMARY", "[NOD_CATCH", "[NOD_ASK", "[NOD_NOTES", "Translate to "))
 
     def _with_images(self, messages: list[dict], images: list[dict[str, str]] | None) -> list[dict]:
         if not images:
@@ -620,6 +622,21 @@ class Pipeline:
                         "You are a translator for live captions.\n"
                         "Output ONLY the translation — no quotes, labels, notes, or preamble.\n"
                         "Preserve names, numbers, and meaning. If the text is already in the target language, return it unchanged."
+                    ),
+                },
+                {"role": "user", "content": question},
+            ]
+        if mode == "listen_ask" or question.startswith("Listener question:"):
+            return [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a live listening assistant. The user may ask at any moment.\n"
+                        "Answer their question clearly and briefly.\n"
+                        "Use the transcript when it helps. If it is empty or silent on the topic, say so, then answer from general knowledge if the question allows it.\n"
+                        "Do not invent quotes, names, numbers, or decisions that were not said.\n"
+                        "4-10 short sentences or bullets. No preamble."
+                        + out_rule
                     ),
                 },
                 {"role": "user", "content": question},
@@ -719,7 +736,7 @@ class Pipeline:
         max_tokens = int(llm.get("max_tokens") or 800)
         if mode == "ask":
             max_tokens = max(max_tokens, 1600)
-        elif mode in ("summary", "notes", "catchup"):
+        elif mode in ("summary", "notes", "catchup", "listen_ask"):
             max_tokens = max(max_tokens, 1600)
         elif mode == "translate":
             max_tokens = max(max_tokens, 800)
@@ -766,7 +783,7 @@ class Pipeline:
             self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
             return
         self._last_answer = answer[-400:]
-        if mode not in ("translate", "summary", "catchup", "notes"):
+        if mode not in ("translate", "summary", "catchup", "notes", "listen_ask"):
             self._qa_history.append({"qid": qid, "q": self._strip_nod_tag(t), "a": answer})
             self._qa_history = self._qa_history[-6:]
         if self.user_id:
@@ -1339,7 +1356,7 @@ class Session:
         if not self._ensure_usage():
             return
         body = text
-        if body.startswith(("[NOD_TRANSLATE", "[NOD_SUMMARY", "[NOD_CATCH", "[NOD_NOTES")):
+        if body.startswith(("[NOD_TRANSLATE", "[NOD_SUMMARY", "[NOD_CATCH", "[NOD_ASK", "[NOD_NOTES")):
             nl = body.find("\n")
             body = body[nl + 1:].strip() if nl >= 0 else body
         if mode == "ask" and body.startswith("Summarize the following meeting transcript"):
@@ -1348,10 +1365,12 @@ class Session:
             mode = "translate"
         if mode == "ask" and (body.startswith("Catch the listener up") or text.lstrip().startswith("[NOD_CATCH")):
             mode = "catchup"
+        if mode == "ask" and (body.startswith("Listener question:") or text.lstrip().startswith("[NOD_ASK")):
+            mode = "listen_ask"
         if mode == "ask" and (body.startswith("Write structured notes") or text.lstrip().startswith("[NOD_NOTES")):
             mode = "notes"
         if self._busy:
-            if mode in ("translate", "summary", "catchup", "notes"):
+            if mode in ("translate", "summary", "catchup", "notes", "listen_ask"):
                 self._pending_asks.append((text, mode))
                 return
             self.emit({"type": "status", "text": "Still working, please wait"})

@@ -166,6 +166,29 @@ export function transcriptBlock(lines: MeetingLine[]): string {
   return lines.map((line) => `${line.ts}  ${line.text}`).join('\n')
 }
 
+export function askContext(lines: MeetingLine[], ended: boolean, now = Date.now()): MeetingLine[] {
+  if (ended || lines.length <= 80) return lines
+  const cutoff = now - 20 * 60_000
+  const windowed = lines.filter((line) => (line.at ?? 0) >= cutoff)
+  return windowed.length ? windowed : lines.slice(-80)
+}
+
+export function askPrompt(lines: MeetingLine[], question: string, outLang: PairLang = 'zh'): string {
+  const name = langName(outLang)
+  const ask = question.trim()
+  return (
+    `[NOD_ASK:${outLang}]\n` +
+    `OUTPUT LANGUAGE (hard rule): Write the entire answer in ${name} only. Do not follow the transcript language.\n` +
+    `Listener question: ${ask}\n` +
+    `Transcript (use when relevant; if empty, say you have not heard enough yet and still answer what you can):\n` +
+    `${transcriptBlock(lines) || '(empty)'}`
+  )
+}
+
+export function isAskPrompt(text: string): boolean {
+  return (text || '').trim().startsWith('[NOD_ASK')
+}
+
 export function catchupPrompt(lines: MeetingLine[], question = '', outLang: PairLang = 'zh'): string {
   const body = transcriptBlock(lines)
   const ask = question.trim()

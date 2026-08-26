@@ -1,6 +1,12 @@
 export type RunState = 'idle' | 'record' | 'listen' | 'think'
 export type Turn = { id: string; q: string; a: string }
-export type CatchNote = { id: string; title: string; text: string }
+export type CatchNote = {
+  id: string
+  title: string
+  text: string
+  kind?: 'catch' | 'ask'
+  question?: string
+}
 export type ViewMode = 'workspace' | 'focus' | 'fullscreen'
 export type AudioSource = 'system' | 'both' | 'mic'
 export type WorkspaceMode = 'interview' | 'meeting' | 'translate'

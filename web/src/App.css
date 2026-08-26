@@ -4123,6 +4123,9 @@ a.tb-menu-action {
   overflow: auto;
   padding: 10px 14px 16px;
   -webkit-overflow-scrolling: touch;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 
 .listen-line {
@@ -4221,6 +4224,23 @@ a.tb-menu-action {
   color: #dce6f6;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.listen-card.ask {
+  border-color: rgba(34, 211, 238, 0.28);
+  background: rgba(34, 211, 238, 0.06);
+}
+
+.listen-card.ask .listen-tag {
+  color: #67e8f9;
+}
+
+.listen-q {
+  margin: 8px 0 0;
+  color: #e8fbff;
+  font-size: 13.5px;
+  font-weight: 650;
+  line-height: 1.4;
 }
 
 .listen-block {

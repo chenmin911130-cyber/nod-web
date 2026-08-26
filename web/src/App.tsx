@@ -13,7 +13,10 @@ import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
 import { api as authApi, fetchMe } from './auth'
 import {
+  askContext,
+  askPrompt,
   catchupPrompt,
+  isAskPrompt,
   isCatchPrompt,
   isNotesPrompt,
   lastTwoMinutes,
@@ -147,7 +150,7 @@ type Action =
   | { type: 'listen_scene'; scene: ListenScene }
   | { type: 'translate_on'; on: boolean }
   | { type: 'listen_new' }
-  | { type: 'expect_catch'; title?: string }
+  | { type: 'expect_catch'; title?: string; kind?: 'catch' | 'ask'; question?: string }
   | { type: 'expect_notes' }
 
 function formatClock(): string {
@@ -277,18 +280,23 @@ function reducer(state: AppState, action: Action): AppState {
           if (isSummaryPrompt(text)) {
             return { ...state, summaryAskId: qid, meetingSummary: '', partial: '', busy: true }
           }
-          if (isCatchPrompt(text) || state.catchAskId === '__pending__') {
+          if (isCatchPrompt(text) || isAskPrompt(text) || state.catchAskId === '__pending__') {
+            const pending = state.catchNotes.find((note) => note.id === '__pending__')
             return {
               ...state,
               catchAskId: qid,
-              catchNotes: [
-                ...state.catchNotes,
-                {
-                  id: qid,
-                  title: state.catchPendingTitle || 'Catch up · last 2 min',
-                  text: '',
-                },
-              ],
+              catchNotes: pending
+                ? state.catchNotes.map((note) => (note.id === '__pending__' ? { ...note, id: qid } : note))
+                : [
+                    ...state.catchNotes,
+                    {
+                      id: qid,
+                      kind: isAskPrompt(text) ? 'ask' : 'catch',
+                      title: state.catchPendingTitle || (isAskPrompt(text) ? 'Ask' : 'Catch up · last 2 min'),
+                      question: '',
+                      text: '',
+                    },
+                  ],
               catchPendingTitle: '',
               partial: '',
               busy: true,
@@ -359,18 +367,40 @@ function reducer(state: AppState, action: Action): AppState {
           let translatePairs = state.translatePairs
           let translateAskId = state.translateAskId
           let catchNotes = state.catchNotes
+          let catchAskId = state.catchAskId
           let notesRaw = state.notesRaw
+          let notesAskId = state.notesAskId
           let meetingLines = state.meetingLines
           if (ev.id && ev.id === state.summaryAskId) {
             meetingSummary += ev.text
           }
-          if (ev.id && ev.id === state.catchAskId) {
-            catchNotes = catchNotes.map((note) =>
-              note.id === ev.id ? { ...note, text: note.text + (ev.text ?? '') } : note,
-            )
+          if (state.catchAskId === '__pending__' || (ev.id && ev.id === state.catchAskId)) {
+            const nextId = ev.id || state.catchAskId
+            const hasPending = catchNotes.some((note) => note.id === '__pending__')
+            if (hasPending) {
+              catchNotes = catchNotes.map((note) =>
+                note.id === '__pending__' ? { ...note, id: nextId, text: note.text + (ev.text ?? '') } : note,
+              )
+            } else if (ev.id && catchNotes.some((note) => note.id === ev.id)) {
+              catchNotes = catchNotes.map((note) =>
+                note.id === ev.id ? { ...note, text: note.text + (ev.text ?? '') } : note,
+              )
+            } else {
+              catchNotes = [
+                ...catchNotes,
+                {
+                  id: nextId,
+                  kind: 'ask',
+                  title: state.catchPendingTitle || 'Ask',
+                  text: ev.text ?? '',
+                },
+              ]
+            }
+            catchAskId = nextId
           }
-          if (ev.id && ev.id === state.notesAskId) {
+          if (notesAskId === '__pending__' || (ev.id && ev.id === notesAskId)) {
             notesRaw += ev.text ?? ''
+            notesAskId = ev.id || notesAskId
           }
           if (state.translateBindId && ev.id) {
             translateAskId = ev.id
@@ -384,7 +414,7 @@ function reducer(state: AppState, action: Action): AppState {
             translatePairs = applyTranslateChunk(translatePairs, state.translateBindId, ev.text ?? '')
           }
           if (state.workspaceMode !== 'interview' || state.turns.length === 0) {
-            return { ...state, meetingSummary, translatePairs, translateAskId, catchNotes, notesRaw, meetingLines }
+            return { ...state, meetingSummary, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
           }
           const turns = state.turns.slice()
           const last = turns[turns.length - 1]
@@ -393,15 +423,15 @@ function reducer(state: AppState, action: Action): AppState {
             && last.id !== ev.id
             && ev.id !== translateAskId
             && ev.id !== state.summaryAskId
-            && ev.id !== state.catchAskId
-            && ev.id !== state.notesAskId
+            && ev.id !== catchAskId
+            && ev.id !== notesAskId
           ) {
-            return { ...state, meetingSummary, translatePairs, translateAskId, catchNotes, notesRaw, meetingLines }
+            return { ...state, meetingSummary, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
           }
           if (!ev.id || last.id === ev.id) {
             turns[turns.length - 1] = { ...last, a: last.a + ev.text }
           }
-          return { ...state, turns, meetingSummary, translatePairs, translateAskId, catchNotes, notesRaw, meetingLines }
+          return { ...state, turns, meetingSummary, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
         }
         case 'done':
           return { ...state, busy: false, translateAskId: '', summaryAskId: '', catchAskId: '', notesAskId: '' }
@@ -495,16 +525,29 @@ function reducer(state: AppState, action: Action): AppState {
         translateAskId: '',
         translateBindId: '',
       }
-    case 'expect_catch':
+    case 'expect_catch': {
+      const kind = action.kind || 'catch'
+      const title = action.title || (kind === 'ask' ? 'Ask' : 'Catch up · last 2 min')
       return {
         ...state,
         catchAskId: '__pending__',
-        catchPendingTitle: action.title || 'Catch up · last 2 min',
+        catchPendingTitle: title,
+        catchNotes: [
+          ...state.catchNotes.filter((note) => note.id !== '__pending__'),
+          {
+            id: '__pending__',
+            kind,
+            title,
+            question: action.question || '',
+            text: '',
+          },
+        ],
         busy: true,
-        status: action.title && action.title !== 'Catch up · last 2 min' ? 'Answering…' : 'Catching up…',
+        status: kind === 'ask' ? 'Answering…' : 'Catching up…',
         translateBindId: '',
         translateAskId: '',
       }
+    }
     case 'expect_notes':
       return { ...state, notesAskId: '__pending__', notesRaw: '', busy: true, status: 'Writing notes…', translateBindId: '', translateAskId: '' }
     case 'translate_from':
@@ -1271,9 +1314,14 @@ export default function App() {
 
   const handleListenAsk = useCallback((text: string) => {
     const s = stateRef.current
-    const windowed = s.meetingEnded ? s.meetingLines : lastTwoMinutes(s.meetingLines)
-    dispatch({ type: 'expect_catch', title: text })
-    window.api.send({ type: 'ask', text: catchupPrompt(windowed, text, s.translateTo), mode: 'catchup' })
+    const question = text.trim()
+    if (!question) return
+    dispatch({ type: 'expect_catch', kind: 'ask', title: 'Ask', question })
+    window.api.send({
+      type: 'ask',
+      text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.translateTo),
+      mode: 'listen_ask',
+    })
   }, [])
 
   const copyPairField = useCallback((pair: TranslatePair, field: 'original' | 'translation') => {
