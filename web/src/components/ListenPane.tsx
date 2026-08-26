@@ -307,7 +307,7 @@ function LectureStudy({
           <h3>{concepts.title}</h3>
           <ol className="lec-concepts">
             {concepts.items.map((item, i) => (
-              <li key={item}>
+              <li key={`${i}-${item}`}>
                 <b>{i + 1}</b>
                 <span><BiText text={item} bilingual={bilingual} /></span>
               </li>
@@ -319,8 +319,8 @@ function LectureStudy({
         <div className="lec-block">
           <h3>{revise.title}</h3>
           <div className="lec-revise">
-            {revise.items.map((item) => (
-              <div className="lec-flash" key={item}>
+            {revise.items.map((item, i) => (
+              <div className="lec-flash" key={`${i}-${item}`}>
                 <BiText text={item} bilingual={bilingual} />
               </div>
             ))}
@@ -331,8 +331,8 @@ function LectureStudy({
         <div className="lec-block">
           <h3>{details.title}</h3>
           <ul>
-            {details.items.map((item) => (
-              <li key={item}><BiText text={item} bilingual={bilingual} /></li>
+            {details.items.map((item, i) => (
+              <li key={`${i}-${item}`}><BiText text={item} bilingual={bilingual} /></li>
             ))}
           </ul>
         </div>
@@ -341,8 +341,8 @@ function LectureStudy({
         <div className="lec-hw">
           <h3>{homework.title}</h3>
           <ul>
-            {homework.items.map((item) => (
-              <li key={item}><BiText text={item} bilingual={bilingual} /></li>
+            {homework.items.map((item, i) => (
+              <li key={`${i}-${item}`}><BiText text={item} bilingual={bilingual} /></li>
             ))}
           </ul>
         </div>
@@ -367,8 +367,8 @@ function MeetingNotes({
             <BiText text={section.items[0]} bilingual={bilingual} />
           ) : (
             <ul>
-              {section.items.map((item) => (
-                <li key={item}><BiText text={item} bilingual={bilingual} /></li>
+              {section.items.map((item, i) => (
+                <li key={`${i}-${item}`}><BiText text={item} bilingual={bilingual} /></li>
               ))}
             </ul>
           )}
@@ -539,7 +539,9 @@ export default function ListenPane(props: Props) {
             <section className="listen-pane">
               <div className="listen-kicker">
                 {lecture ? 'Classroom' : 'Transcript'}
-                <span className={`listen-timer${props.listening ? ' live' : ''}`}>{props.elapsedLabel}</span>
+                <span className={`listen-timer${props.listening ? ' live' : ''}`}>
+                  {props.elapsedLabel === '00:00:00' && !props.listening ? '' : props.elapsedLabel}
+                </span>
                 {props.listening && !notesOpen && (
                   <button
                     type="button"

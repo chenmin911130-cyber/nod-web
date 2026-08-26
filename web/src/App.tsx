@@ -329,18 +329,6 @@ function reducer(state: AppState, action: Action): AppState {
           const ts = formatClock()
           const heard = parseHeardLang(ev.language, text)
           if (state.workspaceMode === 'meeting') {
-            if (state.summaryAskId === '__pending__') {
-              return {
-                ...state,
-                summaryAskId: qid,
-                meetingSummary: '',
-                currentQ: text,
-                currentQId: qid,
-                partial: '',
-                busy: true,
-                heardLang: heard ?? state.heardLang,
-              }
-            }
             const meetingLines = [...state.meetingLines, {
               id: qid,
               ts: formatTs(state.meetingStartedAt),
@@ -392,8 +380,10 @@ function reducer(state: AppState, action: Action): AppState {
           let notesRaw = state.notesRaw
           let notesAskId = state.notesAskId
           let meetingLines = state.meetingLines
-          if (ev.id && ev.id === state.summaryAskId) {
-            meetingSummary += ev.text
+          let summaryAskId = state.summaryAskId
+          if (summaryAskId === '__pending__' || (ev.id && ev.id === summaryAskId)) {
+            meetingSummary += ev.text ?? ''
+            if (ev.id) summaryAskId = ev.id
           }
           if (state.catchAskId === '__pending__' || (ev.id && ev.id === state.catchAskId)) {
             const nextId = ev.id || state.catchAskId
@@ -435,7 +425,7 @@ function reducer(state: AppState, action: Action): AppState {
             translatePairs = applyTranslateChunk(translatePairs, state.translateBindId, ev.text ?? '')
           }
           if (state.workspaceMode !== 'interview' || state.turns.length === 0) {
-            return { ...state, meetingSummary, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
+            return { ...state, meetingSummary, summaryAskId, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
           }
           const turns = state.turns.slice()
           const last = turns[turns.length - 1]
@@ -443,16 +433,16 @@ function reducer(state: AppState, action: Action): AppState {
             ev.id
             && last.id !== ev.id
             && ev.id !== translateAskId
-            && ev.id !== state.summaryAskId
+            && ev.id !== summaryAskId
             && ev.id !== catchAskId
             && ev.id !== notesAskId
           ) {
-            return { ...state, meetingSummary, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
+            return { ...state, meetingSummary, summaryAskId, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
           }
           if (!ev.id || last.id === ev.id) {
             turns[turns.length - 1] = { ...last, a: last.a + ev.text }
           }
-          return { ...state, turns, meetingSummary, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
+          return { ...state, turns, meetingSummary, summaryAskId, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
         }
         case 'done':
           return { ...state, busy: false, translateAskId: '', summaryAskId: '', catchAskId: '', notesAskId: '' }
@@ -588,8 +578,24 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case 'meeting_clock':
       return { ...state, meetingStartedAt: action.startedAt, meetingElapsedMs: action.elapsedMs, meetingEnded: false }
-    case 'meeting_ended':
-      return { ...state, meetingEnded: true }
+    case 'meeting_ended': {
+      // 停止监听会取消服务端在途生成（不发 done），把被打断的 catch/ask 卡标记出来
+      const catchAskId = state.catchAskId
+      const catchNotes = catchAskId
+        ? state.catchNotes.map((note) =>
+            note.id === catchAskId && !note.text.trim()
+              ? { ...note, text: '(Interrupted — listening stopped)' }
+              : note,
+          )
+        : state.catchNotes
+      return {
+        ...state,
+        meetingEnded: true,
+        catchNotes,
+        catchAskId: '',
+        summaryAskId: state.summaryAskId === '__pending__' ? '' : state.summaryAskId,
+      }
+    }
     case 'seed_translate': {
       const ts = formatClock()
       const translatePairs = [...state.translatePairs, { id: action.id, ts, original: action.text, translation: '', to: state.translateTo }]
@@ -605,7 +611,12 @@ function reducer(state: AppState, action: Action): AppState {
           ? { ...p, translation: action.translation, to: state.translateTo, failed: false, passthrough: Boolean(action.passthrough) }
           : p,
       )
-      return { ...state, translatePairs, translateBindId: '', busy: false }
+      // meeting 模式下 passthrough（原文已是目标语言）也要写进 transcript 行，
+      // 否则该行翻译永远空白且被 askedTranslate 标记后不再重试
+      const meetingLines = state.meetingLines.map((ln) =>
+        ln.id === action.id ? { ...ln, translation: action.translation } : ln,
+      )
+      return { ...state, translatePairs, meetingLines, translateBindId: '', busy: false }
     }
     case 'retry_translate': {
       const translatePairs = state.translatePairs.map((p) =>
@@ -616,7 +627,7 @@ function reducer(state: AppState, action: Action): AppState {
     case 'ask_start':
       return { ...state, busy: true, status: 'Asking…' }
     case 'expect_meeting_ask':
-      return { ...state, summaryAskId: '__pending__', busy: true, status: 'Asking…' }
+      return { ...state, summaryAskId: '__pending__', meetingSummary: '', busy: true, status: 'Asking…', translateBindId: '', translateAskId: '' }
     case 'fail_translate': {
       const translatePairs = state.translatePairs.map((p) =>
         p.id === action.id ? { ...p, failed: true } : p,
@@ -674,8 +685,6 @@ function matchesLockedFrom(text: string, locked: PairLang, heard: PairLang | nul
   if (locked === 'en' || locked === 'zh' || locked === 'ja') return looksLikeTarget(text, locked)
   if (/[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]/u.test(text)) return false
   const t = normOriginal(text)
-  if (/[\u3040-\u30FF]/.test(t)) return locked === 'ja'
-  if (/\p{Script=Han}/u.test(t)) return locked === 'zh'
   if (/[¿¡ñ]|cómo|está|hola\b/i.test(t)) return locked === 'es'
   if (/[çœæ]|pourquoi|bonjour|\bça\b/i.test(t)) return locked === 'fr'
   if (/[äöüß]|nicht\b|wie geht/i.test(t)) return locked === 'de'
@@ -823,9 +832,6 @@ export default function App() {
         if (!isTranslatePrompt(text) && s.translateFrom !== 'auto') {
           const heard = parseHeardLang(e.language, text)
           if (!matchesLockedFrom(text, s.translateFrom, heard)) return
-        }
-        if (!isTranslatePrompt(text)) {
-          api.send({ type: 'cancel_generate' })
         }
         const last = stateRef.current.translatePairs[stateRef.current.translatePairs.length - 1]
         if (last && !last.translation && normOriginal(last.original) === normOriginal(text)) {
@@ -1183,14 +1189,16 @@ export default function App() {
   const handleTranslateTo = useCallback((lang: Lang) => {
     const s = stateRef.current
     if (lang === 'auto') {
-      if (s.notesLang === 'auto' && s.lang === 'auto') return
+      if (s.notesLang === 'auto') return
       persistNotesLang('auto')
-      window.api.send({ type: 'set_lang', language: null })
-      dispatch({ type: 'lang', lang: 'auto' })
+      // 只解锁 STT 语言当它本来就是 auto；用户显式锁定的识别语言不被悄悄重置
+      if (s.lang === 'auto') {
+        window.api.send({ type: 'set_lang', language: null })
+      }
       dispatch({ type: 'notes_lang', lang: 'auto' })
       dispatch({
         type: 'engine',
-        ev: { type: 'status', text: 'Auto · follows the language you speak · notes follow speech' },
+        ev: { type: 'status', text: 'Auto · notes follow the language you speak' },
       })
       return
     }
@@ -1261,15 +1269,24 @@ export default function App() {
     const s = stateRef.current
     if (inflightTranslate.current) return
     if (s.workspaceMode === 'meeting' && s.translateOn) {
-      const next = s.meetingLines.find((line) => !line.translation && !askedTranslate.current.has(line.id))
-      if (next) askTranslate(next.text, next.id)
+      // 最新的未翻译行优先（实时字幕语义：先出当前句子，停顿期间回填旧行）
+      for (let i = s.meetingLines.length - 1; i >= 0; i--) {
+        const line = s.meetingLines[i]
+        if (!line.translation && !askedTranslate.current.has(line.id)) {
+          askTranslate(line.text, line.id)
+          return
+        }
+      }
       return
     }
     if (s.workspaceMode !== 'translate') return
-    const next = s.translatePairs.find(
-      (p) => !p.translation && !p.failed && !askedTranslate.current.has(p.id) && !isTranslatePrompt(p.original),
-    )
-    if (next) askTranslate(next.original, next.id)
+    for (let i = s.translatePairs.length - 1; i >= 0; i--) {
+      const p = s.translatePairs[i]
+      if (!p.translation && !p.failed && !askedTranslate.current.has(p.id) && !isTranslatePrompt(p.original)) {
+        askTranslate(p.original, p.id)
+        return
+      }
+    }
   }, [askTranslate])
   pumpTranslateRef.current = pumpTranslate
 
@@ -1309,16 +1326,18 @@ export default function App() {
     const s = stateRef.current
     if (note || files?.length) {
       dispatch({ type: 'expect_meeting_ask' })
-      window.api.send({ type: 'ask', text: note || 'Please review the attached files.', files })
+      window.api.send({ type: 'ask', mode: 'summary', text: note || 'Please review the attached files.', files })
       return
     }
-    const body = s.meetingLines.map((ln) => `[${ln.ts}${ln.marked ? ' ACTION' : ''}] ${ln.text}`).join('\n')
+    const body = s.meetingLines.slice(-500).map((ln) => `[${ln.ts}${ln.marked ? ' ACTION' : ''}] ${ln.text}`).join('\n')
     if (!body.trim()) {
       dispatch({ type: 'engine', ev: { type: 'status', text: 'No transcript to summarize yet.' } })
       return
     }
+    dispatch({ type: 'expect_meeting_ask' })
     window.api.send({
       type: 'ask',
+      mode: 'summary',
       text: `${SUMMARY_PREFIX} as concise bullet points. Only the bullets:\n\n${body}`,
     })
   }, [])
@@ -1330,7 +1349,7 @@ export default function App() {
       return
     }
     dispatch({ type: 'expect_notes' })
-    window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, s.meetingLines, s.notesLang, s.translateOn), mode: 'notes' })
+    window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, s.meetingLines.slice(-500), s.notesLang, s.translateOn), mode: 'notes' })
   }, [])
   generateNotesRef.current = generateNotes
 

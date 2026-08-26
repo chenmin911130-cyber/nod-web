@@ -125,7 +125,7 @@ function canvasToJpeg(canvas: HTMLCanvasElement): Promise<Uint8Array> {
   })
 }
 
-function buildPdf(title: string, pages: Array<{ jpeg: Uint8Array; w: number; h: number }>): Uint8Array {
+function buildPdf(title: string, pages: Array<{ jpeg: Uint8Array; w: number; h: number }>): Uint8Array<ArrayBuffer> {
   const enc = new TextEncoder()
   const parts: Uint8Array[] = []
   const offsets = [0]

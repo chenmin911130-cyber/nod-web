@@ -108,6 +108,7 @@ export interface AppState {
     stt_limit: number
     llm_tokens: number
     llm_limit: number
+    quota_disabled?: boolean
   } | null
 }
 

@@ -1623,7 +1623,8 @@ class Session:
         if heard:
             qev["language"] = heard
         if self._workspace == "translate":
-            self.cancel_generate()
+            # 不取消在途翻译：取消会让被中断的句子等 25s 超时重试（双倍 token + 字幕卡死）。
+            # 新 final 照常入队，前端 pump 一次只发一条，翻译自然串行。
             self._pending = None
             self._pending_wait = (None, 0.0, None)
             self._maybe_follow_speech(cleaned, heard)
