@@ -1386,6 +1386,10 @@ class Session:
             self.manual()
         elif mtype == "toggle_listen":
             self.toggle_listen()
+        elif mtype == "start_listen":
+            self.start_listen()
+        elif mtype == "stop_listen":
+            self.stop_listen()
         elif mtype == "ask":
             self.ask(msg.get("text", ""), msg.get("files"), msg.get("mode") or "ask")
         elif mtype == "set_workspace":
@@ -1679,20 +1683,31 @@ class Session:
         else:
             self.emit({"type": "status", "text": "Microphone unmuted"})
 
-    def toggle_listen(self) -> None:
+    def start_listen(self) -> None:
         if self._manual:
             self.emit({"type": "status", "text": "Stop recording before enabling Auto"})
             return
-        if not self._listener:
-            if not self._ensure_consent():
-                return
-            if not self._ensure_usage():
-                return
-            self._listen_wanted = True
-            self._start_listening()
-        else:
+        self._listen_wanted = True
+        if self._listener:
+            return
+        if not self._ensure_consent() or not self._ensure_usage():
             self._listen_wanted = False
+            return
+        self._start_listening()
+
+    def stop_listen(self) -> None:
+        self._listen_wanted = False
+        if self._listener:
             self._stop_listening()
+            return
+        self.emit({"type": "state", "state": "idle"})
+        self.emit({"type": "status", "text": STATUS_READY})
+
+    def toggle_listen(self) -> None:
+        if self._listener or self._listen_wanted:
+            self.stop_listen()
+        else:
+            self.start_listen()
 
     def _start_listening(self, resume: bool = False) -> None:
         key = self.pipeline.assemblyai_key()

@@ -138,6 +138,8 @@ export type EngineEvent =
 export type EngineMsg =
   | { type: 'manual' }
   | { type: 'toggle_listen' }
+  | { type: 'start_listen' }
+  | { type: 'stop_listen' }
   | { type: 'auth'; token: string }
   | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; mode?: string }
   | { type: 'set_workspace'; mode: WorkspaceMode; scene?: 'meeting' | 'lecture' | 'interview'; speakers_expected?: number }

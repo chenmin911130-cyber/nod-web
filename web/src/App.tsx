@@ -783,6 +783,14 @@ export default function App() {
   const stateRef = useRef(state)
   stateRef.current = state
   const listenWanted = useRef(false)
+  const startListen = () => {
+    listenWanted.current = true
+    window.api.send({ type: 'start_listen' })
+  }
+  const stopListen = () => {
+    listenWanted.current = false
+    window.api.send({ type: 'stop_listen' })
+  }
   const askedTranslate = useRef<Set<string>>(new Set())
   const inflightTranslate = useRef<string | null>(null)
   const translateRetries = useRef<Map<string, number>>(new Map())
@@ -897,18 +905,11 @@ export default function App() {
       if (e.type === 'ready') {
         syncWorkspace()
         if (listenWanted.current) {
-          queueMicrotask(() => api.send({ type: 'toggle_listen' }))
-          return
+          queueMicrotask(() => api.send({ type: 'start_listen' }))
         }
       }
       if (e.type === 'quota_exceeded' || (e.type === 'error' && e.text.includes('Transcription connection lost'))) {
         listenWanted.current = false
-      }
-      if (listenWanted.current && e.type === 'state' && e.state === 'idle') {
-        return
-      }
-      if (listenWanted.current && e.type === 'status' && e.text.startsWith('Ready ·')) {
-        return
       }
       dispatch({ type: 'engine', ev: e })
       if (e.type === 'question' && stateRef.current.workspaceMode === 'meeting' && stateRef.current.translateOn) {
@@ -972,11 +973,11 @@ export default function App() {
     const offShortcut = api.onShortcut((k) => {
       const mode = stateRef.current.workspaceMode
       if (k === 'f2') guardMic(() => api.send({ type: 'manual' }))
-      else if (k === 'f3') guardMic(() => {
+      else if (k === 'f3') {
         const running = stateRef.current.run === 'listen' || stateRef.current.run === 'record'
-        listenWanted.current = !running
-        api.send({ type: 'toggle_listen' })
-      })
+        if (running) stopListen()
+        else guardMic(startListen)
+      }
       else if (k === 'f4') requestClearRef.current()
       else if (k === 'f8' && mode === 'interview') {
         const v = stateRef.current.view
@@ -1048,11 +1049,11 @@ export default function App() {
         }
         return
       }
-      if (k === 'a') guardMic(() => {
+      if (k === 'a') {
         const running = stateRef.current.run === 'listen' || stateRef.current.run === 'record'
-        listenWanted.current = !running
-        window.api.send({ type: 'toggle_listen' })
-      })
+        if (running) stopListen()
+        else guardMic(startListen)
+      }
       else if (k === 'c') copyLatest()
       else if (k === 'x') requestClearRef.current()
     }
@@ -1259,16 +1260,13 @@ export default function App() {
     const s = stateRef.current
     if (s.workspaceMode === 'interview') {
       if (s.run === 'record') return
-      guardMic(() => {
-        listenWanted.current = !(s.run === 'listen')
-        window.api.send({ type: 'toggle_listen' })
-      })
+      if (s.run === 'listen') stopListen()
+      else guardMic(startListen)
       return
     }
     if (s.workspaceMode === 'meeting') {
       if (s.run === 'listen' || s.run === 'record') {
-        listenWanted.current = false
-        window.api.send({ type: 'toggle_listen' })
+        stopListen()
         dispatch({ type: 'meeting_ended' })
         dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped' } })
         return
@@ -1278,19 +1276,19 @@ export default function App() {
       } else {
         dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
       }
-      guardMic(() => {
-        listenWanted.current = true
-        window.api.send({ type: 'toggle_listen' })
-      })
+      guardMic(startListen)
       return
     }
     if (s.run === 'record') return
+    if (s.run === 'listen') {
+      stopListen()
+      return
+    }
     guardMic(() => {
-      listenWanted.current = true
       window.api.send({ type: 'set_workspace', mode: 'translate', scene: stateRef.current.listenScene })
       window.api.send({ type: 'set_translate_from', language: s.translateFrom === 'auto' ? null : s.translateFrom })
       window.api.send({ type: 'set_translate_to', lang: s.translateTo })
-      window.api.send({ type: 'toggle_listen' })
+      startListen()
     })
   }, [])
 
@@ -1301,8 +1299,7 @@ export default function App() {
   const handlePause = useCallback(() => {
     const s = stateRef.current
     if (s.run === 'listen' || s.run === 'record') {
-      listenWanted.current = false
-      window.api.send({ type: 'toggle_listen' })
+      stopListen()
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Meeting paused' } })
     }
   }, [])
@@ -1686,8 +1683,7 @@ export default function App() {
           onCopy={copyLatest}
           onExpand={() => dispatch({ type: 'view', view: 'workspace' })}
           onStop={() => {
-            listenWanted.current = false
-            window.api.send({ type: 'toggle_listen' })
+            stopListen()
             if (state.autoOn) dispatch({ type: 'view', view: 'workspace' })
           }}
           onViewToggle={() =>
