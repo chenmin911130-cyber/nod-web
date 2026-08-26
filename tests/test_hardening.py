@@ -12,6 +12,7 @@ from server.app import (
     _join_speech_frags,
     _meeting_should_hold,
     _same_speech_script,
+    _stt_keyterms,
     assemblyai_ws_url,
     clean_transcript,
     split_code_switched,
@@ -84,6 +85,18 @@ class TranscriptKeepTests(unittest.TestCase):
         self.assertIn("keyterms_prompt=", url)
         self.assertNotIn("word_boost=", url)
         self.assertIn("Lisinopril", url)
+
+    def test_chinese_commerce_keyterms_and_resume_tokens(self):
+        from urllib.parse import unquote
+
+        terms = _stt_keyterms({
+            "profile": {"resume_summary": "熟悉亚马逊站外引流与联盟营销"},
+        })
+        for tok in ("引流", "熟悉", "影响", "站外", "联盟营销"):
+            self.assertIn(tok, terms)
+        url = unquote(assemblyai_ws_url({"stt": {}}))
+        self.assertIn("引流", url)
+        self.assertIn("熟悉", url)
 
     def test_meeting_enables_speaker_labels(self):
         url = assemblyai_ws_url({

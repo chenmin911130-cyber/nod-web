@@ -15,6 +15,9 @@ export function installWebApi(): void {
   const mic = new MicCapture()
   let ws: WebSocket | null = null
   let reconnectTimer = 0
+  let pingTimer = 0
+  let lastRun = 'idle'
+  let micStopTimer = 0
 
   const pending: EngineMsg[] = []
   let micMuted = false
@@ -28,7 +31,9 @@ export function installWebApi(): void {
   }
 
   const syncMic = async (run?: string) => {
-    const need = run === 'listen' || run === 'record'
+    if (run) lastRun = run
+    window.clearTimeout(micStopTimer)
+    const need = lastRun === 'listen' || lastRun === 'record'
     if (need && !mic.active) {
       try {
         await mic.start()
@@ -39,7 +44,9 @@ export function installWebApi(): void {
         })
       }
     } else if (!need && mic.active) {
-      mic.stop()
+      micStopTimer = window.setTimeout(() => {
+        if (lastRun !== 'listen' && lastRun !== 'record' && mic.active) mic.stop()
+      }, 500)
     }
   }
 
@@ -54,6 +61,12 @@ export function installWebApi(): void {
         const msg = pending.shift()
         if (msg) socket.send(JSON.stringify(msg))
       }
+      window.clearInterval(pingTimer)
+      pingTimer = window.setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'ping' }))
+        }
+      }, 25000)
     }
     socket.onmessage = (ev) => {
       if (typeof ev.data !== 'string') return
@@ -67,6 +80,7 @@ export function installWebApi(): void {
     }
     socket.onclose = (ev) => {
       ws = null
+      window.clearInterval(pingTimer)
       window.clearTimeout(reconnectTimer)
       reconnectTimer = window.setTimeout(() => {
         void (async () => {

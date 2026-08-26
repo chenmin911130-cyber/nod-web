@@ -82,6 +82,8 @@ GUARD_Q_WORDS = (
 _STT_BOOST_FIXED = [
     "Python", "C#", "ASP.NET", "SQL", "database", "API", "frontend", "backend",
     "full-stack", "algorithm", "interview", "experience", "project",
+    "引流", "站外引流", "站外", "承接", "成交", "联盟营销", "红人", "影响", "熟悉",
+    "亚马逊", "Amazon", "affiliate", "PPC", "listing", "influencer",
 ]
 
 
@@ -269,7 +271,8 @@ def _stt_keyterms(cfg: dict[str, Any]) -> list[str]:
     for text in (p.get("resume_summary") or "", p.get("jd") or ""):
         for tok in re.split(r"[，。、,.;；:：\s()（）/+\\-]+", text):
             tok = tok.strip()
-            if len(tok) >= 2 and re.search(r"[A-Za-z]", tok):
+            han = len(re.findall(r"[\u4e00-\u9fff]", tok))
+            if len(tok) >= 2 and (re.search(r"[A-Za-z]", tok) or 2 <= han <= 6):
                 _stt_add_keyterm(terms, seen, tok)
     for tok in (cfg.get("stt") or {}).get("vocabulary") or []:
         _stt_add_keyterm(terms, seen, tok)
@@ -994,12 +997,13 @@ class Pipeline:
 
 
 class CloudListener:
-    def __init__(self, api_key: str, cfg: dict[str, Any], on_final, on_partial, on_error):
+    def __init__(self, api_key: str, cfg: dict[str, Any], on_final, on_partial, on_error, on_drop=None):
         self.api_key = api_key
         self.cfg = cfg
         self.on_final = on_final
         self.on_partial = on_partial
         self.on_error = on_error
+        self.on_drop = on_drop
         self._q: queue.Queue[bytes] = queue.Queue(maxsize=240)
         self._stop = threading.Event()
         self._ready = threading.Event()
@@ -1007,6 +1011,8 @@ class CloudListener:
         self._ws = None
         self._last_final = ""
         self._muted = False
+        self._was_ready = False
+        self._drop_sent = False
 
     def set_muted(self, muted: bool) -> None:
         self._muted = bool(muted)
@@ -1032,10 +1038,12 @@ class CloudListener:
         self._stop.clear()
         self._ready.clear()
         self._fail = []
+        self._was_ready = False
+        self._drop_sent = False
         self._ws = websocket.WebSocketApp(
             url,
             header=[f"Authorization: {self.api_key}"],
-            on_open=lambda _ws: self._ready.set(),
+            on_open=self._on_open,
             on_message=self._on_message,
             on_error=self._on_ws_error,
             on_close=self._on_close,
@@ -1049,6 +1057,18 @@ class CloudListener:
             raise RuntimeError(self._fail[0])
         threading.Thread(target=self._sender, daemon=True).start()
 
+    def _on_open(self, _ws) -> None:
+        self._was_ready = True
+        self._ready.set()
+
+    def _notify_drop(self, reason: str) -> None:
+        if self._stop.is_set() or not self._was_ready or self._drop_sent:
+            return
+        self._drop_sent = True
+        cb = self.on_drop or self.on_error
+        if cb:
+            cb(reason)
+
     def _sender(self) -> None:
         import websocket
         while not self._stop.is_set():
@@ -1061,8 +1081,8 @@ class CloudListener:
                 if ws and ws.sock and ws.sock.connected:
                     ws.send(chunk, websocket.ABNF.OPCODE_BINARY)
             except Exception as e:
-                if not self._stop.is_set() and self.on_error:
-                    self.on_error(str(e))
+                if not self._stop.is_set():
+                    self._notify_drop(str(e))
                 return
 
     def _on_message(self, _ws, message) -> None:
@@ -1090,14 +1110,21 @@ class CloudListener:
                     threading.Thread(target=self.on_final, args=(cleaned, lang, speaker), daemon=True).start()
             elif speechy and self.on_partial:
                 self.on_partial(text, lang, speaker)
-        elif kind == "Error" and self.on_error:
-            self.on_error(str(data.get("error") or message))
+        elif kind == "Error":
+            err = str(data.get("error") or message)
+            if self.on_error:
+                self.on_error(err)
+            self._notify_drop(err)
 
     def _on_ws_error(self, _ws, error) -> None:
         self._fail.append(str(error))
         self._ready.set()
-        if not self._stop.is_set() and self.on_error:
+        if self._stop.is_set():
+            return
+        if not self._was_ready and self.on_error:
             self.on_error(str(error))
+            return
+        self._notify_drop(str(error))
 
     def _on_close(self, _ws, status, msg) -> None:
         if self._stop.is_set():
@@ -1106,6 +1133,8 @@ class CloudListener:
         if not self._ready.is_set():
             self._fail.append(f"AssemblyAI connection closed {extra}".strip())
             self._ready.set()
+            return
+        self._notify_drop(extra or "session closed")
 
     def stop(self) -> None:
         self._stop.set()
@@ -1144,6 +1173,9 @@ class Session:
         self._mic_muted = False
         self._workspace = "interview"
         self._pending_speaker: str | None = None
+        self._stt_drops = 0
+        self._stt_drop_at = 0.0
+        self._listen_wanted = False
         self._archive_fp = None
         self._archive_path: str | None = None
         self._archive_bytes = 0
@@ -1273,6 +1305,7 @@ class Session:
         self.emit({"type": "status", "text": STATUS_READY})
 
     def close(self) -> None:
+        self._listen_wanted = False
         self._stop_listening()
         self.pipeline._cancel.set()
         self._flush_cloud_archive(final=True)
@@ -1331,6 +1364,7 @@ class Session:
                 if not ok:
                     self._quota_block(snap)
                     if self._listener:
+                        self._listen_wanted = False
                         self._stop_listening()
                     if self._manual:
                         self._manual = False
@@ -1451,15 +1485,38 @@ class Session:
         return cfg
 
     def _restart_listener(self) -> None:
-        if not self._listener:
+        if not self._listen_wanted:
             return
         lst = self._listener
         self._listener = None
-        try:
-            lst.stop()
-        except Exception:
-            pass
+        if lst:
+            try:
+                lst.stop()
+            except Exception:
+                pass
         self._start_listening(resume=True)
+
+    def _on_stt_drop(self, reason: str) -> None:
+        if not self._listen_wanted:
+            return
+        now = time.time()
+        if now - self._stt_drop_at > 45:
+            self._stt_drops = 0
+        self._stt_drops += 1
+        self._stt_drop_at = now
+        if self._stt_drops > 6:
+            self.emit({"type": "error", "text": "Transcription connection lost. Tap Start Listening."})
+            self._listen_wanted = False
+            self._stop_listening()
+            return
+        self.emit({"type": "status", "text": "Transcription dropped — reconnecting"})
+        delay = min(3.0, 0.4 * self._stt_drops)
+        threading.Timer(delay, self._restart_if_listening).start()
+
+    def _restart_if_listening(self) -> None:
+        if not self._listen_wanted:
+            return
+        self._restart_listener()
 
     def _speech_filter_lang(self) -> str | None:
         # Auto follow is a status hint only. Filtering on it drops the other
@@ -1631,8 +1688,10 @@ class Session:
                 return
             if not self._ensure_usage():
                 return
+            self._listen_wanted = True
             self._start_listening()
         else:
+            self._listen_wanted = False
             self._stop_listening()
 
     def _start_listening(self, resume: bool = False) -> None:
@@ -1646,11 +1705,16 @@ class Session:
             on_final=self._on_final,
             on_partial=self._on_partial,
             on_error=lambda e: self.emit({"type": "error", "text": f"Transcription failed:{e}"}),
+            on_drop=self._on_stt_drop,
         )
         try:
             listener.start()
         except Exception as e:
             self.emit({"type": "error", "text": f"Transcription failed:could not start listening ({e})"})
+            if resume and self._listen_wanted:
+                self._on_stt_drop(str(e))
+            else:
+                self._listen_wanted = False
             return
         if self._mic_muted:
             listener.set_muted(True)
