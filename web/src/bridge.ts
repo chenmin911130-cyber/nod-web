@@ -70,10 +70,18 @@ export function installWebApi(): void {
         /* ignore */
       }
     }
-    socket.onclose = () => {
+    socket.onclose = (ev) => {
       ws = null
       window.clearTimeout(reconnectTimer)
-      reconnectTimer = window.setTimeout(connect, 1200)
+      reconnectTimer = window.setTimeout(() => {
+        void (async () => {
+          if (ev.code === 4401) {
+            const { ensureLocalGuest } = await import('./auth')
+            await ensureLocalGuest()
+          }
+          connect()
+        })()
+      }, ev.code === 4401 ? 2000 : 1200)
     }
     socket.onerror = () => {
       /* onclose reconnects */

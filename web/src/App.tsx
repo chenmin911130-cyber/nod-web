@@ -15,11 +15,9 @@ import { api as authApi, fetchMe } from './auth'
 import {
   askContext,
   askPrompt,
-  catchupPrompt,
   isAskPrompt,
   isCatchPrompt,
   isNotesPrompt,
-  lastTwoMinutes,
   notesPrompt,
   exportNoteSections,
   parseNotes,
@@ -164,6 +162,7 @@ type Action =
   | { type: 'bind_translate'; id: string }
   | { type: 'release_translate' }
   | { type: 'fill_translate'; id: string; translation: string; passthrough?: boolean }
+  | { type: 'clear_translation'; id: string }
   | { type: 'retry_translate'; id: string }
   | { type: 'fail_translate'; id: string }
   | { type: 'ask_start' }
@@ -313,7 +312,7 @@ function reducer(state: AppState, action: Action): AppState {
                     {
                       id: qid,
                       kind: isAskPrompt(text) ? 'ask' : 'catch',
-                      title: state.catchPendingTitle || (isAskPrompt(text) ? 'Ask' : 'Catch up · last 2 min'),
+                      title: state.catchPendingTitle || (isAskPrompt(text) ? 'Ask' : 'Summary'),
                       question: '',
                       text: '',
                     },
@@ -538,7 +537,7 @@ function reducer(state: AppState, action: Action): AppState {
       }
     case 'expect_catch': {
       const kind = action.kind || 'catch'
-      const title = action.title || (kind === 'ask' ? 'Ask' : 'Catch up · last 2 min')
+      const title = action.title || (kind === 'ask' ? 'Ask' : 'Summary')
       return {
         ...state,
         catchAskId: '__pending__',
@@ -577,7 +576,9 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, meetingLines, status: 'Marked last line as action' }
     }
     case 'meeting_clock':
-      return { ...state, meetingStartedAt: action.startedAt, meetingElapsedMs: action.elapsedMs, meetingEnded: false }
+      // 不重置 meetingEnded：时钟 tick 若在 Stop 与 state:idle 事件之间触发，
+      // 会把刚结束的会议打回"暂停"态（结束提示/笔记不显示，主按钮变续听）
+      return { ...state, meetingStartedAt: action.startedAt, meetingElapsedMs: action.elapsedMs }
     case 'meeting_ended': {
       // 停止监听会取消服务端在途生成（不发 done），把被打断的 catch/ask 卡标记出来
       const catchAskId = state.catchAskId
@@ -593,6 +594,7 @@ function reducer(state: AppState, action: Action): AppState {
         meetingEnded: true,
         catchNotes,
         catchAskId: '',
+        notesAskId: state.notesAskId === '__pending__' ? '' : state.notesAskId,
         summaryAskId: state.summaryAskId === '__pending__' ? '' : state.summaryAskId,
       }
     }
@@ -617,6 +619,21 @@ function reducer(state: AppState, action: Action): AppState {
         ln.id === action.id ? { ...ln, translation: action.translation } : ln,
       )
       return { ...state, translatePairs, meetingLines, translateBindId: '', busy: false }
+    }
+    case 'clear_translation': {
+      // 翻译被取消/中断时清掉半截译文，避免 pump 把它当已完成而跳过
+      const translatePairs = state.translatePairs.map((p) =>
+        p.id === action.id ? { ...p, translation: '', failed: false } : p,
+      )
+      const meetingLines = state.meetingLines.map((ln) =>
+        ln.id === action.id ? { ...ln, translation: '' } : ln,
+      )
+      return {
+        ...state,
+        translatePairs,
+        meetingLines,
+        translateBindId: state.translateBindId === action.id ? '' : state.translateBindId,
+      }
     }
     case 'retry_translate': {
       const translatePairs = state.translatePairs.map((p) =>
@@ -729,6 +746,7 @@ export default function App() {
   const pumpTranslateRef = useRef<() => void>(() => {})
   const generateNotesRef = useRef<() => void>(() => {})
   const exportAfterNotes = useRef(false)
+  const autoNotesTried = useRef(false)
   const tickRef = useRef(0)
   const [consent, setConsent] = useState<boolean | null>(null)
   const consentRef = useRef<boolean | null>(null)
@@ -806,6 +824,19 @@ export default function App() {
     inflightTranslate.current = null
   }
 
+  // 发起新的生成（摘要/笔记/提问）前，取消在途翻译并清掉半截译文。
+  // 否则旧翻译的 chunk 会按 translateBindId / '__pending__' 路由进新内容里（卡片/笔记被污染）。
+  const killInflightTranslation = useCallback(() => {
+    const s = stateRef.current
+    const stuck = inflightTranslate.current || s.translateBindId
+    if (!stuck) return
+    window.api.send({ type: 'cancel_generate' })
+    releaseTranslateGate(stuck)
+    translateRetries.current.delete(stuck)
+    askedTranslate.current.delete(stuck)
+    dispatch({ type: 'clear_translation', id: stuck })
+  }, [])
+
   useEffect(() => {
     const api = window.api
     const syncWorkspace = () => {
@@ -837,6 +868,24 @@ export default function App() {
         if (last && !last.translation && normOriginal(last.original) === normOriginal(text)) {
           askedTranslate.current.delete(last.id)
           queueMicrotask(() => pumpTranslateRef.current())
+        }
+      }
+      if (e.type === 'state' && e.state === 'idle') {
+        const stuck = inflightTranslate.current
+        if (stuck) {
+          // 生成被服务端取消（停止/暂停监听等）时不会收到 done → 立即重试，不等 25s 超时
+          const row = stateRef.current.translatePairs.find((p) => p.id === stuck)
+          if (!row || !(row.translation || '').trim()) {
+            clearTranslateTimer()
+            inflightTranslate.current = null
+            const n = (translateRetries.current.get(stuck) || 0) + 1
+            translateRetries.current.set(stuck, n)
+            if (n <= 2) askedTranslate.current.delete(stuck)
+            else if (stateRef.current.workspaceMode === 'translate') dispatch({ type: 'fail_translate', id: stuck })
+            dispatch({ type: 'clear_translation', id: stuck })
+            dispatch({ type: 'release_translate' })
+            queueMicrotask(() => pumpTranslateRef.current())
+          }
         }
       }
       // Only LLM `done` releases the translate gate. STT `error` events must not
@@ -1150,7 +1199,6 @@ export default function App() {
         window.api.send({ type: 'toggle_listen' })
         dispatch({ type: 'meeting_ended' })
         dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped' } })
-        queueMicrotask(() => generateNotesRef.current())
         return
       }
       if (s.meetingEnded || s.meetingStartedAt == null) {
@@ -1238,13 +1286,29 @@ export default function App() {
       return
     }
     const target = targetName(s.translateTo)
+    const sourceHint =
+      s.workspaceMode === 'translate'
+        ? s.translateFrom !== 'auto'
+          ? s.translateFrom
+          : s.heardLang
+        : s.lang !== 'auto'
+          ? s.lang
+          : s.heardLang
+    const prev =
+      s.workspaceMode === 'meeting'
+        ? s.meetingLines.filter((ln) => ln.id !== id && ln.text.trim()).slice(-6).map((ln) => ln.text)
+        : s.translatePairs.filter((p) => p.id !== id && p.original.trim() && !isTranslatePrompt(p.original)).slice(-6).map((p) => p.original)
+    const context = prev.length
+      ? `Previous lines (context only, do not translate):\n${prev.map((line, i) => `${i + 1}. ${line}`).join('\n')}\n\n`
+      : ''
+    const sourceLine = sourceHint ? `Source language: ${targetName(sourceHint)}.\n` : ''
     inflightTranslate.current = id
     askedTranslate.current.add(id)
     dispatch({ type: 'bind_translate', id })
     window.api.send({
       type: 'ask',
       mode: 'translate',
-      text: `[NOD_TRANSLATE:${id}]\n${TRANSLATE_PREFIX}${target}. Output only the translation:\n\n${text}`,
+      text: `[NOD_TRANSLATE:${id}]\n${TRANSLATE_PREFIX}${target}. ${sourceLine}${context}Translate only this line:\n${text}`,
       files: translateFiles.current.get(id),
     })
     translateFiles.current.delete(id)
@@ -1324,6 +1388,7 @@ export default function App() {
 
   const handleGenerateSummary = useCallback((note?: string, files?: AttachPayload[]) => {
     const s = stateRef.current
+    killInflightTranslation()
     if (note || files?.length) {
       dispatch({ type: 'expect_meeting_ask' })
       window.api.send({ type: 'ask', mode: 'summary', text: note || 'Please review the attached files.', files })
@@ -1348,29 +1413,21 @@ export default function App() {
       dispatch({ type: 'engine', ev: { type: 'status', text: 'No transcript to note yet.' } })
       return
     }
+    killInflightTranslation()
     dispatch({ type: 'expect_notes' })
     window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, s.meetingLines.slice(-500), s.notesLang, s.translateOn), mode: 'notes' })
   }, [])
   generateNotesRef.current = generateNotes
 
-  const handleCatchUp = useCallback(() => {
-    const s = stateRef.current
-    const windowed = lastTwoMinutes(s.meetingLines)
-    if (!windowed.length) {
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'Nothing to catch up yet.' } })
-      return
-    }
-    dispatch({
-      type: 'expect_catch',
-      title: 'Catch up · last 2 min',
-    })
-    window.api.send({ type: 'ask', text: catchupPrompt(windowed, '', s.notesLang, s.translateOn), mode: 'catchup' })
-  }, [])
+  const handleSummary = useCallback(() => {
+    generateNotes()
+  }, [generateNotes])
 
   const handleListenAsk = useCallback((text: string) => {
     const s = stateRef.current
     const question = text.trim()
     if (!question) return
+    killInflightTranslation()
     dispatch({ type: 'expect_catch', kind: 'ask', title: 'Ask', question })
     window.api.send({
       type: 'ask',
@@ -1486,6 +1543,7 @@ export default function App() {
     const needsNotes = listenSurface && s.meetingLines.length > 0 && !s.notesRaw.trim()
     if (needsNotes) {
       exportAfterNotes.current = true
+      autoNotesTried.current = false
       if (s.busy) {
         dispatch({ type: 'engine', ev: { type: 'status', text: 'Waiting for notes, then exporting PDF…' } })
         return
@@ -1499,9 +1557,16 @@ export default function App() {
 
   useEffect(() => {
     if (!exportAfterNotes.current || state.busy) return
+    const s = stateRef.current
+    if (!s.notesRaw.trim() && s.meetingLines.length > 0 && !autoNotesTried.current) {
+      // busy 期间点了导出：等它结束后补一次笔记生成，再导出（失败则直接导出已有内容，不重试循环）
+      autoNotesTried.current = true
+      generateNotes()
+      return
+    }
     exportAfterNotes.current = false
     void writePdf()
-  }, [state.busy, state.notesRaw, writePdf])
+  }, [state.busy, state.notesRaw, writePdf, generateNotes])
 
   // Meeting elapsed clock
   useEffect(() => {
@@ -1659,6 +1724,7 @@ export default function App() {
             catchNotes={state.catchNotes}
             notesRaw={state.notesRaw}
             busy={state.busy}
+            summarizing={Boolean(state.notesAskId)}
             qa={state.workspaceMode === 'interview'}
             qaSlot={
               <AnswerPane
@@ -1684,10 +1750,12 @@ export default function App() {
             }}
             onTranslate={(on) => {
               dispatch({ type: 'translate_on', on })
+              // 关闭翻译时取消在途生成并清掉半截译文，重新开启时整句重译
+              if (!on) killInflightTranslation()
               if (on) queueMicrotask(() => pumpTranslateRef.current())
             }}
             onTranslateTo={handleTranslateTo}
-            onCatchUp={handleCatchUp}
+            onSummary={handleSummary}
             onAsk={handleListenAsk}
           />
         )}

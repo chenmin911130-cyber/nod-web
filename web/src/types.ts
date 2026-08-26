@@ -24,6 +24,8 @@ export const TRANSLATE_LANGS: Array<{ id: PairLang; tag: string; name: string }>
   { id: 'pt', tag: 'PT', name: 'Portuguese' },
 ]
 
+export const STT_LANGS = TRANSLATE_LANGS.filter((l) => l.id === 'zh' || l.id === 'ja' || l.id === 'en')
+
 export interface ModelDef {
   label: string
   provider: string

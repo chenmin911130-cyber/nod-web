@@ -160,6 +160,7 @@ def load_config() -> dict[str, Any]:
 
 
 _TRANSLATE_LANGS = ("zh", "ja", "en", "it", "es", "fr", "de", "pt")
+_STT_AUTO_LANGS = ("zh", "ja", "en")
 _LANG_NAMES = {
     "zh": "Chinese",
     "ja": "Japanese",
@@ -179,15 +180,36 @@ def _normalize_translate_to(lang: Any) -> str:
     return "zh"
 
 
+def _normalize_any_lang(lang: Any) -> str | None:
+    if isinstance(lang, str) and lang in _TRANSLATE_LANGS:
+        return lang
+    return None
+
+
 def _normalize_translate_from(lang: Any) -> str | None:
     if lang in (None, "", "auto"):
         return None
-    return _normalize_stt_lang(lang)
+    return _normalize_any_lang(lang)
 
 
 def _normalize_stt_lang(lang: Any) -> str | None:
-    if isinstance(lang, str) and lang in _TRANSLATE_LANGS:
-        return lang
+    return _normalize_any_lang(lang)
+
+
+def _confident_stt_lang(text: str, heard: str | None) -> str | None:
+    raw = heard if heard in _STT_AUTO_LANGS else detect_question_lang(text)
+    if raw not in _STT_AUTO_LANGS:
+        return None
+    t = (text or "").strip()
+    han = len(re.findall(r"[\u4e00-\u9fff]", t))
+    kana = len(re.findall(r"[\u3040-\u30FF]", t))
+    latin = len(re.findall(r"[A-Za-z]", t))
+    if raw == "zh" and han >= 2:
+        return "zh"
+    if raw == "ja" and kana >= 2:
+        return "ja"
+    if raw == "en" and latin >= 16 and han < 2 and kana < 2:
+        return "en"
     return None
 
 
@@ -196,7 +218,7 @@ def heard_lang_from_code(raw: Any) -> str | None:
         return None
     code = raw.strip().lower().replace("_", "-").split("-", 1)[0]
     code = _LANG_ALIASES.get(code, code)
-    return _normalize_stt_lang(code)
+    return _normalize_any_lang(code)
 
 
 def heard_lang_from_turn(data: dict[str, Any]) -> str | None:
@@ -288,8 +310,9 @@ def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
         ("format_turns", "true"),
         ("max_turn_silence", silence),
     ]
-    lang = _normalize_stt_lang(stt.get("language"))
-    for code in ((lang,) if lang else _TRANSLATE_LANGS):
+    lang = _normalize_any_lang(stt.get("language"))
+    auto_langs = stt.get("auto_langs") or _STT_AUTO_LANGS
+    for code in ((lang,) if lang else auto_langs):
         params.append(("language_codes", code))
     boost = _stt_boost_words(cfg)
     if boost:
@@ -676,8 +699,12 @@ class Pipeline:
                     "role": "system",
                     "content": (
                         "You are a translator for live captions.\n"
+                        "Translate ONLY the line after 'Translate only this line:'. "
+                        "Lines under 'Previous lines' are context for names, topic, and source language — do not translate them.\n"
                         "Output ONLY the translation — no quotes, labels, notes, or preamble.\n"
-                        "Preserve names, numbers, and meaning. If the text is already in the target language, return it unchanged."
+                        "Preserve proper nouns, product names, and numbers. "
+                        "If the line is already in the target language, return it unchanged. "
+                        "Do not invent a language that is not Chinese, English, or Japanese."
                     ),
                 },
                 {"role": "user", "content": question},
@@ -1001,6 +1028,8 @@ class Session:
         self._meeting_flush_timer: threading.Timer | None = None
         self._meeting_lock = threading.Lock()
         self._follow_lang: str | None = None
+        self._follow_switch_lang: str | None = None
+        self._follow_switch_hits = 0
         self._recent_finals: list[tuple[str, float]] = []
         self._mic_muted = False
         self._workspace = "interview"
@@ -1199,6 +1228,8 @@ class Session:
             prev = self._effective_stt_lang()
             self.cfg.setdefault("stt", {})["language"] = lang
             self._follow_lang = None
+            self._follow_switch_lang = None
+            self._follow_switch_hits = 0
             if lang:
                 self.emit({"type": "status", "text": f"Speech recognition · {_LANG_NAMES.get(lang, lang)} only"})
             else:
@@ -1266,7 +1297,10 @@ class Session:
     def _stt_cfg(self) -> dict[str, Any]:
         cfg = dict(self.cfg)
         stt = dict(cfg.get("stt") or {})
-        stt["language"] = self._effective_stt_lang() or self._follow_lang
+        stt["language"] = self._effective_stt_lang() or (
+            None if self._workspace == "translate" else self._follow_lang
+        )
+        stt["auto_langs"] = list(_TRANSLATE_LANGS if self._workspace == "translate" else _STT_AUTO_LANGS)
         if self._workspace == "meeting":
             stt["max_turn_silence"] = "1600"
         cfg["stt"] = stt
@@ -1291,27 +1325,32 @@ class Session:
         self._recent_finals = self._recent_finals[-8:]
 
     def _maybe_follow_speech(self, text: str, heard: str | None) -> None:
-        if self._effective_stt_lang() or self._follow_lang:
+        if self._effective_stt_lang():
             return
-        lang = heard or detect_question_lang(text)
+        lang = _confident_stt_lang(text, heard)
         if not lang:
             return
-        t = (text or "").strip()
-        han = len(re.findall(r"[\u4e00-\u9fff]", t))
-        kana = len(re.findall(r"[\u3040-\u30FF]", t))
-        latin = len(re.findall(r"[A-Za-z]", t))
-        if lang == "zh" and han < 2:
+        if not self._follow_lang:
+            self._follow_lang = lang
+            self._follow_switch_lang = None
+            self._follow_switch_hits = 0
+            self.emit({"type": "status", "text": f"Speech recognition · following {_LANG_NAMES.get(lang, lang)}"})
             return
-        if lang == "ja" and kana < 2:
+        if lang == self._follow_lang:
+            self._follow_switch_lang = None
+            self._follow_switch_hits = 0
             return
-        if lang == "en" and latin < 10:
-            return
-        if lang not in ("zh", "ja", "en") and len(t) < 10:
+        if self._follow_switch_lang == lang:
+            self._follow_switch_hits += 1
+        else:
+            self._follow_switch_lang = lang
+            self._follow_switch_hits = 1
+        if self._follow_switch_hits < 2:
             return
         self._follow_lang = lang
+        self._follow_switch_lang = None
+        self._follow_switch_hits = 0
         self.emit({"type": "status", "text": f"Speech recognition · following {_LANG_NAMES.get(lang, lang)}"})
-        if self._listener:
-            threading.Thread(target=self._restart_listener, daemon=True).start()
 
     def _cancel_meeting_timer(self) -> None:
         timer = self._meeting_flush_timer
@@ -1384,7 +1423,9 @@ class Session:
         self._workspace = mode
         self._pending = None
         self._pending_asks = []
-        self._flush_meeting_hold()
+        # 丢弃 hold 住的半句会议内容（不 flush）：模式切换后 emit 的 question 事件
+        # 会被前端路由到新 workspace（如 translate 下变成垃圾翻译对）
+        self._cancel_meeting_timer()
         self._pending_wait = (None, 0.0, None)
         if mode == "translate" and prev != "translate":
             self.cancel_generate()

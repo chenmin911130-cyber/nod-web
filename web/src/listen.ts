@@ -148,7 +148,8 @@ export function parseNotes(raw: string): NotesDoc {
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
   if (start < 0 || end <= start) {
-    doc.summary = text
+    // 有 '{' 但还没等到闭合 '}' → LLM 还在流式输出 JSON，别把半截 JSON 当 summary 渲染
+    doc.summary = start >= 0 ? '' : text
     return doc
   }
   try {
@@ -163,7 +164,8 @@ export function parseNotes(raw: string): NotesDoc {
     doc.revisionNotes = asList(parsed.revisionNotes)
     return doc
   } catch {
-    doc.summary = text
+    // 解析失败：JSON 流没结束（嵌套对象中途）→ 不显示；否则原样显示
+    doc.summary = start >= 0 ? '' : text
     return doc
   }
 }

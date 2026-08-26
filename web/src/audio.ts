@@ -14,9 +14,18 @@ function downsample(input: Float32Array, fromSr: number): ArrayBuffer {
   const ratio = fromSr / TARGET_SR
   const outLen = Math.floor(input.length / ratio)
   if (outLen <= 0) return new ArrayBuffer(0)
+  // 一阶低通（-3dB @ ~7kHz），防止降采样把 8kHz+ 高频折叠（混叠）进语音频段
+  const dt = 1 / fromSr
+  const alpha = dt / (1 / (2 * Math.PI * 7000) + dt)
+  const filtered = new Float32Array(input.length)
+  let y = 0
+  for (let i = 0; i < input.length; i++) {
+    y += alpha * (input[i] - y)
+    filtered[i] = y
+  }
   const sampled = new Float32Array(outLen)
   for (let i = 0; i < outLen; i++) {
-    sampled[i] = input[Math.min(input.length - 1, Math.floor(i * ratio))]
+    sampled[i] = filtered[Math.min(input.length - 1, Math.floor(i * ratio))]
   }
   return floatToPcm16(sampled)
 }

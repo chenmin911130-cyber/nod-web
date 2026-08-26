@@ -24,12 +24,13 @@ interface Props {
   catchNotes: CatchNote[]
   notesRaw: string
   busy: boolean
+  summarizing?: boolean
   qa?: boolean
   qaSlot?: ReactNode
   onScene: (scene: ListenScene) => void
   onTranslate: (on: boolean) => void
   onTranslateTo: (lang: Lang) => void
-  onCatchUp: () => void
+  onSummary: () => void
   onAsk: (text: string) => void
 }
 
@@ -413,13 +414,6 @@ export default function ListenPane(props: Props) {
   }, [props.scene])
 
   useEffect(() => {
-    if (props.catchNotes.length || (props.ended && (props.notesRaw || props.busy))) {
-      setNotesOpen(true)
-      setMobilePane('notes')
-    }
-  }, [props.catchNotes, props.ended, props.notesRaw, props.busy])
-
-  useEffect(() => {
     leftRef.current?.scrollTo({ top: leftRef.current.scrollHeight })
   }, [props.lines, props.partial])
 
@@ -450,6 +444,12 @@ export default function ListenPane(props: Props) {
   const openNotes = () => {
     setNotesOpen(true)
     setMobilePane('notes')
+  }
+
+  const runSummary = () => {
+    if (props.busy || props.lines.length === 0) return
+    openNotes()
+    props.onSummary()
   }
 
   const submit = () => {
@@ -542,17 +542,14 @@ export default function ListenPane(props: Props) {
                 <span className={`listen-timer${props.listening ? ' live' : ''}`}>
                   {props.elapsedLabel === '00:00:00' && !props.listening ? '' : props.elapsedLabel}
                 </span>
-                {props.listening && !notesOpen && (
+                {props.lines.length > 0 && !notesOpen && (
                   <button
                     type="button"
                     className="listen-catch"
-                    disabled={props.busy || props.lines.length === 0}
-                    onClick={() => {
-                      openNotes()
-                      props.onCatchUp()
-                    }}
+                    disabled={props.busy}
+                    onClick={runSummary}
                   >
-                    Catch up
+                    Summarize
                   </button>
                 )}
               </div>
@@ -560,8 +557,8 @@ export default function ListenPane(props: Props) {
                 {props.lines.length === 0 && !props.partial ? (
                   <div className="listen-empty">
                     {lecture
-                      ? 'Start listening. This side is the lecture stream. Study notes open when you miss a stretch or stop the class.'
-                      : 'Start listening. The left side keeps what was said. Translate stays off until you need it.'}
+                      ? 'Start listening. This side is the lecture stream. Notes stay closed until you ask or tap Summarize.'
+                      : 'Start listening. The left side keeps what was said. Notes stay closed until you ask or tap Summarize.'}
                   </div>
                 ) : (
                   props.lines.map((line, i) => (
@@ -612,17 +609,14 @@ export default function ListenPane(props: Props) {
                 <div className="listen-kicker" style={{ padding: 0 }}>
                   {lecture ? 'Study notes' : `Notes · ${sceneLabel(props.scene)}`}
                 </div>
-                {props.listening && (
+                {props.lines.length > 0 && (
                   <button
                     type="button"
                     className="listen-catch"
-                    disabled={props.busy || props.lines.length === 0}
-                    onClick={() => {
-                      openNotes()
-                      props.onCatchUp()
-                    }}
+                    disabled={props.busy}
+                    onClick={runSummary}
                   >
-                    Catch up
+                    Summarize
                   </button>
                 )}
                 {props.ended && <span className="listen-hint">{lecture ? 'Class ended' : 'Session ended'}</span>}
@@ -639,17 +633,9 @@ export default function ListenPane(props: Props) {
                 </button>
               </div>
               <div className="listen-scroll" ref={rightRef}>
-                {props.catchNotes.length === 0 && !props.ended && (
+                {props.catchNotes.length === 0 && !sections.length && !props.busy && (
                   <div className="listen-empty">
-                    {lecture ? (
-                      <>
-                        Ask anything in the box below — the answer lands here. Missed a stretch? Tap <b>Catch up</b>. A study sheet waits until you stop.
-                      </>
-                    ) : (
-                      <>
-                        Ask anything in the box below — the answer lands here. Missed a stretch? Tap <b>Catch up</b>. Full notes wait until you end the session.
-                      </>
-                    )}
+                    Ask in the box below — the answer lands here. Or tap <b>Summarize</b> for a recap.
                   </div>
                 )}
                 {props.catchNotes.map((note, i) => (
@@ -660,29 +646,15 @@ export default function ListenPane(props: Props) {
                       text={note.text || (props.busy && i === props.catchNotes.length - 1 ? '…' : '')}
                       bilingual={props.translateOn}
                     />
-                    {props.listening && i === props.catchNotes.length - 1 && note.kind !== 'ask' && note.title.startsWith('Catch up') && (
-                      <p className="listen-hint">
-                        {lecture
-                          ? 'Still in class. Older cards stay so you can scroll back.'
-                          : 'Still listening. Older cards stay here so you can scroll back.'}
-                      </p>
-                    )}
                   </div>
                 ))}
-                {props.ended && !sections.length && !props.busy && (
-                  <div className="listen-empty">
-                    {lecture
-                      ? 'Stop listening after some speech to build a study sheet — concepts, formulas, and homework.'
-                      : 'Stop listening after some speech to generate scene notes.'}
-                  </div>
+                {props.summarizing && props.busy && !sections.length && (
+                  <div className="listen-empty">{lecture ? 'Writing the study sheet…' : 'Writing the summary…'}</div>
                 )}
-                {props.ended && props.busy && !sections.length && (
-                  <div className="listen-empty">{lecture ? 'Writing the study sheet…' : 'Writing notes…'}</div>
-                )}
-                {props.ended && lecture && sections.length > 0 && (
+                {lecture && sections.length > 0 && (
                   <LectureStudy sections={sections} bilingual={props.translateOn} />
                 )}
-                {props.ended && !lecture && sections.length > 0 && (
+                {!lecture && sections.length > 0 && (
                   <MeetingNotes sections={sections} bilingual={props.translateOn} />
                 )}
               </div>
@@ -695,7 +667,6 @@ export default function ListenPane(props: Props) {
               placeholder="Ask anything — the answer shows in Notes"
               onChange={(e) => {
                 setInput(e.target.value)
-                if (e.target.value.trim()) openNotes()
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') submit()
