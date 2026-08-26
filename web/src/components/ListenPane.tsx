@@ -170,7 +170,7 @@ function LangSelect({
         className={`listen-icon-btn${open ? ' on' : ''}`}
         title={
           value === 'auto'
-            ? 'Speech recognition · Auto. Hears all supported languages. Notes follow the speech.'
+            ? 'Auto. Notes follow the language you speak.'
             : current
               ? `Notes language · ${current.name}`
               : 'Choose notes language'

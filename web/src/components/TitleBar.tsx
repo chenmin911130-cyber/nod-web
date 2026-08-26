@@ -27,7 +27,7 @@ interface Props {
 }
 
 const LANGS: Array<{ label: string; value: Lang; name: string }> = [
-  { label: 'Auto', value: 'auto', name: 'All supported languages' },
+  { label: 'Auto', value: 'auto', name: 'Follows the language you speak' },
   ...TRANSLATE_LANGS.map((l) => ({ label: l.tag, value: l.id as Lang, name: `${l.name} only` })),
 ]
 
@@ -184,7 +184,7 @@ export default function TitleBar(props: Props) {
             aria-label="Speech recognition language"
             title={
               currentLang.value === 'auto'
-                ? 'Speech recognition · Auto. Hears all supported languages.'
+                ? 'Speech recognition · Auto. Follows the language you speak.'
                 : `Speech recognition · ${currentLang.name.replace(/ only$/, '')} only. Other languages are ignored.`
             }
             onClick={() => {

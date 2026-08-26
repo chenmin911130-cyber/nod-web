@@ -91,10 +91,19 @@ def user_from_token(token: str) -> User | None:
         return user
 
 
+def is_local_scope(client_host: str, host_header: str) -> bool:
+    host = (client_host or "").strip()
+    header = (host_header or "").split(":", 1)[0].strip().lower()
+    if host not in {"127.0.0.1", "::1", "localhost"}:
+        return False
+    return not header or header in {"127.0.0.1", "localhost"}
+
+
 def is_local_request(request: Request) -> bool:
-    host = ((request.client.host if request.client else "") or "").strip()
-    header = (request.headers.get("host") or "").split(":", 1)[0].strip().lower()
-    return host in {"127.0.0.1", "::1", "localhost"} and header in {"127.0.0.1", "localhost"}
+    return is_local_scope(
+        request.client.host if request.client else "",
+        request.headers.get("host") or "",
+    )
 
 
 def current_user(

@@ -31,7 +31,7 @@ from server.db import init_db
 from server.headers import CloudflareOriginMiddleware, SecurityHeadersMiddleware
 from server.logging_setup import backup_now, setup_logging
 from server.settings import AUTH_DISABLED, CLERK_PUBLISHABLE_KEY, COOKIE_NAME, PUBLIC_URL, QUOTA_DISABLED
-from server.security import user_from_token
+from server.security import is_local_scope, user_from_token
 
 SR = 16000
 STT_CLOUD = "assemblyai"
@@ -240,14 +240,55 @@ def _stt_boost_words(cfg: dict[str, Any]) -> list[str]:
     return words[:50]
 
 
+def _join_speech_frags(left: str, right: str) -> str:
+    a = (left or "").strip()
+    b = (right or "").strip()
+    if not a:
+        return b
+    if not b:
+        return a
+    if b.startswith(a):
+        return b
+    if a.startswith(b):
+        return a
+    if re.search(r"[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]$", a) and re.search(
+        r"^[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]", b
+    ):
+        return a + b
+    if a.endswith(("，", "、", ",", "—", "-")):
+        return a + b if re.search(r"^[\u4e00-\u9fff\u3040-\u30FF]", b) else f"{a} {b}".strip()
+    return f"{a} {b}".strip()
+
+
+def _meeting_line_complete(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    if t.endswith(("。", "！", "？", ".", "!", "?", "…")):
+        return True
+    return len(t) >= 32
+
+
+def _meeting_should_hold(text: str) -> bool:
+    t = (text or "").strip()
+    if not t or _meeting_line_complete(t):
+        return False
+    if len(t) < 18:
+        return True
+    low = t.lower()
+    return t.endswith(("，", ",", "、")) or low.endswith((" and", " or", " but", " the"))
+
+
 def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
+    stt = cfg.get("stt") or {}
+    silence = str(stt.get("max_turn_silence") or "1600")
     params = [
         ("sample_rate", str(SR)),
         ("speech_model", ASSEMBLYAI_MODEL),
         ("format_turns", "true"),
-        ("max_turn_silence", "1200"),
+        ("max_turn_silence", silence),
     ]
-    lang = _normalize_stt_lang((cfg.get("stt") or {}).get("language"))
+    lang = _normalize_stt_lang(stt.get("language"))
     for code in ((lang,) if lang else _TRANSLATE_LANGS):
         params.append(("language_codes", code))
     boost = _stt_boost_words(cfg)
@@ -957,6 +998,9 @@ class Session:
         self._pending: tuple[str, str | None] | None = None
         self._pending_asks: list[tuple[str, str]] = []
         self._pending_wait: tuple[str | None, float, str | None] = (None, 0.0, None)
+        self._meeting_flush_timer: threading.Timer | None = None
+        self._meeting_lock = threading.Lock()
+        self._follow_lang: str | None = None
         self._recent_finals: list[tuple[str, float]] = []
         self._mic_muted = False
         self._workspace = "interview"
@@ -1154,10 +1198,11 @@ class Session:
             lang = _normalize_stt_lang(msg.get("language"))
             prev = self._effective_stt_lang()
             self.cfg.setdefault("stt", {})["language"] = lang
+            self._follow_lang = None
             if lang:
                 self.emit({"type": "status", "text": f"Speech recognition · {_LANG_NAMES.get(lang, lang)} only"})
             else:
-                self.emit({"type": "status", "text": "Speech recognition · Auto · all supported languages"})
+                self.emit({"type": "status", "text": "Speech recognition · Auto · follows the language you speak"})
             if self._workspace != "translate" and self._listener and prev != lang:
                 self._restart_listener()
         elif mtype == "set_translate_from":
@@ -1221,15 +1266,115 @@ class Session:
     def _stt_cfg(self) -> dict[str, Any]:
         cfg = dict(self.cfg)
         stt = dict(cfg.get("stt") or {})
-        stt["language"] = self._effective_stt_lang()
+        stt["language"] = self._effective_stt_lang() or self._follow_lang
+        if self._workspace == "meeting":
+            stt["max_turn_silence"] = "1600"
         cfg["stt"] = stt
         return cfg
 
     def _restart_listener(self) -> None:
         if not self._listener:
             return
-        self._stop_listening()
-        self._start_listening()
+        lst = self._listener
+        self._listener = None
+        try:
+            lst.stop()
+        except Exception:
+            pass
+        self._start_listening(resume=True)
+
+    def _speech_filter_lang(self) -> str | None:
+        return self._effective_stt_lang() or self._follow_lang
+
+    def _remember_final(self, text: str) -> None:
+        self._recent_finals.append((text, time.time()))
+        self._recent_finals = self._recent_finals[-8:]
+
+    def _maybe_follow_speech(self, text: str, heard: str | None) -> None:
+        if self._effective_stt_lang() or self._follow_lang:
+            return
+        lang = heard or detect_question_lang(text)
+        if not lang:
+            return
+        t = (text or "").strip()
+        han = len(re.findall(r"[\u4e00-\u9fff]", t))
+        kana = len(re.findall(r"[\u3040-\u30FF]", t))
+        latin = len(re.findall(r"[A-Za-z]", t))
+        if lang == "zh" and han < 2:
+            return
+        if lang == "ja" and kana < 2:
+            return
+        if lang == "en" and latin < 10:
+            return
+        if lang not in ("zh", "ja", "en") and len(t) < 10:
+            return
+        self._follow_lang = lang
+        self.emit({"type": "status", "text": f"Speech recognition · following {_LANG_NAMES.get(lang, lang)}"})
+        if self._listener:
+            threading.Thread(target=self._restart_listener, daemon=True).start()
+
+    def _cancel_meeting_timer(self) -> None:
+        timer = self._meeting_flush_timer
+        self._meeting_flush_timer = None
+        if timer:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+
+    def _flush_meeting_hold(self) -> None:
+        with self._meeting_lock:
+            self._cancel_meeting_timer()
+            ptxt, _pts, plang = self._pending_wait
+            self._pending_wait = (None, 0.0, None)
+        if ptxt:
+            self._emit_meeting_line(ptxt, plang)
+
+    def _emit_meeting_line(self, cleaned: str, lang: str | None) -> None:
+        heard = lang or detect_question_lang(cleaned)
+        self._maybe_follow_speech(cleaned, heard)
+        self._remember_final(cleaned)
+        qev: dict[str, Any] = {"type": "question", "id": self.pipeline._new_qid(), "text": cleaned}
+        if heard:
+            qev["language"] = heard
+        self.emit(qev)
+        if self.user_id and self.usage_session_id:
+            from server.meter import save_history
+
+            save_history(self.user_id, self.usage_session_id, "transcript", cleaned, qev["id"])
+
+    def _hold_or_emit_meeting(self, cleaned: str, lang: str | None) -> None:
+        leftover: tuple[str, str | None] | None = None
+        hold_now = False
+        with self._meeting_lock:
+            ptxt, pts, plang = self._pending_wait
+            now = time.time()
+            if ptxt and now - pts < 2.8:
+                cleaned = _join_speech_frags(ptxt, cleaned)
+                lang = plang or lang
+                self._pending_wait = (None, 0.0, None)
+            elif ptxt:
+                leftover = (ptxt, plang)
+                self._pending_wait = (None, 0.0, None)
+            if _meeting_should_hold(cleaned):
+                self._pending_wait = (cleaned, now, lang)
+                self._cancel_meeting_timer()
+                timer = threading.Timer(2.2, self._flush_meeting_hold)
+                timer.daemon = True
+                self._meeting_flush_timer = timer
+                timer.start()
+                hold_now = True
+            else:
+                self._cancel_meeting_timer()
+        if leftover:
+            self._emit_meeting_line(leftover[0], leftover[1])
+        if hold_now:
+            ev: dict[str, Any] = {"type": "partial", "text": cleaned}
+            if lang:
+                ev["language"] = lang
+            self.emit(ev)
+            return
+        self._emit_meeting_line(cleaned, lang)
 
     def set_workspace(self, mode: str) -> None:
         if mode not in ("interview", "meeting", "translate"):
@@ -1239,6 +1384,7 @@ class Session:
         self._workspace = mode
         self._pending = None
         self._pending_asks = []
+        self._flush_meeting_hold()
         self._pending_wait = (None, 0.0, None)
         if mode == "translate" and prev != "translate":
             self.cancel_generate()
@@ -1278,7 +1424,7 @@ class Session:
         else:
             self._stop_listening()
 
-    def _start_listening(self) -> None:
+    def _start_listening(self, resume: bool = False) -> None:
         key = self.pipeline.assemblyai_key()
         if not key:
             self.emit({"type": "error", "text": "Missing AssemblyAI key — add it to start cloud listening"})
@@ -1299,7 +1445,8 @@ class Session:
             listener.set_muted(True)
         self._listener = listener
         self.emit({"type": "state", "state": "listen"})
-        self.emit({"type": "status", "text": STATUS_LISTEN})
+        if not resume:
+            self.emit({"type": "status", "text": STATUS_LISTEN})
 
     def _stop_listening(self) -> None:
         self.pipeline._cancel.set()
@@ -1311,6 +1458,7 @@ class Session:
                 lst.stop()
             except Exception:
                 pass
+        self._flush_meeting_hold()
         self.emit({"type": "state", "state": "idle"})
         self.emit({"type": "status", "text": STATUS_READY})
         self._flush_cloud_archive(final=False)
@@ -1444,7 +1592,7 @@ class Session:
         threading.Thread(target=work, daemon=True).start()
 
     def _speech_allowed(self, text: str, lang: str | None = None) -> bool:
-        locked = self._effective_stt_lang()
+        locked = self._speech_filter_lang()
         return matches_locked_speech(text, locked, lang)
 
     def _on_partial(self, text: str, lang: str | None = None) -> None:
@@ -1470,8 +1618,6 @@ class Session:
         for t, ts in self._recent_finals:
             if now - ts < 5.0 and _ratio(cleaned.lower(), t.lower()) > 0.85:
                 return
-        self._recent_finals.append((cleaned, now))
-        self._recent_finals = self._recent_finals[-8:]
         heard = lang or detect_question_lang(cleaned)
         qev: dict[str, Any] = {"type": "question", "id": "", "text": cleaned}
         if heard:
@@ -1480,16 +1626,13 @@ class Session:
             self.cancel_generate()
             self._pending = None
             self._pending_wait = (None, 0.0, None)
+            self._maybe_follow_speech(cleaned, heard)
+            self._remember_final(cleaned)
             qev["id"] = self.pipeline._new_qid()
             self.emit(qev)
             return
         if self._workspace == "meeting":
-            qev["id"] = self.pipeline._new_qid()
-            self.emit(qev)
-            if self.user_id and self.usage_session_id:
-                from server.meter import save_history
-
-                save_history(self.user_id, self.usage_session_id, "transcript", cleaned, qev["id"])
+            self._hold_or_emit_meeting(cleaned, lang)
             return
         recent_qs = [h["q"] for h in self.pipeline._qa_history]
         verdict = guard_question(cleaned, recent_qs, self.pipeline._last_answer)
@@ -1505,6 +1648,8 @@ class Session:
         self._pending_wait = (None, 0.0, None)
         if verdict == "reject":
             return
+        self._remember_final(cleaned)
+        self._maybe_follow_speech(cleaned, heard)
         if self._busy:
             self._pending = (cleaned, lang)
             return
@@ -1605,6 +1750,11 @@ def api_config():
 async def ws_endpoint(ws: WebSocket):
     token = (ws.query_params.get("token") or "").strip() or (ws.cookies.get(COOKIE_NAME) or "").strip()
     user = user_from_token(token) if token else None
+    local = is_local_scope(ws.client.host if ws.client else "", ws.headers.get("host") or "")
+    if user is None and local:
+        from server.commerce import _ensure_local_user
+
+        user = _ensure_local_user()
     if not AUTH_DISABLED and user is None:
         await ws.accept()
         await ws.send_text(json.dumps({"type": "auth_required"}))

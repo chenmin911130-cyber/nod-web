@@ -1015,7 +1015,7 @@ export default function App() {
         type: 'status',
         text:
           lang === 'auto'
-            ? 'Speech recognition · Auto · all supported languages'
+            ? 'Speech recognition · Auto · follows the language you speak'
             : `Speech recognition · ${targetName(lang)} only`,
       },
     })
@@ -1190,7 +1190,7 @@ export default function App() {
       dispatch({ type: 'notes_lang', lang: 'auto' })
       dispatch({
         type: 'engine',
-        ev: { type: 'status', text: 'Auto · recognize all languages · notes follow speech' },
+        ev: { type: 'status', text: 'Auto · follows the language you speak · notes follow speech' },
       })
       return
     }
