@@ -1,6 +1,6 @@
 interface Props {
   title: string
-  sub: string
+  sub?: string
   shortcuts?: Array<{ key: string; label: string }>
   compact?: boolean
 }
@@ -18,7 +18,7 @@ export default function EmptyState({ title, sub, shortcuts, compact }: Props) {
         </div>
       )}
       <div className="empty-title">{title}</div>
-      <div className="empty-sub">{sub}</div>
+      {sub ? <div className="empty-sub">{sub}</div> : null}
       {shortcuts && shortcuts.length > 0 && (
         <div className="empty-shortcuts">
           {shortcuts.map((s, i) => (

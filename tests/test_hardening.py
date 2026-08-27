@@ -352,6 +352,41 @@ class ListenAskRoutingTests(unittest.TestCase):
         self.assertTrue(question["id"])
         self.assertTrue(question["text"].startswith("[NOD_ASK"))
 
+    def test_cancelled_generation_still_emits_done(self):
+        events: list[dict] = []
+        pipe = Pipeline.__new__(Pipeline)
+        pipe.cfg = {"llm": {"provider": "deepseek", "model": "deepseek-v4-flash", "max_tokens": 80}}
+        pipe.emit = events.append
+        pipe._provider = "deepseek"
+        pipe._model = "deepseek-v4-flash"
+        pipe._qa_history = []
+        pipe._last_answer = ""
+        pipe._cancel = __import__("threading").Event()
+        pipe._gen_seq = 0
+        pipe.user_id = None
+        pipe.usage_session_id = None
+        pipe._heard_lang = None
+
+        class _Delta:
+            content = "Beijing"
+            reasoning_content = None
+
+        class _Choice:
+            delta = _Delta()
+
+        class _Chunk:
+            choices = [_Choice()]
+
+        def stream():
+            pipe._cancel.set()
+            yield _Chunk()
+
+        pipe.client = mock.Mock()
+        pipe.client.chat.completions.create.return_value = stream()
+        pipe.process_text("Where is the capital of China?", "ask")
+        self.assertTrue(any(e.get("type") == "done" and e.get("ok") is False for e in events))
+        self.assertFalse(any(e.get("type") == "chunk" for e in events))
+
     def test_translate_prompt_allows_italian(self):
         pipe = Pipeline.__new__(Pipeline)
         pipe.cfg = {"llm": {}}

@@ -1006,6 +1006,7 @@ class Pipeline:
             reasoning = ""
             for ch in stream:
                 if seq != self._gen_seq or self._cancel.is_set():
+                    self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
                     return
                 if not ch.choices:
                     continue
@@ -1022,11 +1023,13 @@ class Pipeline:
                 self.emit({"type": "chunk", "id": qid, "text": reasoning})
         except Exception as e:
             if seq != self._gen_seq:
+                self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
                 return
             self.emit({"type": "error", "text": f"Generation failed:{e}"})
             self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
             return
         if seq != self._gen_seq or self._cancel.is_set():
+            self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
             return
         if not answer:
             self.emit({"type": "error", "text": "Generation failed: empty response"})
@@ -1821,7 +1824,6 @@ class Session:
             self.emit({"type": "status", "text": STATUS_LISTEN})
 
     def _stop_listening(self) -> None:
-        self.pipeline._cancel.set()
         self._pending = None
         lst = self._listener
         self._listener = None
@@ -1953,6 +1955,7 @@ class Session:
                 self._pending_asks.append((text, mode))
                 return
             self.emit({"type": "status", "text": "Still working, please wait"})
+            self.emit({"type": "done", "id": "", "stt": 0, "llm": 0, "ok": False})
             return
         self.pipeline._cancel.clear()
         self.emit({"type": "state", "state": "think"})

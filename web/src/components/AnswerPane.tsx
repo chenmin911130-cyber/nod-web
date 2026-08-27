@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Turn } from '../types'
 import type { AttachPayload, LocalAttach } from '../attach'
 import { toPayload } from '../attach'
-import { AnswerContent, QuestionBlock } from './AnswerContent'
+import { AnswerContent } from './AnswerContent'
 import PromptAttach from './PromptAttach'
 import EmptyState from './EmptyState'
 
@@ -34,7 +34,7 @@ export default function AnswerPane({ currentQ, partial, turns, busy, onAsk, onCo
   useEffect(() => {
     if (pinned) return
     bottomRef.current?.scrollIntoView({ behavior: 'auto' })
-  }, [turns, pinned])
+  }, [turns, partial, pinned])
 
   const submit = () => {
     const t = input.trim()
@@ -57,39 +57,73 @@ export default function AnswerPane({ currentQ, partial, turns, busy, onAsk, onCo
     setPinned(false)
   }
 
-  const isEmpty = turns.length === 0 && !partial && !busy
-  const answer = turns.length > 0 ? turns[turns.length - 1].a : ''
-  const showQ = currentQ && currentQ !== 'Waiting for the next question…'
+  const last = turns[turns.length - 1]
+  const liveQ = (partial || '').trim()
+  const showLive = Boolean(liveQ) && (!last || last.q !== liveQ)
+  const orphanQ = Boolean(
+    currentQ
+    && currentQ !== 'Waiting for the next question…'
+    && currentQ !== liveQ
+    && !turns.some((t) => t.q === currentQ),
+  )
+  const isEmpty = turns.length === 0 && !showLive && !orphanQ && !busy
 
   return (
-    <div className="main">
-      <div className="kicker">Question</div>
-      {isEmpty ? (
-        <EmptyState
-          title="Waiting for the next question"
-          sub="Type a question to open the sidebar, or hover the left edge to start listening"
-          shortcuts={[
-            { key: 'F2', label: 'Record' },
-            { key: 'F3', label: 'Listen' },
-            { key: 'F4', label: 'Clear' },
-          ]}
-        />
-      ) : (
-        <div className="ap-question">
-          <QuestionBlock q={showQ ? currentQ : (partial ? 'Listening…' : '')} partial={partial} />
+    <div className="main translate-main interview-qa">
+      <div className="kicker">
+        Interview
+        <span className="kicker-hint"> · F2 Record · F3 Listen · F4 Clear</span>
+      </div>
+      <div className="tr-sheet">
+        <div className="qa-head">
+          <div className="tr-col-head">Question</div>
+          <div className="tr-col-head qa-head-right">Answer</div>
         </div>
-      )}
-      <div className="answer-card">
-        <div className="kicker">Answer</div>
-        <div className="answer-scroll" ref={scrollRef} onScroll={handleScroll}>
-          {answer ? (
-            <AnswerContent answer={answer} base="ap" />
+        <div className="tr-body" ref={scrollRef} onScroll={handleScroll}>
+          {isEmpty ? (
+            <EmptyState compact title="Waiting for the next question" />
           ) : (
-            <div className="answer-empty">
-              {busy ? 'Generating answer…' : 'Your answer will appear here.'}
-            </div>
+            <>
+              {turns.map((t) => {
+                const generating = busy && t.id === last?.id && !t.a
+                return (
+                  <div key={t.id} className={`qa-pair${generating ? ' live' : ''}`}>
+                    <div className="tr-cell">
+                      <span>{t.q}</span>
+                    </div>
+                    <div className={`tr-cell${t.a ? '' : ' pending'}`}>
+                      {t.a ? (
+                        <AnswerContent answer={t.a} base={`ap-${t.id}`} />
+                      ) : (
+                        <span>{generating ? 'Generating answer…' : 'Waiting…'}</span>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+              {orphanQ && (
+                <div className="qa-pair">
+                  <div className="tr-cell">
+                    <span>{currentQ}</span>
+                  </div>
+                  <div className="tr-cell pending">
+                    <span>{busy ? 'Generating answer…' : 'Waiting…'}</span>
+                  </div>
+                </div>
+              )}
+              {showLive && (
+                <div className="qa-pair live">
+                  <div className="tr-cell pending">
+                    <span>Listening… {liveQ}</span>
+                  </div>
+                  <div className="tr-cell pending">
+                    <span>Waiting…</span>
+                  </div>
+                </div>
+              )}
+              <div ref={bottomRef} />
+            </>
           )}
-          <div ref={bottomRef} />
         </div>
       </div>
       {pinned && (

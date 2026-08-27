@@ -290,8 +290,10 @@ function reducer(state: AppState, action: Action): AppState {
             autoOn = false
             if (view !== 'workspace') view = 'workspace'
           }
-          const generating = Boolean(state.translateAskId || state.summaryAskId)
-          const busy = run === 'think' || (generating && run !== 'idle')
+          const generating = Boolean(state.translateAskId || state.summaryAskId || state.notesAskId)
+          let busy = state.busy
+          if (run === 'think') busy = true
+          else if (run === 'idle' && !generating) busy = false
           return { ...state, run, autoOn, view, busy, meetingStartedAt }
         }
         case 'status':
@@ -466,31 +468,25 @@ function reducer(state: AppState, action: Action): AppState {
           } else if (translateChunk && state.translatePairs.length) {
             translatePairs = applyTranslateChunk(translatePairs, state.translateBindId, ev.text ?? '')
           }
-          if (state.workspaceMode !== 'interview' || state.turns.length === 0) {
-            return { ...state, meetingSummary, summaryAskId, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
+          if (state.workspaceMode === 'interview' && state.turns.length) {
+            const byId = ev.id ? state.turns.findIndex((t) => t.id === ev.id) : -1
+            const fallback = byId < 0 && !ev.id ? state.turns.length - 1 : state.turns.findIndex((t) => !t.a)
+            const idx = byId >= 0 ? byId : fallback
+            if (idx >= 0) {
+              const turns = state.turns.slice()
+              const row = turns[idx]
+              turns[idx] = { ...row, id: ev.id || row.id, a: row.a + (ev.text ?? '') }
+              return { ...state, turns, meetingSummary, summaryAskId, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
+            }
           }
-          const turns = state.turns.slice()
-          const last = turns[turns.length - 1]
-          if (
-            ev.id
-            && last.id !== ev.id
-            && ev.id !== translateAskId
-            && ev.id !== summaryAskId
-            && ev.id !== catchAskId
-            && ev.id !== notesAskId
-          ) {
-            return { ...state, meetingSummary, summaryAskId, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
-          }
-          if (!ev.id || last.id === ev.id) {
-            turns[turns.length - 1] = { ...last, a: last.a + ev.text }
-          }
-          return { ...state, turns, meetingSummary, summaryAskId, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
+          return { ...state, meetingSummary, summaryAskId, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
         }
         case 'done': {
           const waitingAsk = state.catchNotes.some((note) => isPendingCatchId(note.id))
           return {
             ...state,
             busy: waitingAsk,
+            status: waitingAsk ? state.status : 'Ready',
             translateAskId: '',
             summaryAskId: '',
             catchAskId: waitingAsk ? state.catchAskId : '',
@@ -828,9 +824,23 @@ export default function App() {
   const pendingMic = useRef<(() => void) | null>(null)
   const [composeOpen, setComposeOpen] = useState(false)
   const [railHover, setRailHover] = useState(false)
-  const [railDismissed, setRailDismissed] = useState(false)
   const [clearOpen, setClearOpen] = useState(false)
+  const studyMode = state.workspaceMode === 'interview'
+  const inQa = studyMode && (
+    composeOpen
+    || state.busy
+    || state.turns.length > 0
+    || (Boolean(state.currentQ) && state.currentQ !== PLACEHOLDER)
+  )
+  const [railDismissed, setRailDismissed] = useState(inQa)
+  const wasInQa = useRef(inQa)
   const requestClearRef = useRef<() => void>(() => {})
+
+  useEffect(() => {
+    if (inQa && !wasInQa.current) setRailDismissed(true)
+    if (!inQa) setRailDismissed(false)
+    wasInQa.current = inQa
+  }, [inQa])
 
   useEffect(() => {
     if (!clearOpen) return
@@ -1811,13 +1821,12 @@ export default function App() {
 
   const listening = state.run === 'listen' || state.run === 'record'
   const elapsedLabel = formatElapsed(state.meetingElapsedMs)
-  const study = state.workspaceMode === 'interview'
+  const study = studyMode
   const hideRail = () => {
     setRailDismissed(true)
-    setComposeOpen(false)
     setRailHover(false)
   }
-  const railOn = Boolean(demoScene) || !study || (!railDismissed && (composeOpen || railHover || state.busy || listening))
+  const railOn = !study || !inQa || !railDismissed || railHover
 
   return (
     <div className="app">
@@ -1842,21 +1851,25 @@ export default function App() {
         onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
       />
       <div className={`workspace${study ? ' study' : ''}${study && railOn ? ' rail-on' : ''}`}>
-        {study && (
-          <div
-            className="rail-hotzone"
-            onMouseEnter={() => {
+        {study && !railOn && (
+          <button
+            type="button"
+            className={`rail-hint${listening ? ' live' : ''}`}
+            title="Show controls"
+            aria-label="Show controls"
+            onClick={() => {
               setRailDismissed(false)
               setRailHover(true)
             }}
-            title="Show controls"
-          />
+          >
+            <span className="rail-hint-chevron" aria-hidden="true">›</span>
+            <span className="rail-hint-label">Controls</span>
+          </button>
         )}
         <div
           className="rail-slot"
           onMouseEnter={() => {
-            if (!study) return
-            setRailDismissed(false)
+            if (!study || !inQa) return
             setRailHover(true)
           }}
           onMouseLeave={() => study && setRailHover(false)}
@@ -1874,7 +1887,7 @@ export default function App() {
             onMark={handleMark}
             onExport={() => { void handleExportPdf() }}
             onBilingual={() => dispatch({ type: 'bilingual', on: !state.bilingual })}
-            onClose={study ? hideRail : undefined}
+            onClose={study && inQa ? hideRail : undefined}
             meetingPaused={
               state.workspaceMode === 'meeting'
               && !listening
@@ -1927,14 +1940,7 @@ export default function App() {
                 turns={state.turns}
                 busy={state.busy}
                 onAsk={handleAsk}
-                onCompose={(on) => {
-                  if (on) {
-                    setRailDismissed(false)
-                    setComposeOpen(true)
-                    return
-                  }
-                  setComposeOpen(false)
-                }}
+                onCompose={setComposeOpen}
               />
             }
             onScene={(scene) => {

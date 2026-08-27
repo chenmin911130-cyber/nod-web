@@ -27,8 +27,8 @@ interface Props {
 }
 
 const LANGS: Array<{ label: string; value: Lang; name: string }> = [
-  { label: 'Auto', value: 'auto', name: 'Follows the language you speak' },
-  ...TRANSLATE_LANGS.map((l) => ({ label: l.tag, value: l.id as Lang, name: `${l.name} only` })),
+  { label: 'Auto', value: 'auto', name: '' },
+  ...TRANSLATE_LANGS.map((l) => ({ label: l.tag, value: l.id as Lang, name: l.name })),
 ]
 
 const MODES: Array<{ id: WorkspaceMode; label: string }> = [
@@ -184,8 +184,8 @@ export default function TitleBar(props: Props) {
             aria-label="Speech recognition language"
             title={
               currentLang.value === 'auto'
-                ? 'Speech recognition · Auto. Follows the language you speak.'
-                : `Speech recognition · ${currentLang.name.replace(/ only$/, '')} only. Other languages are ignored.`
+                ? 'Speech recognition · Auto'
+                : `Speech recognition · ${currentLang.name}`
             }
             onClick={() => {
               setLangOpen((v) => !v)
@@ -211,7 +211,7 @@ export default function TitleBar(props: Props) {
                   }}
                 >
                   <span className="lang-menu-tag">{l.label}</span>
-                  <span className="lang-menu-name">{l.name}</span>
+                  {l.name ? <span className="lang-menu-name">{l.name}</span> : null}
                 </button>
               ))}
             </div>
