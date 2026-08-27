@@ -59,8 +59,12 @@ def _client() -> Any:
 def put_bytes(key: str, body: bytes, content_type: str) -> bool:
     if not enabled() or not key or not body:
         return False
-    _client().put_object(Bucket=R2_BUCKET, Key=key, Body=body, ContentType=content_type)
-    return True
+    try:
+        _client().put_object(Bucket=R2_BUCKET, Key=key, Body=body, ContentType=content_type)
+        return True
+    except Exception:
+        log.exception("r2 put failed key=%s", key)
+        return False
 
 
 def presign(key: str, expires: int = 3600) -> str:

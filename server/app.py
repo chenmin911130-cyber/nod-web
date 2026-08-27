@@ -1304,13 +1304,13 @@ class Session:
             if self._archive_bytes >= PART_BYTES:
                 self._archive_rotate()
 
-    def _upload_current_part(self) -> None:
+    def _upload_current_part(self) -> bool:
         from server.r2 import pcm_to_wav, put_bytes
         from server.meter import set_session_file
 
         path = self._archive_path
         if not path or not self.user_id or not self.usage_session_id or self._archive_bytes <= SR * 2:
-            return
+            return True
         if self._archive_fp:
             try:
                 self._archive_fp.flush()
@@ -1321,13 +1321,16 @@ class Session:
         key = f"{prefix}part-{self._archive_part:03d}.wav"
         if put_bytes(key, wav, "audio/wav"):
             set_session_file(self.usage_session_id, audio_key=prefix)
+            return True
+        return False
 
     def _archive_rotate(self) -> None:
+        uploaded = False
         try:
-            self._upload_current_part()
+            uploaded = self._upload_current_part()
         except Exception:
             logging.getLogger("nod").exception("r2 audio part upload failed")
-        self._archive_close(unlink=True)
+        self._archive_close(unlink=uploaded)
         self._archive_part += 1
 
     def _flush_cloud_archive(self, final: bool = False) -> None:
@@ -1337,8 +1340,9 @@ class Session:
             if final:
                 self._archive_close(unlink=True)
             return
+        uploaded = False
         try:
-            self._upload_current_part()
+            uploaded = self._upload_current_part()
         except Exception:
             logging.getLogger("nod").exception("r2 audio upload failed")
         try:
@@ -1348,7 +1352,7 @@ class Session:
         except Exception:
             logging.getLogger("nod").exception("r2 notes upload failed")
         if final:
-            self._archive_close(unlink=True)
+            self._archive_close(unlink=uploaded)
 
     def _archive_close(self, unlink: bool = False) -> None:
         if self._archive_fp:
