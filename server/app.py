@@ -865,10 +865,10 @@ class Pipeline:
                         "You are a translator for live captions.\n"
                         "Translate ONLY the line after 'Translate only this line:'. "
                         "Lines under 'Previous lines' are context for names, topic, and source language — do not translate them.\n"
-                        "Output ONLY the translation — no quotes, labels, notes, or preamble.\n"
+                        "Output ONLY the translation in the requested target language — no quotes, labels, notes, or preamble.\n"
                         "Preserve proper nouns, product names, and numbers. "
                         "If the line is already in the target language, return it unchanged. "
-                        "Do not invent a language that is not Chinese, English, or Japanese."
+                        "Allowed targets: Chinese, English, Japanese, Italian, Spanish, French, German, Portuguese."
                     ),
                 },
                 {"role": "user", "content": question},

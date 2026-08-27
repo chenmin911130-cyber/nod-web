@@ -352,6 +352,18 @@ class ListenAskRoutingTests(unittest.TestCase):
         self.assertTrue(question["id"])
         self.assertTrue(question["text"].startswith("[NOD_ASK"))
 
+    def test_translate_prompt_allows_italian(self):
+        pipe = Pipeline.__new__(Pipeline)
+        pipe.cfg = {"llm": {}}
+        messages = pipe._build_messages(
+            "Translate to Italian.\nSource language: English.\nTranslate only this line:\nHello there",
+            "translate",
+        )
+        sys_msg = messages[0]["content"]
+        self.assertNotIn("that is not Chinese, English, or Japanese", sys_msg)
+        self.assertIn("Italian", sys_msg)
+        self.assertIn("requested target language", sys_msg)
+
 
 class MailerEscapeTests(unittest.TestCase):
     def test_feedback_html_is_escaped(self):

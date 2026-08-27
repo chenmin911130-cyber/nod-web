@@ -452,6 +452,14 @@ function reducer(state: AppState, action: Action): AppState {
             notesRaw += ev.text ?? ''
             notesAskId = ev.id || notesAskId
           }
+          const foreignAsk = Boolean(ev.id) && (
+            ev.id === state.summaryAskId
+            || ev.id === state.notesAskId
+            || catchNotes.some((note) => note.id === ev.id)
+          )
+          if (!translateAskId && state.translateBindId && ev.id && !foreignAsk) {
+            translateAskId = ev.id
+          }
           const translateChunk = Boolean(translateAskId) && ev.id === translateAskId
           if (translateChunk && state.translateOn && meetingLines.length) {
             meetingLines = applyLineTranslation(meetingLines, state.translateBindId, ev.text ?? '')
@@ -946,8 +954,9 @@ export default function App() {
       }
       if (e.type === 'state' && e.state === 'idle') {
         const stuck = inflightTranslate.current
-        if (stuck) {
-          // 生成被服务端取消（停止/暂停监听等）时不会收到 done → 立即重试，不等 25s 超时
+        // Live captions also emit idle. That must not abort an in-flight
+        // translation — it is why rows flipped to Failed while still listening.
+        if (stuck && !listenWanted.current) {
           const row = stateRef.current.translatePairs.find((p) => p.id === stuck)
           if (!row || !(row.translation || '').trim()) {
             clearTranslateTimer()
@@ -971,9 +980,11 @@ export default function App() {
       queueMicrotask(() => {
         if (id) {
           const row = stateRef.current.translatePairs.find((p) => p.id === id)
-          if (row && (row.translation || '').trim()) {
+          const line = stateRef.current.meetingLines.find((ln) => ln.id === id)
+          const translated = (row?.translation || line?.translation || '').trim()
+          if (translated) {
             dispatch({ type: 'release_translate' })
-          } else if (row && !(row.translation || '').trim()) {
+          } else if (row && !translated) {
             const n = (translateRetries.current.get(id) || 0) + 1
             translateRetries.current.set(id, n)
             if (n <= 2) askedTranslate.current.delete(id)
