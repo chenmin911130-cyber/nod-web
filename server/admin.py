@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from server.logging_setup import backup_now
+from server.ratelimit import rate_limit
 from server.meter import (
     admin_feedback,
     admin_overview,
@@ -15,8 +16,9 @@ from server.meter import (
     admin_users,
     delete_user_data,
 )
+from server import settings
 from server.security import require_admin
-from server.settings import ADMIN_COOKIE, ADMIN_TOKEN, QUOTA_DISABLED
+from server.settings import ADMIN_COOKIE, QUOTA_DISABLED
 
 router = APIRouter()
 
@@ -25,15 +27,19 @@ class AdminLoginIn(BaseModel):
     token: str = ""
 
 
-@router.post("/api/admin/login")
+@router.post("/api/admin/login", dependencies=[Depends(rate_limit("admin-login", 5, 600))])
 def login(body: AdminLoginIn, request: Request, response: Response):
+    # Read through the module so the value stays a single source of truth.
+    admin_token = settings.ADMIN_TOKEN
+    if not admin_token:
+        raise HTTPException(503, "Admin API is disabled (ADMIN_TOKEN is not set)")
     offered = (body.token or "").strip()
-    if not ADMIN_TOKEN or not hmac.compare_digest(offered, ADMIN_TOKEN):
+    if not hmac.compare_digest(offered, admin_token):
         raise HTTPException(401, "Wrong admin token")
     https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
     response.set_cookie(
         key=ADMIN_COOKIE,
-        value=ADMIN_TOKEN,
+        value=admin_token,
         httponly=True,
         samesite="lax",
         secure=https,

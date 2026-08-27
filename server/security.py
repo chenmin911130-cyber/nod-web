@@ -134,8 +134,10 @@ def require_admin(
 ) -> None:
     from server.settings import ADMIN_TOKEN
 
+    if not ADMIN_TOKEN:
+        raise HTTPException(status_code=503, detail="Admin API is disabled (ADMIN_TOKEN is not set)")
     offered = (x_admin_token or nod_admin or request.cookies.get("nod_admin") or "").strip()
-    if not ADMIN_TOKEN or not offered or not hmac.compare_digest(offered, ADMIN_TOKEN):
+    if not offered or not hmac.compare_digest(offered, ADMIN_TOKEN):
         raise HTTPException(status_code=401, detail="Admin token required")
 
 

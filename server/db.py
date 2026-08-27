@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Iterator
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
 
 from server.settings import DATA_DIR, database_url, is_sqlite
-
-_lock = threading.Lock()
 
 
 def utcnow() -> datetime:
@@ -136,9 +133,22 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-connect_args = {"check_same_thread": False} if is_sqlite() else {}
+connect_args = {"check_same_thread": False, "timeout": 30} if is_sqlite() else {}
 engine = create_engine(database_url(), connect_args=connect_args, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+
+if is_sqlite():
+
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_conn, _record) -> None:  # noqa: ANN001
+        # WAL lets readers run while a writer holds the file, and busy_timeout
+        # makes concurrent writers wait instead of raising "database is locked".
+        # Together they replace the process-wide lock this module used to hold.
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+        cur.close()
 
 
 def _add_column_if_missing(table: str, column: str, spec: str) -> None:
@@ -164,16 +174,15 @@ def init_db() -> None:
 
 @contextmanager
 def db_session() -> Iterator[Session]:
-    with _lock:
-        s = SessionLocal()
-        try:
-            yield s
-            s.commit()
-        except Exception:
-            s.rollback()
-            raise
-        finally:
-            s.close()
+    s = SessionLocal()
+    try:
+        yield s
+        s.commit()
+    except Exception:
+        s.rollback()
+        raise
+    finally:
+        s.close()
 
 
 init_db()

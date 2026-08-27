@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 
 from server.db import Feedback, GlobalDay, HistoryItem, UsageDay, UsageSession, User, db_session, utcnow
 from server.security import new_id
@@ -185,25 +186,53 @@ def close_usage_session(session_id: str | None) -> None:
             row.ended_at = utcnow()
 
 
+def _ensure_row(db, build, exists) -> None:
+    """Insert a counter row, tolerating a concurrent insert of the same key.
+
+    A SAVEPOINT keeps the losing race from poisoning the caller's transaction.
+    """
+    if exists():
+        return
+    sp = db.begin_nested()
+    try:
+        db.add(build())
+        sp.commit()
+    except IntegrityError:
+        sp.rollback()
+
+
 def _bump(db, user_id: str, stt: float, inp: int, out: int, cost: float) -> None:
     day = _day()
-    row = db.execute(select(UsageDay).where(UsageDay.user_id == user_id, UsageDay.day == day)).scalar_one_or_none()
-    if row is None:
-        row = UsageDay(user_id=user_id, day=day)
-        db.add(row)
-        db.flush()
-    row.stt_seconds += stt
-    row.llm_tokens += inp + out
-    row.cost_usd += cost
-    row.request_count += 1
-    glob = db.get(GlobalDay, day)
-    if glob is None:
-        glob = GlobalDay(day=day)
-        db.add(glob)
-        db.flush()
-    glob.stt_seconds += stt
-    glob.llm_tokens += inp + out
-    glob.cost_usd += cost
+    _ensure_row(
+        db,
+        lambda: UsageDay(user_id=user_id, day=day),
+        lambda: db.execute(
+            select(UsageDay.id).where(UsageDay.user_id == user_id, UsageDay.day == day)
+        ).scalar_one_or_none()
+        is not None,
+    )
+    # Arithmetic stays in SQL: read-modify-write in Python loses increments
+    # when two sessions meter the same day at once.
+    db.execute(
+        update(UsageDay)
+        .where(UsageDay.user_id == user_id, UsageDay.day == day)
+        .values(
+            stt_seconds=UsageDay.stt_seconds + stt,
+            llm_tokens=UsageDay.llm_tokens + inp + out,
+            cost_usd=UsageDay.cost_usd + cost,
+            request_count=UsageDay.request_count + 1,
+        )
+    )
+    _ensure_row(db, lambda: GlobalDay(day=day), lambda: db.get(GlobalDay, day) is not None)
+    db.execute(
+        update(GlobalDay)
+        .where(GlobalDay.day == day)
+        .values(
+            stt_seconds=GlobalDay.stt_seconds + stt,
+            llm_tokens=GlobalDay.llm_tokens + inp + out,
+            cost_usd=GlobalDay.cost_usd + cost,
+        )
+    )
 
 
 def consume_stt(user_id: str, seconds: float, session_id: str | None) -> tuple[bool, dict]:
@@ -213,10 +242,14 @@ def consume_stt(user_id: str, seconds: float, session_id: str | None) -> tuple[b
     cost = _cost_stt(seconds)
     with db_session() as db:
         if session_id:
-            row = db.get(UsageSession, session_id)
-            if row:
-                row.stt_seconds += seconds
-                row.estimated_cost_usd += cost
+            db.execute(
+                update(UsageSession)
+                .where(UsageSession.id == session_id)
+                .values(
+                    stt_seconds=UsageSession.stt_seconds + seconds,
+                    estimated_cost_usd=UsageSession.estimated_cost_usd + cost,
+                )
+            )
         _bump(db, user_id, seconds, 0, 0, cost)
     snap = usage_snapshot(user_id)
     return bool(snap.get("ok")), snap
@@ -236,11 +269,15 @@ def consume_llm(
     cost = _cost_llm(inp, out)
     with db_session() as db:
         if session_id:
-            row = db.get(UsageSession, session_id)
-            if row:
-                row.llm_input_tokens += inp
-                row.llm_output_tokens += out
-                row.estimated_cost_usd += cost
+            db.execute(
+                update(UsageSession)
+                .where(UsageSession.id == session_id)
+                .values(
+                    llm_input_tokens=UsageSession.llm_input_tokens + inp,
+                    llm_output_tokens=UsageSession.llm_output_tokens + out,
+                    estimated_cost_usd=UsageSession.estimated_cost_usd + cost,
+                )
+            )
         _bump(db, user_id, 0, inp, out, cost)
     snap = usage_snapshot(user_id)
     return bool(snap.get("ok")), snap
@@ -275,7 +312,8 @@ def list_history(user_id: str, limit: int = 40) -> list[dict]:
             .order_by(UsageSession.started_at.desc())
             .limit(limit)
         ).scalars().all()
-        out = []
+        out: list[dict] = []
+        file_refs: list[tuple[str, str, str]] = []
         for s in sessions:
             items = db.execute(
                 select(HistoryItem)
@@ -294,27 +332,32 @@ def list_history(user_id: str, limit: int = 40) -> list[dict]:
                     "llm_tokens": s.llm_input_tokens + s.llm_output_tokens,
                     "cost_usd": round(s.estimated_cost_usd, 4),
                     "items": [{"kind": i.kind, "text": i.text, "at": i.created_at.isoformat() if i.created_at else None} for i in items],
-                    "files": _session_files(s),
+                    "files": [],
                 }
             )
-        return out
+            file_refs.append((s.id, s.audio_key or "", s.notes_key or ""))
+    # R2 lookups happen after the transaction closes: a slow bucket used to
+    # hold a database connection open for the whole listing.
+    for entry, (sid, audio_key, notes_key) in zip(out, file_refs):
+        entry["files"] = _session_files(sid, audio_key, notes_key)
+    return out
 
 
-def _session_files(s: UsageSession) -> list[dict]:
+def _session_files(session_id: str, audio_key: str, notes_key: str) -> list[dict]:
     from server.r2 import list_keys
 
     files = []
-    key = s.audio_key or ""
+    key = audio_key or ""
     if key.endswith("/"):
         for item in list_keys(key):
             name = item.rsplit("/", 1)[-1]
             if not name:
                 continue
-            files.append({"kind": "audio", "name": name, "href": f"/api/account/files/{s.id}/audio?part={name}"})
+            files.append({"kind": "audio", "name": name, "href": f"/api/account/files/{session_id}/audio?part={name}"})
     elif key:
-        files.append({"kind": "audio", "name": "audio.wav", "href": f"/api/account/files/{s.id}/audio"})
-    if s.notes_key:
-        files.append({"kind": "notes", "name": "notes.txt", "href": f"/api/account/files/{s.id}/notes"})
+        files.append({"kind": "audio", "name": "audio.wav", "href": f"/api/account/files/{session_id}/audio"})
+    if notes_key:
+        files.append({"kind": "notes", "name": "notes.txt", "href": f"/api/account/files/{session_id}/notes"})
     return files
 
 

@@ -37,45 +37,70 @@ export class MicCapture {
   private source: MediaStreamAudioSourceNode | null = null
   private gain: GainNode | null = null
   private running = false
+  private starting: Promise<void> | null = null
+  // Bumped by stop() so an in-flight start() knows to release what it took
+  // instead of leaving a live MediaStream with no reference to it.
+  private stopSeq = 0
   onPcm: (buf: ArrayBuffer) => void = () => undefined
 
+  // Counts as active while acquiring too, otherwise a second caller sees an
+  // idle mic and opens a competing getUserMedia.
   get active(): boolean {
-    return this.running
+    return this.running || this.starting !== null
   }
 
-  async start(): Promise<void> {
-    if (this.running) return
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    })
-    const ctx = new AudioContext()
-    this.ctx = ctx
-    if (ctx.state === 'suspended') await ctx.resume()
-    const source = ctx.createMediaStreamSource(this.stream)
-    const proc = ctx.createScriptProcessor(4096, 1, 1)
-    const gain = ctx.createGain()
-    gain.gain.value = 0
-    proc.onaudioprocess = (ev) => {
-      if (!this.running) return
-      const input = ev.inputBuffer.getChannelData(0)
-      const pcm = downsample(input, ctx.sampleRate)
-      if (pcm.byteLength) this.onPcm(pcm)
+  start(): Promise<void> {
+    if (this.running) return Promise.resolve()
+    if (!this.starting) {
+      this.starting = this.acquire().finally(() => {
+        this.starting = null
+      })
     }
-    source.connect(proc)
-    proc.connect(gain)
-    gain.connect(ctx.destination)
-    this.source = source
-    this.proc = proc
-    this.gain = gain
-    this.running = true
+    return this.starting
   }
 
-  stop(): void {
+  private async acquire(): Promise<void> {
+    const seq = this.stopSeq
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      })
+      const ctx = new AudioContext()
+      this.ctx = ctx
+      if (ctx.state === 'suspended') await ctx.resume()
+      if (seq !== this.stopSeq) {
+        this.release()
+        return
+      }
+      const source = ctx.createMediaStreamSource(this.stream)
+      const proc = ctx.createScriptProcessor(4096, 1, 1)
+      const gain = ctx.createGain()
+      gain.gain.value = 0
+      proc.onaudioprocess = (ev) => {
+        if (!this.running) return
+        const input = ev.inputBuffer.getChannelData(0)
+        const pcm = downsample(input, ctx.sampleRate)
+        if (pcm.byteLength) this.onPcm(pcm)
+      }
+      source.connect(proc)
+      proc.connect(gain)
+      gain.connect(ctx.destination)
+      this.source = source
+      this.proc = proc
+      this.gain = gain
+      this.running = true
+    } catch (err) {
+      this.release()
+      throw err
+    }
+  }
+
+  private release(): void {
     this.running = false
     try {
       this.proc?.disconnect()
@@ -95,5 +120,10 @@ export class MicCapture {
       this.stream.getTracks().forEach((t) => t.stop())
       this.stream = null
     }
+  }
+
+  stop(): void {
+    this.stopSeq += 1
+    this.release()
   }
 }

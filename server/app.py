@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
+from starlette.concurrency import run_in_threadpool
 
 from server.admin import router as admin_router
 from server.commerce import router as commerce_router
@@ -31,7 +32,7 @@ from server.db import init_db
 from server.headers import CloudflareOriginMiddleware, SecurityHeadersMiddleware
 from server.logging_setup import backup_now, setup_logging
 from server.settings import AUTH_DISABLED, CLERK_PUBLISHABLE_KEY, COOKIE_NAME, PUBLIC_URL, QUOTA_DISABLED
-from server.ratelimit import MAX_WS_FRAME, ws_client_ip, ws_connect, ws_disconnect
+from server.ratelimit import MAX_WS_FRAME, WS_FRAMES_PER_SEC, allow, ws_client_ip, ws_connect, ws_disconnect
 from server.security import is_local_scope, user_from_token
 
 SR = 16000
@@ -160,6 +161,30 @@ def load_config() -> dict[str, Any]:
     cfg.setdefault("stt", {})["model"] = STT_CLOUD
     cfg.setdefault("audio", {})["source"] = "mic"
     return cfg
+
+
+def model_allowed(cfg: dict[str, Any], provider: str, model: str) -> bool:
+    """Only models this deployment advertises may be billed to our API keys.
+
+    Without this a client could name any model on the provider and we would
+    still meter it at the configured flat rate.
+    """
+    wanted = (str(provider or "").strip(), str(model or "").strip())
+    if not wanted[0] or not wanted[1]:
+        return False
+    if wanted[0] not in PROVIDER_ENDPOINTS:
+        return False
+    allowed: set[tuple[str, str]] = set()
+    for entry in cfg.get("models") or []:
+        if isinstance(entry, dict):
+            pair = (str(entry.get("provider") or "").strip(), str(entry.get("model") or "").strip())
+            if all(pair):
+                allowed.add(pair)
+    llm = cfg.get("llm") or {}
+    default = (str(llm.get("provider") or "").strip(), str(llm.get("model") or "").strip())
+    if all(default):
+        allowed.add(default)
+    return wanted in allowed
 
 
 _TRANSLATE_LANGS = ("zh", "ja", "en", "it", "es", "fr", "de", "pt")
@@ -1161,6 +1186,10 @@ class Session:
         self._manual = False
         self._manual_started = 0.0
         self._busy = False
+        # Finals arrive on the STT thread while dispatch runs on a worker, so
+        # the busy flag has to be claimed atomically or two generations start
+        # for one question and both get billed.
+        self._busy_lock = threading.Lock()
         self._pending: tuple[str, str | None] | None = None
         self._pending_asks: list[tuple[str, str]] = []
         self._pending_wait: tuple[str | None, float, str | None] = (None, 0.0, None)
@@ -1446,12 +1475,23 @@ class Session:
         self.emit({"type": "keys_status", "has_llm": st["has_llm"], "has_stt": st["has_stt"]})
         self.emit({"type": "status", "text": "API keys saved — ready to go"})
 
+    def _claim_busy(self) -> bool:
+        with self._busy_lock:
+            if self._busy:
+                return False
+            self._busy = True
+            return True
+
+    def _release_busy(self) -> None:
+        with self._busy_lock:
+            self._busy = False
+
     def cancel_generate(self) -> None:
         """Cancel the in-flight LLM stream without stopping STT."""
         self.pipeline._gen_seq += 1
         self.pipeline._cancel.set()
         self._pending_asks = []
-        self._busy = False
+        self._release_busy()
 
     def set_translate_to(self, lang: str) -> None:
         self.cfg.setdefault("ui", {})["translate_to"] = _normalize_translate_to(lang)
@@ -1515,7 +1555,9 @@ class Session:
             return
         self.emit({"type": "status", "text": "Transcription dropped — reconnecting"})
         delay = min(3.0, 0.4 * self._stt_drops)
-        threading.Timer(delay, self._restart_if_listening).start()
+        timer = threading.Timer(delay, self._restart_if_listening)
+        timer.daemon = True
+        timer.start()
 
     def _restart_if_listening(self) -> None:
         if not self._listen_wanted:
@@ -1662,6 +1704,9 @@ class Session:
             self._restart_listener()
 
     def set_llm(self, provider: str, model: str) -> None:
+        if not model_allowed(self.cfg, provider, model):
+            self.emit({"type": "error", "text": f"Model not available: {model}"})
+            return
         try:
             self.pipeline.set_model(provider, model)
         except Exception as e:
@@ -1831,12 +1876,13 @@ class Session:
             self.emit(ev)
             self.emit({"type": "state", "state": "idle"})
             return
-        self._busy = True
+        if not self._claim_busy():
+            return
         self.pipeline._cancel.clear()
         try:
             self.pipeline.process_text(cleaned, "ask", heard)
         finally:
-            self._busy = False
+            self._release_busy()
             self.emit({"type": "state", "state": "idle"})
 
     def ask(self, text, files=None, mode="ask") -> None:
@@ -1865,13 +1911,12 @@ class Session:
             mode = "listen_ask"
         if mode == "ask" and (body.startswith("Write structured notes") or text.lstrip().startswith("[NOD_NOTES")):
             mode = "notes"
-        if self._busy:
+        if not self._claim_busy():
             if mode in ("translate", "summary", "catchup", "notes", "listen_ask"):
                 self._pending_asks.append((text, mode))
                 return
             self.emit({"type": "status", "text": "Still working, please wait"})
             return
-        self._busy = True
         self.pipeline._cancel.clear()
         self.emit({"type": "state", "state": "think"})
 
@@ -1879,7 +1924,7 @@ class Session:
             try:
                 self.pipeline.process_text(text, mode, images=images)
             finally:
-                self._busy = False
+                self._release_busy()
                 listening = self._listener is not None
                 self.emit({"type": "state", "state": "listen" if listening else "idle"})
                 if self._pending_asks:
@@ -1963,10 +2008,9 @@ class Session:
             return
         self._remember_final(cleaned)
         self._maybe_follow_speech(cleaned, heard)
-        if self._busy:
+        if not self._claim_busy():
             self._pending = (cleaned, lang)
             return
-        self._busy = True
         self.pipeline._cancel.clear()
         self.emit({"type": "state", "state": "think"})
         self.emit({"type": "status", "text": STATUS_CHECK})
@@ -1975,7 +2019,7 @@ class Session:
             try:
                 self.pipeline.process_text(cleaned, "ask", heard)
             finally:
-                self._busy = False
+                self._release_busy()
                 listening = self._listener is not None
                 self.emit({"type": "state", "state": "listen" if listening else "idle"})
                 pending = self._pending
@@ -2124,23 +2168,39 @@ async def ws_endpoint(ws: WebSocket):
                 break
             data = message.get("bytes")
             text = message.get("text")
+            # Both paths run off the event loop: they reach blocking work
+            # (STT handshake waits, metering queries, R2 uploads) and one slow
+            # client used to stall audio for everyone else on the process.
             if data:
                 if len(data) > MAX_WS_FRAME:
                     continue
-                session.push_pcm(data)
+                if not allow(f"wsframe:{ip}", WS_FRAMES_PER_SEC, 1.0):
+                    continue
+                await run_in_threadpool(session.push_pcm, data)
             elif text:
                 if len(text) > 200_000:
                     continue
                 try:
-                    session.dispatch(json.loads(text))
+                    payload = json.loads(text)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(payload, dict):
+                    continue
+                await run_in_threadpool(session.dispatch, payload)
     except WebSocketDisconnect:
         pass
     finally:
         send_task.cancel()
-        session.close()
         ws_disconnect(ip)
+        try:
+            await run_in_threadpool(session.close)
+        except asyncio.CancelledError:
+            # Shutting down mid-session: finish the archive flush inline
+            # rather than dropping the recording.
+            session.close()
+            raise
+        except Exception:
+            log.exception("session close failed")
 
 
 HTML_NO_CACHE = {
@@ -2189,7 +2249,10 @@ def _html_page(name: str) -> FileResponse:
 
 
 if WEB_DIST.exists():
-    app.mount("/assets", StaticFiles(directory=str(WEB_DIST / "assets")), name="assets")
+    # A half-written dist (mid-rebuild, or a build that failed after emptying
+    # the folder) must not take the whole app down at import time.
+    if (WEB_DIST / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=str(WEB_DIST / "assets")), name="assets")
 
     def _favicon() -> FileResponse:
         path = WEB_DIST / "favicon.svg"
@@ -2211,12 +2274,21 @@ if WEB_DIST.exists():
         page = WEB_DIST / "app.html"
         return _html_page("app.html") if page.exists() else _html_page("index.html")
 
+    WEB_DIST_REAL = WEB_DIST.resolve()
+
     @app.get("/{full_path:path}")
     def spa(full_path: str):
         if full_path == "app" or full_path.startswith("app/"):
             page = WEB_DIST / "app.html"
             return _html_page("app.html") if page.exists() else _html_page("index.html")
-        dest = WEB_DIST / full_path
-        if full_path and dest.exists() and dest.is_file():
-            return FileResponse(dest)
+        # ASGI servers pass the unquoted path through without collapsing dot
+        # segments, so "/..%2fdata%2fnod.db" arrives here as "../data/nod.db".
+        # Resolve first, then refuse anything that escapes the build output.
+        if full_path:
+            try:
+                dest = (WEB_DIST / full_path).resolve()
+            except (OSError, ValueError):
+                return _html_page("index.html")
+            if dest.is_relative_to(WEB_DIST_REAL) and dest.is_file():
+                return FileResponse(dest)
         return _html_page("index.html")

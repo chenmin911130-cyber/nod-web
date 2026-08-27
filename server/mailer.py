@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html as html_escape
 import logging
 import smtplib
 from email.message import EmailMessage
@@ -79,9 +80,12 @@ def send_reset_email(to: str, token: str) -> bool:
 
 
 def send_feedback_copy(to_admin: str, from_email: str, message: str) -> None:
+    # Both fields are user supplied and land in an inbox we read.
+    safe_email = html_escape.escape(from_email or "")
+    safe_message = html_escape.escape(message or "")
     send_mail(
         to_admin,
         f"Nod feedback from {from_email or 'anonymous'}",
-        f"<p>{from_email}</p><pre>{message}</pre>",
+        f"<p>{safe_email}</p><pre>{safe_message}</pre>",
         f"{from_email}\n\n{message}",
     )

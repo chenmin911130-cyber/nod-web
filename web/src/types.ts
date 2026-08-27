@@ -167,7 +167,22 @@ export interface Api {
   minimize(): void
   getConfig(): Promise<AppConfig>
   openExternal(url: string): void
-  exportPdf(payload: { title?: string; html?: string; dest?: string; blocks?: Array<{ kind: 'h1' | 'h2' | 'p' | 'meta'; text: string }> }): Promise<string>
+  exportPdf(payload: {
+    title?: string
+    html?: string
+    dest?: string
+    theme?: 'plain' | 'meeting' | 'lecture'
+    subtitle?: string
+    meta?: string[]
+    doc?: import('./pdfTemplates').ListenPdfDoc
+    blocks?: Array<{
+      kind: 'h1' | 'h2' | 'p' | 'meta' | 'bullet' | 'action' | 'decision' | 'flash' | 'concept' | 'line'
+      text: string
+      owner?: string
+      ts?: string
+      speaker?: string
+    }>
+  }): Promise<string>
 }
 
 declare global {

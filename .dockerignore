@@ -6,3 +6,5 @@ __pycache__
 *.pyc
 .env
 secrets.json
+data
+*.db

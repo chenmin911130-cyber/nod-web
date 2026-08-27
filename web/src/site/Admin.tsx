@@ -202,7 +202,7 @@ export default function AdminPage() {
           </div>
           <div className="eyebrow">NOD ADMIN</div>
           <h1>Test console</h1>
-          <p>Free testing only. Enter the admin token to see customer data. Default local token is leonardo.</p>
+          <p>Enter the admin token to see customer data.</p>
           <label>
             Admin token
             <input type="password" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="current-password" />

@@ -24,8 +24,10 @@ import {
   parseNotes,
   promoteLectureSpeakers,
   resolveSpeakerName,
+  sectionTitle,
   type ListenScene,
 } from './listen'
+import { buildListenPdfDoc, type ListenPdfDoc } from './pdfTemplates'
 
 const PLACEHOLDER = 'Waiting for the next question…'
 const STATUS_READY = 'Ready · F2 record / F3 listen / F4 clear'
@@ -1428,6 +1430,12 @@ export default function App() {
   }, [askTranslate])
   pumpTranslateRef.current = pumpTranslate
 
+  // Stable identity so memoised transcript rows are not invalidated on every
+  // parent render — with thousands of lines that dominates the frame budget.
+  const handleRenameSpeaker = useCallback((id: string, name: string) => {
+    dispatch({ type: 'rename_speaker', id, name })
+  }, [])
+
   const handleTranslateTyped = useCallback((text: string, files?: AttachPayload[]) => {
     const original = text.trim() || (files?.length ? files.map((f) => f.name).join(', ') : '')
     const s = stateRef.current
@@ -1534,8 +1542,17 @@ export default function App() {
   const writePdf = useCallback(async () => {
     const s = stateRef.current
     const when = new Date().toLocaleString()
-    const blocks: Array<{ kind: 'h1' | 'h2' | 'p' | 'meta'; text: string }> = []
+    const blocks: Array<{
+      kind: 'h1' | 'h2' | 'p' | 'meta' | 'bullet' | 'action' | 'decision' | 'flash' | 'concept' | 'line'
+      text: string
+      owner?: string
+      ts?: string
+      speaker?: string
+    }> = []
     let title = 'Nod'
+    let theme: 'plain' | 'meeting' | 'lecture' = 'plain'
+    let meta: string[] = []
+    let doc: ListenPdfDoc | undefined
 
     if (s.workspaceMode === 'translate') {
       title = 'Nod captions'
@@ -1573,18 +1590,82 @@ export default function App() {
         }
       }
     } else {
-      const scene = s.listenScene[0].toUpperCase() + s.listenScene.slice(1)
-      title = `Nod ${scene} notes`
+      const lecture = s.listenScene === 'lecture'
+      theme = lecture ? 'lecture' : 'meeting'
+      title = lecture ? 'Study notes' : 'Meeting notes'
       const lines = s.meetingLines
-      const doc = parseNotes(s.notesRaw)
-      blocks.push({ kind: 'h1', text: `Nod ${scene} notes` })
-      blocks.push({ kind: 'meta', text: `Exported ${when}` })
-      for (const section of exportNoteSections(s.listenScene, doc)) {
-        blocks.push({ kind: 'h2', text: section.title })
-        if (section.items.length) {
-          for (const item of section.items) blocks.push({ kind: 'p', text: item })
-        } else {
-          blocks.push({ kind: 'p', text: '—' })
+      const notes = parseNotes(s.notesRaw)
+      const speakers = [...new Set(Object.values(s.speakerNames).filter(Boolean))]
+      meta = [
+        when,
+        s.meetingElapsedMs ? formatElapsed(s.meetingElapsedMs) : '',
+        speakers.length ? speakers.join(' · ') : '',
+      ].filter(Boolean)
+      const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+      doc = buildListenPdfDoc({
+        theme,
+        summary: notes.summary,
+        date,
+        exported: when,
+        duration: s.meetingElapsedMs ? formatElapsed(s.meetingElapsedMs) : '',
+        speakers,
+        keyPoints: notes.keyPoints,
+        decisions: notes.decisions,
+        actionItems: notes.actionItems,
+        importantDetails: notes.importantDetails,
+        followUps: notes.followUps,
+        revisionNotes: notes.revisionNotes,
+        catchNotes: s.catchNotes.map((n) => ({ title: n.title, text: n.text })),
+        transcript: lines.map((ln) => ({
+          ts: ln.ts,
+          speaker: resolveSpeakerName(s.speakerNames, ln.speaker),
+          text: ln.text,
+          translation: s.translateOn ? ln.translation : undefined,
+        })),
+      })
+      title = doc.title
+      blocks.push({ kind: 'h1', text: title })
+      if (notes.summary.trim()) {
+        blocks.push({ kind: 'h2', text: sectionTitle(s.listenScene, 'summary') })
+        blocks.push({ kind: 'p', text: notes.summary.trim() })
+      }
+      if (lecture) {
+        if (notes.keyPoints.length) {
+          blocks.push({ kind: 'h2', text: sectionTitle('lecture', 'keyPoints') })
+          notes.keyPoints.forEach((item, i) => blocks.push({ kind: 'concept', text: item, owner: String(i + 1).padStart(2, '0') }))
+        }
+        if (notes.revisionNotes.length) {
+          blocks.push({ kind: 'h2', text: sectionTitle('lecture', 'revisionNotes') })
+          notes.revisionNotes.forEach((item) => blocks.push({ kind: 'flash', text: item, owner: 'Revise' }))
+        }
+        if (notes.importantDetails.length) {
+          blocks.push({ kind: 'h2', text: sectionTitle('lecture', 'importantDetails') })
+          for (const item of notes.importantDetails) blocks.push({ kind: 'bullet', text: item })
+        }
+        if (notes.followUps.length) {
+          blocks.push({ kind: 'h2', text: sectionTitle('lecture', 'followUps') })
+          for (const item of notes.followUps) blocks.push({ kind: 'bullet', text: item })
+        }
+      } else {
+        if (notes.keyPoints.length) {
+          blocks.push({ kind: 'h2', text: sectionTitle('meeting', 'keyPoints') })
+          for (const item of notes.keyPoints) blocks.push({ kind: 'bullet', text: item })
+        }
+        if (notes.decisions.length) {
+          blocks.push({ kind: 'h2', text: sectionTitle('meeting', 'decisions') })
+          for (const item of notes.decisions) blocks.push({ kind: 'decision', text: item })
+        }
+        if (notes.actionItems.length) {
+          blocks.push({ kind: 'h2', text: sectionTitle('meeting', 'actionItems') })
+          for (const row of notes.actionItems) blocks.push({ kind: 'action', text: row.text, owner: row.owner })
+        }
+        if (notes.importantDetails.length) {
+          blocks.push({ kind: 'h2', text: sectionTitle('meeting', 'importantDetails') })
+          for (const item of notes.importantDetails) blocks.push({ kind: 'bullet', text: item })
+        }
+        if (notes.followUps.length) {
+          blocks.push({ kind: 'h2', text: sectionTitle('meeting', 'followUps') })
+          for (const item of notes.followUps) blocks.push({ kind: 'bullet', text: item })
         }
       }
       for (const note of s.catchNotes) {
@@ -1592,19 +1673,21 @@ export default function App() {
         blocks.push({ kind: 'h2', text: note.title })
         blocks.push({ kind: 'p', text: note.text.trim() })
       }
-      blocks.push({ kind: 'h2', text: 'Transcript' })
+      blocks.push({ kind: 'h2', text: lecture ? 'Classroom stream' : 'Transcript' })
       if (lines.length === 0) blocks.push({ kind: 'p', text: 'No transcript lines.' })
       else {
         for (const ln of lines) {
           const who = resolveSpeakerName(s.speakerNames, ln.speaker)
-          blocks.push({ kind: 'p', text: `${ln.ts}${who ? ` ${who}` : ''}  ${ln.text}` })
-          if (s.translateOn && ln.translation) blocks.push({ kind: 'p', text: `     ${ln.translation}` })
+          blocks.push({ kind: 'line', text: ln.text, ts: ln.ts, speaker: who })
+          if (s.translateOn && ln.translation) {
+            blocks.push({ kind: 'line', text: ln.translation, ts: '', speaker: '' })
+          }
         }
       }
     }
 
     try {
-      const dest = await window.api.exportPdf({ title, blocks })
+      const dest = await window.api.exportPdf({ title, blocks, theme, meta, doc })
       if (!dest) {
         dispatch({ type: 'engine', ev: { type: 'status', text: 'Export cancelled' } })
         return
@@ -1646,17 +1729,25 @@ export default function App() {
     void writePdf()
   }, [state.busy, state.notesRaw, writePdf, generateNotes])
 
+  // 'think' is a generation state, not a pause: it must not freeze the clock,
+  // but it must not restart it either when the meeting is genuinely paused.
+  const [clockRunning, setClockRunning] = useState(false)
+  useEffect(() => {
+    if (state.run === 'think') return
+    setClockRunning(state.run === 'listen' || state.run === 'record')
+  }, [state.run])
+
   // Meeting elapsed clock
   useEffect(() => {
     if (state.workspaceMode !== 'meeting' || state.meetingStartedAt == null) return
-    if (state.run !== 'listen' && state.run !== 'record') return
+    if (!clockRunning) return
     const id = window.setInterval(() => {
       tickRef.current += 1
       const started = stateRef.current.meetingStartedAt
       if (started) dispatch({ type: 'meeting_clock', startedAt: started, elapsedMs: Date.now() - started })
     }, 1000)
     return () => window.clearInterval(id)
-  }, [state.workspaceMode, state.meetingStartedAt, state.run])
+  }, [state.workspaceMode, state.meetingStartedAt, clockRunning])
 
   if (!state.keys.hasLlm || !state.keys.hasStt) {
     return <KeySetup hasLlm={state.keys.hasLlm} hasStt={state.keys.hasStt} />
@@ -1797,7 +1888,7 @@ export default function App() {
             lines={state.meetingLines}
             speakerNames={state.speakerNames}
             partialSpeaker={state.partialSpeaker}
-            onRenameSpeaker={(id, name) => dispatch({ type: 'rename_speaker', id, name })}
+            onRenameSpeaker={handleRenameSpeaker}
             partial={state.partial}
             elapsedLabel={elapsedLabel}
             listening={listening}

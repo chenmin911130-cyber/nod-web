@@ -1,6 +1,8 @@
+import asyncio
 import logging
 import time
 import unittest
+from unittest import mock
 
 from starlette.testclient import TestClient
 
@@ -9,12 +11,14 @@ from server.mailer import send_reset_email
 from server.ratelimit import allow
 from server.app import (
     ASSEMBLYAI_MODEL,
+    WEB_DIST,
     _join_speech_frags,
     _meeting_should_hold,
     _same_speech_script,
     _stt_keyterms,
     assemblyai_ws_url,
     clean_transcript,
+    model_allowed,
     split_code_switched,
 )
 from server.settings import DAILY_STT_SECONDS
@@ -153,6 +157,170 @@ class ApiGuardTests(unittest.TestCase):
             except Exception:
                 return
             self.assertEqual(msg.get("type"), "auth_required")
+
+
+def _raw_get(path: str) -> tuple[int | None, bytes]:
+    """Drive the ASGI app with a hand-built scope.
+
+    HTTP clients normalise dot segments before they hit the wire, but ASGI
+    servers hand the unquoted path straight to the app, so this is the only way
+    to reproduce what an attacker sends with curl --path-as-is.
+    """
+    from server.app import app
+
+    body = bytearray()
+    status: dict[str, int] = {}
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        if msg["type"] == "http.response.start":
+            status["code"] = msg["status"]
+        elif msg["type"] == "http.response.body":
+            body.extend(msg.get("body") or b"")
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.1"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"127.0.0.1")],
+        "client": ("1.2.3.4", 5555),
+        "server": ("127.0.0.1", 80),
+    }
+    asyncio.run(app(scope, receive, send))
+    return status.get("code"), bytes(body)
+
+
+@unittest.skipUnless(WEB_DIST.exists(), "frontend build required for the SPA catch-all route")
+class StaticTraversalTests(unittest.TestCase):
+    def test_dot_segments_cannot_escape_web_dist(self):
+        # WEB_DIST is <repo>/web/dist, so escaping to the repo root takes two
+        # levels; anything less lands on a path that never existed anyway.
+        for path in (
+            "/../../requirements.txt",
+            "/a/../../../requirements.txt",
+            "/../../data/nod.db",
+            "/../../data/auth_secret.key",
+        ):
+            with self.subTest(path=path):
+                _, body = _raw_get(path)
+                self.assertNotIn(b"fastapi==", body)
+                self.assertNotIn(b"SQLite format", body)
+                self.assertIn(b"<", body)  # fell through to index.html
+
+    def test_real_asset_still_served(self):
+        code, body = _raw_get("/index.html")
+        self.assertEqual(code, 200)
+        self.assertTrue(body)
+
+
+class AdminTokenTests(unittest.TestCase):
+    def test_unset_env_leaves_admin_token_empty(self):
+        """No fallback in code: an unconfigured deployment gets no admin token.
+
+        Set (not removed) to an empty value so the .env loader, which only
+        fills keys that are absent, cannot put a developer's local token back.
+        """
+        import importlib
+        import os
+
+        from server import settings
+
+        with mock.patch.dict(os.environ, {"ADMIN_TOKEN": ""}):
+            reloaded = importlib.reload(settings)
+            try:
+                self.assertEqual(reloaded.ADMIN_TOKEN, "")
+            finally:
+                importlib.reload(settings)
+
+    def test_login_disabled_when_token_unset(self):
+        from server.app import app
+
+        with mock.patch("server.settings.ADMIN_TOKEN", ""):
+            client = TestClient(app)
+            res = client.post("/api/admin/login", json={"token": "leonardo"})
+            self.assertEqual(res.status_code, 503)
+
+    def test_protected_route_closed_when_token_unset(self):
+        from server.app import app
+
+        with mock.patch("server.settings.ADMIN_TOKEN", ""):
+            client = TestClient(app)
+            res = client.get("/api/admin/overview", headers={"X-Admin-Token": "leonardo"})
+            self.assertEqual(res.status_code, 503)
+
+    def test_wrong_token_rejected(self):
+        from server import ratelimit
+        from server.app import app
+
+        ratelimit._hits.clear()
+        with mock.patch("server.settings.ADMIN_TOKEN", "configured-token"):
+            client = TestClient(app)
+            res = client.post("/api/admin/login", json={"token": "leonardo"})
+            self.assertEqual(res.status_code, 401)
+            ok = client.post("/api/admin/login", json={"token": "configured-token"})
+            self.assertEqual(ok.status_code, 200)
+
+    def test_login_is_rate_limited(self):
+        from server import ratelimit
+        from server.app import app
+
+        ratelimit._hits.clear()
+        with mock.patch("server.settings.ADMIN_TOKEN", "configured-token"):
+            client = TestClient(app)
+            codes = [client.post("/api/admin/login", json={"token": "guess"}).status_code for _ in range(8)]
+        self.assertIn(429, codes, f"brute force was never throttled: {codes}")
+        self.assertEqual(codes[0], 401)
+
+
+class ModelWhitelistTests(unittest.TestCase):
+    cfg = {
+        "llm": {"provider": "deepseek", "model": "deepseek-v4-flash"},
+        "models": [{"provider": "deepseek", "model": "deepseek-v4-pro"}],
+    }
+
+    def test_listed_models_allowed(self):
+        self.assertTrue(model_allowed(self.cfg, "deepseek", "deepseek-v4-pro"))
+        self.assertTrue(model_allowed(self.cfg, "deepseek", "deepseek-v4-flash"))
+
+    def test_arbitrary_model_rejected(self):
+        self.assertFalse(model_allowed(self.cfg, "openrouter", "openai/o3-pro"))
+        self.assertFalse(model_allowed(self.cfg, "deepseek", ""))
+        self.assertFalse(model_allowed(self.cfg, "made-up-provider", "deepseek-v4-pro"))
+
+
+class RateLimitTableTests(unittest.TestCase):
+    def test_stale_keys_are_swept(self):
+        from server import ratelimit
+
+        with mock.patch.object(ratelimit, "_STALE_AFTER", 0.0), mock.patch.object(ratelimit, "_SWEEP_EVERY", 0.0):
+            ratelimit.allow(f"sweep-a-{time.time()}", 5, 60)
+            before = len(ratelimit._hits)
+            ratelimit.allow(f"sweep-b-{time.time()}", 5, 60)
+            self.assertLessEqual(len(ratelimit._hits), before + 1)
+
+
+class MailerEscapeTests(unittest.TestCase):
+    def test_feedback_html_is_escaped(self):
+        from server import mailer
+
+        sent: dict[str, str] = {}
+
+        def fake_send(to, subject, html, text):
+            sent["html"] = html
+            return True
+
+        with mock.patch.object(mailer, "send_mail", fake_send):
+            mailer.send_feedback_copy("admin@example.com", "a@b.co", "<img src=x onerror=alert(1)>")
+        self.assertNotIn("<img", sent["html"])
+        self.assertIn("&lt;img", sent["html"])
 
 
 if __name__ == "__main__":

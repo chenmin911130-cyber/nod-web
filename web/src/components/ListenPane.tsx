@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import type { CatchNote, Lang, MeetingLine, PairLang } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import {
@@ -445,6 +445,35 @@ function SpeakerName({
   )
 }
 
+interface LineRowProps {
+  ts: string
+  text: string
+  translation: string
+  speaker: string
+  speakerLabel: string
+  live: boolean
+  translateOn: boolean
+  busy: boolean
+  onRename: (id: string, name: string) => void
+}
+
+// A two-hour session renders thousands of these. Without memo every partial
+// transcript update rebuilt the whole list.
+const LineRow = memo(function LineRow(p: LineRowProps) {
+  return (
+    <div className={`listen-line${p.live ? ' live' : ''}`}>
+      <div className="listen-ts">
+        {p.ts}
+        {p.speaker ? <SpeakerName speakerId={p.speaker} label={p.speakerLabel} onRename={p.onRename} /> : null}
+      </div>
+      <div>
+        <div className="listen-orig">{p.text}</div>
+        {p.translateOn && <div className="listen-tr">{p.translation || (p.busy ? '…' : '')}</div>}
+      </div>
+    </div>
+  )
+})
+
 export default function ListenPane(props: Props) {
   const [input, setInput] = useState('')
   const [notesOpen, setNotesOpen] = useState(false)
@@ -457,8 +486,10 @@ export default function ListenPane(props: Props) {
   const splitRef = useRef<HTMLDivElement>(null)
   const notesWRef = useRef(notesW)
   notesWRef.current = notesW
-  const notes = parseNotes(props.notesRaw)
-  const sections = visibleSections(props.scene, notes)
+  // notesRaw grows with every streamed chunk; re-parsing it on each render made
+  // the cost quadratic over a summary.
+  const notes = useMemo(() => parseNotes(props.notesRaw), [props.notesRaw])
+  const sections = useMemo(() => visibleSections(props.scene, notes), [props.scene, notes])
   const lecture = props.scene === 'lecture'
 
   useEffect(() => {
@@ -466,8 +497,16 @@ export default function ListenPane(props: Props) {
   }, [props.scene])
 
   useEffect(() => {
-    leftRef.current?.scrollTo({ top: leftRef.current.scrollHeight })
-  }, [props.lines, props.partial])
+    const el = leftRef.current
+    if (!el) return
+    // Reading scrollHeight forces layout, so coalesce bursts of partials into
+    // one measurement per frame and leave the user alone if they scrolled up.
+    const frame = requestAnimationFrame(() => {
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 240
+      if (nearBottom) el.scrollTop = el.scrollHeight
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [props.lines.length, props.partial])
 
   useEffect(() => {
     rightRef.current?.scrollTo({ top: rightRef.current.scrollHeight })
@@ -614,27 +653,18 @@ export default function ListenPane(props: Props) {
                   </div>
                 ) : (
                   props.lines.map((line, i) => (
-                    <div
+                    <LineRow
                       key={line.id || `${line.ts}-${i}`}
-                      className={`listen-line${props.listening && i === props.lines.length - 1 && !props.partial ? ' live' : ''}`}
-                    >
-                      <div className="listen-ts">
-                        {line.ts}
-                        {line.speaker ? (
-                          <SpeakerName
-                            speakerId={line.speaker}
-                            label={resolveSpeakerName(props.speakerNames, line.speaker)}
-                            onRename={props.onRenameSpeaker}
-                          />
-                        ) : null}
-                      </div>
-                      <div>
-                        <div className="listen-orig">{line.text}</div>
-                        {props.translateOn && (
-                          <div className="listen-tr">{line.translation || (props.busy ? '…' : '')}</div>
-                        )}
-                      </div>
-                    </div>
+                      ts={line.ts}
+                      text={line.text}
+                      translation={line.translation || ''}
+                      speaker={line.speaker || ''}
+                      speakerLabel={line.speaker ? resolveSpeakerName(props.speakerNames, line.speaker) : ''}
+                      live={props.listening && i === props.lines.length - 1 && !props.partial}
+                      translateOn={props.translateOn}
+                      busy={props.busy}
+                      onRename={props.onRenameSpeaker}
+                    />
                   ))
                 )}
                 {props.partial && (
