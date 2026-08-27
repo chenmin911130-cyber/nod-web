@@ -6,6 +6,7 @@ export type TrackEvent =
   | 'scroll_pricing'
   | 'open_privacy'
   | 'signup_success'
+  | 'watch_demo'
 
 type TrackProps = Record<string, string | number | boolean | undefined>
 
