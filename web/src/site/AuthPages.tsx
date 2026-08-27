@@ -75,7 +75,7 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
 
   return (
     <div className="nod-site-page">
-      <Header extra={<a className="button button-ghost" href="/signup">Create account</a>} />
+      <Header extra={<a className="button button-cyan header-cta" href="/signup">Create account</a>} />
       <div className="site-wrap">
         <div className="site-card">
           <div className="eyebrow">ACCOUNT</div>
@@ -153,7 +153,7 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
 
   return (
     <div className="nod-site-page">
-      <Header extra={<a className="button button-ghost" href="/login">Sign in</a>} />
+      <Header extra={<a className="button button-cyan header-cta" href="/login">Sign in</a>} />
       <div className="site-wrap">
         <div className="site-card">
           <div className="eyebrow">REGISTER</div>

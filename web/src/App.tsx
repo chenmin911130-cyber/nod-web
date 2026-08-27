@@ -23,11 +23,18 @@ import {
   exportNoteSections,
   parseNotes,
   promoteLectureSpeakers,
+  promoteMeetingSpeakers,
   resolveSpeakerName,
+  speakersExpected,
   sectionTitle,
   type ListenScene,
 } from './listen'
 import { buildListenPdfDoc, type ListenPdfDoc } from './pdfTemplates'
+import { applyDemoSeed, readDemoScene } from './demoSeed'
+
+function isPendingCatchId(id: string): boolean {
+  return id === '__pending__' || id.startsWith('__pending__:')
+}
 
 const PLACEHOLDER = 'Waiting for the next question…'
 const STATUS_READY = 'Ready · F2 record / F3 listen / F4 clear'
@@ -259,6 +266,12 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case 'engine': {
       const ev = action.ev
+      if (
+        readDemoScene()
+        && (ev.type === 'ready' || ev.type === 'state' || ev.type === 'keys_status' || ev.type === 'status')
+      ) {
+        return state
+      }
       switch (ev.type) {
         case 'ready':
           return { ...state, status: STATUS_READY, run: 'idle' }
@@ -315,13 +328,13 @@ function reducer(state: AppState, action: Action): AppState {
           if (isSummaryPrompt(text)) {
             return { ...state, summaryAskId: qid, meetingSummary: '', partial: '', busy: true }
           }
-          if (isCatchPrompt(text) || isAskPrompt(text) || state.catchAskId === '__pending__') {
-            const pending = state.catchNotes.find((note) => note.id === '__pending__')
+          if (isCatchPrompt(text) || isAskPrompt(text)) {
+            const pending = state.catchNotes.find((note) => isPendingCatchId(note.id))
             return {
               ...state,
               catchAskId: qid,
               catchNotes: pending
-                ? state.catchNotes.map((note) => (note.id === '__pending__' ? { ...note, id: qid } : note))
+                ? state.catchNotes.map((note) => (note.id === pending.id ? { ...note, id: qid } : note))
                 : [
                     ...state.catchNotes,
                     {
@@ -354,6 +367,8 @@ function reducer(state: AppState, action: Action): AppState {
             }]
             if (scene === 'lecture') {
               speakerNames = promoteLectureSpeakers(meetingLines, speakerNames, state.speakerNameLocked)
+            } else {
+              speakerNames = promoteMeetingSpeakers(meetingLines, speakerNames, state.speakerNameLocked, scene)
             }
             return {
               ...state,
@@ -414,40 +429,30 @@ function reducer(state: AppState, action: Action): AppState {
             meetingSummary += ev.text ?? ''
             if (ev.id) summaryAskId = ev.id
           }
-          if (state.catchAskId === '__pending__' || (ev.id && ev.id === state.catchAskId)) {
-            const nextId = ev.id || state.catchAskId
-            const hasPending = catchNotes.some((note) => note.id === '__pending__')
-            if (hasPending) {
+          {
+            const byId = ev.id ? catchNotes.find((note) => note.id === ev.id) : undefined
+            const foreign = Boolean(ev.id) && (
+              ev.id === state.translateAskId
+              || ev.id === state.summaryAskId
+              || ev.id === state.notesAskId
+            )
+            const pending = !byId && !foreign
+              ? catchNotes.find((note) => isPendingCatchId(note.id))
+              : undefined
+            const target = byId || pending
+            if (target) {
+              const nextId = ev.id || target.id
               catchNotes = catchNotes.map((note) =>
-                note.id === '__pending__' ? { ...note, id: nextId, text: note.text + (ev.text ?? '') } : note,
+                note.id === target.id ? { ...note, id: nextId, text: note.text + (ev.text ?? '') } : note,
               )
-            } else if (ev.id && catchNotes.some((note) => note.id === ev.id)) {
-              catchNotes = catchNotes.map((note) =>
-                note.id === ev.id ? { ...note, text: note.text + (ev.text ?? '') } : note,
-              )
-            } else {
-              catchNotes = [
-                ...catchNotes,
-                {
-                  id: nextId,
-                  kind: 'ask',
-                  title: state.catchPendingTitle || 'Ask',
-                  text: ev.text ?? '',
-                },
-              ]
+              catchAskId = nextId
             }
-            catchAskId = nextId
           }
           if (notesAskId === '__pending__' || (ev.id && ev.id === notesAskId)) {
             notesRaw += ev.text ?? ''
             notesAskId = ev.id || notesAskId
           }
-          if (state.translateBindId && ev.id) {
-            translateAskId = ev.id
-          }
-          const translateChunk =
-            Boolean(state.translateBindId) ||
-            (Boolean(translateAskId) && ev.id === translateAskId)
+          const translateChunk = Boolean(translateAskId) && ev.id === translateAskId
           if (translateChunk && state.translateOn && meetingLines.length) {
             meetingLines = applyLineTranslation(meetingLines, state.translateBindId, ev.text ?? '')
           } else if (translateChunk && state.translatePairs.length) {
@@ -473,8 +478,17 @@ function reducer(state: AppState, action: Action): AppState {
           }
           return { ...state, turns, meetingSummary, summaryAskId, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
         }
-        case 'done':
-          return { ...state, busy: false, translateAskId: '', summaryAskId: '', catchAskId: '', notesAskId: '' }
+        case 'done': {
+          const waitingAsk = state.catchNotes.some((note) => isPendingCatchId(note.id))
+          return {
+            ...state,
+            busy: waitingAsk,
+            translateAskId: '',
+            summaryAskId: '',
+            catchAskId: waitingAsk ? state.catchAskId : '',
+            notesAskId: '',
+          }
+        }
         case 'error':
           return { ...state, status: ev.text, busy: false }
         case 'auth_required':
@@ -584,14 +598,15 @@ function reducer(state: AppState, action: Action): AppState {
     case 'expect_catch': {
       const kind = action.kind || 'catch'
       const title = action.title || (kind === 'ask' ? 'Ask' : 'Summary')
+      const pendingId = `__pending__:${Date.now()}-${state.catchNotes.length}-${Math.random().toString(36).slice(2, 8)}`
       return {
         ...state,
-        catchAskId: '__pending__',
+        catchAskId: pendingId,
         catchPendingTitle: title,
         catchNotes: [
-          ...state.catchNotes.filter((note) => note.id !== '__pending__'),
+          ...state.catchNotes,
           {
-            id: '__pending__',
+            id: pendingId,
             kind,
             title,
             question: action.question || '',
@@ -600,8 +615,6 @@ function reducer(state: AppState, action: Action): AppState {
         ],
         busy: true,
         status: kind === 'ask' ? 'Answering…' : 'Catching up…',
-        translateBindId: '',
-        translateAskId: '',
       }
     }
     case 'expect_notes':
@@ -626,15 +639,12 @@ function reducer(state: AppState, action: Action): AppState {
       // 会把刚结束的会议打回"暂停"态（结束提示/笔记不显示，主按钮变续听）
       return { ...state, meetingStartedAt: action.startedAt, meetingElapsedMs: action.elapsedMs }
     case 'meeting_ended': {
-      // 停止监听会取消服务端在途生成（不发 done），把被打断的 catch/ask 卡标记出来
-      const catchAskId = state.catchAskId
-      const catchNotes = catchAskId
-        ? state.catchNotes.map((note) =>
-            note.id === catchAskId && !note.text.trim()
-              ? { ...note, text: '(Interrupted — listening stopped)' }
-              : note,
-          )
-        : state.catchNotes
+      // 停止监听会取消服务端在途生成（不发 done），把还没写完的 ask/catch 卡标出来
+      const catchNotes = state.catchNotes.map((note) =>
+        !note.text.trim() && (isPendingCatchId(note.id) || note.id === state.catchAskId)
+          ? { ...note, text: '(Interrupted — listening stopped)' }
+          : note,
+      )
       return {
         ...state,
         meetingEnded: true,
@@ -781,7 +791,8 @@ function engineSource(listenMic: boolean, systemMuted: boolean): AudioSource {
 }
 
 export default function App() {
-  const [state, dispatch] = useReducer(reducer, initial)
+  const [state, dispatch] = useReducer(reducer, initial, applyDemoSeed)
+  const demoScene = readDemoScene()
   const stateRef = useRef(state)
   stateRef.current = state
   const listenWanted = useRef(false)
@@ -803,8 +814,8 @@ export default function App() {
   const exportAfterNotes = useRef(false)
   const autoNotesTried = useRef(false)
   const tickRef = useRef(0)
-  const [consent, setConsent] = useState<boolean | null>(null)
-  const consentRef = useRef<boolean | null>(null)
+  const [consent, setConsent] = useState<boolean | null>(demoScene ? true : null)
+  const consentRef = useRef<boolean | null>(demoScene ? true : null)
   const [consentOpen, setConsentOpen] = useState(false)
   const pendingMic = useRef<(() => void) | null>(null)
   const [composeOpen, setComposeOpen] = useState(false)
@@ -898,7 +909,7 @@ export default function App() {
       const s = stateRef.current
       api.send({ type: 'set_translate_from', language: s.translateFrom === 'auto' ? null : s.translateFrom })
       api.send({ type: 'set_translate_to', lang: s.translateTo })
-      api.send({ type: 'set_workspace', mode: s.workspaceMode, scene: s.listenScene })
+      api.send({ type: 'set_workspace', mode: s.workspaceMode, scene: s.listenScene, speakers_expected: speakersExpected(s.listenScene) })
       if (s.workspaceMode !== 'translate') {
         api.send({ type: 'set_lang', language: s.lang === 'auto' ? null : s.lang })
       }
@@ -1239,7 +1250,7 @@ export default function App() {
     } else {
       window.api.send({ type: 'set_lang', language: s.lang === 'auto' ? null : s.lang })
     }
-    window.api.send({ type: 'set_workspace', mode, scene: s.listenScene })
+    window.api.send({ type: 'set_workspace', mode, scene: s.listenScene, speakers_expected: speakersExpected(s.listenScene) })
     dispatch({ type: 'workspace', mode })
     setComposeOpen(false)
     setRailHover(false)
@@ -1512,7 +1523,6 @@ export default function App() {
     const s = stateRef.current
     const question = text.trim()
     if (!question) return
-    killInflightTranslation()
     dispatch({ type: 'expect_catch', kind: 'ask', title: 'Ask', question })
     window.api.send({
       type: 'ask',
@@ -1796,7 +1806,7 @@ export default function App() {
     setComposeOpen(false)
     setRailHover(false)
   }
-  const railOn = !study || (!railDismissed && (composeOpen || railHover || state.busy || listening))
+  const railOn = Boolean(demoScene) || !study || (!railDismissed && (composeOpen || railHover || state.busy || listening))
 
   return (
     <div className="app">
@@ -1897,6 +1907,7 @@ export default function App() {
             notesRaw={state.notesRaw}
             busy={state.busy}
             summarizing={Boolean(state.notesAskId)}
+            notesDefaultOpen={demoScene === 'meeting-notes'}
             qa={state.workspaceMode === 'interview'}
             qaSlot={
               <AnswerPane
@@ -1919,7 +1930,7 @@ export default function App() {
               dispatch({ type: 'listen_scene', scene })
               if (scene === 'interview') handleMode('interview')
               else if (state.workspaceMode !== 'meeting') handleMode('meeting')
-              else window.api.send({ type: 'set_workspace', mode: 'meeting', scene })
+              else window.api.send({ type: 'set_workspace', mode: 'meeting', scene, speakers_expected: speakersExpected(scene) })
             }}
             onTranslate={(on) => {
               dispatch({ type: 'translate_on', on })

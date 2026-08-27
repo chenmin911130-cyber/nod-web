@@ -109,7 +109,7 @@ export default function AccountPage() {
             Nod
           </a>
           <div className="header-actions">
-            <a className="button button-ghost" href="/app">
+            <a className="button button-cyan header-cta" href="/app">
               Workspace
             </a>
             <button

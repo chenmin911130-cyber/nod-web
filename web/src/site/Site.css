@@ -19,7 +19,7 @@
 }
 
 .funnel .on a {
-  color: #63e6bc;
+  color: #00d2ff;
 }
 
 .funnel b {
@@ -45,9 +45,9 @@
 .nod-site-page {
   min-height: 100svh;
   background:
-    radial-gradient(circle at 82% 8%, rgba(23, 108, 145, 0.18), transparent 28%),
-    var(--ink, #07101f);
-  color: var(--paper, #f2f6fb);
+    radial-gradient(ellipse at 80% 0%, rgba(0, 180, 255, 0.1), transparent 36%),
+    var(--ink, #05070a);
+  color: var(--paper, #f4f8fc);
   font-family: 'IBM Plex Sans', sans-serif;
 }
 
@@ -62,10 +62,12 @@
 }
 
 .site-card {
-  border: 1px solid #294762;
+  border: 1px solid rgba(0, 210, 255, 0.16);
   border-radius: 22px;
   padding: 2rem;
-  background: linear-gradient(160deg, #102a42, #0a1728);
+  background: rgba(8, 14, 22, 0.58);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32), inset 0 1px rgba(255, 255, 255, 0.08);
 }
 
 .site-card h1 {
@@ -98,9 +100,9 @@
 .site-form input,
 .site-form textarea {
   width: 100%;
-  border: 1px solid #31506d;
+  border: 1px solid rgba(0, 210, 255, 0.16);
   border-radius: 12px;
-  background: #071321;
+  background: rgba(5, 7, 10, 0.72);
   color: #eff8ff;
   padding: 0.8rem 0.9rem;
   font: 400 1rem/1.4 'IBM Plex Sans', sans-serif;
@@ -129,7 +131,7 @@
 }
 
 .site-ok {
-  color: #63e6bc;
+  color: #00d2ff;
   font-size: 0.86rem;
 }
 
@@ -141,7 +143,7 @@
 }
 
 .site-links a {
-  color: #5bdaf4;
+  color: #00d2ff;
   font-size: 0.84rem;
   text-decoration: none;
 }
@@ -181,7 +183,7 @@
   content: '';
   flex: 1;
   height: 1px;
-  background: #294762;
+  background: rgba(0, 210, 255, 0.16);
 }
 
 .quota-grid {
@@ -192,10 +194,10 @@
 }
 
 .quota-card {
-  border: 1px solid #233c56;
+  border: 1px solid rgba(0, 210, 255, 0.16);
   border-radius: 16px;
   padding: 1rem;
-  background: rgba(7, 19, 33, 0.55);
+  background: rgba(8, 14, 22, 0.55);
 }
 
 .quota-card b {
@@ -212,7 +214,7 @@
 .bar {
   height: 6px;
   border-radius: 99px;
-  background: #10273d;
+  background: rgba(0, 210, 255, 0.1);
   overflow: hidden;
   margin-top: 0.6rem;
 }
@@ -220,7 +222,7 @@
 .bar i {
   display: block;
   height: 100%;
-  background: linear-gradient(90deg, #5bdaf4, #63e6bc);
+  background: linear-gradient(90deg, #00d2ff, #5be4ff);
 }
 
 .history-list {
@@ -229,10 +231,10 @@
 }
 
 .history-item {
-  border: 1px solid #233c56;
+  border: 1px solid rgba(0, 210, 255, 0.14);
   border-radius: 14px;
   padding: 0.9rem 1rem;
-  background: rgba(7, 19, 33, 0.4);
+  background: rgba(8, 14, 22, 0.45);
 }
 
 .history-item h3 {

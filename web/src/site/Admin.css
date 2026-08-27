@@ -2,8 +2,8 @@
   min-height: 100svh;
   display: grid;
   grid-template-columns: 228px 1fr;
-  background: #07101f;
-  color: #f2f6fb;
+  background: #05070a;
+  color: #f4f8fc;
 }
 
 .admin-login {

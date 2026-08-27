@@ -13,7 +13,7 @@ function Shell({ title, children }: { title: string; children: ReactNode }) {
             Nod
           </a>
           <div className="header-actions">
-            <a className="button button-ghost" href="/signup">
+            <a className="button button-cyan header-cta" href="/signup">
               Start free
             </a>
           </div>

@@ -1,38 +1,26 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchMe } from '../auth'
 import { applySeo, track } from '../site/track'
 import { COPY, type Locale } from './copy'
+import NodMark from '../site/NodMark'
+import { DemoModal, FeatIcon, HeroBackdrop, HeroStage, WatchIcon, type DemoMode } from './HeroDemo'
 import './Landing.css'
 
 type AskId = '1' | '2' | '3' | '4'
 type NoteKind = 'meeting' | 'lecture'
-
-function NodLogo() {
-  return (
-    <svg className="brand-mark" width="27" height="27" viewBox="0 0 100 100" fill="none" aria-hidden="true">
-      <path
-        d="M26 88 V32 A13 13 0 0 1 52 32 L78 58"
-        stroke="currentColor"
-        strokeWidth="9"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path d="M58 38 Q66 29 81 34 V60" stroke="currentColor" strokeWidth="9" strokeLinecap="round" />
-      <circle cx="81" cy="70" r="4.5" fill="#5bdaf4" />
-    </svg>
-  )
-}
 
 export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabled?: boolean }) {
   const [ask, setAsk] = useState<AskId>('1')
   const [noteKind, setNoteKind] = useState<NoteKind>('meeting')
   const [navOpen, setNavOpen] = useState(false)
   const [signedIn, setSignedIn] = useState(false)
+  const [demoOpen, setDemoOpen] = useState(false)
+  const [demoMode, setDemoMode] = useState<DemoMode>('meeting')
   const priced = useRef(false)
   const t = COPY[locale]
   const primaryHref = signedIn ? '/app' : '/signup'
   const primaryLabel = signedIn ? t.enterWorkspace : t.startFree
-  const home = locale === 'zh' ? '/zh' : '/'
+  const home = '/'
   const askMap = {
     '1': { q: t.ask1, a: t.askA1 },
     '2': { q: t.ask2, a: t.askA2 },
@@ -46,7 +34,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
       title: t.title,
       description: t.description,
       ogTitle: t.ogTitle,
-      url: origin + (locale === 'zh' ? '/zh' : '/'),
+      url: `${origin}/`,
       lang: t.htmlLang,
       image: `${origin}/og.png`,
     })
@@ -73,13 +61,20 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
   const onHeroCta = () => track('cta_hero_start', { place: 'hero', signed_in: signedIn })
   const onHeaderCta = () => track('cta_hero_start', { place: 'header' })
   const onPriceCta = () => track('cta_pricing')
+  const openDemo = useCallback((mode: DemoMode = 'meeting') => {
+    setDemoMode(mode)
+    setDemoOpen(true)
+    track('watch_demo', { mode })
+  }, [])
+  const closeDemo = useCallback(() => setDemoOpen(false), [])
+  const heroCta = signedIn ? t.enterWorkspace : t.heroCta
 
   return (
     <div className="nod-landing">
       <header className={`site-header${navOpen ? ' nav-open' : ''}`}>
         <div className="shell header-inner">
           <a className="brand" href={home} onClick={closeNav}>
-            <NodLogo />
+            <NodMark />
             Nod
           </a>
           <nav className="desktop-nav">
@@ -95,14 +90,8 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
             <a href="/privacy" onClick={closeNav}>
               {t.navPrivacy}
             </a>
-            <a className="lang-switch" href={t.langSwitchHref} hrefLang={locale === 'zh' ? 'en' : 'zh-Hans'} onClick={closeNav} aria-label={t.langSwitchLabel}>
-              {t.langSwitch}
-            </a>
           </nav>
           <div className="header-actions">
-            <a className="lang-switch header-lang" href={t.langSwitchHref} hrefLang={locale === 'zh' ? 'en' : 'zh-Hans'} aria-label={t.langSwitchLabel}>
-              {t.langSwitch}
-            </a>
             {signedIn ? (
               <a className="button button-ghost" href="/account">
                 {t.navAccount}
@@ -112,8 +101,8 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
                 {t.navSignIn}
               </a>
             )}
-            <a className="button button-primary" href={primaryHref} onClick={onHeaderCta}>
-              {primaryLabel}
+            <a className="button button-cyan header-cta" href={primaryHref} onClick={onHeaderCta}>
+              {signedIn ? t.enterWorkspace : t.getStarted}
             </a>
             <button
               className="mobile-toggle"
@@ -129,36 +118,61 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
       </header>
 
       <main id="top">
-        <section className="hero hero-value">
-          <div className="shell hero-center reveal visible">
-            <p className="hero-brand">{t.heroBrand}</p>
-            <div className="eyebrow">{t.heroProduct}</div>
-            <h1>
-              {t.heroH1a}
-              <br />
-              {t.heroH1b}
-              <br />
-              <span className="underline">{t.heroH1c}</span>
-            </h1>
-            <p className="hero-copy">{t.heroCopy}</p>
-            <div className="hero-actions">
-              <a className="button button-primary" href={primaryHref} onClick={onHeroCta}>
-                {primaryLabel}
-              </a>
-              <a className="button button-ghost" href="#desktop">
-                {t.downloadDesktop}
-              </a>
+        <section className="hero hero-cover">
+          <HeroBackdrop />
+          <div className="shell hero-grid reveal visible">
+            <div className="hero-copy-col">
+              <div className="hero-badge">{t.heroProduct}</div>
+              <h1>
+                {t.heroH1a}
+                <br />
+                {t.heroH1b}
+                <br />
+                {t.heroH1c}
+              </h1>
+              <p className="hero-copy">{t.heroCopy}</p>
+              <div className="hero-actions">
+                <a className="button button-cyan" href={primaryHref} onClick={onHeroCta}>
+                  {heroCta}
+                  <span aria-hidden="true">→</span>
+                </a>
+                <button type="button" className="button button-ghost" onClick={() => openDemo(demoMode)}>
+                  <WatchIcon />
+                  {t.watchDemo}
+                </button>
+              </div>
+              <div className="hero-feats">
+                <span>
+                  <i>
+                    <FeatIcon name="mic" />
+                  </i>
+                  {t.feat1}
+                </span>
+                <span>
+                  <i>
+                    <FeatIcon name="lang" />
+                  </i>
+                  {t.feat2}
+                </span>
+                <span>
+                  <i>
+                    <FeatIcon name="spark" />
+                  </i>
+                  {t.feat3}
+                </span>
+                <span>
+                  <i>
+                    <FeatIcon name="lock" />
+                  </i>
+                  {t.feat4}
+                </span>
+              </div>
             </div>
-            {!signedIn && <p className="hero-note">{t.startFreeNote}</p>}
-            <div className="hero-proof">
-              <span>{t.proof1}</span>
-              <span>{t.proof2}</span>
-              <span>{t.proof3}</span>
-              <span>{t.proof4}</span>
-              <span>{t.proof5}</span>
-            </div>
+            <HeroStage t={t} onOpen={openDemo} />
           </div>
         </section>
+
+        <DemoModal t={t} open={demoOpen} mode={demoMode} onMode={setDemoMode} onClose={closeDemo} />
 
         <section className="live-now" id="live">
           <div className="shell">
@@ -312,7 +326,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
               <article>
                 <h3>{t.platWeb}</h3>
                 <p>{t.platWebP}</p>
-                <a className="button button-primary" href={primaryHref} onClick={onHeroCta}>
+                <a className="button button-cyan" href={primaryHref} onClick={onHeroCta}>
                   {primaryLabel}
                 </a>
               </article>
@@ -389,7 +403,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
                   <b>{t.planOverV}</b>
                 </div>
               </div>
-              <a className="button button-primary" href={primaryHref} onClick={onPriceCta}>
+              <a className="button button-cyan" href={primaryHref} onClick={onPriceCta}>
                 {signedIn ? t.enterWorkspace : t.planCta}
               </a>
               <p className="plan-fine">{t.planFine}</p>
@@ -439,7 +453,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
               </h2>
               <p>{t.ctaP}</p>
               <div className="cta-actions">
-                <a className="button button-primary" href={primaryHref} onClick={() => track('cta_hero_start', { place: 'footer' })}>
+                <a className="button button-cyan" href={primaryHref} onClick={() => track('cta_hero_start', { place: 'footer' })}>
                   {primaryLabel}
                 </a>
               </div>
@@ -453,7 +467,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
         <div className="shell footer-inner">
           <div>
             <a className="brand" href={home}>
-              <NodLogo />
+              <NodMark />
               Nod
             </a>
             <p>
@@ -463,9 +477,6 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
             </p>
           </div>
           <div className="footer-links">
-            <a href={t.langSwitchHref} hrefLang={locale === 'zh' ? 'en' : 'zh-Hans'}>
-              {t.langSwitch}
-            </a>
             <a href="/privacy">{t.navPrivacy}</a>
             <a href="/terms">Terms</a>
             <a href="/signup">{t.footerRegister}</a>

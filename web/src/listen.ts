@@ -195,6 +195,10 @@ export function visibleSections(scene: ListenScene, doc: NotesDoc): Array<{ id: 
     .map((section) => ({ ...section, title: sectionTitle(scene, section.id) }))
 }
 
+export function speakersExpected(scene: ListenScene): number {
+  return scene === 'lecture' ? 4 : 2
+}
+
 export function speakerLabel(scene: ListenScene, index: number): string {
   if (scene === 'lecture') {
     if (index === 0) return 'Lecturer'
@@ -209,13 +213,18 @@ export function speakerLabel(scene: ListenScene, index: number): string {
   return index === 1 ? 'Guest' : `Guest ${index}`
 }
 
+function isUsableSpeakerId(id: string): boolean {
+  const key = id.trim().toLowerCase()
+  return Boolean(key) && key !== 'pending' && key !== 'none' && key !== 'unknown'
+}
+
 export function bindSpeakerName(
   names: Record<string, string>,
   speakerId: string | undefined,
   scene: ListenScene,
 ): Record<string, string> {
   const id = (speakerId || '').trim()
-  if (!id || names[id]) return names
+  if (!isUsableSpeakerId(id) || names[id]) return names
   const index = Object.keys(names).length
   const used = new Set(Object.values(names))
   let label = speakerLabel(scene, index)
@@ -237,7 +246,7 @@ export function promoteLectureSpeakers(
   const counts = new Map<string, number>()
   for (const line of lines) {
     const id = (line.speaker || '').trim()
-    if (!id) continue
+    if (!isUsableSpeakerId(id)) continue
     counts.set(id, (counts.get(id) || 0) + 1)
   }
   const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
@@ -245,6 +254,45 @@ export function promoteLectureSpeakers(
   const next = { ...names }
   ranked.forEach(([id], i) => {
     if (!locked[id]) next[id] = speakerLabel('lecture', i)
+  })
+  return next
+}
+
+const HOST_HINT = /然后呢|对吧|好的[，,]|那[么呃]*[，,]|所以说|怎么看|能不能|到底该怎么|tell me|what about|\bhow (?:do|would|can)\b|\bso[,?]|right\?/i
+const ASK_HINT = /[?？]|吗[.。!！]?$|呢[.。!！]?$|怎么|为什么|\bwhat\b|\bwhy\b|\bhow\b/
+
+export function hostLikeness(text: string): number {
+  const raw = (text || '').trim()
+  if (!raw) return 0
+  const han = (raw.match(/[\u4e00-\u9fff]/g) || []).length
+  const latin = (raw.match(/[A-Za-z]/g) || []).length
+  let score = 0
+  if (HOST_HINT.test(raw)) score += 3
+  if (ASK_HINT.test(raw)) score += 2
+  if (raw.length < 22) score += 1
+  if (raw.length > 70) score -= 2
+  if (latin > 20 && latin > han * 2) score -= 2
+  return score
+}
+
+export function promoteMeetingSpeakers(
+  lines: MeetingLine[],
+  names: Record<string, string>,
+  locked: Record<string, boolean>,
+  scene: ListenScene = 'meeting',
+): Record<string, string> {
+  const roleScene = scene === 'interview' ? 'interview' : 'meeting'
+  const scores = new Map<string, number>()
+  for (const line of lines) {
+    const id = (line.speaker || '').trim()
+    if (!isUsableSpeakerId(id)) continue
+    scores.set(id, (scores.get(id) || 0) + hostLikeness(line.text))
+  }
+  const ranked = [...scores.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  if (ranked.length < 2) return names
+  const next = { ...names }
+  ranked.forEach(([id], i) => {
+    if (!locked[id]) next[id] = speakerLabel(roleScene, i)
   })
   return next
 }

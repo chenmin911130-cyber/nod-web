@@ -313,26 +313,61 @@ def _stt_prompt(cfg: dict[str, Any]) -> str:
         if scene == "lecture":
             return f"{name} lecture."
         if scene == "interview":
-            return f"{name} job interview."
+            return f"{name} job interview. Interviewer and candidate take turns."
         if scene == "meeting":
-            return f"{name} meeting."
+            return f"{name} two-speaker conversation. The host asks short questions. The guest gives longer answers."
         return f"{name} conversation."
     if scene == "lecture":
         return "Mandarin, English, and Japanese lecture. People switch languages mid-sentence."
     if scene == "interview":
-        return "Mandarin, English, and Japanese job interview. People switch languages mid-sentence."
-    return "Mandarin, English, and Japanese conversation. People switch languages mid-sentence."
+        return "Mandarin, English, and Japanese job interview. Interviewer and candidate take turns."
+    return (
+        "Mandarin, English, and Japanese two-speaker conversation. "
+        "The host asks short questions. The guest gives longer answers. People switch languages mid-sentence."
+    )
 
 
 def _stt_max_speakers(cfg: dict[str, Any]) -> int | None:
-    raw = (cfg.get("stt") or {}).get("speakers_expected")
+    stt = cfg.get("stt") or {}
+    scene = str(stt.get("listen_scene") or "").strip().lower()
+    raw = stt.get("speakers_expected")
     try:
-        n = int(raw)
+        n = int(raw) if raw is not None and raw != "" else 0
     except (TypeError, ValueError):
-        return None
+        n = 0
+    # Two-party rooms (meeting/interview) need an exact cap of 2. Headroom
+    # here merges host and guest into one label. Lectures keep a little slack.
+    if scene in ("meeting", "interview"):
+        return min(10, max(2, n or 2))
     if n < 1:
-        return None
+        return 4 if scene == "lecture" else None
     return min(10, max(2, n + 1))
+
+
+_SPEAKER_PENDING = {"", "pending", "none", "null", "unknown"}
+
+
+def speaker_from_turn(data: dict[str, Any]) -> str | None:
+    """Prefer a confident word-level vote over a PENDING turn label.
+
+    Short host backchannels often arrive as speaker_label=PENDING. Treating
+    that string as a real id made every uncertain line collapse onto Host.
+    """
+    raw = data.get("speaker_label") or data.get("speaker")
+    label = str(raw).strip() if raw is not None else ""
+    if label.lower() in _SPEAKER_PENDING:
+        label = ""
+    votes: dict[str, int] = {}
+    for word in data.get("words") or []:
+        if not isinstance(word, dict) or word.get("word_is_final") is False:
+            continue
+        sp = str(word.get("speaker") or "").strip()
+        if not sp or sp.lower() in _SPEAKER_PENDING:
+            continue
+        votes[sp] = votes.get(sp, 0) + 1
+    if votes:
+        return max(votes, key=votes.get)
+    return label or None
 
 
 def _speech_script(text: str) -> str:
@@ -937,12 +972,15 @@ class Pipeline:
         qid = self._new_qid()
         internal = self._is_internal(t, mode)
         self.emit({"type": "status", "text": STATUS_GENERATE})
+        # Always emit question so the client can bind a pending Ask/Notes card
+        # to this generation id. Tagged internal prompts are filtered in the UI
+        # and must not be omitted — otherwise the next transcript line steals the card.
+        ev: dict[str, Any] = {"type": "question", "id": qid, "text": t}
         if not internal:
             heard = self._heard_lang or (detect_question_lang(t) if mode == "ask" else None)
-            ev: dict[str, Any] = {"type": "question", "id": qid, "text": t}
             if heard:
                 ev["language"] = heard
-            self.emit(ev)
+        self.emit(ev)
         t0 = time.time()
         llm = self.cfg.get("llm") or {}
         max_tokens = int(llm.get("max_tokens") or 800)
@@ -1122,8 +1160,7 @@ class CloudListener:
                 return
             speechy = bool(re.search(r"[A-Za-z0-9\u00C0-\u024F\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]", text))
             lang = heard_lang_from_turn(data)
-            speaker = data.get("speaker_label") or data.get("speaker")
-            speaker = str(speaker).strip() if speaker else None
+            speaker = speaker_from_turn(data)
             if data.get("end_of_turn"):
                 if data.get("turn_is_formatted") is False:
                     if speechy and self.on_partial:
@@ -1521,8 +1558,8 @@ class Session:
         if self._workspace == "meeting":
             stt["max_turn_silence"] = "1200"
             stt["speaker_labels"] = True
-            if not stt.get("speakers_expected") and scene == "interview":
-                stt["speakers_expected"] = 2
+            if not stt.get("speakers_expected"):
+                stt["speakers_expected"] = 4 if scene == "lecture" else 2
         else:
             stt["speaker_labels"] = False
         cfg["stt"] = stt

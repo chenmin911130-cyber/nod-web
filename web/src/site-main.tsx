@@ -22,10 +22,10 @@ async function boot() {
         signUpFallbackRedirectUrl="/signup"
         appearance={{
           variables: {
-            colorPrimary: '#2bb7a8',
-            colorBackground: '#0a1728',
-            colorText: '#f2f6fb',
-            colorInputBackground: '#071321',
+            colorPrimary: '#00d2ff',
+            colorBackground: '#080b10',
+            colorText: '#f4f8fc',
+            colorInputBackground: '#05070a',
             colorInputText: '#eff8ff',
             borderRadius: '12px',
           },

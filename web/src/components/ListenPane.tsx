@@ -29,6 +29,7 @@ interface Props {
   notesRaw: string
   busy: boolean
   summarizing?: boolean
+  notesDefaultOpen?: boolean
   qa?: boolean
   qaSlot?: ReactNode
   onScene: (scene: ListenScene) => void
@@ -476,7 +477,7 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
 
 export default function ListenPane(props: Props) {
   const [input, setInput] = useState('')
-  const [notesOpen, setNotesOpen] = useState(false)
+  const [notesOpen, setNotesOpen] = useState(Boolean(props.notesDefaultOpen))
   const [mobilePane, setMobilePane] = useState<'live' | 'notes'>('live')
   const [notesW, setNotesW] = useState(() => readNotesW(props.scene))
   const [dragging, setDragging] = useState(false)
@@ -741,7 +742,7 @@ export default function ListenPane(props: Props) {
                     <div className="listen-tag">{note.kind === 'ask' ? 'Ask' : note.title}</div>
                     {note.question ? <p className="listen-q">{note.question}</p> : null}
                     <BiText
-                      text={note.text || (props.busy && i === props.catchNotes.length - 1 ? '…' : '')}
+                      text={note.text || (props.busy && !note.text ? '…' : note.kind === 'ask' && !note.text ? 'Waiting for an answer…' : '')}
                       bilingual={props.translateOn}
                     />
                   </div>

@@ -38,8 +38,6 @@ export default function Site({ clerkEnabled = false }: { clerkEnabled?: boolean 
       <ConsentPage />
     ) : path === '/admin' ? (
       <AdminPage />
-    ) : path === '/zh' ? (
-      <Landing locale="zh" clerkEnabled={clerkEnabled} />
     ) : (
       <Landing locale="en" clerkEnabled={clerkEnabled} />
     )

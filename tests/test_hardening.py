@@ -12,6 +12,7 @@ from server.ratelimit import allow
 from server.app import (
     ASSEMBLYAI_MODEL,
     WEB_DIST,
+    Pipeline,
     _join_speech_frags,
     _meeting_should_hold,
     _same_speech_script,
@@ -19,6 +20,7 @@ from server.app import (
     assemblyai_ws_url,
     clean_transcript,
     model_allowed,
+    speaker_from_turn,
     split_code_switched,
 )
 from server.settings import DAILY_STT_SECONDS
@@ -106,12 +108,32 @@ class TranscriptKeepTests(unittest.TestCase):
         url = assemblyai_ws_url({
             "stt": {
                 "speaker_labels": True,
-                "speakers_expected": 3,
+                "speakers_expected": 2,
                 "listen_scene": "meeting",
             }
         })
         self.assertIn("speaker_labels=true", url)
-        self.assertIn("max_speakers=4", url)
+        self.assertIn("max_speakers=2", url)
+
+    def test_meeting_defaults_to_two_speakers(self):
+        url = assemblyai_ws_url({
+            "stt": {"speaker_labels": True, "listen_scene": "meeting"},
+        })
+        self.assertIn("max_speakers=2", url)
+
+    def test_pending_turn_uses_word_majority(self):
+        self.assertEqual(
+            speaker_from_turn({
+                "speaker_label": "PENDING",
+                "words": [
+                    {"text": "then", "speaker": "A", "word_is_final": True},
+                    {"text": "what", "speaker": "A", "word_is_final": True},
+                    {"text": "about", "speaker": "B", "word_is_final": True},
+                ],
+            }),
+            "A",
+        )
+        self.assertIsNone(speaker_from_turn({"speaker_label": "PENDING", "words": []}))
 
 
 class QuotaSettingsTests(unittest.TestCase):
@@ -305,6 +327,30 @@ class RateLimitTableTests(unittest.TestCase):
             before = len(ratelimit._hits)
             ratelimit.allow(f"sweep-b-{time.time()}", 5, 60)
             self.assertLessEqual(len(ratelimit._hits), before + 1)
+
+
+class ListenAskRoutingTests(unittest.TestCase):
+    def test_listen_ask_emits_question_so_cards_can_bind(self):
+        events: list[dict] = []
+        pipe = Pipeline.__new__(Pipeline)
+        pipe.cfg = {"llm": {"provider": "deepseek", "model": "deepseek-v4-flash", "max_tokens": 80}}
+        pipe.emit = events.append
+        pipe._provider = "deepseek"
+        pipe._model = "deepseek-v4-flash"
+        pipe.client = mock.Mock()
+        pipe.client.chat.completions.create.return_value = []
+        pipe._qa_history = []
+        pipe._last_answer = ""
+        pipe._cancel = __import__("threading").Event()
+        pipe._gen_seq = 0
+        pipe.user_id = None
+        pipe.usage_session_id = None
+        pipe._heard_lang = None
+
+        pipe.process_text("[NOD_ASK:zh]\nListener question: 找到这个联盟营销的网站", "listen_ask")
+        question = next(e for e in events if e.get("type") == "question")
+        self.assertTrue(question["id"])
+        self.assertTrue(question["text"].startswith("[NOD_ASK"))
 
 
 class MailerEscapeTests(unittest.TestCase):
