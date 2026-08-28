@@ -49,8 +49,8 @@ def session_download_name(
 ) -> str:
     label = scene_label(normalize_scene(mode, scene))
     stamp = session_stamp(started_at)
-    if kind == "notes":
-        return f"{label}-{stamp}-notes.txt"
+    if kind in ("notes", "pdf"):
+        return f"{label}-{stamp}.pdf"
     idx = part_index(part_name)
     if idx:
         return f"{label}-{stamp}-part{idx}.wav"

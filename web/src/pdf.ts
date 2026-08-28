@@ -25,6 +25,7 @@ export type PdfOptions = {
   subtitle?: string
   meta?: string[]
   doc?: ListenPdfDoc
+  filename?: string
 }
 
 const PAGE_W = 595
@@ -120,7 +121,10 @@ export async function downloadPdf(title: string, blocks: PdfBlock[], options: Pd
   if (!pages.length) pages = await renderPages(title, blocks, options)
   if (pages.length === 0) throw new Error('Nothing to export')
   const bytes = buildPdf(title, pages)
-  const name = `${safeName(title)}.pdf`
+  const raw = (options.filename || '').replace(/[\\/:*?"<>|]+/g, ' ').trim()
+  const name = raw
+    ? (raw.toLowerCase().endsWith('.pdf') ? raw : `${raw}.pdf`)
+    : `${safeName(title)}.pdf`
   const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
   const a = document.createElement('a')
   a.href = url

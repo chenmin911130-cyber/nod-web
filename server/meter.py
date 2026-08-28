@@ -425,9 +425,8 @@ def _session_files(
     elif key:
         name = session_download_name(mode, scene, started_at)
         files.append({"kind": "audio", "name": name, "href": f"/api/account/files/{session_id}/audio?filename={quote(name)}"})
-    if notes_key:
-        name = session_download_name(mode, scene, started_at, kind="notes")
-        files.append({"kind": "notes", "name": name, "href": f"/api/account/files/{session_id}/notes?filename={quote(name)}"})
+    pdf_name = session_download_name(mode, scene, started_at, kind="pdf")
+    files.insert(0, {"kind": "pdf", "name": pdf_name, "href": ""})
     return files
 
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../auth'
+import { downloadHistoryPdf } from '../historyPdf'
 import { copyText, modeOf, sceneOf } from '../historyRestore'
 
 export type HistoryItem = { kind: string; text: string; at?: string | null; qid?: string }
@@ -35,6 +36,7 @@ export default function HistoryPane({
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState('')
   const [busyId, setBusyId] = useState('')
+  const [pdfId, setPdfId] = useState('')
 
   useEffect(() => {
     if (!open) return
@@ -52,6 +54,18 @@ export default function HistoryPane({
     const ok = await copyText(session.copy_text || session.items.map((i) => i.text).join('\n'))
     setCopied(ok ? session.id : '')
     window.setTimeout(() => setCopied(''), 1600)
+  }
+
+  const exportPdf = async (session: HistorySession) => {
+    setPdfId(session.id)
+    setErr('')
+    try {
+      await downloadHistoryPdf(session)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Could not export PDF')
+    } finally {
+      setPdfId('')
+    }
   }
 
   const deleteSession = async (session: HistorySession) => {
@@ -109,6 +123,13 @@ export default function HistoryPane({
                   </button>
                   <button
                     type="button"
+                    disabled={pdfId === s.id}
+                    onClick={() => void exportPdf(s)}
+                  >
+                    {pdfId === s.id ? 'Saving…' : ((s.files || []).find((file) => file.kind === 'pdf')?.name || 'PDF')}
+                  </button>
+                  <button
+                    type="button"
                     className="hist-del"
                     disabled={busyId === s.id}
                     onClick={() => void deleteSession(s)}
@@ -116,9 +137,9 @@ export default function HistoryPane({
                     {busyId === s.id ? 'Deleting…' : 'Delete'}
                   </button>
                 </div>
-                {s.files && s.files.length > 0 && (
+                {(s.files || []).some((file) => file.kind === 'audio') && (
                   <p className="hist-files">
-                    {s.files.map((file) => (
+                    {(s.files || []).filter((file) => file.kind === 'audio').map((file) => (
                       <a key={file.href} href={file.href} download={file.name}>
                         {file.name}
                       </a>

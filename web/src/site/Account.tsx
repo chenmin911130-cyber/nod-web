@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, fetchMe, logout, type Me } from '../auth'
+import { downloadHistoryPdf } from '../historyPdf'
 import { copyText } from '../historyRestore'
 import './Site.css'
 import NodMark from './NodMark'
@@ -15,6 +16,7 @@ type SessionRow = {
   cost_usd: number
   items: Array<{ kind: string; text: string }>
   copy_text?: string
+  scene?: string
   files?: Array<{ kind: string; name: string; href: string }>
 }
 
@@ -238,6 +240,13 @@ export default function AccountPage() {
                         <button
                           type="button"
                           className="button button-ghost"
+                          onClick={() => void downloadHistoryPdf(s).catch((ex: Error) => setErr(ex.message))}
+                        >
+                          {(s.files || []).find((file) => file.kind === 'pdf')?.name || 'Download PDF'}
+                        </button>
+                        <button
+                          type="button"
+                          className="button button-ghost"
                           onClick={() => {
                             if (!confirm(`Delete this ${s.mode} session? This cannot be undone.`)) return
                             void api(`/api/account/history/${s.id}`, { method: 'DELETE' })
@@ -252,9 +261,9 @@ export default function AccountPage() {
                           Delete
                         </button>
                       </p>
-                      {s.files && s.files.length > 0 && (
+                      {s.files && s.files.some((file) => file.kind === 'audio') && (
                         <p>
-                          {s.files.map((file) => (
+                          {s.files.filter((file) => file.kind === 'audio').map((file) => (
                             <a key={file.href} href={file.href} style={{ marginRight: 12 }}>
                               {file.name}
                             </a>

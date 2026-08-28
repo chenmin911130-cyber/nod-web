@@ -15,7 +15,11 @@ class HistoryFormatTests(unittest.TestCase):
         self.assertEqual(session_download_name("interview", "", started), "Interview-2026-08-28.wav")
         self.assertEqual(
             session_download_name("meeting", "meeting", started, kind="notes"),
-            "Meeting-2026-08-28-notes.txt",
+            "Meeting-2026-08-28.pdf",
+        )
+        self.assertEqual(
+            session_download_name("meeting", "lecture", started, kind="pdf"),
+            "Lecture-2026-08-28.pdf",
         )
 
     def test_copy_text_includes_session_body(self):
