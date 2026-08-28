@@ -154,3 +154,76 @@ class CloudflareOriginMiddleware:
             }
         )
         await send({"type": "http.response.body", "body": body})
+
+
+def host_allowed(scope: Scope, allowed_hosts: set[str]) -> bool:
+    """Pure Host-allowlist check used by HostLockMiddleware.
+
+    ``allowed_hosts`` are lowercase hostnames without port. Loopback clients
+    with a loopback Host (local dev) are always allowed.
+    """
+    host = ""
+    for raw_key, raw_val in scope.get("headers") or []:
+        if raw_key.lower() == b"host":
+            host = raw_val.decode("latin1", "replace").split(":", 1)[0].strip().lower()
+            break
+    if not host:
+        return False
+    if host in allowed_hosts:
+        return True
+    # Starlette TestClient uses Host: testserver. Only honour that while
+    # pytest is running so a production PUBLIC_URL does not 403 the suite.
+    if host == "testserver" and os.environ.get("PYTEST_CURRENT_TEST"):
+        return True
+    client = scope.get("client") or ("", 0)
+    if client[0] in {"127.0.0.1", "::1", "localhost"} and host in {"127.0.0.1", "localhost"}:
+        return True
+    return False
+
+
+class HostLockMiddleware:
+    """Reject requests whose Host is not the deployment domain.
+
+    A direct hit on the Railway-assigned *.up.railway.app domain would skip
+    Cloudflare entirely (WAF, rate limiting, DDoS buffer). This middleware
+    answers 403 / 4403 to any Host outside the allowlist, so the only way in
+    is through the registered domain. ``/api/health`` stays open so Railway's
+    own health check keeps working. Auto-enabled when a non-local PUBLIC_URL
+    or ALLOWED_HOSTS is configured (see settings.ALLOWED_HOSTS).
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        from server.settings import ALLOWED_HOSTS, HOST_LOCK
+
+        self.app = app
+        self.enabled = bool(HOST_LOCK)
+        self.allowed = set(ALLOWED_HOSTS)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        if not self.enabled:
+            await self.app(scope, receive, send)
+            return
+        if is_health_path(scope.get("path") or ""):
+            await self.app(scope, receive, send)
+            return
+        if host_allowed(scope, self.allowed):
+            await self.app(scope, receive, send)
+            return
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 4403})
+            return
+        body = b'{"detail":"Host not allowed"}'
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 403,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})

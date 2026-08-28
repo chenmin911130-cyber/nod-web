@@ -25,7 +25,7 @@ from server.security import (
     valid_email,
     verify_password,
 )
-from server.ratelimit import rate_limit
+from server.ratelimit import rate_limit, rate_limit_global
 from server.settings import CLERK_PUBLISHABLE_KEY, MAIL_FROM, PLANS, PUBLIC_URL, STRIPE_PRICE_PRO, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 
 log = logging.getLogger("nod.api")
@@ -129,6 +129,7 @@ def register(
     request: Request,
     response: Response,
     _: None = Depends(rate_limit("register", 8, 60)),
+    __: None = Depends(rate_limit_global("register", 20, 60)),
 ):
     email = body.email.strip().lower()
     if not valid_email(email):
@@ -161,6 +162,7 @@ def login(
     request: Request,
     response: Response,
     _: None = Depends(rate_limit("login", 10, 60)),
+    __: None = Depends(rate_limit_global("login", 30, 60)),
 ):
     email = body.email.strip().lower()
     with db_session() as db:

@@ -29,7 +29,7 @@ from starlette.concurrency import run_in_threadpool
 from server.admin import router as admin_router
 from server.commerce import router as commerce_router
 from server.db import init_db
-from server.headers import CloudflareOriginMiddleware, SecurityHeadersMiddleware
+from server.headers import CloudflareOriginMiddleware, HostLockMiddleware, SecurityHeadersMiddleware
 from server.logging_setup import backup_now, setup_logging
 from server.settings import (
     AUTH_DISABLED,
@@ -2221,6 +2221,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(CloudflareOriginMiddleware)
+app.add_middleware(HostLockMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(commerce_router)
 app.include_router(admin_router)
@@ -2284,8 +2285,14 @@ async def ws_endpoint(ws: WebSocket):
     if not AUTH_DISABLED and user is None:
         user = await _user_from_ws_auth(ws)
         if user is None:
-            await ws.send_text(json.dumps({"type": "auth_required"}))
-            await ws.close(code=4401)
+            try:
+                await ws.send_text(json.dumps({"type": "auth_required"}))
+                await ws.close(code=4401)
+            except Exception:
+                # Client disconnected inside the 4s auth window (tab closed,
+                # network drop). uvicorn already tore the socket down; sending
+                # now raises "unexpected websocket.send after websocket.close".
+                pass
             ws_disconnect(ip)
             return
     loop = asyncio.get_running_loop()

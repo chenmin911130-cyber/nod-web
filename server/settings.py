@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import secrets
 from pathlib import Path
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -84,6 +85,50 @@ R2_BUCKET = (os.environ.get("R2_BUCKET") or "").strip()
 # opening it with a guessable default.
 ADMIN_TOKEN = (os.environ.get("ADMIN_TOKEN") or "").strip()
 ADMIN_COOKIE = "nod_admin"
+
+
+def _www_siblings(hosts: set[str]) -> set[str]:
+    """Pair apex and www so PUBLIC_URL=https://nodpilot.com also serves www."""
+    extra: set[str] = set()
+    for host in hosts:
+        if host.startswith("www.") and host.count(".") >= 2:
+            extra.add(host[4:])
+        elif host.count(".") == 1:
+            extra.add(f"www.{host}")
+    return hosts | extra
+
+
+def _allowed_hosts(public_url: str | None = None) -> set[str]:
+    """Hosts the app will answer to, for the HostLock middleware.
+
+    Built from ALLOWED_HOSTS (comma-separated, optional) plus the host of
+    PUBLIC_URL when it is a real deployment domain. Apex and www are paired
+    so a single PUBLIC_URL does not 403 the other. When the result is
+    non-empty the lock is ON: any request whose Host is not listed (e.g. a
+    direct hit on the *.up.railway.app domain) is rejected at the edge of
+    the app, so DDoS / brute-force traffic cannot bypass Cloudflare.
+    """
+    hosts: set[str] = set()
+    raw = os.environ.get("ALLOWED_HOSTS", "").strip()
+    for h in raw.split(","):
+        h = h.strip().lower()
+        if h and h not in ("127.0.0.1", "localhost"):
+            hosts.add(h)
+    pu = PUBLIC_URL if public_url is None else public_url
+    if pu:
+        try:
+            pu_host = (urlparse(pu).hostname or "").strip().lower()
+        except ValueError:
+            pu_host = ""
+        if pu_host and pu_host not in ("127.0.0.1", "localhost"):
+            hosts.add(pu_host)
+    return _www_siblings(hosts)
+
+
+ALLOWED_HOSTS = _allowed_hosts()
+# Auto-enabled: a non-local PUBLIC_URL (production) turns the lock on;
+# local development keeps it off so 127.0.0.1 / testserver flows are untouched.
+HOST_LOCK = bool(ALLOWED_HOSTS)
 
 STT_USD_PER_MINUTE = float(os.environ.get("STT_USD_PER_MINUTE") or "0.01")
 LLM_USD_PER_1K_IN = float(os.environ.get("LLM_USD_PER_1K_IN") or "0.00014")

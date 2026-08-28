@@ -9,9 +9,13 @@ from fastapi import HTTPException, Request
 _lock = threading.Lock()
 _hits: dict[str, deque[float]] = defaultdict(deque)
 _ws_conns: dict[str, int] = defaultdict(int)
+_ws_total = 0
 
 MAX_WS_FRAME = 48 * 1024
 MAX_WS_CONNS = 8
+# Global WebSocket cap: per-IP limits are useless against distributed
+# connections, and one instance can be saturated by a few hundred sockets.
+MAX_WS_TOTAL = 100
 WS_FRAMES_PER_SEC = 40
 
 # x-forwarded-for is attacker-controlled unless the origin only accepts traffic
@@ -72,18 +76,41 @@ def rate_limit(scope: str, limit: int, window: float):
     return _check
 
 
+def rate_limit_global(scope: str, limit: int, window: float):
+    """Per-process cap shared by every client.
+
+    Per-IP limits (above) are bypassed by distributed attackers sending one
+    request per IP. This key deliberately has no IP in it, so the whole
+    process is throttled together (e.g. global signup floods).
+    """
+
+    def _check() -> None:
+        if not allow(f"global:{scope}", limit, window):
+            raise HTTPException(status_code=429, detail="Too many requests. Try again shortly.")
+
+    return _check
+
+
 def ws_connect(ip: str) -> bool:
+    global _ws_total
     with _lock:
-        if _ws_conns[ip] >= MAX_WS_CONNS:
+        if _ws_conns[ip] >= MAX_WS_CONNS or _ws_total >= MAX_WS_TOTAL:
             return False
         _ws_conns[ip] += 1
+        _ws_total += 1
         return True
 
 
 def ws_disconnect(ip: str) -> None:
+    global _ws_total
     with _lock:
-        n = _ws_conns.get(ip, 0) - 1
+        n = _ws_conns.get(ip, 0)
+        if n <= 0:
+            return
+        n -= 1
         if n <= 0:
             _ws_conns.pop(ip, None)
         else:
             _ws_conns[ip] = n
+        if _ws_total > 0:
+            _ws_total -= 1

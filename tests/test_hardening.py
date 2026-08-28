@@ -213,7 +213,7 @@ def _raw_get(path: str) -> tuple[int | None, bytes]:
         "query_string": b"",
         "root_path": "",
         "headers": [(b"host", b"127.0.0.1")],
-        "client": ("1.2.3.4", 5555),
+        "client": ("127.0.0.1", 5555),
         "server": ("127.0.0.1", 80),
     }
     asyncio.run(app(scope, receive, send))
