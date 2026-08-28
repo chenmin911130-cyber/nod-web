@@ -10,6 +10,12 @@ type Overview = {
   signups_today: number
   no_consent: number
   open_sessions: number
+  live_ws: number
+  live_listening: number
+  live_generating: number
+  errors_1h: number
+  quota_blocks_1h: number
+  ws_rejected_1h: number
   feedback: number
   stt_seconds_today: number
   cost_usd_today: number
@@ -145,6 +151,14 @@ export default function AdminPage() {
     void load(tab).catch((ex: Error) => setErr(ex.message))
   }, [authed, tab])
 
+  useEffect(() => {
+    if (!authed || tab !== 'overview') return
+    const tick = window.setInterval(() => {
+      void load('overview').catch((ex: Error) => setErr(ex.message))
+    }, 15_000)
+    return () => window.clearInterval(tick)
+  }, [authed, tab])
+
   const signIn = async (e: FormEvent) => {
     e.preventDefault()
     setErr('')
@@ -274,9 +288,23 @@ export default function AdminPage() {
                 <span className="warn">budget ${overview.global_daily_budget_usd}</span>
               </div>
               <div className="card">
-                <small>Open sessions</small>
-                <b>{overview.open_sessions}</b>
-                <span className="up">{overview.feedback} feedback notes</span>
+                <small>Live now</small>
+                <b>{overview.live_ws ?? 0}</b>
+                <span className="up">
+                  {overview.live_listening ?? 0} listening · {overview.live_generating ?? 0} generating
+                </span>
+              </div>
+              <div className="card">
+                <small>Errors · 1h</small>
+                <b>{overview.errors_1h ?? 0}</b>
+                <span className={overview.ws_rejected_1h ? 'warn' : 'up'}>
+                  {overview.ws_rejected_1h ?? 0} ws rejected
+                </span>
+              </div>
+              <div className="card">
+                <small>Quota blocks · 1h</small>
+                <b>{overview.quota_blocks_1h ?? 0}</b>
+                <span className="up">billing open {overview.open_sessions}</span>
               </div>
             </div>
             <div className="grid-2">

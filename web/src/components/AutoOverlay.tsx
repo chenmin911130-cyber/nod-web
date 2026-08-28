@@ -329,7 +329,7 @@ export default function AutoOverlay(props: Props) {
         </div>
         <div className="ov-answer" ref={scrollRef} onScroll={handleScroll}>
           {answer ? (
-            <AnswerContent answer={answer} base="ov" />
+            <AnswerContent answer={answer} base="ov" copyable={false} />
           ) : (
             <div className="ov-answer-empty">
               {generating

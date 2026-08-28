@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from server.db import AuditLog, Feedback, Order, ResetToken, User, db_session, utcnow
 from server.mailer import send_reset_email
-from server.meter import delete_user_data, list_history, plan_of, session_file_url, usage_snapshot
+from server.meter import delete_history_session, delete_user_data, list_history, plan_of, session_file_url, usage_snapshot
 from server.security import (
     cookie_kwargs,
     current_user,
@@ -326,11 +326,24 @@ def history(user: User = Depends(current_user)):
     return {"ok": True, "sessions": list_history(user.id)}
 
 
+@router.delete("/api/account/history/{session_id}")
+def delete_history(session_id: str, user: User = Depends(current_user)):
+    if not delete_history_session(user.id, session_id):
+        raise HTTPException(404, "Session not found")
+    return {"ok": True}
+
+
 @router.get("/api/account/files/{session_id}/{kind}")
-def download_session_file(session_id: str, kind: str, part: str | None = None, user: User = Depends(current_user)):
+def download_session_file(
+    session_id: str,
+    kind: str,
+    part: str | None = None,
+    filename: str = "",
+    user: User = Depends(current_user),
+):
     if kind not in ("audio", "notes"):
         raise HTTPException(404, "Unknown file")
-    url = session_file_url(user.id, session_id, kind, part)
+    url = session_file_url(user.id, session_id, kind, part, filename)
     if not url:
         raise HTTPException(404, "File not found")
     return RedirectResponse(url, status_code=302)

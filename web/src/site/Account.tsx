@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, fetchMe, logout, type Me } from '../auth'
+import { copyText } from '../historyRestore'
 import './Site.css'
 import NodMark from './NodMark'
 
@@ -8,10 +9,12 @@ type SessionRow = {
   mode: string
   title: string
   started_at: string | null
+  ended_at?: string | null
   stt_seconds: number
   llm_tokens: number
   cost_usd: number
   items: Array<{ kind: string; text: string }>
+  copy_text?: string
   files?: Array<{ kind: string; name: string; href: string }>
 }
 
@@ -34,7 +37,15 @@ export default function AccountPage() {
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
   const [feedback, setFeedback] = useState('')
+  const [openId, setOpenId] = useState<string | null>(null)
+  const [copied, setCopied] = useState('')
   const paid = new URLSearchParams(location.search).get('paid')
+
+  const copySession = async (session: SessionRow, key = session.id) => {
+    const ok = await copyText(session.copy_text || session.items.map((item) => item.text).join('\n'))
+    setCopied(ok ? key : '')
+    window.setTimeout(() => setCopied(''), 1600)
+  }
 
   useEffect(() => {
     document.title = 'Account · Nod'
@@ -199,28 +210,77 @@ export default function AccountPage() {
         <div className="site-card" style={{ marginTop: 18 }}>
           <div className="eyebrow">HISTORY</div>
           <h1>Your sessions</h1>
-          <p>Transcripts and answers stay on your account. If cloud audio storage is on, long sessions are saved as 30-minute WAV parts, up to 8 hours.</p>
+          <p>Each listen session is saved here. Open one to read the transcript, answers, and any audio files.</p>
           <div className="history-list">
             {sessions.length === 0 && <p>No sessions yet. Open the workspace to start one.</p>}
-            {sessions.map((s) => (
-              <article key={s.id} className="history-item">
-                <small>
-                  {s.mode} · {s.started_at ? new Date(s.started_at).toLocaleString() : ''} · {fmtMin(s.stt_seconds)} · $
-                  {s.cost_usd.toFixed(4)}
-                </small>
-                <h3>{s.title || 'Session'}</h3>
-                <p>{s.items.slice(0, 2).map((i) => i.text).join(' / ').slice(0, 220)}</p>
-                {s.files && s.files.length > 0 && (
-                  <p>
-                    {s.files.map((file) => (
-                      <a key={file.href} href={file.href} style={{ marginRight: 12 }}>
-                        {file.name}
-                      </a>
-                    ))}
-                  </p>
-                )}
-              </article>
-            ))}
+            {sessions.map((s) => {
+              const open = openId === s.id
+              return (
+                <article key={s.id} className="history-item">
+                  <button type="button" className="history-open" onClick={() => setOpenId(open ? null : s.id)}>
+                    <small>
+                      {s.mode} · {s.started_at ? new Date(s.started_at).toLocaleString() : ''} · {fmtMin(s.stt_seconds)}
+                      {s.ended_at ? '' : ' · in progress'}
+                    </small>
+                    <h3>{s.title || 'Session'}</h3>
+                    {!open && <p>{s.items.slice(0, 2).map((i) => i.text).join(' / ').slice(0, 220)}</p>}
+                  </button>
+                  {open && (
+                    <div className="history-detail">
+                      <p className="history-actions">
+                        <button
+                          type="button"
+                          className="button button-ghost"
+                          onClick={() => void copySession(s)}
+                        >
+                          {copied === s.id ? 'Copied' : 'Copy session'}
+                        </button>
+                        <button
+                          type="button"
+                          className="button button-ghost"
+                          onClick={() => {
+                            if (!confirm(`Delete this ${s.mode} session? This cannot be undone.`)) return
+                            void api(`/api/account/history/${s.id}`, { method: 'DELETE' })
+                              .then(() => {
+                                setSessions((rows) => rows.filter((row) => row.id !== s.id))
+                                setOpenId(null)
+                                setMsg('Session deleted')
+                              })
+                              .catch((ex: Error) => setErr(ex.message))
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </p>
+                      {s.files && s.files.length > 0 && (
+                        <p>
+                          {s.files.map((file) => (
+                            <a key={file.href} href={file.href} style={{ marginRight: 12 }}>
+                              {file.name}
+                            </a>
+                          ))}
+                        </p>
+                      )}
+                      {s.items.length === 0 && <p>No transcript or answers saved in this session.</p>}
+                      {s.items.map((item, i) => (
+                        <p key={`${item.kind}-${i}`}>
+                          <small>{item.kind}</small>
+                          <button
+                            type="button"
+                            className="history-copy-one"
+                            onClick={() => void copyText(item.text).then((ok) => ok && setCopied(`${s.id}-${i}`))}
+                          >
+                            {copied === `${s.id}-${i}` ? 'Copied' : 'Copy'}
+                          </button>
+                          <br />
+                          {item.text}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              )
+            })}
           </div>
         </div>
 

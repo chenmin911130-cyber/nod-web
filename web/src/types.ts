@@ -133,6 +133,7 @@ export type EngineEvent =
   | { type: 'auth_required' }
   | { type: 'quota'; ok: boolean; reason?: string; plan?: string; plan_name?: string; stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; sessions?: number; session_limit?: number; daily_cost_usd?: number; daily_cost_limit?: number; daily_stt_seconds?: number; daily_stt_limit?: number; quota_disabled?: boolean }
   | { type: 'quota_exceeded'; reason: string }
+  | { type: 'save_prompt'; id?: string; text?: string }
 
 // 前端 → 引擎
 export type EngineMsg =
@@ -140,6 +141,8 @@ export type EngineMsg =
   | { type: 'toggle_listen' }
   | { type: 'start_listen' }
   | { type: 'stop_listen' }
+  | { type: 'keep_history' }
+  | { type: 'discard_history' }
   | { type: 'auth'; token: string }
   | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; mode?: string }
   | { type: 'set_workspace'; mode: WorkspaceMode; scene?: 'meeting' | 'lecture' | 'interview'; speakers_expected?: number }

@@ -8,7 +8,6 @@ interface Props {
   bilingual: boolean
   onPrimary: () => void
   onRecord: () => void
-  onCopy: () => void
   onClear: () => void
   onPause: () => void
   onMark: () => void
@@ -16,6 +15,8 @@ interface Props {
   onBilingual: () => void
   meetingPaused?: boolean
   onClose?: () => void
+  onOpenHistory?: () => void
+  onNewSession?: () => void
 }
 
 function MicIcon() {
@@ -37,15 +38,6 @@ function WaveIcon() {
       <line x1="13" y1="4" x2="13" y2="20" />
       <line x1="17" y1="7" x2="17" y2="17" />
       <line x1="21" y1="10" x2="21" y2="14" />
-    </svg>
-  )
-}
-
-function CopyIcon() {
-  return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="7" y="7" width="9" height="10" rx="1.6" />
-      <path d="M5 13V5.5A1.5 1.5 0 0 1 6.5 4H13" />
     </svg>
   )
 }
@@ -102,6 +94,24 @@ function MiniWave() {
     <span className="rail-wave-mini" aria-hidden="true">
       <span /><span /><span /><span /><span />
     </span>
+  )
+}
+
+function NewSessionIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4.2" y="3.6" width="11.6" height="12.8" rx="1.6" />
+      <path d="M10 7.4v5.2M7.4 10h5.2" />
+    </svg>
+  )
+}
+
+function HistoryIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4.2" y="3.5" width="11.6" height="13" rx="1.6" />
+      <path d="M7 7.2h6M7 10h6M7 12.8h4" />
+    </svg>
   )
 }
 
@@ -184,19 +194,6 @@ export default function SideRail(props: Props) {
 
       {mode === 'interview' && (
         <>
-          <button
-            className={`rail-icon-btn${recording ? ' live' : ''}`}
-            onClick={props.onRecord}
-            disabled={autoOn || run === 'listen'}
-            title={recording ? 'Stop recording (F2)' : 'Record this question (F2)'}
-          >
-            <RecIcon />
-            <span>{recording ? 'Recording' : 'Record'}</span>
-          </button>
-          <button className="rail-icon-btn" onClick={props.onCopy} title="Copy latest answer (C)">
-            <CopyIcon />
-            <span>Copy</span>
-          </button>
           <button className="rail-icon-btn" onClick={props.onClear} title="Clear history (F4)">
             <TrashIcon />
             <span>Clear</span>
@@ -210,10 +207,6 @@ export default function SideRail(props: Props) {
 
       {mode === 'meeting' && (
         <>
-          <button className="rail-icon-btn" onClick={props.onCopy} title="Copy last transcript line">
-            <CopyIcon />
-            <span>Copy</span>
-          </button>
           <button className="rail-icon-btn" onClick={props.onClear} title="Clear transcript (F4)">
             <TrashIcon />
             <span>Clear</span>
@@ -246,12 +239,27 @@ export default function SideRail(props: Props) {
             <RecIcon />
             <span>{recording ? 'Recording' : 'Record'}</span>
           </button>
-          <button className="rail-icon-btn" onClick={props.onCopy} title="Copy last translation">
-            <CopyIcon />
-            <span>Copy</span>
-          </button>
         </>
       )}
+
+      <button
+        type="button"
+        className="rail-icon-btn"
+        onClick={props.onOpenHistory}
+        title="Open session history"
+      >
+        <HistoryIcon />
+        <span>History</span>
+      </button>
+      <button
+        type="button"
+        className="rail-icon-btn"
+        onClick={props.onNewSession}
+        title="Start a new session"
+      >
+        <NewSessionIcon />
+        <span>New session</span>
+      </button>
 
       <div className="rail-status">
         <span className={`rail-dot-live${listening ? ' on' : ''}`} />

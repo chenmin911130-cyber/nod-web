@@ -93,6 +93,8 @@ GLOBAL_DAILY_BUDGET_USD = float(os.environ.get("GLOBAL_DAILY_BUDGET_USD") or "25
 QUOTA_DISABLED = os.environ.get("QUOTA_DISABLED", "0").strip().lower() in ("1", "true", "yes")
 DAILY_STT_SECONDS = max(60, int(float(os.environ.get("DAILY_STT_SECONDS") or str(2 * 3600))))
 MAX_AUDIO_HOURS = max(0.5, float(os.environ.get("MAX_AUDIO_HOURS") or "8"))
+LISTEN_IDLE_SECONDS = max(60, int(float(os.environ.get("LISTEN_IDLE_SECONDS") or str(15 * 60))))
+LISTEN_MAX_SECONDS = max(LISTEN_IDLE_SECONDS, int(float(os.environ.get("LISTEN_MAX_SECONDS") or str(2 * 3600))))
 
 PLANS: dict[str, dict] = {
     "free": {

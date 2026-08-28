@@ -158,18 +158,23 @@ def can_start_session(user_id: str) -> tuple[bool, dict]:
     return True, snap
 
 
-def open_usage_session(user_id: str, mode: str) -> tuple[str | None, dict]:
+def open_usage_session(user_id: str, mode: str, scene: str = "") -> tuple[str | None, dict]:
+    from server.history_fmt import normalize_scene, scene_label
+
     ok, snap = can_start_session(user_id)
     if not ok:
         return None, snap
     sid = new_id()
+    scene = normalize_scene(mode, scene)
     with db_session() as db:
         db.add(
             UsageSession(
                 id=sid,
                 user_id=user_id,
                 mode=mode or "interview",
-                title=f"{(mode or 'interview').title()} · {utcnow().strftime('%b %d %H:%M')}",
+                scene=scene,
+                title=f"{scene_label(scene)} · {utcnow().strftime('%b %d %H:%M')}",
+                kept=False,
             )
         )
     snap = usage_snapshot(user_id)
@@ -184,6 +189,51 @@ def close_usage_session(session_id: str | None) -> None:
         row = db.get(UsageSession, session_id)
         if row and row.ended_at is None:
             row.ended_at = utcnow()
+
+
+def is_session_kept(session_id: str | None) -> bool:
+    if not session_id:
+        return False
+    with db_session() as db:
+        row = db.get(UsageSession, session_id)
+        return bool(row and row.kept)
+
+
+def keep_usage_session(user_id: str, session_id: str) -> None:
+    if not user_id or not session_id:
+        return
+    with db_session() as db:
+        row = db.get(UsageSession, session_id)
+        if not row or row.user_id != user_id:
+            return
+        row.kept = True
+        if row.ended_at is None:
+            row.ended_at = utcnow()
+
+
+def discard_usage_session(user_id: str | None, session_id: str | None) -> None:
+    if not user_id or not session_id:
+        return
+    from server.r2 import delete_prefix
+
+    delete_prefix(f"users/{user_id}/sessions/{session_id}/")
+    with db_session() as db:
+        row = db.get(UsageSession, session_id)
+        if not row or row.user_id != user_id:
+            return
+        db.execute(delete(HistoryItem).where(HistoryItem.session_id == session_id))
+        db.delete(row)
+
+
+def delete_history_session(user_id: str, session_id: str) -> bool:
+    if not user_id or not session_id:
+        return False
+    with db_session() as db:
+        row = db.get(UsageSession, session_id)
+        if not row or row.user_id != user_id:
+            return False
+    discard_usage_session(user_id, session_id)
+    return True
 
 
 def _ensure_row(db, build, exists) -> None:
@@ -308,12 +358,12 @@ def list_history(user_id: str, limit: int = 40) -> list[dict]:
     with db_session() as db:
         sessions = db.execute(
             select(UsageSession)
-            .where(UsageSession.user_id == user_id)
+            .where(UsageSession.user_id == user_id, UsageSession.kept.is_(True))
             .order_by(UsageSession.started_at.desc())
             .limit(limit)
         ).scalars().all()
         out: list[dict] = []
-        file_refs: list[tuple[str, str, str]] = []
+        file_refs: list[tuple] = []
         for s in sessions:
             items = db.execute(
                 select(HistoryItem)
@@ -321,43 +371,63 @@ def list_history(user_id: str, limit: int = 40) -> list[dict]:
                 .order_by(HistoryItem.created_at.asc())
                 .limit(80)
             ).scalars().all()
+            from server.history_fmt import normalize_scene, session_copy_text
+
+            scene = normalize_scene(s.mode, getattr(s, "scene", "") or "")
+            item_rows = [{"kind": i.kind, "text": i.text, "at": i.created_at.isoformat() if i.created_at else None, "qid": i.qid} for i in items]
             out.append(
                 {
                     "id": s.id,
                     "mode": s.mode,
+                    "scene": scene,
                     "title": s.title,
                     "started_at": s.started_at.isoformat() if s.started_at else None,
                     "ended_at": s.ended_at.isoformat() if s.ended_at else None,
                     "stt_seconds": round(s.stt_seconds, 2),
                     "llm_tokens": s.llm_input_tokens + s.llm_output_tokens,
                     "cost_usd": round(s.estimated_cost_usd, 4),
-                    "items": [{"kind": i.kind, "text": i.text, "at": i.created_at.isoformat() if i.created_at else None} for i in items],
+                    "items": item_rows,
+                    "copy_text": session_copy_text(s.title, s.mode, scene, item_rows),
                     "files": [],
                 }
             )
-            file_refs.append((s.id, s.audio_key or "", s.notes_key or ""))
-    # R2 lookups happen after the transaction closes: a slow bucket used to
-    # hold a database connection open for the whole listing.
-    for entry, (sid, audio_key, notes_key) in zip(out, file_refs):
-        entry["files"] = _session_files(sid, audio_key, notes_key)
+            file_refs.append((s.id, s.mode, scene, s.started_at, s.audio_key or "", s.notes_key or ""))
+    for entry, (sid, mode, scene, started, audio_key, notes_key) in zip(out, file_refs):
+        entry["files"] = _session_files(sid, audio_key, notes_key, mode, scene, started)
     return out
 
 
-def _session_files(session_id: str, audio_key: str, notes_key: str) -> list[dict]:
+def _session_files(
+    session_id: str,
+    audio_key: str,
+    notes_key: str,
+    mode: str = "",
+    scene: str = "",
+    started_at=None,
+) -> list[dict]:
+    from urllib.parse import quote
+
+    from server.history_fmt import session_download_name
     from server.r2 import list_keys
 
     files = []
     key = audio_key or ""
     if key.endswith("/"):
         for item in list_keys(key):
-            name = item.rsplit("/", 1)[-1]
-            if not name:
+            part = item.rsplit("/", 1)[-1]
+            if not part:
                 continue
-            files.append({"kind": "audio", "name": name, "href": f"/api/account/files/{session_id}/audio?part={name}"})
+            name = session_download_name(mode, scene, started_at, part_name=part)
+            files.append({"kind": "audio", "name": name, "href": f"/api/account/files/{session_id}/audio?part={quote(part)}&filename={quote(name)}"})
+        if not files and key:
+            name = session_download_name(mode, scene, started_at)
+            files.append({"kind": "audio", "name": name, "href": f"/api/account/files/{session_id}/audio?filename={quote(name)}"})
     elif key:
-        files.append({"kind": "audio", "name": "audio.wav", "href": f"/api/account/files/{session_id}/audio"})
+        name = session_download_name(mode, scene, started_at)
+        files.append({"kind": "audio", "name": name, "href": f"/api/account/files/{session_id}/audio?filename={quote(name)}"})
     if notes_key:
-        files.append({"kind": "notes", "name": "notes.txt", "href": f"/api/account/files/{session_id}/notes"})
+        name = session_download_name(mode, scene, started_at, kind="notes")
+        files.append({"kind": "notes", "name": name, "href": f"/api/account/files/{session_id}/notes?filename={quote(name)}"})
     return files
 
 
@@ -372,7 +442,8 @@ def set_session_file(session_id: str, *, audio_key: str | None = None, notes_key
             row.notes_key = notes_key
 
 
-def session_file_url(user_id: str, session_id: str, kind: str, part: str | None = None) -> str:
+def session_file_url(user_id: str, session_id: str, kind: str, part: str | None = None, filename: str = "") -> str:
+    from server.history_fmt import session_download_name
     from server.r2 import list_keys, presign
 
     with db_session() as db:
@@ -380,6 +451,9 @@ def session_file_url(user_id: str, session_id: str, kind: str, part: str | None 
         if not row or row.user_id != user_id:
             return ""
         key = row.audio_key if kind == "audio" else row.notes_key if kind == "notes" else ""
+        mode = row.mode
+        scene = getattr(row, "scene", "") or ""
+        started = row.started_at
     if not key:
         return ""
     if kind == "audio" and key.endswith("/"):
@@ -389,7 +463,10 @@ def session_file_url(user_id: str, session_id: str, kind: str, part: str | None 
             key = next((item for item in keys if item.rsplit("/", 1)[-1] == safe), "")
         else:
             key = keys[0] if keys else ""
-    return presign(key) if key else ""
+            part = key.rsplit("/", 1)[-1] if key else part
+    if not filename:
+        filename = session_download_name(mode, scene, started, kind=kind, part_name=part)
+    return presign(key, filename=filename) if key else ""
 
 
 def write_session_notes(user_id: str, session_id: str) -> None:
@@ -480,7 +557,14 @@ def admin_overview() -> dict:
             "top_users": [{"user_id": uid, "cost_usd": round(float(cost or 0), 4)} for uid, cost in top],
             "global_daily_budget_usd": GLOBAL_DAILY_BUDGET_USD,
             "quota_disabled": QUOTA_DISABLED,
+            **_live_counts(),
         }
+
+
+def _live_counts() -> dict[str, int]:
+    from server.live import snapshot
+
+    return snapshot()
 
 
 def _user_usage_maps(db, user_ids: list[str]) -> dict[str, dict]:

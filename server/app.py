@@ -31,7 +31,15 @@ from server.commerce import router as commerce_router
 from server.db import init_db
 from server.headers import CloudflareOriginMiddleware, SecurityHeadersMiddleware
 from server.logging_setup import backup_now, setup_logging
-from server.settings import AUTH_DISABLED, CLERK_PUBLISHABLE_KEY, COOKIE_NAME, PUBLIC_URL, QUOTA_DISABLED
+from server.settings import (
+    AUTH_DISABLED,
+    CLERK_PUBLISHABLE_KEY,
+    COOKIE_NAME,
+    LISTEN_IDLE_SECONDS,
+    LISTEN_MAX_SECONDS,
+    PUBLIC_URL,
+    QUOTA_DISABLED,
+)
 from server.ratelimit import MAX_WS_FRAME, WS_FRAMES_PER_SEC, allow, ws_client_ip, ws_connect, ws_disconnect
 from server.security import is_local_scope, user_from_token
 
@@ -1245,6 +1253,9 @@ class Session:
         self._stt_drops = 0
         self._stt_drop_at = 0.0
         self._listen_wanted = False
+        self._listen_started_at = 0.0
+        self._last_voice_at = 0.0
+        self._idle_check_at = 0.0
         self._archive_fp = None
         self._archive_path: str | None = None
         self._archive_bytes = 0
@@ -1383,9 +1394,12 @@ class Session:
         self.pipeline._cancel.set()
         self._flush_cloud_archive(final=True)
         if self.usage_session_id:
-            from server.meter import close_usage_session
+            from server.meter import close_usage_session, discard_usage_session, is_session_kept
 
-            close_usage_session(self.usage_session_id)
+            if self.user_id and not is_session_kept(self.usage_session_id):
+                discard_usage_session(self.user_id, self.usage_session_id)
+            else:
+                close_usage_session(self.usage_session_id)
             self.usage_session_id = None
             self.pipeline.usage_session_id = None
 
@@ -1400,8 +1414,11 @@ class Session:
             return True
         if not self._ensure_consent():
             return False
-        from server.meter import open_usage_session, usage_snapshot
+        from server.meter import is_session_kept, open_usage_session, usage_snapshot
 
+        if self.usage_session_id and is_session_kept(self.usage_session_id):
+            self.usage_session_id = None
+            self.pipeline.usage_session_id = None
         if self.usage_session_id:
             snap = usage_snapshot(self.user_id)
             self.emit({"type": "quota", **snap})
@@ -1409,7 +1426,8 @@ class Session:
                 self._quota_block(snap)
                 return False
             return True
-        sid, snap = open_usage_session(self.user_id, self._workspace)
+        scene = str((self.cfg.get("stt") or {}).get("listen_scene") or "")
+        sid, snap = open_usage_session(self.user_id, self._workspace, scene)
         self.emit({"type": "quota", **snap})
         if not sid:
             self._quota_block(snap)
@@ -1439,6 +1457,7 @@ class Session:
                     if self._listener:
                         self._listen_wanted = False
                         self._stop_listening()
+                        self._offer_save_history()
                     if self._manual:
                         self._manual = False
                         self._manual_buf = bytearray()
@@ -1452,6 +1471,7 @@ class Session:
         if self._listener:
             self._archive_append(pcm)
             self._listener.push_pcm(pcm)
+            self._maybe_stop_forgotten_listen()
 
     def dispatch(self, msg: dict) -> None:
         mtype = msg.get("type")
@@ -1463,6 +1483,10 @@ class Session:
             self.start_listen()
         elif mtype == "stop_listen":
             self.stop_listen()
+        elif mtype == "keep_history":
+            self.keep_history()
+        elif mtype == "discard_history":
+            self.discard_history()
         elif mtype == "ask":
             self.ask(msg.get("text", ""), msg.get("files"), msg.get("mode") or "ask")
         elif mtype == "set_workspace":
@@ -1596,6 +1620,7 @@ class Session:
             self.emit({"type": "error", "text": "Transcription connection lost. Tap Start Listening."})
             self._listen_wanted = False
             self._stop_listening()
+            self._offer_save_history()
             return
         self.emit({"type": "status", "text": "Transcription dropped — reconnecting"})
         delay = min(3.0, 0.4 * self._stt_drops)
@@ -1788,9 +1813,39 @@ class Session:
         self._listen_wanted = False
         if self._listener:
             self._stop_listening()
+        else:
+            self.emit({"type": "state", "state": "idle"})
+            self.emit({"type": "status", "text": STATUS_READY})
+        self._offer_save_history()
+
+    def _offer_save_history(self) -> None:
+        if not getattr(self, "user_id", None) or not getattr(self, "usage_session_id", None):
             return
-        self.emit({"type": "state", "state": "idle"})
-        self.emit({"type": "status", "text": STATUS_READY})
+        self.emit({
+            "type": "save_prompt",
+            "id": self.usage_session_id,
+            "text": "Save this session to History?",
+        })
+
+    def keep_history(self) -> None:
+        sid = self.usage_session_id
+        if not self.user_id or not sid:
+            return
+        from server.meter import keep_usage_session
+
+        keep_usage_session(self.user_id, sid)
+        self.emit({"type": "status", "text": "Saved to History"})
+
+    def discard_history(self) -> None:
+        sid = self.usage_session_id
+        if not self.user_id or not sid:
+            return
+        from server.meter import discard_usage_session
+
+        discard_usage_session(self.user_id, sid)
+        self.usage_session_id = None
+        self.pipeline.usage_session_id = None
+        self.emit({"type": "status", "text": "Session discarded"})
 
     def toggle_listen(self) -> None:
         if self._listener or self._listen_wanted:
@@ -1823,9 +1878,38 @@ class Session:
         if self._mic_muted:
             listener.set_muted(True)
         self._listener = listener
+        now = time.time()
+        if not resume or not self._listen_started_at:
+            self._listen_started_at = now
+        self._last_voice_at = now
+        self._idle_check_at = 0.0
         self.emit({"type": "state", "state": "listen"})
         if not resume:
             self.emit({"type": "status", "text": STATUS_LISTEN})
+
+    def _mark_voice(self) -> None:
+        self._last_voice_at = time.time()
+
+    def _maybe_stop_forgotten_listen(self) -> None:
+        if not self._listener:
+            return
+        now = time.time()
+        if now - self._idle_check_at < 5:
+            return
+        self._idle_check_at = now
+        started = self._listen_started_at or now
+        last = self._last_voice_at or started
+        if now - started >= LISTEN_MAX_SECONDS:
+            self._listen_wanted = False
+            self._stop_listening()
+            self.emit({"type": "status", "text": "Listening stopped after 2 hours. Start again if you still need it."})
+            self._offer_save_history()
+            return
+        if now - last >= LISTEN_IDLE_SECONDS:
+            self._listen_wanted = False
+            self._stop_listening()
+            self.emit({"type": "status", "text": "Listening stopped after 15 minutes of silence."})
+            self._offer_save_history()
 
     def _stop_listening(self) -> None:
         self._pending = None
@@ -1875,6 +1959,7 @@ class Session:
         self.emit({"type": "state", "state": "think"})
         self.emit({"type": "status", "text": STATUS_TRANSCRIBE})
         threading.Thread(target=self._finish_manual, args=(pcm,), daemon=True).start()
+        self._offer_save_history()
 
     def _finish_manual(self, pcm: bytes) -> None:
         key = self.pipeline.assemblyai_key()
@@ -1984,6 +2069,7 @@ class Session:
     def _on_partial(self, text: str, lang: str | None = None, speaker: str | None = None) -> None:
         if not text:
             return
+        self._mark_voice()
         if not self._speech_allowed(text, lang):
             self.emit({"type": "partial", "text": ""})
             return
@@ -1995,6 +2081,8 @@ class Session:
         self.emit(ev)
 
     def _on_final(self, text: str, lang: str | None = None, speaker: str | None = None) -> None:
+        if text:
+            self._mark_voice()
         recent = [t for t, _ in self._recent_finals[-3:]]
         cleaned, _reason = clean_transcript(
             text,
@@ -2097,7 +2185,18 @@ async def lifespan(_app: FastAPI):
             except Exception:
                 log.exception("scheduled backup failed")
 
+    def live_loop():
+        from server.live import log_snapshot
+
+        while True:
+            time.sleep(60)
+            try:
+                log_snapshot()
+            except Exception:
+                log.exception("live snapshot failed")
+
     threading.Thread(target=loop, daemon=True, name="nod-backup").start()
+    threading.Thread(target=live_loop, daemon=True, name="nod-live").start()
     yield
 
 
@@ -2169,6 +2268,9 @@ async def ws_endpoint(ws: WebSocket):
     raw_headers = {k.decode("latin1"): v.decode("latin1") for k, v in (ws.scope.get("headers") or [])}
     ip = ws_client_ip(ws.client.host if ws.client else "", raw_headers)
     if not ws_connect(ip):
+        from server.live import mark
+
+        mark("ws_rejected")
         await ws.close(code=4408)
         return
     cookie_token = (ws.cookies.get(COOKIE_NAME) or "").strip()
@@ -2190,9 +2292,15 @@ async def ws_endpoint(ws: WebSocket):
     out: asyncio.Queue[str] = asyncio.Queue()
 
     def emit(obj: dict) -> None:
+        from server.live import note_event
+
+        note_event(obj)
         asyncio.run_coroutine_threadsafe(out.put(json.dumps(obj, ensure_ascii=False)), loop)
 
     session = Session(emit, json.loads(json.dumps(CFG)), dict(KEYS), user.id if user else None)
+    from server.live import attach, detach
+
+    attach(session)
     session.start()
     if user:
         from server.meter import usage_snapshot
@@ -2236,6 +2344,7 @@ async def ws_endpoint(ws: WebSocket):
     finally:
         send_task.cancel()
         ws_disconnect(ip)
+        detach(session)
         try:
             await run_in_threadpool(session.close)
         except asyncio.CancelledError:

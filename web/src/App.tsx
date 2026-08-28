@@ -4,6 +4,9 @@ import type { AppConfig, AppState, AudioSource, EngineEvent, Lang, MeetingLine, 
 import { TRANSLATE_LANGS } from './types'
 import { isWeb } from './platform'
 import TitleBar from './components/TitleBar'
+import HistoryPane, { type HistorySession } from './components/HistoryPane'
+import { restoreFromSession } from './historyRestore'
+import SavePrompt from './components/SavePrompt'
 import SideRail from './components/SideRail'
 import AnswerPane from './components/AnswerPane'
 import ListenPane from './components/ListenPane'
@@ -188,6 +191,16 @@ type Action =
   | { type: 'expect_catch'; title?: string; kind?: 'catch' | 'ask'; question?: string }
   | { type: 'expect_notes' }
   | { type: 'rename_speaker'; id: string; name: string }
+  | {
+      type: 'restore_session'
+      mode: WorkspaceMode
+      scene: ListenScene
+      lines: MeetingLine[]
+      turns: AppState['turns']
+      notes: string
+      summary: string
+      pairs: TranslatePair[]
+    }
 
 function formatClock(): string {
   const d = new Date()
@@ -566,6 +579,26 @@ function reducer(state: AppState, action: Action): AppState {
       }
     case 'workspace':
       return { ...state, workspaceMode: action.mode, view: 'workspace' }
+    case 'restore_session': {
+      const lastTurn = action.turns[action.turns.length - 1]
+      return {
+        ...state,
+        workspaceMode: action.mode,
+        listenScene: action.scene,
+        meetingLines: action.lines,
+        turns: action.turns,
+        currentQ: lastTurn?.q || PLACEHOLDER,
+        currentQId: lastTurn?.id || '',
+        notesRaw: action.notes,
+        meetingSummary: action.summary,
+        translatePairs: action.pairs,
+        meetingStartedAt: Date.now(),
+        meetingEnded: false,
+        meetingElapsedMs: 0,
+        view: 'workspace',
+        partial: '',
+      }
+    }
     case 'listen_scene':
       return { ...state, listenScene: action.scene }
     case 'translate_on':
@@ -800,8 +833,10 @@ export default function App() {
   const stateRef = useRef(state)
   stateRef.current = state
   const listenWanted = useRef(false)
+  const [savePrompt, setSavePrompt] = useState(false)
   const startListen = () => {
     listenWanted.current = true
+    setSavePrompt(false)
     window.api.send({ type: 'start_listen' })
   }
   const stopListen = () => {
@@ -832,6 +867,31 @@ export default function App() {
     || state.turns.length > 0
     || (Boolean(state.currentQ) && state.currentQ !== PLACEHOLDER)
   )
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const restoreHistory = useCallback((session: HistorySession) => {
+    const s = stateRef.current
+    if (s.busy || s.run === 'listen' || s.run === 'record' || listenWanted.current) {
+      dispatch({
+        type: 'engine',
+        ev: { type: 'status', text: 'Stop listening or wait for the answer before opening a saved session.' },
+      })
+      return
+    }
+    const payload = restoreFromSession(session)
+    window.api.send({
+      type: 'set_workspace',
+      mode: payload.mode,
+      scene: payload.scene,
+      speakers_expected: speakersExpected(payload.scene),
+    })
+    dispatch({ type: 'restore_session', ...payload })
+    setRailDismissed(false)
+    setHistoryOpen(false)
+    dispatch({
+      type: 'engine',
+      ev: { type: 'status', text: `Opened ${payload.scene} session` },
+    })
+  }, [])
   const [railDismissed, setRailDismissed] = useState(inQa)
   const wasInQa = useRef(inQa)
   const requestClearRef = useRef<() => void>(() => {})
@@ -942,6 +1002,7 @@ export default function App() {
       if (e.type === 'quota_exceeded' || (e.type === 'error' && e.text.includes('Transcription connection lost'))) {
         listenWanted.current = false
       }
+      if (e.type === 'save_prompt') setSavePrompt(true)
       dispatch({ type: 'engine', ev: e })
       if (e.type === 'question' && stateRef.current.workspaceMode === 'meeting' && stateRef.current.translateOn) {
         const text = e.text ?? ''
@@ -1078,7 +1139,7 @@ export default function App() {
           window.dispatchEvent(new CustomEvent('ov:show-input'))
         } else if (k === 'escape') {
           window.dispatchEvent(new CustomEvent('ov:hide-input'))
-        } else if (k === 'c') {
+        } else if (k === 'c' && !e.ctrlKey && !e.metaKey && !window.getSelection()?.toString().trim()) {
           copyLatest()
         }
         return
@@ -1088,7 +1149,7 @@ export default function App() {
         if (running) stopListen()
         else guardMic(startListen)
       }
-      else if (k === 'c') copyLatest()
+      else if (k === 'c' && !e.ctrlKey && !e.metaKey && !window.getSelection()?.toString().trim()) copyLatest()
       else if (k === 'x') requestClearRef.current()
     }
     window.addEventListener('keydown', onKey)
@@ -1104,6 +1165,19 @@ export default function App() {
     dispatch({ type: 'clear' })
     setClearOpen(false)
   }, [])
+
+  const handleNewSession = useCallback(() => {
+    const s = stateRef.current
+    if (s.busy || s.run === 'listen' || s.run === 'record' || listenWanted.current) {
+      dispatch({
+        type: 'engine',
+        ev: { type: 'status', text: 'Stop listening or wait for the answer before starting a new session.' },
+      })
+      return
+    }
+    doClear()
+    dispatch({ type: 'engine', ev: { type: 'status', text: 'New session' } })
+  }, [doClear])
 
   const handleClear = useCallback(() => {
     const s = stateRef.current
@@ -1850,6 +1924,18 @@ export default function App() {
         onStealth={handleStealth}
         onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
       />
+      <HistoryPane open={historyOpen} onClose={() => setHistoryOpen(false)} onRestore={restoreHistory} />
+      <SavePrompt
+        open={savePrompt}
+        onKeep={() => {
+          setSavePrompt(false)
+          window.api.send({ type: 'keep_history' })
+        }}
+        onDiscard={() => {
+          setSavePrompt(false)
+          window.api.send({ type: 'discard_history' })
+        }}
+      />
       <div className={`workspace${study ? ' study' : ''}${study && railOn ? ' rail-on' : ''}`}>
         {study && !railOn && (
           <button
@@ -1881,7 +1967,6 @@ export default function App() {
             bilingual={state.bilingual}
             onPrimary={handlePrimary}
             onRecord={handleRecord}
-            onCopy={copyLatest}
             onClear={handleClear}
             onPause={handlePause}
             onMark={handleMark}
@@ -1894,6 +1979,8 @@ export default function App() {
               && state.meetingStartedAt != null
               && !state.meetingEnded
             }
+            onOpenHistory={() => setHistoryOpen(true)}
+            onNewSession={handleNewSession}
           />
         </div>
         {state.workspaceMode === 'translate' ? (

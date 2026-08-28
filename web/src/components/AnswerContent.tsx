@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { copyText } from '../historyRestore'
 
 /* ============================================================
    口试速记式答案渲染（AutoOverlay + AnswerPane 共用）
@@ -168,11 +169,57 @@ function renderBody(text: string, keyBase: string): ReactNode[] {
 
 /* ---------- 答案内容 ---------- */
 
-export function AnswerContent({ answer, base }: { answer: string; base?: string }) {
+export function AnswerContent({
+  answer,
+  base,
+  copyable = true,
+}: {
+  answer: string
+  base?: string
+  copyable?: boolean
+}) {
   const parsed = useMemo(() => parseAnswer(answer), [answer])
   const b = base ?? 'a'
+  const [near, setNear] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const hideTimer = useRef(0)
+
+  const showCopy = () => {
+    window.clearTimeout(hideTimer.current)
+    setNear(true)
+  }
+  const hideCopy = () => {
+    window.clearTimeout(hideTimer.current)
+    hideTimer.current = window.setTimeout(() => setNear(false), 450)
+  }
+
+  useEffect(() => () => window.clearTimeout(hideTimer.current), [])
+
   return (
-    <article className="answer-content">
+    <article
+      className={`answer-content${copyable ? ' has-copy' : ''}${near ? ' is-near' : ''}`}
+      onPointerEnter={copyable ? showCopy : undefined}
+      onPointerLeave={copyable ? hideCopy : undefined}
+    >
+      {copyable && (
+        <button
+          type="button"
+          className={`ans-copy${copied ? ' done' : ''}`}
+          aria-label="Copy answer"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            void copyText(answer).then((ok) => {
+              if (!ok) return
+              setCopied(true)
+              window.setTimeout(() => setCopied(false), 1400)
+            })
+          }}
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      )}
       {parsed.lead && (
         <p className="ans-lead">{renderInline(parsed.lead, `${b}l`)}</p>
       )}

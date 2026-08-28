@@ -61,6 +61,8 @@ class UsageSession(Base):
     estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0)
     audio_key: Mapped[str] = mapped_column(String(400), default="")
     notes_key: Mapped[str] = mapped_column(String(400), default="")
+    kept: Mapped[bool] = mapped_column(Boolean, default=True)
+    scene: Mapped[str] = mapped_column(String(32), default="")
 
 
 class HistoryItem(Base):
@@ -170,6 +172,8 @@ def init_db() -> None:
     _add_column_if_missing("users", "stt_limit_seconds", "INTEGER")
     _add_column_if_missing("usage_sessions", "audio_key", "VARCHAR(400) DEFAULT ''")
     _add_column_if_missing("usage_sessions", "notes_key", "VARCHAR(400) DEFAULT ''")
+    _add_column_if_missing("usage_sessions", "kept", "INTEGER DEFAULT 1")
+    _add_column_if_missing("usage_sessions", "scene", "VARCHAR(32) DEFAULT ''")
 
 
 @contextmanager

@@ -67,12 +67,16 @@ def put_bytes(key: str, body: bytes, content_type: str) -> bool:
         return False
 
 
-def presign(key: str, expires: int = 3600) -> str:
+def presign(key: str, expires: int = 3600, filename: str = "") -> str:
     if not enabled() or not key:
         return ""
+    params: dict[str, str] = {"Bucket": R2_BUCKET, "Key": key}
+    if filename:
+        safe = filename.replace('"', "").replace("\n", " ")
+        params["ResponseContentDisposition"] = f'attachment; filename="{safe}"'
     return _client().generate_presigned_url(
         "get_object",
-        Params={"Bucket": R2_BUCKET, "Key": key},
+        Params=params,
         ExpiresIn=expires,
     )
 
