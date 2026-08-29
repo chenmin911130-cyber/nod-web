@@ -8,6 +8,7 @@ import PetTimer from './PetTimer'
 
 interface Props {
   listening?: boolean
+  elapsedMs?: number
   mode: WorkspaceMode
   lang: Lang
   heardLang?: PairLang | null
@@ -188,7 +189,7 @@ export default function TitleBar(props: Props) {
       </div>
 
       <div className="titlebar-right no-drag">
-        <PetTimer listening={Boolean(props.listening)} />
+        <PetTimer listening={Boolean(props.listening)} elapsedMs={props.elapsedMs} />
         {mode !== 'translate' && (
         <div className="lang-pills" ref={langRef}>
           <button

@@ -810,6 +810,20 @@ function looksLikeTarget(text: string, to: PairLang): boolean {
   return false
 }
 
+// Script-level check only (no word markers): catches the model answering in a
+// blatantly wrong language (e.g. Chinese for an EN target) without flagging
+// accented proper nouns in otherwise-correct output.
+function wrongScriptForTarget(text: string, to: PairLang): boolean {
+  const chars = Array.from(normOriginal(text)).filter((c) => /[\p{L}]/u.test(c))
+  if (chars.length < 4) return false
+  const han = chars.filter((c) => /\p{Script=Han}/u.test(c)).length
+  const kana = chars.filter((c) => /[\u3040-\u30FF]/.test(c)).length
+  const hangul = chars.filter((c) => /\p{Script=Hangul}/u.test(c)).length
+  if (to === 'zh') return han === 0
+  if (to === 'ja') return han + kana === 0
+  return (han + kana + hangul) / chars.length >= 0.5
+}
+
 function matchesLockedFrom(text: string, locked: PairLang, heard: PairLang | null): boolean {
   if (heard && heard !== locked) return false
   if (locked === 'en' || locked === 'zh' || locked === 'ja') return looksLikeTarget(text, locked)
@@ -1074,7 +1088,18 @@ export default function App() {
           const row = stateRef.current.translatePairs.find((p) => p.id === id)
           const line = stateRef.current.meetingLines.find((ln) => ln.id === id)
           const translated = (row?.translation || line?.translation || '').trim()
-          if (translated) {
+          if (translated && wrongScriptForTarget(translated, stateRef.current.translateTo)) {
+            // Model ignored the target (e.g. Chinese for an EN target).
+            // Redo the line within the normal retry budget; past it, keep
+            // what we got rather than marking the row failed.
+            const n = (translateRetries.current.get(id) || 0) + 1
+            translateRetries.current.set(id, n)
+            if (n <= 2) {
+              askedTranslate.current.delete(id)
+              dispatch({ type: 'clear_translation', id })
+            }
+            dispatch({ type: 'release_translate' })
+          } else if (translated) {
             dispatch({ type: 'release_translate' })
           } else if (row && !translated) {
             const n = (translateRetries.current.get(id) || 0) + 1
@@ -1947,6 +1972,11 @@ export default function App() {
         onStealth={handleStealth}
         onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
         listening={listening}
+        elapsedMs={
+          state.workspaceMode === 'meeting' && state.meetingStartedAt != null
+            ? state.meetingElapsedMs
+            : undefined
+        }
       />
       <HistoryPane open={historyOpen} onClose={() => setHistoryOpen(false)} onRestore={restoreHistory} />
       <SavePrompt

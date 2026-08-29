@@ -20,7 +20,9 @@ function PetMark() {
   )
 }
 
-export default function PetTimer({ listening }: { listening: boolean }) {
+// elapsedMs: session clock from the workspace (survives pause/resume). The
+// internal stopwatch is only a fallback for workspaces without one.
+export default function PetTimer({ listening, elapsedMs }: { listening: boolean; elapsedMs?: number }) {
   const [phase, setPhase] = useState<'hidden' | 'hello' | 'live' | 'bye'>('hidden')
   const [ms, setMs] = useState(0)
   const [travel, setTravel] = useState(0)
@@ -66,7 +68,7 @@ export default function PetTimer({ listening }: { listening: boolean }) {
   if (!visible) return null
 
   const line = phase === 'bye' ? BYE : HELLO
-  const clock = formatClock(ms)
+  const clock = formatClock(elapsedMs ?? ms)
   const walking = phase !== 'bye' && travel > 24
 
   return (

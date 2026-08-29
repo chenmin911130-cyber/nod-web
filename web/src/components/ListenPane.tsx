@@ -631,9 +631,11 @@ export default function ListenPane(props: Props) {
             <section className="listen-pane">
               <div className="listen-kicker">
                 {lecture ? 'Classroom' : 'Transcript'}
-                <span className={`listen-timer${props.listening ? ' live' : ''}`}>
-                  {props.elapsedLabel === '00:00:00' && !props.listening ? '' : props.elapsedLabel}
-                </span>
+                {/* While listening the pet timer in the title bar shows the clock —
+                    keep only the post-session total here to avoid two timers. */}
+                {!props.listening && props.elapsedLabel !== '00:00:00' && (
+                  <span className="listen-timer">{props.elapsedLabel}</span>
+                )}
                 {props.lines.length > 0 && !notesOpen && (
                   <button
                     type="button"

@@ -604,7 +604,13 @@ def matches_locked_speech(text: str, locked: str | None, heard: str | None = Non
         return bool(re.search(r"[\u3040-\u30FF]", t)) or guessed == "ja"
     if _CJK_OR_HANGUL.search(t):
         return False
-    return guessed == locked
+    # Latin locks (it/es/fr/de/pt): STT itself is already locked to this
+    # language, and word-marker guessing cannot tell Latin languages apart —
+    # requiring guessed == locked dropped nearly every real Italian sentence.
+    # Reject only when the guess confidently names a DIFFERENT Latin language.
+    if heard == locked:
+        return True
+    return guessed in (locked, "en")
 
 
 def _guard_units(text: str) -> int:
@@ -932,12 +938,24 @@ class Pipeline:
                 {"role": "user", "content": question},
             ]
         if mode == "translate" or question.startswith("Translate to "):
+            # The target lives inside the user message; models sometimes drift
+            # to the context language (e.g. answered Chinese for an EN target),
+            # so restate it as a hard rule in the system prompt.
+            tm = re.match(r"Translate to ([A-Za-z]+)\.", question)
+            target = tm.group(1) if tm else ""
+            target_rule = (
+                f"TARGET LANGUAGE (hard rule): {target}. Every word of the output must be {target} — "
+                "never the language of the context lines or of the source.\n"
+                if target
+                else ""
+            )
             return [
                 {
                     "role": "system",
                     "content": (
                         "You are a translator for live captions.\n"
-                        "Translate ONLY the line after 'Translate only this line:'. "
+                        + target_rule
+                        + "Translate ONLY the line after 'Translate only this line:'. "
                         "Lines under 'Previous lines' are context for names, topic, and source language — do not translate them.\n"
                         "Output ONLY the translation in the requested target language — no quotes, labels, notes, or preamble.\n"
                         "Preserve proper nouns, product names, and numbers. "
