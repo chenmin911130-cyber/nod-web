@@ -4,8 +4,10 @@ import { TRANSLATE_LANGS } from '../types'
 import { isWeb } from '../platform'
 import { logout } from '../auth'
 import OpacityBar from './OpacityBar'
+import PetTimer from './PetTimer'
 
 interface Props {
+  listening?: boolean
   mode: WorkspaceMode
   lang: Lang
   heardLang?: PairLang | null
@@ -174,6 +176,7 @@ export default function TitleBar(props: Props) {
       </div>
 
       <div className="titlebar-right no-drag">
+        <PetTimer listening={Boolean(props.listening)} />
         {mode !== 'translate' && (
         <div className="lang-pills" ref={langRef}>
           <button

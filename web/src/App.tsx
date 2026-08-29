@@ -1946,6 +1946,7 @@ export default function App() {
         onMicMuted={handleMicMuted}
         onStealth={handleStealth}
         onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
+        listening={listening}
       />
       <HistoryPane open={historyOpen} onClose={() => setHistoryOpen(false)} onRestore={restoreHistory} />
       <SavePrompt

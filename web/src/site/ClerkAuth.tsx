@@ -164,7 +164,7 @@ export function SSOCallbackPage() {
         <div className="site-card">
           <div className="eyebrow">GOOGLE</div>
           <h1>Finishing sign-in…</h1>
-          <p>Hold on — Nod is opening the workspace.</p>
+          <p>Hold on — Nodpilot is opening the workspace.</p>
           <AuthenticateWithRedirectCallback />
         </div>
       </div>

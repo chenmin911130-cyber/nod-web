@@ -80,8 +80,8 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
         <div className="site-card">
           <div className="eyebrow">ACCOUNT</div>
           <Funnel current="account" />
-          <h1>Sign in to Nod</h1>
-          <p>Nod needs an account before it can listen, translate, and summarize. Continue with Google, or use email. Google is optional.</p>
+          <h1>Sign in to Nodpilot</h1>
+          <p>Nodpilot needs an account before it can listen, translate, and summarize. Continue with Google, or use email. Google is optional.</p>
           {clerkEnabled && (
             <>
               <Suspense fallback={null}>
@@ -158,7 +158,7 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
         <div className="site-card">
           <div className="eyebrow">REGISTER</div>
           <Funnel current="account" />
-          <h1>Create your account</h1>
+          <h1>Create your Nodpilot account</h1>
           <p>Google or email — both start the same free trial. No card required. 20 minutes of transcription included.</p>
           {clerkEnabled && (
             <>

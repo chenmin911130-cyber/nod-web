@@ -138,17 +138,7 @@ export default function TranslatePane({
         </div>
         <div className="tr-body">
           {empty ? (
-            <EmptyState
-              compact
-              title="No captions yet"
-              sub={isWeb
-                ? 'F3 listens on the browser microphone. Lock From to one language to ignore the rest — they will not appear. F2 records a clip. Or type a line below.'
-                : 'F3 listens to system audio. F2 records your microphone. Or type a line below.'}
-              shortcuts={[
-                { key: 'F3', label: isWeb ? 'Listen' : 'System audio' },
-                { key: 'F2', label: isWeb ? 'Record' : 'Your mic' },
-              ]}
-            />
+            <EmptyState compact title="Make communication simpler." />
           ) : (
             <>
               {pairs.map((p) => {

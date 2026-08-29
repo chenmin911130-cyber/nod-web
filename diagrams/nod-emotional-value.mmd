@@ -1,0 +1,12 @@
+graph TD
+  Core["You held this session"]
+  Core --> Miss["Didn't miss it"]
+  Core --> Handle["Can take the next line"]
+  Core --> Return["Can come back"]
+
+  Open["First 10s: Press Listen. Answers stay on screen."] --> Miss
+  Open --> Handle
+  Live["While listening: words move; speak only if it breaks"] --> Miss
+  After["After: copy a line; save as Meeting-today"] --> Handle
+  After --> Return
+  Next["Next day: scene-named History and PDF"] --> Return

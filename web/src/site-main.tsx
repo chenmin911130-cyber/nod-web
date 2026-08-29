@@ -29,6 +29,25 @@ async function boot() {
             colorInputText: '#eff8ff',
             borderRadius: '12px',
           },
+          layout: {
+            logoImageUrl: '/logo.svg',
+            logoLinkUrl: '/',
+            logoPlacement: 'inside',
+          },
+        }}
+        localization={{
+          signIn: {
+            start: {
+              title: 'Sign in to Nodpilot',
+              subtitle: 'Welcome back. Continue to Nodpilot.',
+            },
+          },
+          signUp: {
+            start: {
+              title: 'Create your Nodpilot account',
+              subtitle: 'Start listening with Nodpilot.',
+            },
+          },
         }}
       >
         <Site clerkEnabled />

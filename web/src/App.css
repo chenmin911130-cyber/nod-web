@@ -1870,6 +1870,7 @@ html.nod-web .ov-root {
   gap: 6px;
   min-width: 0;
   flex: 1 1 auto;
+  overflow: visible;
   -webkit-app-region: no-drag;
 }
 
@@ -4991,5 +4992,79 @@ a.tb-menu-action {
     max-height: 28vh;
     border-right: 0;
     border-bottom: 1px solid #1d3146;
+  }
+}
+
+.pet-timer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  max-width: min(220px, 42vw);
+  padding: 4px 10px 4px 5px;
+  border: 1px solid rgba(34, 211, 238, 0.28);
+  border-radius: 999px;
+  background: rgba(8, 18, 34, 0.72);
+  pointer-events: none;
+  animation: pet-in 0.28s ease-out;
+}
+
+.pet-timer.bye {
+  animation: pet-out 0.28s ease-in forwards;
+}
+
+.pet-mark {
+  display: block;
+  flex-shrink: 0;
+  animation: pet-bob 1.6s ease-in-out infinite;
+}
+
+.pet-timer-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.pet-timer-line {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pet-timer-clock {
+  color: var(--live);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes pet-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pet-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-6px); }
+}
+
+@keyframes pet-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+@media (max-width: 760px) {
+  .pet-timer {
+    max-width: min(168px, 48vw);
+    padding: 3px 8px 3px 4px;
+  }
+
+  .pet-timer-line {
+    font-size: 11px;
   }
 }
