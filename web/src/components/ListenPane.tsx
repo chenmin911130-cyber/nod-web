@@ -498,6 +498,12 @@ export default function ListenPane(props: Props) {
   }, [props.scene])
 
   useEffect(() => {
+    if (!props.notesDefaultOpen || !props.notesRaw.trim()) return
+    setNotesOpen(true)
+    setMobilePane('notes')
+  }, [props.notesDefaultOpen, props.notesRaw])
+
+  useEffect(() => {
     const el = leftRef.current
     if (!el) return
     // Reading scrollHeight forces layout, so coalesce bursts of partials into

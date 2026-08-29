@@ -875,6 +875,7 @@ export default function App() {
   const exportAfterNotes = useRef(false)
   const autoNotesTried = useRef(false)
   const watchAutoNotes = useRef(false)
+  const [watchReportOpen, setWatchReportOpen] = useState(false)
   const tickRef = useRef(0)
   const [consent, setConsent] = useState<boolean | null>(demoScene ? true : null)
   const consentRef = useRef<boolean | null>(demoScene ? true : null)
@@ -972,6 +973,7 @@ export default function App() {
     return installWatchRemote({
       onStart: () => {
         watchAutoNotes.current = true
+        setWatchReportOpen(false)
         guardMic(startListen)
       },
       onStop: stopListen,
@@ -984,8 +986,8 @@ export default function App() {
     let hint = 'Ready'
     if (consentOpen) hint = 'Confirm on iPhone'
     else if (listening) hint = state.partial.trim() || 'Watch mic'
-    else if (state.notesAskId) hint = 'Writing notes on iPhone'
-    else if (state.notesRaw.trim()) hint = 'Notes ready on iPhone'
+    else if (state.notesAskId) hint = 'Writing report on iPhone'
+    else if (state.notesRaw.trim()) hint = 'Open iPhone to read the report'
     const timer = window.setTimeout(() => pushWatchStatus(listening, hint), 180)
     return () => window.clearTimeout(timer)
   }, [consentOpen, state.notesAskId, state.notesRaw, state.partial, state.run])
@@ -1049,7 +1051,14 @@ export default function App() {
       if (e.type === 'quota_exceeded' || (e.type === 'error' && e.text.includes('Transcription connection lost'))) {
         listenWanted.current = false
       }
-      if (e.type === 'save_prompt') setSavePrompt(true)
+      if (e.type === 'save_prompt') {
+        // Watch stop-and-save: keep History without a dialog the wrist cannot tap.
+        if (watchAutoNotes.current) {
+          api.send({ type: 'keep_history' })
+        } else {
+          setSavePrompt(true)
+        }
+      }
       dispatch({ type: 'engine', ev: e })
       if (e.type === 'question' && stateRef.current.workspaceMode === 'meeting' && stateRef.current.translateOn) {
         const text = e.text ?? ''
@@ -1671,6 +1680,7 @@ export default function App() {
     watchAutoNotes.current = false
     if (!state.meetingLines.length) return
     generateNotesRef.current()
+    setWatchReportOpen(true)
   }, [state.busy, state.meetingLines.length, state.run, state.workspaceMode])
 
   const handleSummary = useCallback(() => {
@@ -2082,7 +2092,7 @@ export default function App() {
             notesRaw={state.notesRaw}
             busy={state.busy}
             summarizing={Boolean(state.notesAskId)}
-            notesDefaultOpen={demoScene === 'meeting-notes'}
+            notesDefaultOpen={demoScene === 'meeting-notes' || watchReportOpen}
             qa={state.workspaceMode === 'interview'}
             qaSlot={
               <AnswerPane
