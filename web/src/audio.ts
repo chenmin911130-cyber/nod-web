@@ -1,4 +1,5 @@
 import { isNativeApp } from './native'
+import { isWatchMicPreferred } from './watch'
 import type { PluginListenerHandle } from '@capacitor/core'
 
 const TARGET_SR = 16000
@@ -74,6 +75,10 @@ export class MicCapture {
     const seq = this.stopSeq
     try {
       if (isNativeApp()) {
+        if (isWatchMicPreferred()) {
+          this.running = true
+          return
+        }
         await this.acquireNative(seq)
         return
       }

@@ -15,7 +15,8 @@ import StatusToast from './components/StatusToast'
 import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
 import { api as authApi, fetchMe } from './auth'
-import { nativeGo } from './native'
+import { isNativeApp, nativeGo } from './native'
+import { installWatchRemote, pushWatchStatus } from './watch'
 import {
   askContext,
   askPrompt,
@@ -964,6 +965,24 @@ export default function App() {
     }
     setConsentOpen(true)
   }
+
+  useEffect(() => {
+    if (!isNativeApp()) return
+    return installWatchRemote({
+      onStart: () => guardMic(startListen),
+      onStop: stopListen,
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!isNativeApp()) return
+    const listening = state.run === 'listen' || state.run === 'record'
+    let hint = 'Ready'
+    if (consentOpen) hint = 'Confirm on iPhone'
+    else if (listening) hint = state.partial.trim() || 'Watch / iPhone listening'
+    const timer = window.setTimeout(() => pushWatchStatus(listening, hint), 180)
+    return () => window.clearTimeout(timer)
+  }, [consentOpen, state.partial, state.run])
 
   const acceptConsent = () => {
     void authApi('/api/me/consent', { method: 'POST', body: JSON.stringify({ consent: true }) }).then(() => {

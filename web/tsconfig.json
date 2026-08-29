@@ -12,7 +12,11 @@
     "noEmit": true,
     "isolatedModules": true,
     "resolveJsonModule": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "nod-mic": ["src/shims/nod-mic.ts"]
+    }
   },
   "include": ["src"]
 }

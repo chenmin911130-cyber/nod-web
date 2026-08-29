@@ -2,6 +2,7 @@ import type { Api, AppConfig, EngineEvent, EngineMsg } from './types'
 import { getToken } from './auth'
 import { MicCapture } from './audio'
 import { apiUrl, isNativeApp, wsUrl } from './native'
+import { setWatchPcmSink } from './watch'
 
 const EVENT_TYPES = new Set([
   'ready',
@@ -219,6 +220,10 @@ export function installWebApi(): void {
       /* onclose reconnects */
     }
   }
+
+  setWatchPcmSink((buf) => {
+    if (mic.active) mic.onPcm(buf)
+  })
 
   mic.onPcm = (buf) => {
     if (micMuted) return
