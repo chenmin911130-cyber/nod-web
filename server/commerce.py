@@ -26,7 +26,7 @@ from server.security import (
     verify_password,
 )
 from server.ratelimit import rate_limit, rate_limit_global
-from server.settings import CLERK_PUBLISHABLE_KEY, MAIL_FROM, PLANS, PUBLIC_URL, STRIPE_PRICE_PRO, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
+from server.settings import CLERK_PUBLISHABLE_KEY, CONTACT_EMAIL, MAIL_FROM, PLANS, PUBLIC_URL, STRIPE_PRICE_PRO, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 
 log = logging.getLogger("nod.api")
 router = APIRouter()
@@ -491,12 +491,12 @@ def feedback(
                 message=body.message.strip(),
             )
         )
-    to_admin = MAIL_FROM
-    if "@" in MAIL_FROM and "localhost" not in MAIL_FROM:
+    to_admin = CONTACT_EMAIL or MAIL_FROM
+    if "@" in to_admin and "localhost" not in to_admin:
         try:
             from server.mailer import send_feedback_copy
 
-            send_feedback_copy(MAIL_FROM, body.email, body.message)
+            send_feedback_copy(to_admin, body.email, body.message)
         except Exception:
             log.exception("feedback mail failed")
     return {"ok": True}

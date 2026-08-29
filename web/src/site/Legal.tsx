@@ -68,7 +68,10 @@ export function PrivacyPage() {
         model providers cannot be pulled back from this screen.
       </p>
       <h2>Contact</h2>
-      <p>Use the feedback form in Account, or email the address published when a custom domain is live.</p>
+      <p>
+        Use the feedback form in Account, or email{' '}
+        <a href="mailto:hello@nodpilot.com">hello@nodpilot.com</a>.
+      </p>
     </Shell>
   )
 }
@@ -106,6 +109,10 @@ export function TermsPage() {
       </p>
       <h2>Termination</h2>
       <p>You may delete your account at any time. We may suspend accounts that abuse quota or harm other users.</p>
+      <h2>Contact</h2>
+      <p>
+        Questions about these terms: <a href="mailto:hello@nodpilot.com">hello@nodpilot.com</a>.
+      </p>
     </Shell>
   )
 }

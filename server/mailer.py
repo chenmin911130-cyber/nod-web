@@ -8,6 +8,8 @@ from email.message import EmailMessage
 import httpx
 
 from server.settings import (
+    CF_ACCOUNT_ID,
+    CF_API_TOKEN,
     MAIL_FROM,
     PUBLIC_URL,
     RESEND_API_KEY,
@@ -50,10 +52,25 @@ def _send_resend(to: str, subject: str, html: str, text: str) -> bool:
     return True
 
 
+def _send_cloudflare(to: str, subject: str, html: str, text: str) -> bool:
+    if not CF_API_TOKEN or not CF_ACCOUNT_ID:
+        return False
+    r = httpx.post(
+        f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/email/sending/send",
+        headers={"Authorization": f"Bearer {CF_API_TOKEN}"},
+        json={"from": MAIL_FROM, "to": to, "subject": subject, "html": html, "text": text},
+        timeout=20,
+    )
+    r.raise_for_status()
+    return True
+
+
 def send_mail(to: str, subject: str, html: str, text: str) -> bool:
     try:
         if RESEND_API_KEY:
             return _send_resend(to, subject, html, text)
+        if CF_API_TOKEN and CF_ACCOUNT_ID:
+            return _send_cloudflare(to, subject, html, text)
         if SMTP_HOST:
             return _send_smtp(to, subject, html, text)
     except Exception:
