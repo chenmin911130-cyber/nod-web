@@ -13,12 +13,14 @@ from server.app import (
     ASSEMBLYAI_MODEL,
     WEB_DIST,
     Pipeline,
+    Session,
     _join_speech_frags,
     _meeting_should_hold,
     _same_speech_script,
     _stt_keyterms,
     assemblyai_ws_url,
     clean_transcript,
+    guard_question,
     model_allowed,
     speaker_from_turn,
     split_code_switched,
@@ -329,6 +331,80 @@ class RateLimitTableTests(unittest.TestCase):
             self.assertLessEqual(len(ratelimit._hits), before + 1)
 
 
+class InterviewQuestionGuardTests(unittest.TestCase):
+    def test_chinese_spoken_prompt_is_accepted(self):
+        self.assertEqual(guard_question("告诉我当下经济啊。", []), "accept")
+        self.assertEqual(guard_question("为什么", []), "accept")
+        self.assertEqual(guard_question("介绍一下你自己", []), "accept")
+        self.assertEqual(guard_question("What is OOP?", []), "accept")
+
+    def test_fillers_and_non_questions_still_rejected(self):
+        self.assertEqual(guard_question("嗯", []), "reject")
+        self.assertEqual(guard_question("okay", []), "reject")
+        self.assertEqual(guard_question("嗯，不行。", []), "reject")
+
+    def test_short_chinese_statement_waits_instead_of_dropping(self):
+        self.assertEqual(guard_question("当下经济情况", []), "wait")
+
+
+class InterviewWaitFlushTests(unittest.TestCase):
+    def _session(self) -> Session:
+        sess = Session.__new__(Session)
+        sess.cfg = {"stt": {}, "ui": {}, "llm": {}}
+        sess._workspace = "interview"
+        sess._listener = object()
+        sess._busy = False
+        sess._busy_lock = __import__("threading").Lock()
+        sess._pending = None
+        sess._pending_wait = (None, 0.0, None)
+        sess._pending_asks = []
+        sess._pending_speaker = None
+        sess._recent_finals = []
+        sess._follow_lang = None
+        sess._follow_switch_lang = None
+        sess._follow_switch_hits = 0
+        sess._last_voice_at = 0.0
+        sess._interview_wait_timer = None
+        sess.emit = mock.Mock()
+        sess.pipeline = mock.Mock()
+        sess.pipeline._qa_history = []
+        sess.pipeline._last_answer = ""
+        sess.pipeline._cancel = __import__("threading").Event()
+        sess.pipeline.process_text = mock.Mock()
+        return sess
+
+    def test_chinese_question_starts_answer(self):
+        sess = self._session()
+        sess._on_final("告诉我当下经济啊。", "zh")
+        for _ in range(40):
+            if sess.pipeline.process_text.called:
+                break
+            time.sleep(0.05)
+        sess.pipeline.process_text.assert_called_once()
+        args, _kwargs = sess.pipeline.process_text.call_args
+        self.assertEqual(args[0], "告诉我当下经济啊。")
+
+    def test_reject_clears_partial_so_ui_does_not_stick(self):
+        sess = self._session()
+        sess._on_final("嗯，不行。", "zh")
+        sess.emit.assert_any_call({"type": "partial", "text": ""})
+        sess.pipeline.process_text.assert_not_called()
+
+    def test_wait_flush_starts_answer(self):
+        sess = self._session()
+        sess._pending_wait = ("当下经济情况", time.time(), "zh")
+        sess._flush_interview_wait()
+        self.assertEqual(sess._pending_wait, (None, 0.0, None))
+        for _ in range(40):
+            if sess.pipeline.process_text.called:
+                break
+            time.sleep(0.05)
+        sess.pipeline.process_text.assert_called_once()
+        args, _kwargs = sess.pipeline.process_text.call_args
+        self.assertEqual(args[0], "当下经济情况")
+        self.assertEqual(args[1], "ask")
+
+
 class ListenAskRoutingTests(unittest.TestCase):
     def test_listen_ask_emits_question_so_cards_can_bind(self):
         events: list[dict] = []
@@ -351,6 +427,41 @@ class ListenAskRoutingTests(unittest.TestCase):
         question = next(e for e in events if e.get("type") == "question")
         self.assertTrue(question["id"])
         self.assertTrue(question["text"].startswith("[NOD_ASK"))
+
+    def test_transient_llm_error_retries_once(self):
+        events: list[dict] = []
+        pipe = Pipeline.__new__(Pipeline)
+        pipe.cfg = {"llm": {"provider": "deepseek", "model": "deepseek-v4-flash", "max_tokens": 80}}
+        pipe.emit = events.append
+        pipe._provider = "deepseek"
+        pipe._model = "deepseek-v4-flash"
+        pipe._qa_history = []
+        pipe._last_answer = ""
+        pipe._cancel = __import__("threading").Event()
+        pipe._gen_seq = 0
+        pipe.user_id = None
+        pipe.usage_session_id = None
+        pipe._heard_lang = None
+
+        class _Delta:
+            content = "Beijing is the capital."
+            reasoning_content = None
+
+        class _Choice:
+            delta = _Delta()
+
+        class _Chunk:
+            choices = [_Choice()]
+
+        pipe.client = mock.Mock()
+        pipe.client.chat.completions.create.side_effect = [
+            ConnectionError("network timeout"),
+            [_Chunk()],
+        ]
+        pipe.process_text("Where is the capital of China?", "ask")
+        self.assertEqual(pipe.client.chat.completions.create.call_count, 2)
+        self.assertTrue(any(e.get("type") == "chunk" and "Beijing" in (e.get("text") or "") for e in events))
+        self.assertTrue(any(e.get("type") == "done" and e.get("ok") is True for e in events))
 
     def test_cancelled_generation_still_emits_done(self):
         events: list[dict] = []

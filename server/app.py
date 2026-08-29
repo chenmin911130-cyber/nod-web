@@ -85,8 +85,8 @@ _STT_SOCIAL_WORDS = {
 GUARD_Q_WORDS = (
     "what", "why", "how", "when", "where", "which", "who",
     "can you", "could you", "tell me", "explain", "difference",
-    "define", "describe", "?", "吗", "么", "什么", "为什么", "怎么", "如何",
-    "介绍一下", "说说", "谈谈", "讲一下",
+    "define", "describe", "?", "？", "吗", "么", "呢", "什么", "为什么", "怎么", "如何",
+    "介绍一下", "说说", "谈谈", "讲一下", "告诉", "告诉我", "请问", "能否",
 )
 _STT_BOOST_FIXED = [
     "Python", "C#", "ASP.NET", "SQL", "database", "API", "frontend", "backend",
@@ -581,12 +581,32 @@ def matches_locked_speech(text: str, locked: str | None, heard: str | None = Non
     return guessed == locked
 
 
+def _guard_units(text: str) -> int:
+    """English letters count as 1; CJK syllables count as 2.
+
+    Interview questions in Chinese are often 4–8 characters. A raw
+    `len()` threshold of 18 (tuned for English) dropped them before
+    the model ever ran.
+    """
+    units = 0
+    for ch in text:
+        if "\u4e00" <= ch <= "\u9fff" or "\u3040" <= ch <= "\u30ff":
+            units += 2
+        elif ch.isalnum() or ch in "?？":
+            units += 1
+    return units
+
+
 def guard_question(text: str, recent_questions, last_answer=None) -> str:
     t = (text or "").strip()
     if not t:
         return "reject"
     low = t.lower()
-    if low in _STT_SOCIAL_WORDS or len(t) < 4:
+    has_q = any(w in low for w in GUARD_Q_WORDS)
+    units = _guard_units(t)
+    if low in _STT_SOCIAL_WORDS:
+        return "reject"
+    if not has_q and units < 4:
         return "reject"
     if last_answer and len(last_answer) > 12:
         a = last_answer.lower()
@@ -596,13 +616,31 @@ def guard_question(text: str, recent_questions, last_answer=None) -> str:
         for q in recent_questions[-2:]:
             if q and _ratio(low, q.lower()) > 0.9:
                 return "reject"
-    if any(w in low for w in GUARD_Q_WORDS) or len(t) >= 18:
+    if has_q or units >= 16:
         if t.endswith((",", "，", "、")) or low.endswith((" and", " or", " the", " a")):
             return "wait"
         return "accept"
-    if len(t) >= 10:
+    if units >= 8:
         return "wait"
     return "reject"
+
+
+_TRANSIENT_LLM = (
+    "timeout", "timed out", "connection", "network", "temporarily",
+    "503", "502", "429", "overloaded", "reset", "unavailable",
+    "网络", "开小差",
+)
+
+
+def _is_transient_llm_error(err: BaseException) -> bool:
+    text = str(err).lower()
+    return any(tok in text for tok in _TRANSIENT_LLM)
+
+
+def _friendly_gen_error(err: BaseException) -> str:
+    if _is_transient_llm_error(err):
+        return "Generation failed: network error. Please try again."
+    return f"Generation failed:{err}"
 
 
 def attachments_to_prompt(files) -> str:
@@ -999,41 +1037,56 @@ class Pipeline:
         elif mode == "translate":
             max_tokens = max(max_tokens, 800)
         answer = ""
-        try:
-            kwargs: dict[str, Any] = dict(
-                model=self._model,
-                messages=self._with_images(self._build_messages(t, mode), images),
-                max_tokens=max_tokens,
-                stream=True,
-            )
-            if not str(self._model).startswith(("o1", "o3")):
-                kwargs["temperature"] = llm.get("temperature", 0.5)
-            if self._provider == "deepseek":
-                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-            stream = self.client.chat.completions.create(**kwargs)
-            reasoning = ""
-            for ch in stream:
-                if seq != self._gen_seq or self._cancel.is_set():
-                    self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
-                    return
-                if not ch.choices:
-                    continue
-                delta = ch.choices[0].delta
-                piece = getattr(delta, "content", None) or ""
-                if piece:
-                    answer += piece
-                    self.emit({"type": "chunk", "id": qid, "text": piece})
-                think = getattr(delta, "reasoning_content", None) or ""
-                if think:
-                    reasoning += think
-            if not answer and reasoning:
-                answer = reasoning
-                self.emit({"type": "chunk", "id": qid, "text": reasoning})
-        except Exception as e:
-            if seq != self._gen_seq:
+        messages = self._with_images(self._build_messages(t, mode), images)
+        last_err: Exception | None = None
+        for attempt in range(2):
+            if seq != self._gen_seq or self._cancel.is_set():
                 self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
                 return
-            self.emit({"type": "error", "text": f"Generation failed:{e}"})
+            try:
+                kwargs: dict[str, Any] = dict(
+                    model=self._model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    stream=True,
+                )
+                if not str(self._model).startswith(("o1", "o3")):
+                    kwargs["temperature"] = llm.get("temperature", 0.5)
+                if self._provider == "deepseek":
+                    kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+                stream = self.client.chat.completions.create(**kwargs)
+                reasoning = ""
+                for ch in stream:
+                    if seq != self._gen_seq or self._cancel.is_set():
+                        self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
+                        return
+                    if not ch.choices:
+                        continue
+                    delta = ch.choices[0].delta
+                    piece = getattr(delta, "content", None) or ""
+                    if piece:
+                        answer += piece
+                        self.emit({"type": "chunk", "id": qid, "text": piece})
+                    think = getattr(delta, "reasoning_content", None) or ""
+                    if think:
+                        reasoning += think
+                if not answer and reasoning:
+                    answer = reasoning
+                    self.emit({"type": "chunk", "id": qid, "text": reasoning})
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                if seq != self._gen_seq:
+                    self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
+                    return
+                if attempt == 0 and not answer and _is_transient_llm_error(e):
+                    continue
+                self.emit({"type": "error", "text": _friendly_gen_error(e)})
+                self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
+                return
+        if last_err and not answer:
+            self.emit({"type": "error", "text": _friendly_gen_error(last_err)})
             self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
             return
         if seq != self._gen_seq or self._cancel.is_set():
@@ -1242,6 +1295,7 @@ class Session:
         self._pending_asks: list[tuple[str, str]] = []
         self._pending_wait: tuple[str | None, float, str | None] = (None, 0.0, None)
         self._meeting_flush_timer: threading.Timer | None = None
+        self._interview_wait_timer: threading.Timer | None = None
         self._meeting_lock = threading.Lock()
         self._follow_lang: str | None = None
         self._follow_switch_lang: str | None = None
@@ -1679,6 +1733,29 @@ class Session:
             except Exception:
                 pass
 
+    def _cancel_interview_wait_timer(self) -> None:
+        timer = getattr(self, "_interview_wait_timer", None)
+        self._interview_wait_timer = None
+        if timer:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+
+    def _schedule_interview_wait_flush(self) -> None:
+        self._cancel_interview_wait_timer()
+        timer = threading.Timer(1.2, self._flush_interview_wait)
+        timer.daemon = True
+        self._interview_wait_timer = timer
+        timer.start()
+
+    def _flush_interview_wait(self) -> None:
+        self._interview_wait_timer = None
+        ptxt, _pts, plang = self._pending_wait
+        self._pending_wait = (None, 0.0, None)
+        if ptxt and self._workspace == "interview":
+            self._start_interview_answer(ptxt, plang)
+
     def _flush_meeting_hold(self) -> None:
         with self._meeting_lock:
             self._cancel_meeting_timer()
@@ -1765,6 +1842,7 @@ class Session:
         # 丢弃 hold 住的半句会议内容（不 flush）：模式切换后 emit 的 question 事件
         # 会被前端路由到新 workspace（如 translate 下变成垃圾翻译对）
         self._cancel_meeting_timer()
+        self._cancel_interview_wait_timer()
         self._pending_wait = (None, 0.0, None)
         self._pending_speaker = None
         if mode == "translate" and prev != "translate":
@@ -1920,7 +1998,11 @@ class Session:
                 lst.stop()
             except Exception:
                 pass
-        self._flush_meeting_hold()
+        if self._workspace == "interview":
+            self._cancel_interview_wait_timer()
+            self._flush_interview_wait()
+        else:
+            self._flush_meeting_hold()
         self.emit({"type": "state", "state": "idle"})
         self.emit({"type": "status", "text": STATUS_READY})
         self._flush_cloud_archive(final=False)
@@ -2124,20 +2206,29 @@ class Session:
         if verdict == "wait":
             ptxt, pts, plang = self._pending_wait
             if ptxt and time.time() - pts < 2.0 and _same_speech_script(ptxt, cleaned):
+                self._cancel_interview_wait_timer()
                 self._pending_wait = (None, 0.0, None)
                 self._on_final(f"{ptxt} {cleaned}", plang or lang)
             elif ptxt:
                 leftover, leftover_lang = ptxt, plang
+                self._cancel_interview_wait_timer()
                 self._pending_wait = (None, 0.0, None)
                 self._on_final(leftover, leftover_lang)
                 self._on_final(cleaned, lang)
             else:
                 self._pending_wait = (cleaned, time.time(), lang)
+                self._schedule_interview_wait_flush()
                 self.emit({"type": "status", "text": STATUS_WAIT_MORE})
             return
+        self._cancel_interview_wait_timer()
         self._pending_wait = (None, 0.0, None)
         if verdict == "reject":
+            self.emit({"type": "partial", "text": ""})
             return
+        self._start_interview_answer(cleaned, lang)
+
+    def _start_interview_answer(self, cleaned: str, lang: str | None) -> None:
+        heard = heard_lang_from_text(cleaned, lang)
         self._remember_final(cleaned)
         self._maybe_follow_speech(cleaned, heard)
         if not self._claim_busy():
