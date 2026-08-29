@@ -18,6 +18,7 @@ from server.app import (
     _meeting_should_hold,
     _same_speech_script,
     _stt_keyterms,
+    _stt_prompt,
     assemblyai_ws_url,
     clean_transcript,
     guard_question,
@@ -338,6 +339,23 @@ class InterviewQuestionGuardTests(unittest.TestCase):
         self.assertEqual(guard_question("介绍一下你自己", []), "accept")
         self.assertEqual(guard_question("What is OOP?", []), "accept")
 
+    def test_short_chinese_wh_and_a_not_a_are_accepted(self):
+        self.assertEqual(guard_question("你是谁", []), "accept")
+        self.assertEqual(guard_question("啥意思", []), "accept")
+        self.assertEqual(guard_question("谁负责", []), "accept")
+        self.assertEqual(guard_question("是不是", []), "accept")
+        self.assertEqual(guard_question("有没有", []), "accept")
+        self.assertEqual(guard_question("多少钱", []), "accept")
+
+    def test_traditional_chinese_question_cues_are_accepted(self):
+        self.assertEqual(guard_question("為什麼", []), "accept")
+        self.assertEqual(guard_question("加班嗎", []), "accept")
+        self.assertEqual(guard_question("你是誰", []), "accept")
+        self.assertEqual(guard_question("告訴我當下經濟啊。", []), "accept")
+
+    def test_japanese_question_cue_is_accepted(self):
+        self.assertEqual(guard_question("なぜ", []), "accept")
+
     def test_fillers_and_non_questions_still_rejected(self):
         self.assertEqual(guard_question("嗯", []), "reject")
         self.assertEqual(guard_question("okay", []), "reject")
@@ -345,6 +363,26 @@ class InterviewQuestionGuardTests(unittest.TestCase):
 
     def test_short_chinese_statement_waits_instead_of_dropping(self):
         self.assertEqual(guard_question("当下经济情况", []), "wait")
+
+    def test_restated_chinese_question_in_answer_is_not_echo(self):
+        # Answers often repeat the question. 15 Han chars is a whole prompt,
+        # not the 15-letter English phrase the old gate was tuned for.
+        question = "请你详细说明一下当前的经济形势"
+        answer = "好的，请你详细说明一下当前的经济形势，我认为增长放缓，出口还行。"
+        self.assertEqual(guard_question(question, [], answer), "accept")
+
+    def test_english_answer_substring_is_still_echo(self):
+        spoken = "what is your experience"
+        answer = "Sure. what is your experience — I would start with Python and APIs."
+        self.assertEqual(guard_question(spoken, [], answer), "reject")
+
+    def test_subtitle_word_is_not_a_hallucination(self):
+        text, reason = clean_transcript("这个片子没有字幕")
+        self.assertEqual(text, "这个片子没有字幕")
+        self.assertEqual(reason, "")
+        dropped, why = clean_transcript("謝謝收看")
+        self.assertEqual(dropped, "")
+        self.assertEqual(why, "hallucination")
 
 
 class InterviewWaitFlushTests(unittest.TestCase):
@@ -365,6 +403,8 @@ class InterviewWaitFlushTests(unittest.TestCase):
         sess._follow_switch_hits = 0
         sess._last_voice_at = 0.0
         sess._interview_wait_timer = None
+        sess._meeting_flush_timer = None
+        sess._meeting_lock = __import__("threading").Lock()
         sess.emit = mock.Mock()
         sess.pipeline = mock.Mock()
         sess.pipeline._qa_history = []
@@ -390,6 +430,18 @@ class InterviewWaitFlushTests(unittest.TestCase):
         sess.emit.assert_any_call({"type": "partial", "text": ""})
         sess.pipeline.process_text.assert_not_called()
 
+    def test_social_filler_clears_partial_before_guard(self):
+        sess = self._session()
+        sess._on_final("嗯", "zh")
+        sess.emit.assert_any_call({"type": "partial", "text": ""})
+        sess.pipeline.process_text.assert_not_called()
+
+    def test_wait_join_does_not_insert_space_between_chinese(self):
+        sess = self._session()
+        sess._pending_wait = ("当下", time.time(), "zh")
+        sess._on_final("经济情况", "zh")
+        self.assertEqual(sess._pending_wait[0], "当下经济情况")
+
     def test_wait_flush_starts_answer(self):
         sess = self._session()
         sess._pending_wait = ("当下经济情况", time.time(), "zh")
@@ -403,6 +455,22 @@ class InterviewWaitFlushTests(unittest.TestCase):
         args, _kwargs = sess.pipeline.process_text.call_args
         self.assertEqual(args[0], "当下经济情况")
         self.assertEqual(args[1], "ask")
+
+    def test_meeting_hold_flush_does_not_emit_after_leaving_meeting(self):
+        sess = self._session()
+        sess._workspace = "translate"
+        sess._pending_wait = ("那个", time.time(), "zh")
+        sess._emit_meeting_line = mock.Mock()
+        sess._flush_meeting_hold()
+        sess._emit_meeting_line.assert_not_called()
+        self.assertEqual(sess._pending_wait, (None, 0.0, None))
+
+    def test_translate_stt_prompt_is_not_interview(self):
+        sess = self._session()
+        sess._workspace = "translate"
+        sess.cfg = {"stt": {"listen_scene": "interview"}, "ui": {}, "llm": {}}
+        prompt = _stt_prompt(sess._stt_cfg())
+        self.assertNotIn("job interview", prompt.lower())
 
 
 class ListenAskRoutingTests(unittest.TestCase):
