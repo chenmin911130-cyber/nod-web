@@ -71,7 +71,8 @@ PROVIDER_KEY = {"deepseek": "DEEPSEEK_API_KEY", "openrouter": "OPENROUTER_API_KE
 
 _STT_HALLUCINATIONS = (
     "thank you for watching", "thanks for watching", "thanks for listening",
-    "please subscribe", "please like", "like and subscribe", "字幕", "謝謝收看",
+    "please subscribe", "please like", "like and subscribe",
+    "谢谢收看", "謝謝收看", "字幕志愿者", "字幕志願者", "subtitles by", "字幕 by",
 )
 _STT_STATUS_WORDS = (
     "checking question", "answer ready", "calibrating microphone",
@@ -85,8 +86,16 @@ _STT_SOCIAL_WORDS = {
 GUARD_Q_WORDS = (
     "what", "why", "how", "when", "where", "which", "who",
     "can you", "could you", "tell me", "explain", "difference",
-    "define", "describe", "?", "？", "吗", "么", "呢", "什么", "为什么", "怎么", "如何",
-    "介绍一下", "说说", "谈谈", "讲一下", "告诉", "告诉我", "请问", "能否",
+    "define", "describe", "?", "？",
+    "吗", "嗎", "么", "麼", "呢", "嘛",
+    "什么", "什麼", "为什么", "為什麼", "怎么", "怎麼", "如何", "为何", "為何",
+    "谁", "誰", "哪", "哪儿", "哪兒", "哪里", "哪裡", "哪个", "哪個",
+    "多少", "几点", "幾點", "多大", "啥",
+    "介绍一下", "介紹一下", "说说", "說說", "谈谈", "談談", "讲一下", "講一下",
+    "告诉", "告訴", "告诉我", "告訴我", "请问", "請問", "能否",
+    "是不是", "好不好", "对不对", "對不對", "行不行",
+    "能不能", "会不会", "會不會", "有没有", "有沒有", "可不可以",
+    "なぜ", "どうして", "ですか", "ますか", "でしょうか", "教えて",
 )
 _STT_BOOST_FIXED = [
     "Python", "C#", "ASP.NET", "SQL", "database", "API", "frontend", "backend",
@@ -398,6 +407,24 @@ def _same_speech_script(left: str, right: str) -> bool:
     return not a or not b or a == b
 
 
+def _is_answer_echo(text: str, last_answer: str | None) -> bool:
+    """True when STT is hearing the model answer, not a new question.
+
+    The substring check is Latin-only. Chinese answers routinely restate
+    the question, and 15 Han characters is a complete prompt — the same
+    raw length that used to mean a short English phrase.
+    """
+    if not last_answer or len(last_answer) <= 12:
+        return False
+    low = (text or "").strip().lower()
+    a = last_answer.lower()
+    if _ratio(low, a) > 0.7:
+        return True
+    if _speech_script(text) in ("zh", "ja"):
+        return False
+    return len(low) > 15 and low in a
+
+
 def heard_lang_from_text(text: str, heard: str | None = None) -> str | None:
     """Prefer the script on the page over AssemblyAI's language tag."""
     script = _speech_script(text)
@@ -512,10 +539,8 @@ def clean_transcript(text: str, recent_finals=None, last_answer=None, keep_fille
         for prev in recent_finals[-2:]:
             if prev and _ratio(low, prev.lower()) > 0.85:
                 return "", "duplicate"
-    if last_answer and len(last_answer) > 12:
-        a = last_answer.lower()
-        if _ratio(low, a) > 0.7 or (len(low) > 15 and low in a):
-            return "", "echo"
+    if _is_answer_echo(t, last_answer):
+        return "", "echo"
     return t, ""
 
 
@@ -608,10 +633,8 @@ def guard_question(text: str, recent_questions, last_answer=None) -> str:
         return "reject"
     if not has_q and units < 4:
         return "reject"
-    if last_answer and len(last_answer) > 12:
-        a = last_answer.lower()
-        if _ratio(low, a) > 0.7 or (len(low) > 15 and low in a):
-            return "reject"
+    if _is_answer_echo(t, last_answer):
+        return "reject"
     if recent_questions:
         for q in recent_questions[-2:]:
             if q and _ratio(low, q.lower()) > 0.9:
@@ -1639,6 +1662,10 @@ class Session:
         scene = str(stt.get("listen_scene") or "").strip().lower()
         if scene not in ("meeting", "lecture", "interview"):
             scene = "interview" if self._workspace == "interview" else "meeting"
+        # Translate inherits the last listen scene from the UI. Interview
+        # Q&A prompt would bias captions toward English interview turns.
+        if self._workspace == "translate" and scene == "interview":
+            scene = "meeting"
         stt["listen_scene"] = scene
         if self._workspace == "meeting":
             stt["max_turn_silence"] = "1200"
@@ -1760,10 +1787,12 @@ class Session:
         with self._meeting_lock:
             self._cancel_meeting_timer()
             ptxt, _pts, plang = self._pending_wait
+            speaker = self._pending_speaker
             self._pending_wait = (None, 0.0, None)
-        if ptxt:
-            self._emit_meeting_line(ptxt, plang, self._pending_speaker)
             self._pending_speaker = None
+            workspace = self._workspace
+        if ptxt and workspace == "meeting":
+            self._emit_meeting_line(ptxt, plang, speaker)
 
     def _emit_meeting_line(self, cleaned: str, lang: str | None, speaker: str | None = None) -> None:
         heard = heard_lang_from_text(cleaned, lang)
@@ -1841,10 +1870,11 @@ class Session:
         self._pending_asks = []
         # 丢弃 hold 住的半句会议内容（不 flush）：模式切换后 emit 的 question 事件
         # 会被前端路由到新 workspace（如 translate 下变成垃圾翻译对）
-        self._cancel_meeting_timer()
-        self._cancel_interview_wait_timer()
-        self._pending_wait = (None, 0.0, None)
-        self._pending_speaker = None
+        with self._meeting_lock:
+            self._cancel_meeting_timer()
+            self._cancel_interview_wait_timer()
+            self._pending_wait = (None, 0.0, None)
+            self._pending_speaker = None
         if mode == "translate" and prev != "translate":
             self.cancel_generate()
         if self._listener and (prev_lang != self._effective_stt_lang() or prev_url != assemblyai_ws_url(self._stt_cfg())):
@@ -2173,6 +2203,7 @@ class Session:
             keep_fillers=self._workspace in ("meeting", "translate"),
         )
         if not cleaned:
+            self.emit({"type": "partial", "text": ""})
             return
         if not self._speech_allowed(cleaned, lang):
             self.emit({"type": "partial", "text": ""})
@@ -2180,6 +2211,7 @@ class Session:
         now = time.time()
         for t, ts in self._recent_finals:
             if now - ts < 5.0 and _ratio(cleaned.lower(), t.lower()) > 0.85:
+                self.emit({"type": "partial", "text": ""})
                 return
         heard = heard_lang_from_text(cleaned, lang)
         if self._workspace == "translate":
@@ -2208,7 +2240,7 @@ class Session:
             if ptxt and time.time() - pts < 2.0 and _same_speech_script(ptxt, cleaned):
                 self._cancel_interview_wait_timer()
                 self._pending_wait = (None, 0.0, None)
-                self._on_final(f"{ptxt} {cleaned}", plang or lang)
+                self._on_final(_join_speech_frags(ptxt, cleaned), plang or lang)
             elif ptxt:
                 leftover, leftover_lang = ptxt, plang
                 self._cancel_interview_wait_timer()
