@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlencode, urlparse
 
+import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -803,7 +804,11 @@ class Pipeline:
     def _make_client(self) -> OpenAI:
         endpoint = PROVIDER_ENDPOINTS.get(self._provider, PROVIDER_ENDPOINTS["deepseek"])
         key = (self._keys.get(PROVIDER_KEY.get(self._provider, "DEEPSEEK_API_KEY"), "") or "").strip() or "missing"
-        return OpenAI(api_key=key, base_url=endpoint)
+        # Without an explicit timeout the SDK waits up to 600s with 2 built-in
+        # retries; a hung upstream held `busy` for many minutes and every ask /
+        # translate queued behind it. process_text already retries transients.
+        timeout = httpx.Timeout(90.0, connect=10.0, read=90.0)
+        return OpenAI(api_key=key, base_url=endpoint, timeout=timeout, max_retries=0)
 
     def set_keys(self, keys: dict[str, str]) -> None:
         self._keys.update({k: v for k, v in keys.items() if v})
@@ -2124,6 +2129,15 @@ class Session:
         finally:
             self._release_busy()
             self.emit({"type": "state", "state": "idle"})
+            self._drain_pending_ask()
+
+    def _drain_pending_ask(self) -> None:
+        # Summarize/translate queued while busy must run after the current
+        # generation, no matter which path (ask, manual, interview voice)
+        # held the busy flag — otherwise they sit until the next question.
+        if self._pending_asks:
+            nxt, md = self._pending_asks.pop(0)
+            self.ask(nxt, None, md)
 
     def ask(self, text, files=None, mode="ask") -> None:
         extra = attachments_to_prompt(files)
@@ -2168,9 +2182,7 @@ class Session:
                 self._release_busy()
                 listening = self._listener is not None
                 self.emit({"type": "state", "state": "listen" if listening else "idle"})
-                if self._pending_asks:
-                    nxt, md = self._pending_asks.pop(0)
-                    self.ask(nxt, None, md)
+                self._drain_pending_ask()
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -2282,6 +2294,8 @@ class Session:
                 if pending:
                     ptxt, plang = pending
                     self._on_final(ptxt, plang)
+                else:
+                    self._drain_pending_ask()
 
         threading.Thread(target=work, daemon=True).start()
 
