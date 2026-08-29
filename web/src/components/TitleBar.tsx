@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { AudioSource, Lang, PairLang, WorkspaceMode } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import { isWeb } from '../platform'
@@ -142,6 +142,18 @@ export default function TitleBar(props: Props) {
     setMenuOpen(false)
     setLangOpen(false)
   }, [mode])
+
+  useLayoutEffect(() => {
+    if (!langOpen) return
+    const menu = langRef.current?.querySelector('.lang-menu')
+    if (!(menu instanceof HTMLElement)) return
+    const pad = 10
+    const r = menu.getBoundingClientRect()
+    let dx = 0
+    if (r.left < pad) dx = pad - r.left
+    else if (r.right > window.innerWidth - pad) dx = window.innerWidth - pad - r.right
+    menu.style.transform = dx ? `translateX(${dx}px)` : ''
+  }, [langOpen])
 
   return (
     <div className="titlebar">

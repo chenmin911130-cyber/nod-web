@@ -3129,6 +3129,7 @@ html.nod-web .ov-root {
   top: calc(100% + 8px);
   right: 0;
   width: 188px;
+  max-width: calc(100vw - 20px);
   max-height: min(360px, 70vh);
   overflow: auto;
   padding: 6px;
@@ -3581,6 +3582,19 @@ a.tb-menu-action {
     height: 28px;
     min-width: 68px;
     font-size: 12px;
+  }
+
+  .lang-menu {
+    left: 0;
+    right: auto;
+    width: min(220px, calc(100vw - 20px));
+    max-height: min(320px, 55vh);
+  }
+
+  .listen-lang-menu {
+    left: 0;
+    right: auto;
+    width: min(200px, calc(100vw - 20px));
   }
 
   .tb-menu {
@@ -4995,28 +5009,75 @@ a.tb-menu-action {
   }
 }
 
-.pet-timer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-  max-width: min(220px, 42vw);
-  padding: 4px 10px 4px 5px;
-  border: 1px solid rgba(34, 211, 238, 0.28);
-  border-radius: 999px;
-  background: rgba(8, 18, 34, 0.72);
+.pet-track {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 88px;
+  height: 44px;
   pointer-events: none;
+  overflow: hidden;
   animation: pet-in 0.28s ease-out;
 }
 
-.pet-timer.bye {
+.pet-track.bye {
   animation: pet-out 0.28s ease-in forwards;
 }
 
+.pet-timer {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(220px, 70%);
+  padding: 3px 12px 3px 3px;
+  border: 1px solid rgba(34, 211, 238, 0.28);
+  border-radius: 999px;
+  background: rgba(8, 14, 24, 0.78);
+}
+
+.pet-track.walk .pet-timer {
+  animation: pet-patrol 14s ease-in-out infinite;
+}
+
 .pet-mark {
+  position: relative;
   display: block;
   flex-shrink: 0;
-  animation: pet-bob 1.6s ease-in-out infinite;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 1.5px solid rgba(34, 211, 238, 0.55);
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.22);
+  background: #080b12;
+}
+
+.pet-track.walk .pet-mark {
+  animation: pet-face 14s ease-in-out infinite;
+}
+
+.pet-mark::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: linear-gradient(180deg, rgba(8, 14, 28, 0.06), rgba(8, 14, 28, 0.28));
+  pointer-events: none;
+}
+
+.pet-mark-photo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 42%;
+  filter: saturate(0.86) brightness(0.92);
+}
+
+.pet-track.walk .pet-mark-photo {
+  animation: pet-step 0.42s ease-in-out infinite;
 }
 
 .pet-timer-copy {
@@ -5053,18 +5114,40 @@ a.tb-menu-action {
   to { opacity: 0; transform: translateY(-6px); }
 }
 
-@keyframes pet-bob {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-2px); }
+@keyframes pet-patrol {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(var(--pet-travel, 80px)); }
+}
+
+@keyframes pet-face {
+  0%, 49.9% { transform: scaleX(1); }
+  50%, 99.9% { transform: scaleX(-1); }
+}
+
+@keyframes pet-step {
+  0%, 100% { transform: translateY(0) rotate(-3deg); }
+  50% { transform: translateY(-3px) rotate(3deg); }
 }
 
 @media (max-width: 760px) {
+  .pet-track {
+    min-width: 64px;
+  }
+
   .pet-timer {
-    max-width: min(168px, 48vw);
-    padding: 3px 8px 3px 4px;
+    max-width: min(156px, 72%);
+    padding: 3px 8px 3px 3px;
   }
 
   .pet-timer-line {
     font-size: 11px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pet-track.walk .pet-timer,
+  .pet-track.walk .pet-mark,
+  .pet-track.walk .pet-mark-photo {
+    animation: none;
   }
 }

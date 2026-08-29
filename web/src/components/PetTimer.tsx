@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 
 const HELLO = "I'm listening."
 const BYE = "I'll be here."
@@ -14,26 +14,19 @@ function formatClock(ms: number): string {
 
 function PetMark() {
   return (
-    <svg className="pet-mark" viewBox="0 0 64 64" width="28" height="28" aria-hidden="true">
-      <ellipse cx="32" cy="40" rx="18" ry="16" fill="#1a334d" />
-      <path d="M18 28c-2-10 6-16 10-8" fill="#1a334d" />
-      <path d="M46 28c2-10-6-16-10-8" fill="#1a334d" />
-      <path d="M18 28c-2-10 6-16 10-8" fill="none" stroke="#22d3ee" strokeWidth="1.4" />
-      <path d="M46 28c2-10-6-16-10-8" fill="none" stroke="#22d3ee" strokeWidth="1.4" />
-      <ellipse cx="32" cy="40" rx="18" ry="16" fill="none" stroke="#22d3ee" strokeWidth="1.6" />
-      <circle cx="25" cy="38" r="2.2" fill="#f2f6ff" />
-      <circle cx="39" cy="38" r="2.2" fill="#f2f6ff" />
-      <circle cx="25.4" cy="37.6" r="0.7" fill="#0c1a2e" />
-      <circle cx="39.4" cy="37.6" r="0.7" fill="#0c1a2e" />
-      <path d="M29 45c2 2.4 4 2.4 6 0" stroke="#22d3ee" strokeWidth="1.6" strokeLinecap="round" fill="none" />
-    </svg>
+    <span className="pet-mark" aria-hidden="true">
+      <img className="pet-mark-photo" src="/pet-shiba.jpg" alt="" width={36} height={36} />
+    </span>
   )
 }
 
 export default function PetTimer({ listening }: { listening: boolean }) {
   const [phase, setPhase] = useState<'hidden' | 'hello' | 'live' | 'bye'>('hidden')
   const [ms, setMs] = useState(0)
+  const [travel, setTravel] = useState(0)
   const started = useRef(0)
+  const trackRef = useRef<HTMLDivElement>(null)
+  const chipRef = useRef<HTMLDivElement>(null)
   const visible = phase !== 'hidden'
 
   useEffect(() => {
@@ -55,17 +48,44 @@ export default function PetTimer({ listening }: { listening: boolean }) {
     return () => window.clearInterval(id)
   }, [listening])
 
+  useLayoutEffect(() => {
+    if (!visible) return
+    const measure = () => {
+      const track = trackRef.current
+      const chip = chipRef.current
+      if (!track || !chip) return
+      setTravel(Math.max(0, track.clientWidth - chip.offsetWidth))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    if (trackRef.current) ro.observe(trackRef.current)
+    if (chipRef.current) ro.observe(chipRef.current)
+    return () => ro.disconnect()
+  }, [visible, phase])
+
   if (!visible) return null
 
   const line = phase === 'bye' ? BYE : HELLO
   const clock = formatClock(ms)
+  const walking = phase !== 'bye' && travel > 24
 
   return (
-    <div className={`pet-timer${phase === 'bye' ? ' bye' : ''}`} role="status" aria-live="polite">
-      <PetMark />
-      <div className="pet-timer-copy">
-        <span className="pet-timer-line">{line}</span>
-        {phase !== 'hello' && <span className="pet-timer-clock">{clock}</span>}
+    <div
+      ref={trackRef}
+      className={`pet-track${phase === 'bye' ? ' bye' : ''}${walking ? ' walk' : ''}`}
+      role="status"
+      aria-live="polite"
+    >
+      <div
+        ref={chipRef}
+        className="pet-timer"
+        style={{ '--pet-travel': `${travel}px` } as CSSProperties}
+      >
+        <PetMark />
+        <div className="pet-timer-copy">
+          <span className="pet-timer-line">{line}</span>
+          {phase !== 'hello' && <span className="pet-timer-clock">{clock}</span>}
+        </div>
       </div>
     </div>
   )
