@@ -30,6 +30,7 @@ interface Props {
   busy: boolean
   summarizing?: boolean
   notesDefaultOpen?: boolean
+  notesReveal?: number
   qa?: boolean
   qaSlot?: ReactNode
   onScene: (scene: ListenScene) => void
@@ -478,7 +479,7 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
 export default function ListenPane(props: Props) {
   const [input, setInput] = useState('')
   const [notesOpen, setNotesOpen] = useState(Boolean(props.notesDefaultOpen))
-  const [mobilePane, setMobilePane] = useState<'live' | 'notes'>('live')
+  const [mobilePane, setMobilePane] = useState<'live' | 'notes'>(props.notesDefaultOpen ? 'notes' : 'live')
   const [notesW, setNotesW] = useState(() => readNotesW(props.scene))
   const [dragging, setDragging] = useState(false)
   const stacked = useStackedLayout()
@@ -498,10 +499,10 @@ export default function ListenPane(props: Props) {
   }, [props.scene])
 
   useEffect(() => {
-    if (!props.notesDefaultOpen || !props.notesRaw.trim()) return
+    if (!props.notesDefaultOpen) return
     setNotesOpen(true)
     setMobilePane('notes')
-  }, [props.notesDefaultOpen, props.notesRaw])
+  }, [props.notesDefaultOpen, props.notesReveal])
 
   useEffect(() => {
     const el = leftRef.current

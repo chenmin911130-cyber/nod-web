@@ -24,7 +24,7 @@ npx cap open ios
 1. In Xcode, select the **App** target → **Signing & Capabilities**. Choose your Team. Do the same for **WatchApp**.
 2. Plug in an iPhone that is paired with an Apple Watch (watchOS 9+). Run the **App** scheme — the Watch app is embedded and installs with it.
 3. Open Nod on the iPhone once and sign in. Confirm the first microphone consent on the phone (same copy as the website).
-4. On the Watch, allow **Microphone**, then tap **Listen**. The Watch captures audio. If the iPhone is nearby, PCM streams over and live captions appear in the phone app. If the phone is out of range, the Watch keeps recording and flushes the leftover audio when you tap Stop. After **Stop**, the session is saved to History and Nod writes the meeting or lecture report on the iPhone. Open Nod on the phone — the Notes pane should already be open. This is not email or iMessage.
+4. On the Watch, allow **Microphone**, then tap **Listen**. The Watch captures audio. If the iPhone is nearby, PCM streams over and live captions appear in the phone app. If the phone is out of range, the Watch keeps recording and flushes the leftover audio when you tap Stop. After **Stop**, the session is saved to History and Nod writes the meeting or lecture report on the iPhone. Unlock the phone and open Nod — the Notes tab is already showing the report, including after the app was killed. This is not email or iMessage.
 5. iPhone lock-screen listening (phone mic) still works from the phone UI.
 
 Safari / Google sign-in returns through `nodpilot://auth?token=…`. Confirm that URL scheme is listed under **Info → URL Types** (`nodpilot`). Email sign-in stays inside the app.

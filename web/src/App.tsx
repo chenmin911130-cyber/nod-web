@@ -18,6 +18,17 @@ import { api as authApi, fetchMe } from './auth'
 import { isNativeApp, nativeGo } from './native'
 import { installWatchRemote, pushWatchStatus } from './watch'
 import {
+  clearWatchReport,
+  markWatchReport,
+  pickWatchReportSession,
+  readWatchReport,
+  readWatchReportSnapshot,
+  shouldRestoreWatchReport,
+  snapshotFromWorkspace,
+  snapshotToHistoryItems,
+  writeWatchReportSnapshot,
+} from './watchReport'
+import {
   askContext,
   askPrompt,
   bindSpeakerName,
@@ -856,9 +867,21 @@ export default function App() {
   stateRef.current = state
   const listenWanted = useRef(false)
   const [savePrompt, setSavePrompt] = useState(false)
+  const watchAutoNotes = useRef(false)
+  const watchRestoreTried = useRef(false)
+  const [watchReportOpen, setWatchReportOpen] = useState(false)
+  const [watchReportReveal, setWatchReportReveal] = useState(0)
+  const showWatchReport = () => {
+    setWatchReportOpen(true)
+    setWatchReportReveal((n) => n + 1)
+  }
   const startListen = () => {
     listenWanted.current = true
     setSavePrompt(false)
+    if (!watchAutoNotes.current) {
+      clearWatchReport()
+      setWatchReportOpen(false)
+    }
     window.api.send({ type: 'start_listen' })
   }
   const stopListen = () => {
@@ -874,8 +897,6 @@ export default function App() {
   const generateNotesRef = useRef<() => void>(() => {})
   const exportAfterNotes = useRef(false)
   const autoNotesTried = useRef(false)
-  const watchAutoNotes = useRef(false)
-  const [watchReportOpen, setWatchReportOpen] = useState(false)
   const tickRef = useRef(0)
   const [consent, setConsent] = useState<boolean | null>(demoScene ? true : null)
   const consentRef = useRef<boolean | null>(demoScene ? true : null)
@@ -973,6 +994,8 @@ export default function App() {
     return installWatchRemote({
       onStart: () => {
         watchAutoNotes.current = true
+        watchRestoreTried.current = false
+        clearWatchReport()
         setWatchReportOpen(false)
         guardMic(startListen)
       },
@@ -1680,8 +1703,101 @@ export default function App() {
     watchAutoNotes.current = false
     if (!state.meetingLines.length) return
     generateNotesRef.current()
-    setWatchReportOpen(true)
+    const snap = snapshotFromWorkspace({
+      mode: state.workspaceMode,
+      scene: state.listenScene,
+      notes: state.notesRaw,
+      lines: state.meetingLines,
+    })
+    if (!snap) return
+    markWatchReport()
+    writeWatchReportSnapshot(snap)
+    showWatchReport()
   }, [state.busy, state.meetingLines.length, state.run, state.workspaceMode])
+
+  useEffect(() => {
+    if (!isNativeApp() || !readWatchReport()) return
+    const snap = snapshotFromWorkspace({
+      mode: state.workspaceMode,
+      scene: state.listenScene,
+      notes: state.notesRaw,
+      lines: state.meetingLines,
+    })
+    if (snap) writeWatchReportSnapshot(snap)
+  }, [state.listenScene, state.meetingLines, state.notesRaw, state.workspaceMode])
+
+  useEffect(() => {
+    if (!isNativeApp()) return
+    const mark = readWatchReport()
+    if (!mark) return
+    showWatchReport()
+    const s = stateRef.current
+    if (
+      !shouldRestoreWatchReport({
+        mark,
+        listening: s.run === 'listen' || s.run === 'record' || listenWanted.current,
+        busy: s.busy,
+        hasWorkspace: s.meetingLines.length > 0 || Boolean(s.notesRaw.trim()),
+      })
+    ) {
+      return
+    }
+    if (watchRestoreTried.current) return
+    watchRestoreTried.current = true
+    const snap = readWatchReportSnapshot()
+    if (snap && (snap.notes.trim() || snap.lines.length)) {
+      restoreHistory({
+        id: 'watch-report',
+        mode: snap.mode,
+        scene: snap.scene,
+        title: 'Watch report',
+        started_at: null,
+        stt_seconds: 0,
+        items: snapshotToHistoryItems(snap),
+      })
+      return
+    }
+    let gone = false
+    void authApi<{ sessions: HistorySession[] }>('/api/account/history')
+      .then((out) => {
+        if (gone) return
+        const session = pickWatchReportSession(out.sessions || [])
+        if (!session) return
+        restoreHistory(session)
+      })
+      .catch(() => undefined)
+    return () => {
+      gone = true
+    }
+  }, [restoreHistory])
+
+  useEffect(() => {
+    if (!isNativeApp()) return
+    const reveal = () => {
+      if (readWatchReport()) showWatchReport()
+    }
+    const onVis = () => {
+      if (document.visibilityState === 'visible') reveal()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('pageshow', reveal)
+    let removeApp: (() => void) | undefined
+    void import('@capacitor/app').then(({ App }) => {
+      const pending = App.addListener('appStateChange', ({ isActive }) => {
+        if (isActive) reveal()
+      })
+      void pending.then((handle) => {
+        removeApp = () => {
+          void handle.remove()
+        }
+      })
+    }).catch(() => undefined)
+    return () => {
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('pageshow', reveal)
+      removeApp?.()
+    }
+  }, [])
 
   const handleSummary = useCallback(() => {
     generateNotes()
@@ -2093,6 +2209,7 @@ export default function App() {
             busy={state.busy}
             summarizing={Boolean(state.notesAskId)}
             notesDefaultOpen={demoScene === 'meeting-notes' || watchReportOpen}
+            notesReveal={watchReportReveal}
             qa={state.workspaceMode === 'interview'}
             qaSlot={
               <AnswerPane
