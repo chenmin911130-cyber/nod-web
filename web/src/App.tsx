@@ -15,6 +15,7 @@ import StatusToast from './components/StatusToast'
 import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
 import { api as authApi, fetchMe } from './auth'
+import { nativeGo } from './native'
 import {
   askContext,
   askPrompt,
@@ -530,7 +531,7 @@ function reducer(state: AppState, action: Action): AppState {
         }
         case 'auth_required':
           if (location.hostname !== '127.0.0.1' && location.hostname !== 'localhost') {
-            window.location.replace('/login?next=/app')
+            nativeGo('/login?next=/app', true)
           }
           return state
         case 'quota':

@@ -1,16 +1,18 @@
 import { createRoot } from 'react-dom/client'
 import { ensureLocalGuest, fetchMe, isLocalHost } from './auth'
+import { installNativeShell, isNativeApp, nativeGo } from './native'
 
 const rootEl = document.getElementById('root')
 
 async function boot() {
   if (!rootEl) return
+  installNativeShell()
   const path = window.location.pathname + window.location.search
   let me = await fetchMe()
   if (isLocalHost()) me = (await ensureLocalGuest()) || me
-  else if (!me) me = await ensureLocalGuest()
+  else if (!me && !isNativeApp()) me = await ensureLocalGuest()
   if (!me) {
-    window.location.replace(`/login?next=${encodeURIComponent(path || '/app')}`)
+    nativeGo(`/login?next=${encodeURIComponent(isNativeApp() ? '/app' : path || '/app')}`, true)
     return
   }
   document.documentElement.classList.add('nod-web')

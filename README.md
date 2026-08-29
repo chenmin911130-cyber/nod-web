@@ -17,6 +17,8 @@ cd web && npm install && npm run build && cd ..
 
 打开 http://127.0.0.1:9320
 
+iOS App（Capacitor 套现有网页）见 **[ios/README.md](ios/README.md)**。需要 Mac + Xcode。
+
 开发热更新：先起后端 `9320`，再 `cd web && npm run dev`（Vite `5174`，会把 `/ws` `/api` 代理到后端）。
 
 Key 读取顺序：环境变量 → Hermes `.env` → `%APPDATA%\Nod\secrets.json`。也可以在页面里填写。

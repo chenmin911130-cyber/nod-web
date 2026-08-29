@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -29,6 +29,7 @@ from starlette.concurrency import run_in_threadpool
 
 from server.admin import router as admin_router
 from server.commerce import router as commerce_router
+from server.cors import cors_origins
 from server.db import init_db
 from server.headers import CloudflareOriginMiddleware, HostLockMiddleware, SecurityHeadersMiddleware
 from server.logging_setup import backup_now, setup_logging
@@ -2338,21 +2339,9 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Nod Web", lifespan=lifespan)
-_origins = [
-    "http://127.0.0.1:5174",
-    "http://localhost:5174",
-    "http://127.0.0.1:9320",
-    "http://localhost:9320",
-]
-if PUBLIC_URL:
-    _origin = PUBLIC_URL.rstrip("/")
-    _origins.append(_origin)
-    _host = urlparse(_origin).hostname or ""
-    if _host.count(".") == 1:
-        _origins.append(f"{urlparse(_origin).scheme}://www.{_host}")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_origins,
+    allow_origins=cors_origins(PUBLIC_URL),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

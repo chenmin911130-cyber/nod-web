@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { AudioSource, Lang, PairLang, TranslatePair } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import { isWeb } from '../platform'
+import { isNativeApp } from '../native'
 import type { AttachPayload, LocalAttach } from '../attach'
 import { toPayload } from '../attach'
 import PromptAttach from './PromptAttach'
@@ -80,7 +81,9 @@ export default function TranslatePane({
 
   const empty = pairs.length === 0 && !partial
   const queued = pairs.filter((p) => !p.translation && !p.failed && p.id !== bindId).length
-  const sourceHint = isWeb
+  const sourceHint = isNativeApp()
+    ? 'iPhone mic'
+    : isWeb
     ? 'Browser mic'
     : source === 'both'
       ? 'System + mic'

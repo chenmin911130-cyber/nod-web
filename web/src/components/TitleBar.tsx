@@ -3,6 +3,7 @@ import type { AudioSource, Lang, PairLang, WorkspaceMode } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import { isWeb } from '../platform'
 import { logout } from '../auth'
+import { isNativeApp, nativeGo } from '../native'
 import OpacityBar from './OpacityBar'
 import PetTimer from './PetTimer'
 
@@ -157,7 +158,7 @@ export default function TitleBar(props: Props) {
 
   return (
     <div className="titlebar">
-      {isWeb ? (
+      {isWeb && !isNativeApp() ? (
         <a href="/" className="brand no-drag" title="Product page">
           <NodLogo />
           <span className="brand-white">Nod</span>
@@ -336,7 +337,7 @@ export default function TitleBar(props: Props) {
                       onClick={() => {
                         setMenuOpen(false)
                         void logout().finally(() => {
-                          location.href = '/?signout=1'
+                          nativeGo(isNativeApp() ? '/login' : '/?signout=1')
                         })
                       }}
                     >

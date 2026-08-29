@@ -48,6 +48,20 @@ html.nod-web #root {
   max-height: 100dvh;
 }
 
+html.nod-native.nod-web #root {
+  padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
+    max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+}
+
+html.nod-native .titlebar {
+  padding-top: 8px;
+}
+
+html.nod-native .platforms,
+html.nod-native .desktop-status {
+  display: none !important;
+}
+
 html.nod-web .app {
   height: 100%;
   max-height: 100%;

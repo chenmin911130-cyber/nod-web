@@ -1,10 +1,12 @@
 import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { api, fetchMe, setToken } from '../auth'
+import { api, fetchMe, getToken, setToken } from '../auth'
+import { isNativeApp, maybeReturnToNativeApp, nativeGo } from '../native'
 import { track } from './track'
 import './Site.css'
 import NodMark from './NodMark'
 
 const GoogleButton = lazy(() => import('./ClerkAuth').then((m) => ({ default: m.GoogleButton })))
+const NativeGoogleButton = lazy(() => import('./ClerkAuth').then((m) => ({ default: m.NativeGoogleButton })))
 
 function Funnel({ current }: { current: 'product' | 'account' | 'workspace' }) {
   const steps = [
@@ -49,7 +51,10 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
   useEffect(() => {
     let cancelled = false
     void fetchMe().then((me) => {
-      if (!cancelled && me) location.replace(next)
+      if (!cancelled && me) {
+        if (maybeReturnToNativeApp(getToken())) return
+        nativeGo(next, true)
+      }
     })
     return () => {
       cancelled = true
@@ -66,7 +71,8 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
         body: JSON.stringify({ email, password }),
       })
       setToken(out.token)
-      location.href = next
+      if (maybeReturnToNativeApp(out.token)) return
+      nativeGo(next)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Sign in failed')
       setBusy(false)
@@ -82,10 +88,10 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
           <Funnel current="account" />
           <h1>Sign in to Nodpilot</h1>
           <p>Nodpilot needs an account before it can listen, translate, and summarize. Continue with Google, or use email. Google is optional.</p>
-          {clerkEnabled && (
+          {(clerkEnabled || isNativeApp()) && (
             <>
               <Suspense fallback={null}>
-                <GoogleButton next={next} />
+                {isNativeApp() ? <NativeGoogleButton /> : <GoogleButton next={next} />}
               </Suspense>
               <div className="site-or">or email</div>
             </>
@@ -125,7 +131,10 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
   useEffect(() => {
     let cancelled = false
     void fetchMe().then((me) => {
-      if (!cancelled && me) location.replace('/app')
+      if (!cancelled && me) {
+        if (maybeReturnToNativeApp(getToken())) return
+        nativeGo('/app', true)
+      }
     })
     return () => {
       cancelled = true
@@ -144,7 +153,8 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
       })
       setToken(out.token)
       track('signup_success', { method: 'email' })
-      location.href = '/app'
+      if (maybeReturnToNativeApp(out.token)) return
+      nativeGo('/app')
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Could not create account')
       setBusy(false)
@@ -160,10 +170,10 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
           <Funnel current="account" />
           <h1>Create your Nodpilot account</h1>
           <p>Google or email — both start the same free trial. No card required. 20 minutes of transcription included.</p>
-          {clerkEnabled && (
+          {(clerkEnabled || isNativeApp()) && (
             <>
               <Suspense fallback={null}>
-                <GoogleButton next="/app" />
+                {isNativeApp() ? <NativeGoogleButton /> : <GoogleButton next="/app" />}
               </Suspense>
               <div className="site-or">or email</div>
             </>
@@ -266,7 +276,8 @@ export function ResetPage() {
         body: JSON.stringify({ token, password }),
       })
       setToken(out.token)
-      location.href = '/account'
+      if (maybeReturnToNativeApp(out.token)) return
+      nativeGo('/account')
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Reset failed')
       setBusy(false)

@@ -1,18 +1,20 @@
 import { createRoot } from 'react-dom/client'
 import Site from './site/Site'
+import { apiUrl, installNativeShell, isNativeApp } from './native'
 
 const rootEl = document.getElementById('root')
 
 async function boot() {
   if (!rootEl) return
+  installNativeShell()
   document.documentElement.classList.add('nod-site')
   const root = createRoot(rootEl)
   root.render(<Site />)
 
   try {
-    const cfg = (await fetch('/api/config').then((res) => res.json())) as { clerk_publishable_key?: string }
+    const cfg = (await fetch(apiUrl('/api/config')).then((res) => res.json())) as { clerk_publishable_key?: string }
     const clerkKey = cfg.clerk_publishable_key || ''
-    if (!clerkKey) return
+    if (!clerkKey || isNativeApp()) return
     const { ClerkProvider } = await import('@clerk/clerk-react')
     root.render(
       <ClerkProvider

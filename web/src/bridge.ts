@@ -1,11 +1,7 @@
 import type { Api, AppConfig, EngineEvent, EngineMsg } from './types'
 import { getToken } from './auth'
 import { MicCapture } from './audio'
-
-function wsUrl(): string {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${proto}//${location.host}/ws`
-}
+import { apiUrl, isNativeApp, wsUrl } from './native'
 
 const EVENT_TYPES = new Set([
   'ready',
@@ -264,7 +260,7 @@ export function installWebApi(): void {
     close: () => undefined,
     minimize: () => undefined,
     getConfig: async () => {
-      const res = await fetch('/api/config')
+      const res = await fetch(apiUrl('/api/config'))
       if (!res.ok) {
         return {
           llm: { provider: 'deepseek', model: '' },
@@ -289,6 +285,9 @@ export function installWebApi(): void {
   connect()
 
   window.addEventListener('pagehide', () => {
+    // Lock screen / background must keep the native mic session and the
+    // Railway WebSocket alive. WKWebView getUserMedia would already be dead.
+    if (isNativeApp()) return
     closing = true
     window.clearTimeout(reconnectTimer)
     window.clearInterval(pingTimer)
