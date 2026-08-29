@@ -874,6 +874,7 @@ export default function App() {
   const generateNotesRef = useRef<() => void>(() => {})
   const exportAfterNotes = useRef(false)
   const autoNotesTried = useRef(false)
+  const watchAutoNotes = useRef(false)
   const tickRef = useRef(0)
   const [consent, setConsent] = useState<boolean | null>(demoScene ? true : null)
   const consentRef = useRef<boolean | null>(demoScene ? true : null)
@@ -969,7 +970,10 @@ export default function App() {
   useEffect(() => {
     if (!isNativeApp()) return
     return installWatchRemote({
-      onStart: () => guardMic(startListen),
+      onStart: () => {
+        watchAutoNotes.current = true
+        guardMic(startListen)
+      },
       onStop: stopListen,
     })
   }, [])
@@ -979,10 +983,12 @@ export default function App() {
     const listening = state.run === 'listen' || state.run === 'record'
     let hint = 'Ready'
     if (consentOpen) hint = 'Confirm on iPhone'
-    else if (listening) hint = state.partial.trim() || 'Watch / iPhone listening'
+    else if (listening) hint = state.partial.trim() || 'Watch mic'
+    else if (state.notesAskId) hint = 'Writing notes on iPhone'
+    else if (state.notesRaw.trim()) hint = 'Notes ready on iPhone'
     const timer = window.setTimeout(() => pushWatchStatus(listening, hint), 180)
     return () => window.clearTimeout(timer)
-  }, [consentOpen, state.partial, state.run])
+  }, [consentOpen, state.notesAskId, state.notesRaw, state.partial, state.run])
 
   const acceptConsent = () => {
     void authApi('/api/me/consent', { method: 'POST', body: JSON.stringify({ consent: true }) }).then(() => {
@@ -1652,6 +1658,20 @@ export default function App() {
     window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, s.meetingLines.slice(-500), s.notesLang, s.translateOn, s.speakerNames), mode: 'notes' })
   }, [])
   generateNotesRef.current = generateNotes
+
+  useEffect(() => {
+    if (!isNativeApp() || !watchAutoNotes.current) return
+    if (state.run === 'listen' || state.run === 'record' || state.run === 'think') return
+    if (state.workspaceMode === 'translate') {
+      watchAutoNotes.current = false
+      return
+    }
+    // Interview Ask still uses busy; wait so we do not cancel an answer.
+    if (state.busy) return
+    watchAutoNotes.current = false
+    if (!state.meetingLines.length) return
+    generateNotesRef.current()
+  }, [state.busy, state.meetingLines.length, state.run, state.workspaceMode])
 
   const handleSummary = useCallback(() => {
     generateNotes()
