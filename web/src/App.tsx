@@ -304,9 +304,10 @@ function reducer(state: AppState, action: Action): AppState {
             if (view !== 'workspace') view = 'workspace'
           }
           const generating = Boolean(state.translateAskId || state.summaryAskId || state.notesAskId)
+          const interviewAsking = state.workspaceMode === 'interview' && state.busy
           let busy = state.busy
           if (run === 'think') busy = true
-          else if (run === 'idle' && !generating) busy = false
+          else if (run === 'idle' && !generating && !interviewAsking) busy = false
           return { ...state, run, autoOn, view, busy, meetingStartedAt }
         }
         case 'status':
@@ -496,8 +497,17 @@ function reducer(state: AppState, action: Action): AppState {
         }
         case 'done': {
           const waitingAsk = state.catchNotes.some((note) => isPendingCatchId(note.id))
+          let turns = state.turns
+          if (state.workspaceMode === 'interview' && ev.ok === false && ev.id && turns.length) {
+            const i = turns.findIndex((t) => t.id === ev.id)
+            if (i >= 0 && !turns[i].a) {
+              turns = turns.slice()
+              turns[i] = { ...turns[i], a: state.status.startsWith('Generation failed') ? state.status : 'Generation stopped. Please try again.' }
+            }
+          }
           return {
             ...state,
+            turns,
             busy: waitingAsk,
             status: waitingAsk ? state.status : 'Ready',
             translateAskId: '',
@@ -506,8 +516,18 @@ function reducer(state: AppState, action: Action): AppState {
             notesAskId: '',
           }
         }
-        case 'error':
-          return { ...state, status: ev.text, busy: false }
+        case 'error': {
+          const msg = ev.text || 'Generation failed'
+          if (state.workspaceMode === 'interview' && state.turns.length) {
+            const i = state.turns.findIndex((t) => !t.a)
+            if (i >= 0) {
+              const turns = state.turns.slice()
+              turns[i] = { ...turns[i], a: msg }
+              return { ...state, turns, status: msg, busy: false }
+            }
+          }
+          return { ...state, status: msg, busy: false }
+        }
         case 'auth_required':
           if (location.hostname !== '127.0.0.1' && location.hostname !== 'localhost') {
             window.location.replace('/login?next=/app')
@@ -987,7 +1007,8 @@ export default function App() {
       const s = stateRef.current
       api.send({ type: 'set_translate_from', language: s.translateFrom === 'auto' ? null : s.translateFrom })
       api.send({ type: 'set_translate_to', lang: s.translateTo })
-      api.send({ type: 'set_workspace', mode: s.workspaceMode, scene: s.listenScene, speakers_expected: speakersExpected(s.listenScene) })
+      const scene = s.workspaceMode === 'interview' ? 'interview' : s.listenScene
+      api.send({ type: 'set_workspace', mode: s.workspaceMode, scene, speakers_expected: speakersExpected(scene) })
       if (s.workspaceMode !== 'translate') {
         api.send({ type: 'set_lang', language: s.lang === 'auto' ? null : s.lang })
       }
@@ -1331,13 +1352,15 @@ export default function App() {
     })
   }, [])
 
-  const handleMode = useCallback((mode: WorkspaceMode) => {
+  const handleMode = useCallback((mode: WorkspaceMode, scene?: ListenScene) => {
     const s = stateRef.current
+    const nextScene = scene ?? (mode === 'interview' ? 'interview' : s.listenScene)
     if (s.stealth && mode !== 'interview') {
       window.api.setStealth(false)
       dispatch({ type: 'stealth', on: false })
     }
     if (s.view !== 'workspace') dispatch({ type: 'view', view: 'workspace' })
+    if (nextScene !== s.listenScene) dispatch({ type: 'listen_scene', scene: nextScene })
     if (mode === 'translate') {
       window.api.send({ type: 'cancel_generate' })
       window.api.send({ type: 'set_translate_from', language: s.translateFrom === 'auto' ? null : s.translateFrom })
@@ -1345,7 +1368,7 @@ export default function App() {
     } else {
       window.api.send({ type: 'set_lang', language: s.lang === 'auto' ? null : s.lang })
     }
-    window.api.send({ type: 'set_workspace', mode, scene: s.listenScene, speakers_expected: speakersExpected(s.listenScene) })
+    window.api.send({ type: 'set_workspace', mode, scene: nextScene, speakers_expected: speakersExpected(nextScene) })
     dispatch({ type: 'workspace', mode })
     setComposeOpen(false)
     setRailHover(false)
@@ -2032,8 +2055,8 @@ export default function App() {
             }
             onScene={(scene) => {
               dispatch({ type: 'listen_scene', scene })
-              if (scene === 'interview') handleMode('interview')
-              else if (state.workspaceMode !== 'meeting') handleMode('meeting')
+              if (scene === 'interview') handleMode('interview', 'interview')
+              else if (state.workspaceMode !== 'meeting') handleMode('meeting', scene)
               else window.api.send({ type: 'set_workspace', mode: 'meeting', scene, speakers_expected: speakersExpected(scene) })
             }}
             onTranslate={(on) => {
