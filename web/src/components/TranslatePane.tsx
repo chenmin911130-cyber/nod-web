@@ -8,14 +8,11 @@ import type { AttachPayload, LocalAttach } from '../attach'
 import { toPayload } from '../attach'
 import PromptAttach from './PromptAttach'
 import EmptyState from './EmptyState'
-import { CaptionMode } from './SideRail'
 
 interface Props {
   pairs: TranslatePair[]
   partial: string
   bindId: string
-  bilingual: boolean
-  onBilingual: (on: boolean) => void
   to: PairLang
   from: Lang
   heardFrom?: PairLang | null
@@ -60,8 +57,6 @@ export default function TranslatePane({
   pairs,
   partial,
   bindId,
-  bilingual,
-  onBilingual,
   to,
   from,
   heardFrom,
@@ -111,17 +106,16 @@ export default function TranslatePane({
       <div className="kicker">
         Captions · {fromTag} → {langTag(to)}
         {sameLang ? ' · same language' : ''}
-        {bilingual && queued > 0 ? ` · ${queued} queued` : ''}
+        {queued > 0 ? ` · ${queued} queued` : ''}
         <span className="kicker-hint">
           {' '}
-          · {bilingual ? 'Bilingual' : 'Original'} · F3 {sourceHint}
+          · F3 {sourceHint}
           {ttsMode === 'live'
             ? ' · headphones: live translation in your language'
             : ' · tap a line to hear it'}
         </span>
       </div>
       <div className="tr-voice-row">
-        <CaptionMode bilingual={bilingual} onChange={onBilingual} />
         <button
           type="button"
           className={`tr-voice-btn${ttsMode === 'tap' ? ' on' : ''}`}
@@ -155,7 +149,7 @@ export default function TranslatePane({
         </button>
         {!ttsReady ? <span className="tr-voice-hint">Speech key missing</span> : null}
       </div>
-      <div className={`tr-sheet${bilingual ? '' : ' single'}`}>
+      <div className="tr-sheet">
         <div className="tr-head-row">
           <label className="tr-col-head tr-to-head tr-from-head">
             <span>From</span>
@@ -200,33 +194,27 @@ export default function TranslatePane({
           ) : (
             <>
               {pairs.map((p) => {
-                const typed = p.id.startsWith('typed-')
-                const showTranslation = bilingual || typed
-                const pending = showTranslation && !p.translation
+                const pending = !p.translation
                 const active = pending && !p.failed && p.id === bindId
                 let status = p.translation
-                if (showTranslation && !status) {
+                if (!status) {
                   if (p.failed) status = 'Failed'
                   else if (active) status = 'Translating…'
                   else status = 'Waiting…'
                 }
                 return (
                   <div key={p.id} className="tr-pair">
-                    {(bilingual || !typed) && (
-                      <button
-                        type="button"
-                        className="tr-cell"
-                        onClick={() => onCopyField(p, 'original')}
-                        title="Copy original"
-                      >
-                        <span className="meet-ts">{p.ts}</span>
-                        <span>{p.original}</span>
-                        {p.from ? <span className="tr-lang-chip">{langTag(p.from)}</span> : null}
-                      </button>
-                    )}
-                    {showTranslation && (
+                    <button
+                      type="button"
+                      className="tr-cell"
+                      onClick={() => onCopyField(p, 'original')}
+                      title="Copy original"
+                    >
+                      <span className="meet-ts">{p.ts}</span>
+                      <span>{p.original}</span>
+                      {p.from ? <span className="tr-lang-chip">{langTag(p.from)}</span> : null}
+                    </button>
                     <div className={`tr-cell${p.translation ? '' : ' pending'}${p.failed ? ' failed' : ''}`}>
-                      {typed && !bilingual && <span className="meet-ts">{p.ts}</span>}
                       <button
                         type="button"
                         className="tr-copy-hit"
@@ -256,7 +244,6 @@ export default function TranslatePane({
                         </button>
                       ) : null}
                     </div>
-                    )}
                   </div>
                 )
               })}
@@ -266,11 +253,9 @@ export default function TranslatePane({
                     <span className="meet-ts">live</span>
                     <span>{partial}</span>
                   </div>
-                  {bilingual && (
-                    <div className="tr-cell pending">
-                      <span>Listening…</span>
-                    </div>
-                  )}
+                  <div className="tr-cell pending">
+                    <span>Listening…</span>
+                  </div>
                 </div>
               )}
             </>

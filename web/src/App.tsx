@@ -1690,8 +1690,6 @@ export default function App() {
     if (s.workspaceMode !== 'translate') return
     for (let i = s.translatePairs.length - 1; i >= 0; i--) {
       const p = s.translatePairs[i]
-      const typed = p.id.startsWith('typed-')
-      if (!s.bilingual && !typed) continue
       if (!p.translation && !p.failed && !askedTranslate.current.has(p.id) && !isTranslatePrompt(p.original)) {
         askTranslate(p.original, p.id)
         return
@@ -2302,13 +2300,6 @@ export default function App() {
             pairs={state.translatePairs}
             partial={state.partial}
             bindId={state.translateBindId}
-            bilingual={state.bilingual}
-            onBilingual={(on) => {
-              if (on === state.bilingual) return
-              dispatch({ type: 'bilingual', on })
-              if (!on) killInflightTranslation()
-              if (on) queueMicrotask(() => pumpTranslateRef.current())
-            }}
             to={state.translateTo}
             from={state.translateFrom}
             heardFrom={state.translateFrom === 'auto' ? state.heardLang : state.translateFrom}
