@@ -38,6 +38,7 @@ export interface AppConfig {
   audio?: { source?: string }
   ui?: { opacity?: number; translate_from?: Lang; translate_to?: PairLang }
   models?: ModelDef[]
+  has_tts?: boolean
 }
 
 export interface MeetingLine {

@@ -1,15 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AudioSource, Lang, PairLang, TranslatePair } from '../types'
+import type { TtsMode, TtsVoice } from '../tts'
 import { TRANSLATE_LANGS } from '../types'
 import { isWeb } from '../platform'
-import type { AttachPayload } from '../attach'
+import { isNativeApp } from '../native'
+import type { AttachPayload, LocalAttach } from '../attach'
+import { toPayload } from '../attach'
+import PromptAttach from './PromptAttach'
 import EmptyState from './EmptyState'
+import { CaptionMode } from './SideRail'
 
 interface Props {
   pairs: TranslatePair[]
   partial: string
   bindId: string
   bilingual: boolean
+  onBilingual: (on: boolean) => void
   to: PairLang
   from: Lang
   heardFrom?: PairLang | null
@@ -20,6 +26,12 @@ interface Props {
   onSwap: () => void
   onCopyField: (pair: TranslatePair, field: 'original' | 'translation') => void
   onRetry: (id: string) => void
+  ttsMode: TtsMode
+  ttsVoice: TtsVoice
+  ttsReady: boolean
+  onTtsMode: (mode: TtsMode) => void
+  onTtsVoice: (voice: TtsVoice) => void
+  onSpeak: (text: string) => void
 }
 
 function langTag(code: PairLang): string {
@@ -49,6 +61,7 @@ export default function TranslatePane({
   partial,
   bindId,
   bilingual,
+  onBilingual,
   to,
   from,
   heardFrom,
@@ -59,6 +72,12 @@ export default function TranslatePane({
   onSwap,
   onCopyField,
   onRetry,
+  ttsMode,
+  ttsVoice,
+  ttsReady,
+  onTtsMode,
+  onTtsVoice,
+  onSpeak,
 }: Props) {
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -76,7 +95,9 @@ export default function TranslatePane({
 
   const empty = pairs.length === 0 && !partial
   const queued = pairs.filter((p) => !p.translation && !p.failed && p.id !== bindId).length
-  const sourceHint = isWeb
+  const sourceHint = isNativeApp()
+    ? 'iPhone mic'
+    : isWeb
     ? 'Browser mic'
     : source === 'both'
       ? 'System + mic'
@@ -90,8 +111,49 @@ export default function TranslatePane({
       <div className="kicker">
         Captions · {fromTag} → {langTag(to)}
         {sameLang ? ' · same language' : ''}
-        {queued > 0 ? ` · ${queued} queued` : ''}
-        <span className="kicker-hint"> · F3 {sourceHint} · F2 your mic</span>
+        {bilingual && queued > 0 ? ` · ${queued} queued` : ''}
+        <span className="kicker-hint">
+          {' '}
+          · {bilingual ? 'Bilingual' : 'Original'} · F3 {sourceHint}
+          {ttsMode === 'live'
+            ? ' · headphones: live translation in your language'
+            : ' · tap a line to hear it'}
+        </span>
+      </div>
+      <div className="tr-voice-row">
+        <CaptionMode bilingual={bilingual} onChange={onBilingual} />
+        <button
+          type="button"
+          className={`tr-voice-btn${ttsMode === 'tap' ? ' on' : ''}`}
+          onClick={() => onTtsMode('tap')}
+          title="Phone or computer: tap a caption when you want it read aloud"
+        >
+          Tap to hear
+        </button>
+        <button
+          type="button"
+          className={`tr-voice-btn${ttsMode === 'live' ? ' on' : ''}`}
+          onClick={() => onTtsMode('live')}
+          title="Headphones: speak translations as soon as each line is ready"
+        >
+          Headphones
+        </button>
+        <span className="tr-voice-split" aria-hidden="true" />
+        <button
+          type="button"
+          className={`tr-voice-btn${ttsVoice === 'female' ? ' on' : ''}`}
+          onClick={() => onTtsVoice('female')}
+        >
+          Female
+        </button>
+        <button
+          type="button"
+          className={`tr-voice-btn${ttsVoice === 'male' ? ' on' : ''}`}
+          onClick={() => onTtsVoice('male')}
+        >
+          Male
+        </button>
+        {!ttsReady ? <span className="tr-voice-hint">Speech key missing</span> : null}
       </div>
       <div className={`tr-sheet${bilingual ? '' : ' single'}`}>
         <div className="tr-head-row">
@@ -138,17 +200,19 @@ export default function TranslatePane({
           ) : (
             <>
               {pairs.map((p) => {
-                const pending = !p.translation
+                const typed = p.id.startsWith('typed-')
+                const showTranslation = bilingual || typed
+                const pending = showTranslation && !p.translation
                 const active = pending && !p.failed && p.id === bindId
                 let status = p.translation
-                if (!status) {
+                if (showTranslation && !status) {
                   if (p.failed) status = 'Failed'
                   else if (active) status = 'Translating…'
                   else status = 'Waiting…'
                 }
                 return (
                   <div key={p.id} className="tr-pair">
-                    {bilingual && (
+                    {(bilingual || !typed) && (
                       <button
                         type="button"
                         className="tr-cell"
@@ -160,8 +224,9 @@ export default function TranslatePane({
                         {p.from ? <span className="tr-lang-chip">{langTag(p.from)}</span> : null}
                       </button>
                     )}
+                    {showTranslation && (
                     <div className={`tr-cell${p.translation ? '' : ' pending'}${p.failed ? ' failed' : ''}`}>
-                      {!bilingual && <span className="meet-ts">{p.ts}</span>}
+                      {typed && !bilingual && <span className="meet-ts">{p.ts}</span>}
                       <button
                         type="button"
                         className="tr-copy-hit"
@@ -175,27 +240,37 @@ export default function TranslatePane({
                           <span className="tr-lang-chip">{langTag(p.to)}</span>
                         ) : null}
                       </button>
+                      {p.translation && !p.failed ? (
+                        <button
+                          type="button"
+                          className="tr-speak"
+                          onClick={() => onSpeak(p.translation)}
+                          title="Read this line"
+                        >
+                          Play
+                        </button>
+                      ) : null}
                       {p.failed ? (
                         <button type="button" className="tr-retry" onClick={() => onRetry(p.id)}>
                           Retry
                         </button>
                       ) : null}
                     </div>
+                    )}
                   </div>
                 )
               })}
               {partial && (
                 <div className="tr-pair live">
+                  <div className="tr-cell">
+                    <span className="meet-ts">live</span>
+                    <span>{partial}</span>
+                  </div>
                   {bilingual && (
-                    <div className="tr-cell">
-                      <span className="meet-ts">live</span>
-                      <span>{partial}</span>
+                    <div className="tr-cell pending">
+                      <span>Listening…</span>
                     </div>
                   )}
-                  <div className="tr-cell pending">
-                    {!bilingual && <span className="meet-ts">live</span>}
-                    <span>Listening…</span>
-                  </div>
                 </div>
               )}
             </>

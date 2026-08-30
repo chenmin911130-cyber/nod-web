@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, fetchMe, logout, type Me } from '../auth'
+import { nativeGo } from '../native'
 import { downloadHistoryPdf } from '../historyPdf'
 import { copyText } from '../historyRestore'
 import './Site.css'
@@ -54,7 +55,7 @@ export default function AccountPage() {
     void (async () => {
       const user = await fetchMe()
       if (!user) {
-        location.href = '/login?next=/account'
+        nativeGo('/login?next=/account')
         return
       }
       setMe(user)
@@ -110,7 +111,7 @@ export default function AccountPage() {
     if (!confirm('Delete your account, history, and remaining quota? This cannot be undone.')) return
     await api('/api/account', { method: 'DELETE' })
     logout()
-    location.href = '/'
+    nativeGo('/login')
   }
 
   return (
@@ -133,11 +134,11 @@ export default function AccountPage() {
                   const clerk = (window as unknown as { Clerk?: { signOut?: () => Promise<unknown> } }).Clerk
                   if (clerk?.signOut) {
                     void clerk.signOut().finally(() => {
-                      location.href = '/'
+                      nativeGo('/login')
                     })
                     return
                   }
-                  location.href = '/?signout=1'
+                  nativeGo('/login')
                 })
               }}
             >

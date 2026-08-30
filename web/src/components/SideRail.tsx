@@ -5,18 +5,83 @@ interface Props {
   mode: WorkspaceMode
   run: RunState
   autoOn: boolean
-  bilingual: boolean
   onPrimary: () => void
   onRecord: () => void
   onClear: () => void
   onPause: () => void
   onMark: () => void
   onExport: () => void
-  onBilingual: () => void
   meetingPaused?: boolean
   onClose?: () => void
   onOpenHistory?: () => void
   onNewSession?: () => void
+}
+
+export function CaptionMode({
+  bilingual,
+  onChange,
+}: {
+  bilingual: boolean
+  onChange: (on: boolean) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const boxRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!boxRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  return (
+    <div className={`listen-scene caption-mode${open ? ' open' : ''}`} ref={boxRef}>
+      <button
+        type="button"
+        className="listen-scene-btn"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="Caption mode"
+        title={bilingual ? 'Show original and translation together' : 'Show the transcript only'}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {bilingual ? 'Bilingual' : 'Original'}
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <path d="M2.2 3.4 5 6.4 7.8 3.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
+      </button>
+      {open && (
+        <div className="listen-scene-menu caption-mode-menu" role="listbox">
+          <button
+            type="button"
+            role="option"
+            aria-selected={!bilingual}
+            className={bilingual ? '' : 'on'}
+            onClick={() => {
+              onChange(false)
+              setOpen(false)
+            }}
+          >
+            Original
+          </button>
+          <button
+            type="button"
+            role="option"
+            aria-selected={bilingual}
+            className={bilingual ? 'on' : ''}
+            onClick={() => {
+              onChange(true)
+              setOpen(false)
+            }}
+          >
+            Bilingual
+          </button>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function MicIcon() {
@@ -136,11 +201,11 @@ function primaryLabel(mode: WorkspaceMode, listening: boolean, paused = false): 
 }
 
 export default function SideRail(props: Props) {
-  const { mode, run, autoOn, bilingual, meetingPaused } = props
+  const { mode, run, autoOn, meetingPaused } = props
   const recording = run === 'record'
   const listening = run === 'listen' || recording
   const primaryOn = mode === 'interview' ? autoOn || run === 'listen' : listening
-  const primaryDisabled = mode === 'interview' || mode === 'translate' ? recording : false
+  const primaryDisabled = recording
   const live = primaryOn || recording
   const [moreOpen, setMoreOpen] = useState(false)
   const moreRef = useRef<HTMLDivElement>(null)
@@ -207,9 +272,14 @@ export default function SideRail(props: Props) {
 
       {mode === 'meeting' && (
         <>
-          <button className="rail-icon-btn" onClick={props.onClear} title="Clear transcript (F4)">
-            <TrashIcon />
-            <span>Clear</span>
+          <button
+            className={`rail-icon-btn${recording ? ' live' : ''}`}
+            onClick={props.onRecord}
+            disabled={run === 'listen'}
+            title={recording ? 'Stop recording (F2)' : 'Record, then transcribe accurately (F2)'}
+          >
+            <RecIcon />
+            <span>{recording ? 'Recording' : 'Record'}</span>
           </button>
           <button className="rail-icon-btn" onClick={props.onExport} title="Summarize all sections and export PDF">
             <PdfIcon />
@@ -219,27 +289,15 @@ export default function SideRail(props: Props) {
       )}
 
       {mode === 'translate' && (
-        <>
-          <div className="rail-sec">
-            <span className="rail-sec-label">Bilingual</span>
-            <button
-              className={`switch${bilingual ? ' on' : ''}`}
-              onClick={props.onBilingual}
-              role="switch"
-              aria-checked={bilingual}
-              title="Show original and translation together"
-            />
-          </div>
-          <button
-            className={`rail-icon-btn${recording ? ' live' : ''}`}
-            onClick={props.onRecord}
-            disabled={autoOn || run === 'listen'}
-            title={recording ? 'Stop recording (F2)' : 'Record your microphone (F2)'}
-          >
-            <RecIcon />
-            <span>{recording ? 'Recording' : 'Record'}</span>
-          </button>
-        </>
+        <button
+          className={`rail-icon-btn${recording ? ' live' : ''}`}
+          onClick={props.onRecord}
+          disabled={autoOn || run === 'listen'}
+          title={recording ? 'Stop recording (F2)' : 'Record, then transcribe accurately (F2)'}
+        >
+          <RecIcon />
+          <span>{recording ? 'Recording' : 'Record'}</span>
+        </button>
       )}
 
       <button

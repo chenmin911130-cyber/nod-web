@@ -48,6 +48,20 @@ html.nod-web #root {
   max-height: 100dvh;
 }
 
+html.nod-native.nod-web #root {
+  padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
+    max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+}
+
+html.nod-native .titlebar {
+  padding-top: 8px;
+}
+
+html.nod-native .platforms,
+html.nod-native .desktop-status {
+  display: none !important;
+}
+
 html.nod-web .app {
   height: 100%;
   max-height: 100%;
@@ -1992,6 +2006,17 @@ html.nod-web .ov-root {
   color: #9fb3d0;
 }
 
+.caption-mode-menu {
+  width: auto;
+  min-width: 128px;
+}
+
+.caption-mode-menu button {
+  display: block;
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .rail-lang {
   padding: 0 8px;
 }
@@ -2240,6 +2265,59 @@ html.nod-web .ov-root {
   border: 1px solid rgba(34, 211, 238, 0.12);
   border-radius: 16px;
   overflow: hidden;
+}
+
+.tr-voice-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 10px;
+}
+
+.tr-voice-btn {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(157, 184, 227, 0.22);
+  border-radius: 8px;
+  background: rgba(115, 138, 183, 0.1);
+  color: #9fb3d0;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tr-voice-btn.on {
+  border-color: rgba(93, 211, 245, 0.45);
+  color: #e8eef8;
+  background: rgba(93, 211, 245, 0.12);
+}
+
+.tr-voice-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tr-voice-hint {
+  color: #8a9bb8;
+  font-size: 12px;
+}
+
+.tr-voice-split {
+  width: 1px;
+  height: 16px;
+  background: rgba(157, 184, 227, 0.22);
+}
+
+.tr-speak {
+  flex: 0 0 auto;
+  margin-left: auto;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(93, 211, 245, 0.35);
+  border-radius: 7px;
+  background: rgba(93, 211, 245, 0.1);
+  color: #d7eef8;
+  font-size: 11px;
+  cursor: pointer;
 }
 
 .tr-head-row {
@@ -3910,6 +3988,7 @@ a.tb-menu-action {
 .listen-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   min-height: 52px;
   padding: 8px 14px;
@@ -4286,6 +4365,11 @@ a.tb-menu-action {
   font-weight: 650;
 }
 
+.listen-mode-tag {
+  letter-spacing: 0.06em;
+  color: #9ec9d8;
+}
+
 .listen-timer {
   margin-left: auto;
   letter-spacing: 0.04em;
@@ -4382,6 +4466,18 @@ a.tb-menu-action {
   font-size: 13.5px;
   line-height: 1.55;
   padding: 18px 4px;
+}
+
+.listen-pane:not(.listen-notes) .listen-empty {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #c5d4ea;
 }
 
 .listen-empty b {

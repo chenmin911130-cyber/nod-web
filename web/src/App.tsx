@@ -15,6 +15,20 @@ import StatusToast from './components/StatusToast'
 import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
 import { api as authApi, fetchMe } from './auth'
+import { readTtsMode, readTtsVoice, speakTranslation, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
+import { isNativeApp, nativeGo } from './native'
+import { installWatchRemote, pushWatchStatus } from './watch'
+import {
+  clearWatchReport,
+  markWatchReport,
+  pickWatchReportSession,
+  readWatchReport,
+  readWatchReportSnapshot,
+  shouldRestoreWatchReport,
+  snapshotFromWorkspace,
+  snapshotToHistoryItems,
+  writeWatchReportSnapshot,
+} from './watchReport'
 import {
   askContext,
   askPrompt,
@@ -535,7 +549,7 @@ function reducer(state: AppState, action: Action): AppState {
         }
         case 'auth_required':
           if (location.hostname !== '127.0.0.1' && location.hostname !== 'localhost') {
-            window.location.replace('/login?next=/app')
+            nativeGo('/login?next=/app', true)
           }
           return state
         case 'quota':
@@ -883,9 +897,21 @@ export default function App() {
   stateRef.current = state
   const listenWanted = useRef(false)
   const [savePrompt, setSavePrompt] = useState(false)
+  const watchAutoNotes = useRef(false)
+  const watchRestoreTried = useRef(false)
+  const [watchReportOpen, setWatchReportOpen] = useState(false)
+  const [watchReportReveal, setWatchReportReveal] = useState(0)
+  const showWatchReport = () => {
+    setWatchReportOpen(true)
+    setWatchReportReveal((n) => n + 1)
+  }
   const startListen = () => {
     listenWanted.current = true
     setSavePrompt(false)
+    if (!watchAutoNotes.current) {
+      clearWatchReport()
+      setWatchReportOpen(false)
+    }
     window.api.send({ type: 'start_listen' })
   }
   const stopListen = () => {
@@ -903,6 +929,10 @@ export default function App() {
   const autoNotesTried = useRef(false)
   const tickRef = useRef(0)
   const [consent, setConsent] = useState<boolean | null>(demoScene ? true : null)
+  const [ttsMode, setTtsMode] = useState<TtsMode>(readTtsMode)
+  const [ttsVoice, setTtsVoice] = useState<TtsVoice>(readTtsVoice)
+  const [ttsReady, setTtsReady] = useState(false)
+  const spokenTranslate = useRef<Set<string>>(new Set())
   const consentRef = useRef<boolean | null>(demoScene ? true : null)
   const [consentOpen, setConsentOpen] = useState(false)
   const pendingMic = useRef<(() => void) | null>(null)
@@ -944,6 +974,7 @@ export default function App() {
   const [railDismissed, setRailDismissed] = useState(inQa)
   const wasInQa = useRef(inQa)
   const requestClearRef = useRef<() => void>(() => {})
+  const handleRecordRef = useRef<() => void>(() => {})
 
   useEffect(() => {
     if (inQa && !wasInQa.current) setRailDismissed(true)
@@ -992,6 +1023,32 @@ export default function App() {
     }
     setConsentOpen(true)
   }
+
+  useEffect(() => {
+    if (!isNativeApp()) return
+    return installWatchRemote({
+      onStart: () => {
+        watchAutoNotes.current = true
+        watchRestoreTried.current = false
+        clearWatchReport()
+        setWatchReportOpen(false)
+        guardMic(startListen)
+      },
+      onStop: stopListen,
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!isNativeApp()) return
+    const listening = state.run === 'listen' || state.run === 'record'
+    let hint = 'Ready'
+    if (consentOpen) hint = 'Confirm on iPhone'
+    else if (listening) hint = state.partial.trim() || 'Watch mic'
+    else if (state.notesAskId) hint = 'Writing report on iPhone'
+    else if (state.notesRaw.trim()) hint = 'Open iPhone to read the report'
+    const timer = window.setTimeout(() => pushWatchStatus(listening, hint), 180)
+    return () => window.clearTimeout(timer)
+  }, [consentOpen, state.notesAskId, state.notesRaw, state.partial, state.run])
 
   const acceptConsent = () => {
     void authApi('/api/me/consent', { method: 'POST', body: JSON.stringify({ consent: true }) }).then(() => {
@@ -1052,7 +1109,14 @@ export default function App() {
       if (e.type === 'quota_exceeded' || (e.type === 'error' && e.text.includes('Transcription connection lost'))) {
         listenWanted.current = false
       }
-      if (e.type === 'save_prompt') setSavePrompt(true)
+      if (e.type === 'save_prompt') {
+        // Watch stop-and-save: keep History without a dialog the wrist cannot tap.
+        if (watchAutoNotes.current) {
+          api.send({ type: 'keep_history' })
+        } else {
+          setSavePrompt(true)
+        }
+      }
       dispatch({ type: 'engine', ev: e })
       if (e.type === 'question' && stateRef.current.workspaceMode === 'meeting' && stateRef.current.translateOn) {
         const text = e.text ?? ''
@@ -1128,7 +1192,7 @@ export default function App() {
     })
     const offShortcut = api.onShortcut((k) => {
       const mode = stateRef.current.workspaceMode
-      if (k === 'f2') guardMic(() => api.send({ type: 'manual' }))
+      if (k === 'f2') handleRecordRef.current()
       else if (k === 'f3') {
         const running = stateRef.current.run === 'listen' || stateRef.current.run === 'record'
         if (running) stopListen()
@@ -1146,7 +1210,10 @@ export default function App() {
         dispatch({ type: 'engine', ev: { type: 'status', text: next ? 'Stealth on — hidden from screen capture' : 'Stealth off' } })
       }
     })
-    api.getConfig().then((cfg) => dispatch({ type: 'config', cfg }))
+    api.getConfig().then((cfg) => {
+      dispatch({ type: 'config', cfg })
+      setTtsReady(Boolean(cfg.has_tts))
+    })
     return () => {
       offEvent()
       offShortcut()
@@ -1484,8 +1551,20 @@ export default function App() {
   }, [])
 
   const handleRecord = useCallback(() => {
-    guardMic(() => window.api.send({ type: 'manual' }))
+    guardMic(() => {
+      const s = stateRef.current
+      if (s.run === 'listen') return
+      if (s.workspaceMode === 'meeting' && s.run !== 'record') {
+        if (s.meetingEnded || s.meetingStartedAt == null) {
+          dispatch({ type: 'listen_new' })
+        } else {
+          dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
+        }
+      }
+      window.api.send({ type: 'manual' })
+    })
   }, [])
+  handleRecordRef.current = handleRecord
 
   const handlePause = useCallback(() => {
     const s = stateRef.current
@@ -1611,6 +1690,8 @@ export default function App() {
     if (s.workspaceMode !== 'translate') return
     for (let i = s.translatePairs.length - 1; i >= 0; i--) {
       const p = s.translatePairs[i]
+      const typed = p.id.startsWith('typed-')
+      if (!s.bilingual && !typed) continue
       if (!p.translation && !p.failed && !askedTranslate.current.has(p.id) && !isTranslatePrompt(p.original)) {
         askTranslate(p.original, p.id)
         return
@@ -1655,7 +1736,33 @@ export default function App() {
     }
     if (state.workspaceMode !== 'translate') return
     pumpTranslate()
-  }, [state.translatePairs, state.meetingLines, state.translateOn, state.workspaceMode, pumpTranslate])
+  }, [state.translatePairs, state.meetingLines, state.translateOn, state.bilingual, state.workspaceMode, pumpTranslate])
+
+  useEffect(() => {
+    if (ttsMode !== 'live' || state.workspaceMode !== 'translate') {
+      if (state.workspaceMode !== 'translate') stopSpeech()
+      return
+    }
+    for (const pair of state.translatePairs) {
+      if (
+        pair.passthrough
+        || pair.failed
+        || pair.id === state.translateBindId
+        || spokenTranslate.current.has(pair.id)
+      ) continue
+      const text = (pair.translation || '').trim()
+      if (!text) continue
+      spokenTranslate.current.add(pair.id)
+      void speakTranslation(text, ttsVoice).catch((err) => {
+        spokenTranslate.current.delete(pair.id)
+        dispatch({
+          type: 'engine',
+          ev: { type: 'status', text: err instanceof Error ? err.message : 'Could not speak translation' },
+        })
+      })
+      break
+    }
+  }, [state.translatePairs, state.translateBindId, state.workspaceMode, ttsMode, ttsVoice])
 
   const handleGenerateSummary = useCallback((note?: string, files?: AttachPayload[]) => {
     const s = stateRef.current
@@ -1692,6 +1799,114 @@ export default function App() {
     window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, s.meetingLines.slice(-500), s.notesLang, s.translateOn, s.speakerNames), mode: 'notes' })
   }, [])
   generateNotesRef.current = generateNotes
+
+  useEffect(() => {
+    if (!isNativeApp() || !watchAutoNotes.current) return
+    if (state.run === 'listen' || state.run === 'record' || state.run === 'think') return
+    if (state.workspaceMode === 'translate') {
+      watchAutoNotes.current = false
+      return
+    }
+    // Interview Ask still uses busy; wait so we do not cancel an answer.
+    if (state.busy) return
+    watchAutoNotes.current = false
+    if (!state.meetingLines.length) return
+    generateNotesRef.current()
+    const snap = snapshotFromWorkspace({
+      mode: state.workspaceMode,
+      scene: state.listenScene,
+      notes: state.notesRaw,
+      lines: state.meetingLines,
+    })
+    if (!snap) return
+    markWatchReport()
+    writeWatchReportSnapshot(snap)
+    showWatchReport()
+  }, [state.busy, state.meetingLines.length, state.run, state.workspaceMode])
+
+  useEffect(() => {
+    if (!isNativeApp() || !readWatchReport()) return
+    const snap = snapshotFromWorkspace({
+      mode: state.workspaceMode,
+      scene: state.listenScene,
+      notes: state.notesRaw,
+      lines: state.meetingLines,
+    })
+    if (snap) writeWatchReportSnapshot(snap)
+  }, [state.listenScene, state.meetingLines, state.notesRaw, state.workspaceMode])
+
+  useEffect(() => {
+    if (!isNativeApp()) return
+    const mark = readWatchReport()
+    if (!mark) return
+    showWatchReport()
+    const s = stateRef.current
+    if (
+      !shouldRestoreWatchReport({
+        mark,
+        listening: s.run === 'listen' || s.run === 'record' || listenWanted.current,
+        busy: s.busy,
+        hasWorkspace: s.meetingLines.length > 0 || Boolean(s.notesRaw.trim()),
+      })
+    ) {
+      return
+    }
+    if (watchRestoreTried.current) return
+    watchRestoreTried.current = true
+    const snap = readWatchReportSnapshot()
+    if (snap && (snap.notes.trim() || snap.lines.length)) {
+      restoreHistory({
+        id: 'watch-report',
+        mode: snap.mode,
+        scene: snap.scene,
+        title: 'Watch report',
+        started_at: null,
+        stt_seconds: 0,
+        items: snapshotToHistoryItems(snap),
+      })
+      return
+    }
+    let gone = false
+    void authApi<{ sessions: HistorySession[] }>('/api/account/history')
+      .then((out) => {
+        if (gone) return
+        const session = pickWatchReportSession(out.sessions || [])
+        if (!session) return
+        restoreHistory(session)
+      })
+      .catch(() => undefined)
+    return () => {
+      gone = true
+    }
+  }, [restoreHistory])
+
+  useEffect(() => {
+    if (!isNativeApp()) return
+    const reveal = () => {
+      if (readWatchReport()) showWatchReport()
+    }
+    const onVis = () => {
+      if (document.visibilityState === 'visible') reveal()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('pageshow', reveal)
+    let removeApp: (() => void) | undefined
+    void import('@capacitor/app').then(({ App }) => {
+      const pending = App.addListener('appStateChange', ({ isActive }) => {
+        if (isActive) reveal()
+      })
+      void pending.then((handle) => {
+        removeApp = () => {
+          void handle.remove()
+        }
+      })
+    }).catch(() => undefined)
+    return () => {
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('pageshow', reveal)
+      removeApp?.()
+    }
+  }, [])
 
   const handleSummary = useCallback(() => {
     generateNotes()
@@ -1734,6 +1949,7 @@ export default function App() {
     if (inflightTranslate.current === id) return
     askedTranslate.current.delete(id)
     translateRetries.current.delete(id)
+    spokenTranslate.current.delete(id)
     dispatch({ type: 'retry_translate', id })
     queueMicrotask(() => pumpTranslateRef.current())
   }, [])
@@ -2064,14 +2280,12 @@ export default function App() {
             mode={state.workspaceMode}
             run={state.run}
             autoOn={state.autoOn}
-            bilingual={state.bilingual}
             onPrimary={handlePrimary}
             onRecord={handleRecord}
             onClear={handleClear}
             onPause={handlePause}
             onMark={handleMark}
             onExport={() => { void handleExportPdf() }}
-            onBilingual={() => dispatch({ type: 'bilingual', on: !state.bilingual })}
             onClose={study && inQa ? hideRail : undefined}
             meetingPaused={
               state.workspaceMode === 'meeting'
@@ -2089,6 +2303,12 @@ export default function App() {
             partial={state.partial}
             bindId={state.translateBindId}
             bilingual={state.bilingual}
+            onBilingual={(on) => {
+              if (on === state.bilingual) return
+              dispatch({ type: 'bilingual', on })
+              if (!on) killInflightTranslation()
+              if (on) queueMicrotask(() => pumpTranslateRef.current())
+            }}
             to={state.translateTo}
             from={state.translateFrom}
             heardFrom={state.translateFrom === 'auto' ? state.heardLang : state.translateFrom}
@@ -2099,6 +2319,28 @@ export default function App() {
             onSwap={handleSwapTranslate}
             onCopyField={copyPairField}
             onRetry={handleRetryTranslate}
+            ttsMode={ttsMode}
+            ttsVoice={ttsVoice}
+            ttsReady={ttsReady}
+            onTtsMode={(mode) => {
+              setTtsMode(mode)
+              writeTtsMode(mode)
+              if (mode === 'live') unlockSpeech()
+              else stopSpeech()
+            }}
+            onTtsVoice={(voice) => {
+              setTtsVoice(voice)
+              writeTtsVoice(voice)
+            }}
+            onSpeak={(text) => {
+              unlockSpeech()
+              void speakTranslation(text, ttsVoice).catch((err) => {
+                dispatch({
+                  type: 'engine',
+                  ev: { type: 'status', text: err instanceof Error ? err.message : 'Could not speak translation' },
+                })
+              })
+            }}
           />
         ) : (
           <ListenPane
@@ -2118,7 +2360,8 @@ export default function App() {
             notesRaw={state.notesRaw}
             busy={state.busy}
             summarizing={Boolean(state.notesAskId)}
-            notesDefaultOpen={demoScene === 'meeting-notes'}
+            notesDefaultOpen={demoScene === 'meeting-notes' || watchReportOpen}
+            notesReveal={watchReportReveal}
             qa={state.workspaceMode === 'interview'}
             qaSlot={
               <AnswerPane
@@ -2137,8 +2380,8 @@ export default function App() {
               else window.api.send({ type: 'set_workspace', mode: 'meeting', scene, speakers_expected: speakersExpected(scene) })
             }}
             onTranslate={(on) => {
+              if (on === state.translateOn) return
               dispatch({ type: 'translate_on', on })
-              // 关闭翻译时取消在途生成并清掉半截译文，重新开启时整句重译
               if (!on) killInflightTranslation()
               if (on) queueMicrotask(() => pumpTranslateRef.current())
             }}

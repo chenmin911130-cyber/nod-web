@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchMe } from '../auth'
+import { isNativeApp } from '../native'
 import { applySeo, track } from '../site/track'
 import { COPY, type Locale } from './copy'
 import NodMark from '../site/NodMark'
@@ -316,7 +317,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
           </div>
         </section>
 
-        <section className="platforms" id="desktop">
+        {!isNativeApp() && <section className="platforms" id="desktop">
           <div className="shell">
             <div className="section-head reveal">
               <div className="eyebrow">{t.platEyebrow}</div>
@@ -337,7 +338,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
               </article>
             </div>
           </div>
-        </section>
+        </section>}
 
         <section className="commercial" id="pilot">
           <div className="shell commercial-grid">

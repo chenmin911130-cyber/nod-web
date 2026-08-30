@@ -43,6 +43,8 @@ export type Me = {
   quota_disabled?: boolean
 }
 
+import { apiUrl, isNativeApp } from './native'
+
 export function getToken(): string {
   try {
     return localStorage.getItem(TOKEN_KEY) || ''
@@ -65,7 +67,7 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
   const token = getToken()
   if (token) headers.set('Authorization', `Bearer ${token}`)
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
-  const res = await fetch(path, { ...init, headers, credentials: 'include' })
+  const res = await fetch(apiUrl(path), { ...init, headers, credentials: 'include' })
   const data = (await res.json().catch(() => ({}))) as T & { detail?: unknown }
   if (!res.ok) {
     const detail = data?.detail
@@ -76,6 +78,7 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
 }
 
 export function isLocalHost(): boolean {
+  if (isNativeApp()) return false
   return location.hostname === '127.0.0.1' || location.hostname === 'localhost'
 }
 

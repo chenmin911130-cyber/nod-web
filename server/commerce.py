@@ -6,7 +6,7 @@ from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response as RawResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -64,6 +64,11 @@ class ClerkIn(BaseModel):
 class FeedbackIn(BaseModel):
     email: str = ""
     message: str = Field(min_length=4, max_length=4000)
+
+
+class TtsIn(BaseModel):
+    text: str = Field(min_length=1, max_length=800)
+    voice: str = "female"
 
 
 def _public_user(user: User) -> dict[str, Any]:
@@ -474,6 +479,34 @@ async def stripe_webhook(request: Request):
                 else:
                     user.subscription_status = "past_due"
     return {"ok": True}
+
+
+@router.get("/api/tts/status")
+def tts_status():
+    from server.tts import elevenlabs_key
+
+    return {"ok": bool(elevenlabs_key())}
+
+
+@router.post("/api/tts", dependencies=[Depends(rate_limit("tts", 30, 60))])
+def tts_speak(
+    request: Request,
+    body: TtsIn,
+    user: User | None = Depends(optional_user),
+):
+    if user is None and not is_local_request(request):
+        raise HTTPException(status_code=401, detail="Please sign in")
+    from server.tts import elevenlabs_key, synthesize
+
+    if not elevenlabs_key():
+        raise HTTPException(status_code=503, detail="Speech is not configured")
+    try:
+        audio = synthesize(body.text, body.voice)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    return RawResponse(content=audio, media_type="audio/mpeg")
 
 
 @router.post("/api/feedback")

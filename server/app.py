@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -29,6 +29,7 @@ from starlette.concurrency import run_in_threadpool
 
 from server.admin import router as admin_router
 from server.commerce import router as commerce_router
+from server.cors import cors_origins
 from server.db import init_db
 from server.headers import CloudflareOriginMiddleware, HostLockMiddleware, SecurityHeadersMiddleware
 from server.logging_setup import backup_now, setup_logging
@@ -47,17 +48,19 @@ from server.security import is_local_scope, user_from_token
 SR = 16000
 STT_CLOUD = "assemblyai"
 ASSEMBLYAI_WS = "wss://streaming.assemblyai.com/v3/ws"
+ASSEMBLYAI_API = "https://api.assemblyai.com"
 ASSEMBLYAI_MODEL = "universal-3-5-pro"
+ASSEMBLYAI_FILE_MODELS = ["universal-3-5-pro", "universal-2"]
 STATUS_READY = "Ready · F2 record / F3 listen / F4 clear · browser mic + cloud STT"
-STATUS_RECORD = "Recording · tap Listening / F2 to stop"
+STATUS_RECORD = "Recording · F2 to stop, then accurate transcribe"
 STATUS_LISTEN = "Listening for the next question…"
-STATUS_TRANSCRIBE = "Transcribing…"
+STATUS_TRANSCRIBE = "Transcribing carefully — this can take a moment…"
 STATUS_CHECK = "Checking question…"
 STATUS_GENERATE = "Generating answer…"
 STATUS_ANSWER_READY = "Answer ready"
 STATUS_WAIT_MORE = "I caught part of a question. Keep listening…"
 STATUS_EMPTY = "No speech detected, please try again"
-MANUAL_MAX_SEC = 30 * 60.0 if QUOTA_DISABLED else 120.0
+MANUAL_MAX_SEC = float(LISTEN_MAX_SECONDS)
 MANUAL_MIN_SEC = 0.4
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -273,6 +276,8 @@ def heard_lang_from_turn(data: dict[str, Any]) -> str | None:
 
 
 def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    from server.tts import elevenlabs_key
+
     return {
         "llm": {
             "provider": "",
@@ -288,6 +293,7 @@ def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
         "models": [],
         "auth_required": not AUTH_DISABLED,
         "clerk_publishable_key": CLERK_PUBLISHABLE_KEY,
+        "has_tts": bool(elevenlabs_key()),
     }
 
 
@@ -495,6 +501,20 @@ def _meeting_should_hold(text: str) -> bool:
     return len(t) < 8
 
 
+def _pcm_has_voice(pcm: bytes) -> bool:
+    if len(pcm) < 2:
+        return False
+    peak = 0
+    for i in range(0, min(len(pcm) - 1, 3200), 2):
+        sample = int.from_bytes(pcm[i : i + 2], "little", signed=True)
+        amp = sample if sample >= 0 else -sample
+        if amp > peak:
+            peak = amp
+        if peak > 800:
+            return True
+    return False
+
+
 def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
     stt = cfg.get("stt") or {}
     silence = str(stt.get("max_turn_silence") or "1600")
@@ -520,6 +540,27 @@ def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
         if cap:
             params.append(("max_speakers", str(cap)))
     return ASSEMBLYAI_WS + "?" + urlencode(params)
+
+
+def assemblyai_prerecorded_body(cfg: dict[str, Any], audio_url: str) -> dict[str, Any]:
+    """File STT: same Pro model as live, but the async API sees the whole clip."""
+    stt = cfg.get("stt") or {}
+    body: dict[str, Any] = {
+        "audio_url": audio_url,
+        "speech_models": list(ASSEMBLYAI_FILE_MODELS),
+        "punctuate": True,
+        "format_text": True,
+        "prompt": _stt_prompt(cfg),
+    }
+    lang = _normalize_any_lang(stt.get("language"))
+    if lang:
+        body["language_code"] = lang
+    else:
+        body["language_detection"] = True
+    keyterms = _stt_keyterms(cfg)
+    if keyterms:
+        body["keyterms_prompt"] = keyterms
+    return body
 
 
 def clean_transcript(text: str, recent_finals=None, last_answer=None, keep_fillers=False) -> tuple[str, str]:
@@ -856,9 +897,58 @@ def take_attach_files(aid: str):
     return row.get("files")
 
 
+def assemblyai_transcribe_accurate(
+    api_key: str,
+    pcm: bytes,
+    cfg: dict[str, Any],
+    timeout: float | None = None,
+) -> tuple[str, str | None]:
+    from server.r2 import pcm_to_wav
+
+    wav = pcm_to_wav(pcm)
+    dur = len(pcm) / float(SR * 2)
+    if timeout is None:
+        timeout = min(30 * 60.0, max(90.0, dur * 0.4 + 60.0))
+    write_s = min(180.0, max(60.0, len(wav) / 250_000))
+    headers = {"authorization": api_key}
+    with httpx.Client(timeout=httpx.Timeout(timeout, connect=20.0, write=write_s, read=timeout)) as client:
+        up = client.post(
+            f"{ASSEMBLYAI_API}/v2/upload",
+            headers={**headers, "content-type": "application/octet-stream"},
+            content=wav,
+        )
+        up.raise_for_status()
+        audio_url = (up.json() or {}).get("upload_url")
+        if not audio_url:
+            raise RuntimeError("AssemblyAI upload missing url")
+        created = client.post(
+            f"{ASSEMBLYAI_API}/v2/transcript",
+            headers=headers,
+            json=assemblyai_prerecorded_body(cfg, audio_url),
+        )
+        created.raise_for_status()
+        tid = (created.json() or {}).get("id")
+        if not tid:
+            raise RuntimeError("AssemblyAI transcript missing id")
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            poll = client.get(f"{ASSEMBLYAI_API}/v2/transcript/{tid}", headers=headers)
+            poll.raise_for_status()
+            data = poll.json() or {}
+            status = data.get("status")
+            if status == "completed":
+                text = (data.get("text") or "").strip()
+                return text, heard_lang_from_code(data.get("language_code"))
+            if status == "error":
+                raise RuntimeError(data.get("error") or "AssemblyAI file transcription failed")
+            time.sleep(1.5)
+    raise RuntimeError("AssemblyAI file transcription timeout")
+
+
 def assemblyai_transcribe_pcm(api_key: str, pcm: bytes, cfg: dict[str, Any], timeout: float = 18.0) -> tuple[str, str | None]:
     import websocket
     result = {"text": "", "lang": None, "err": None}
+    parts: list[str] = []
     done = threading.Event()
     url = assemblyai_ws_url(cfg)
 
@@ -886,10 +976,12 @@ def assemblyai_transcribe_pcm(api_key: str, pcm: bytes, cfg: dict[str, Any], tim
         if kind == "Turn":
             t = (data.get("utterance") or data.get("transcript") or "").strip()
             if t:
-                result["text"] = t
                 result["lang"] = heard_lang_from_turn(data) or result.get("lang")
-            if data.get("end_of_turn"):
-                done.set()
+                if data.get("end_of_turn"):
+                    parts.append(t)
+                    result["text"] = " ".join(parts)
+                else:
+                    result["text"] = " ".join(parts + [t]) if parts else t
         elif kind in ("Termination", "Error"):
             if kind == "Error":
                 result["err"] = data.get("error") or message
@@ -1495,6 +1587,7 @@ class Session:
         self._manual_buf = bytearray()
         self._manual = False
         self._manual_started = 0.0
+        self._manual_last_voice = 0.0
         self._busy = False
         # Finals arrive on the STT thread while dispatch runs on a worker, so
         # the busy flag has to be claimed atomically or two generations start
@@ -1728,7 +1821,12 @@ class Session:
         if self._manual:
             self._manual_buf.extend(pcm)
             self._archive_append(pcm)
-            if time.time() - self._manual_started > MANUAL_MAX_SEC:
+            now = time.time()
+            if _pcm_has_voice(pcm):
+                self._manual_last_voice = now
+            started = self._manual_started or now
+            last = self._manual_last_voice or started
+            if now - started >= MANUAL_MAX_SEC or now - last >= LISTEN_IDLE_SECONDS:
                 self._stop_manual()
             return
         if self._listener:
@@ -2108,6 +2206,9 @@ class Session:
 
     def stop_listen(self) -> None:
         self._listen_wanted = False
+        if self._manual:
+            self._stop_manual()
+            return
         if self._listener:
             self._stop_listening()
         else:
@@ -2268,18 +2369,27 @@ class Session:
             self.emit({"type": "error", "text": "Missing AssemblyAI key"})
             self.emit({"type": "state", "state": "idle"})
             return
+        cfg = self._stt_cfg()
         try:
-            text, lang = assemblyai_transcribe_pcm(key, pcm, self._stt_cfg())
+            text, lang = assemblyai_transcribe_accurate(key, pcm, cfg)
         except Exception as e:
-            self.emit({"type": "error", "text": f"Transcription failed:{e}"})
+            log.warning("accurate STT failed, falling back to realtime: %s", e)
+            try:
+                dur = len(pcm) / float(SR * 2)
+                text, lang = assemblyai_transcribe_pcm(key, pcm, cfg, timeout=min(90.0, max(24.0, dur * 2 + 12)))
+            except Exception as e2:
+                self.emit({"type": "error", "text": f"Transcription failed:{e2}"})
+                self.emit({"type": "state", "state": "idle"})
+                return
+        if not (text or "").strip():
+            self.emit({"type": "status", "text": STATUS_EMPTY})
             self.emit({"type": "state", "state": "idle"})
             return
-        cleaned, _ = clean_transcript(
-            text or "",
-            None,
-            self.pipeline._last_answer,
-            keep_fillers=self._workspace in ("meeting", "translate"),
-        )
+        if self._workspace in ("translate", "meeting"):
+            self._on_final(text, lang)
+            self.emit({"type": "state", "state": "idle"})
+            return
+        cleaned, _ = clean_transcript(text or "", None, self.pipeline._last_answer)
         if not cleaned:
             self.emit({"type": "status", "text": STATUS_EMPTY})
             self.emit({"type": "state", "state": "idle"})
@@ -2287,22 +2397,6 @@ class Session:
         heard = lang or detect_question_lang(cleaned)
         if not self._speech_allowed(cleaned, lang or heard):
             self.emit({"type": "partial", "text": ""})
-            self.emit({"type": "state", "state": "idle"})
-            return
-        if self._workspace == "translate":
-            qid = self.pipeline._new_qid()
-            ev: dict[str, Any] = {"type": "question", "id": qid, "text": cleaned}
-            if heard:
-                ev["language"] = heard
-            self.emit(ev)
-            self.emit({"type": "state", "state": "idle"})
-            return
-        if self._workspace == "meeting":
-            qid = self.pipeline._new_qid()
-            ev: dict[str, Any] = {"type": "question", "id": qid, "text": cleaned}
-            if heard:
-                ev["language"] = heard
-            self.emit(ev)
             self.emit({"type": "state", "state": "idle"})
             return
         if not self._claim_busy():
@@ -2530,21 +2624,9 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Nod Web", lifespan=lifespan)
-_origins = [
-    "http://127.0.0.1:5174",
-    "http://localhost:5174",
-    "http://127.0.0.1:9320",
-    "http://localhost:9320",
-]
-if PUBLIC_URL:
-    _origin = PUBLIC_URL.rstrip("/")
-    _origins.append(_origin)
-    _host = urlparse(_origin).hostname or ""
-    if _host.count(".") == 1:
-        _origins.append(f"{urlparse(_origin).scheme}://www.{_host}")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_origins,
+    allow_origins=cors_origins(PUBLIC_URL),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

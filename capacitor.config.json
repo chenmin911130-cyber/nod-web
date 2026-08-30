@@ -1,0 +1,33 @@
+{
+  "appId": "com.nodpilot.app",
+  "appName": "Nod",
+  "webDir": "web/dist",
+  "backgroundColor": "#05070a",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#05070a",
+    "scheme": "Nod",
+    "preferredContentMode": "mobile",
+    "limitsNavigationsToAppBoundDomains": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "backgroundColor": "#05070a",
+      "launchAutoHide": true
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#05070a"
+    }
+  },
+  "server": {
+    "iosScheme": "capacitor",
+    "allowNavigation": [
+      "nodpilot.com",
+      "www.nodpilot.com",
+      "*.clerk.accounts.dev",
+      "*.clerk.com",
+      "accounts.google.com"
+    ]
+  }
+}

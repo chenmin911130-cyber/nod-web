@@ -6,12 +6,13 @@ import {
   useClerk,
   useSignIn,
 } from '@clerk/clerk-react'
-import { setToken } from '../auth'
+import { getToken, setToken } from '../auth'
+import { apiUrl, maybeReturnToNativeApp, nativeGo } from '../native'
 import { track } from './track'
 import './Site.css'
 
 async function exchangeClerkSession(sessionToken: string) {
-  const res = await fetch('/api/auth/clerk', {
+  const res = await fetch(apiUrl('/api/auth/clerk'), {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -75,10 +76,12 @@ export function ClerkExchange() {
         await clerk.signOut().catch(() => undefined)
         return
       }
+      if (maybeReturnToNativeApp(getToken())) return
       const path = window.location.pathname.replace(/\/+$/, '') || '/'
-      if (path === '/login' || path === '/signup' || path === '/sso-callback') {
+      const view = new URLSearchParams(window.location.search).get('view')
+      if (path === '/login' || path === '/signup' || path === '/sso-callback' || view === 'login' || view === 'signup' || view === 'sso-callback') {
         const next = new URLSearchParams(window.location.search).get('next') || '/app'
-        window.location.replace(next)
+        nativeGo(next, true)
       }
     })()
   }, [clerk, getClerkToken, isLoaded, isSignedIn])
@@ -92,6 +95,35 @@ export function ClerkOneTap() {
       signInForceRedirectUrl="/login?next=/app"
       signUpForceRedirectUrl="/login?next=/app"
     />
+  )
+}
+
+export function NativeGoogleButton() {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const start = async () => {
+    setBusy(true)
+    setErr('')
+    try {
+      track('cta_google')
+      const { Browser } = await import('@capacitor/browser')
+      await Browser.open({ url: 'https://nodpilot.com/login?native_return=1' })
+      setBusy(false)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Google sign-in failed')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="google-auth">
+      <button className="button google-btn" type="button" onClick={() => void start()} disabled={busy}>
+        <GoogleMark />
+        {busy ? 'Opening Google…' : 'Continue with Google'}
+      </button>
+      {err && <div className="site-err">{err}</div>}
+    </div>
   )
 }
 
@@ -110,7 +142,8 @@ export function GoogleButton({ next = '/app' }: { next?: string }) {
         const sessionToken = await getClerkToken({ skipCache: true })
         if (!sessionToken) throw new Error('Google session expired. Try again.')
         await exchangeClerkSession(sessionToken)
-        window.location.replace(next)
+        if (maybeReturnToNativeApp(getToken())) return
+        nativeGo(next, true)
         return
       }
       if (!signIn) {

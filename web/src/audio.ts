@@ -1,3 +1,7 @@
+import { isNativeApp } from './native'
+import { isWatchMicPreferred } from './watch'
+import type { PluginListenerHandle } from '@capacitor/core'
+
 const TARGET_SR = 16000
 
 function floatToPcm16(input: Float32Array): ArrayBuffer {
@@ -30,12 +34,20 @@ function downsample(input: Float32Array, fromSr: number): ArrayBuffer {
   return floatToPcm16(sampled)
 }
 
+function base64ToPcm(data: string): ArrayBuffer {
+  const binary = atob(data)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes.buffer
+}
+
 export class MicCapture {
   private ctx: AudioContext | null = null
   private stream: MediaStream | null = null
   private proc: ScriptProcessorNode | null = null
   private source: MediaStreamAudioSourceNode | null = null
   private gain: GainNode | null = null
+  private nativeHandle: PluginListenerHandle | null = null
   private running = false
   private starting: Promise<void> | null = null
   // Bumped by stop() so an in-flight start() knows to release what it took
@@ -62,6 +74,14 @@ export class MicCapture {
   private async acquire(): Promise<void> {
     const seq = this.stopSeq
     try {
+      if (isNativeApp()) {
+        if (isWatchMicPreferred()) {
+          this.running = true
+          return
+        }
+        await this.acquireNative(seq)
+        return
+      }
       this.stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -100,8 +120,29 @@ export class MicCapture {
     }
   }
 
+  private async acquireNative(seq: number): Promise<void> {
+    const { NodMic } = await import('nod-mic')
+    this.nativeHandle = await NodMic.addListener('pcm', (ev) => {
+      if (!this.running) return
+      const pcm = base64ToPcm(ev.data || '')
+      if (pcm.byteLength) this.onPcm(pcm)
+    })
+    await NodMic.start()
+    if (seq !== this.stopSeq) {
+      this.release()
+      return
+    }
+    this.running = true
+  }
+
   private release(): void {
     this.running = false
+    const handle = this.nativeHandle
+    this.nativeHandle = null
+    if (handle) {
+      void handle.remove()
+      void import('nod-mic').then(({ NodMic }) => NodMic.stop()).catch(() => undefined)
+    }
     try {
       this.proc?.disconnect()
       this.source?.disconnect()

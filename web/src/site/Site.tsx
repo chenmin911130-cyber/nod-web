@@ -1,4 +1,5 @@
 import { lazy, Suspense } from 'react'
+import { sitePathFromLocation } from '../native'
 import Landing from '../landing/Landing'
 import AdminPage from './Admin'
 import AccountPage from './Account'
@@ -10,7 +11,7 @@ const ClerkChrome = lazy(() => import('./ClerkAuth').then((m) => ({ default: m.C
 const SSOCallbackPage = lazy(() => import('./ClerkAuth').then((m) => ({ default: m.SSOCallbackPage })))
 
 export default function Site({ clerkEnabled = false }: { clerkEnabled?: boolean }) {
-  const path = window.location.pathname.replace(/\/+$/, '') || '/'
+  const path = sitePathFromLocation()
   const page =
     path === '/login' ? (
       <LoginPage clerkEnabled={clerkEnabled} />
