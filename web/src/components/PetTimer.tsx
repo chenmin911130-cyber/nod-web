@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const HELLO = "I'm listening."
 const BYE = "I'll be here."
@@ -25,10 +25,7 @@ function PetMark() {
 export default function PetTimer({ listening, elapsedMs }: { listening: boolean; elapsedMs?: number }) {
   const [phase, setPhase] = useState<'hidden' | 'hello' | 'live' | 'bye'>('hidden')
   const [ms, setMs] = useState(0)
-  const [travel, setTravel] = useState(0)
   const started = useRef(0)
-  const trackRef = useRef<HTMLDivElement>(null)
-  const chipRef = useRef<HTMLDivElement>(null)
   const visible = phase !== 'hidden'
 
   useEffect(() => {
@@ -50,39 +47,18 @@ export default function PetTimer({ listening, elapsedMs }: { listening: boolean;
     return () => window.clearInterval(id)
   }, [listening])
 
-  useLayoutEffect(() => {
-    if (!visible) return
-    const measure = () => {
-      const track = trackRef.current
-      const chip = chipRef.current
-      if (!track || !chip) return
-      setTravel(Math.max(0, track.clientWidth - chip.offsetWidth))
-    }
-    measure()
-    const ro = new ResizeObserver(measure)
-    if (trackRef.current) ro.observe(trackRef.current)
-    if (chipRef.current) ro.observe(chipRef.current)
-    return () => ro.disconnect()
-  }, [visible, phase])
-
   if (!visible) return null
 
   const line = phase === 'bye' ? BYE : HELLO
   const clock = formatClock(elapsedMs ?? ms)
-  const walking = phase !== 'bye' && travel > 24
 
   return (
     <div
-      ref={trackRef}
-      className={`pet-track${phase === 'bye' ? ' bye' : ''}${walking ? ' walk' : ''}`}
+      className={`pet-track${phase === 'bye' ? ' bye' : ''}`}
       role="status"
       aria-live="polite"
     >
-      <div
-        ref={chipRef}
-        className="pet-timer"
-        style={{ '--pet-travel': `${travel}px` } as CSSProperties}
-      >
+      <div className="pet-timer">
         <PetMark />
         <div className="pet-timer-copy">
           <span className="pet-timer-line">{line}</span>

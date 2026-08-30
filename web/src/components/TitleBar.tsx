@@ -189,7 +189,6 @@ export default function TitleBar(props: Props) {
       </div>
 
       <div className="titlebar-right no-drag">
-        <PetTimer listening={Boolean(props.listening)} elapsedMs={props.elapsedMs} />
         {mode !== 'translate' && (
         <div className="lang-pills" ref={langRef}>
           <button
@@ -350,6 +349,7 @@ export default function TitleBar(props: Props) {
           </div>
         </div>
 
+        <PetTimer listening={Boolean(props.listening)} elapsedMs={props.elapsedMs} />
         {!isWeb && (
           <div className="tb-win">
             <button className="win-btn" onClick={() => window.api.minimize()} title="Minimize">

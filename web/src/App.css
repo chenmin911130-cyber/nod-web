@@ -5022,11 +5022,12 @@ a.tb-menu-action {
 
 .pet-track {
   position: relative;
-  flex: 1 1 auto;
-  min-width: 88px;
+  flex: 0 0 auto;
+  min-width: 0;
   height: 44px;
+  margin-left: auto;
   pointer-events: none;
-  overflow: hidden;
+  overflow: visible;
   animation: pet-in 0.28s ease-out;
 }
 
@@ -5035,13 +5036,12 @@ a.tb-menu-action {
 }
 
 .pet-timer {
-  position: absolute;
+  position: relative;
   top: 2px;
-  left: 0;
   display: flex;
   align-items: center;
   gap: 8px;
-  max-width: min(220px, 70%);
+  max-width: min(220px, 42vw);
   padding: 3px 12px 3px 3px;
   border: 1px solid rgba(34, 211, 238, 0.28);
   border-radius: 999px;
@@ -5142,11 +5142,12 @@ a.tb-menu-action {
 
 @media (max-width: 760px) {
   .pet-track {
-    min-width: 64px;
+    min-width: 0;
+    margin-left: auto;
   }
 
   .pet-timer {
-    max-width: min(156px, 72%);
+    max-width: min(168px, 46vw);
     padding: 3px 8px 3px 3px;
   }
 
