@@ -673,6 +673,120 @@ def _friendly_gen_error(err: BaseException) -> str:
     return f"Generation failed:{err}"
 
 
+_IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "gif", "bmp"}
+_TEXT_EXTS = {"txt", "md"}
+_OFFICE_DOC = {"doc", "docx"}
+_OFFICE_SHEET = {"xls", "xlsx"}
+_OFFICE_SLIDE = {"ppt", "pptx"}
+
+
+def _file_ext(name: str) -> str:
+    return name.rsplit(".", 1)[-1].lower() if "." in (name or "") else ""
+
+
+def _is_image_attach(name: str, mime: str) -> bool:
+    return mime.startswith("image/") or _file_ext(name) in _IMAGE_EXTS
+
+
+def _image_mime(name: str, mime: str) -> str:
+    if mime.startswith("image/"):
+        return mime
+    ext = _file_ext(name)
+    return {
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "webp": "image/webp",
+        "gif": "image/gif",
+        "bmp": "image/bmp",
+    }.get(ext, "image/png")
+
+
+def _extract_pdf(raw: bytes) -> str:
+    from io import BytesIO
+
+    from pypdf import PdfReader
+
+    reader = PdfReader(BytesIO(raw))
+    body = "\n".join((p.extract_text() or "") for p in reader.pages)[:12000]
+    return body or "[PDF attached, no extractable text.]"
+
+
+def _extract_docx(raw: bytes) -> str:
+    from io import BytesIO
+
+    from docx import Document
+
+    doc = Document(BytesIO(raw))
+    parts = [p.text for p in doc.paragraphs if p.text.strip()]
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells if c.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+    return "\n".join(parts)[:12000] or "[Word document attached, no extractable text.]"
+
+
+def _extract_xlsx(raw: bytes) -> str:
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(BytesIO(raw), read_only=True, data_only=True)
+    lines: list[str] = []
+    for sheet in wb.worksheets:
+        lines.append(f"# {sheet.title}")
+        for row in sheet.iter_rows(values_only=True):
+            cells = [str(c) for c in row if c is not None and str(c).strip()]
+            if cells:
+                lines.append(" | ".join(cells))
+            if len("\n".join(lines)) > 12000:
+                break
+    wb.close()
+    return "\n".join(lines)[:12000] or "[Spreadsheet attached, no extractable text.]"
+
+
+def _extract_pptx(raw: bytes) -> str:
+    from io import BytesIO
+
+    from pptx import Presentation
+
+    prs = Presentation(BytesIO(raw))
+    parts: list[str] = []
+    for i, slide in enumerate(prs.slides, 1):
+        bits = []
+        for shape in slide.shapes:
+            text = getattr(shape, "text", "") or ""
+            if text.strip():
+                bits.append(text.strip())
+        if bits:
+            parts.append(f"# Slide {i}\n" + "\n".join(bits))
+    return "\n".join(parts)[:12000] or "[Slides attached, no extractable text.]"
+
+
+def _extract_attachment_text(name: str, mime: str, raw: bytes) -> str:
+    ext = _file_ext(name)
+    if ext in _TEXT_EXTS or mime.startswith("text/"):
+        return raw.decode("utf-8", errors="replace")[:12000]
+    if ext == "pdf" or mime == "application/pdf":
+        return _extract_pdf(raw)
+    if ext in _OFFICE_DOC or "wordprocessingml" in mime:
+        if ext == "doc":
+            return "[Old .doc files are not supported. Save as .docx and attach again.]"
+        return _extract_docx(raw)
+    if ext in _OFFICE_SHEET or "spreadsheetml" in mime:
+        if ext == "xls":
+            return "[Old .xls files are not supported. Save as .xlsx and attach again.]"
+        return _extract_xlsx(raw)
+    if ext in _OFFICE_SLIDE or "presentationml" in mime:
+        if ext == "ppt":
+            return "[Old .ppt files are not supported. Save as .pptx and attach again.]"
+        return _extract_pptx(raw)
+    if _is_image_attach(name, mime):
+        return f"[Image attached: {name}. The model can see this image.]"
+    return f"[Attached file: {name}]"
+
+
 def attachments_to_prompt(files) -> str:
     if not files:
         return ""
@@ -686,22 +800,10 @@ def attachments_to_prompt(files) -> str:
         except Exception:
             blocks.append(f"[Could not read {name}]")
             continue
-        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-        if ext in ("txt", "md") or mime.startswith("text/"):
-            body = raw.decode("utf-8", errors="replace")[:12000]
-        elif ext == "pdf" or mime == "application/pdf":
-            try:
-                from pypdf import PdfReader
-                from io import BytesIO
-                reader = PdfReader(BytesIO(raw))
-                body = "\n".join((p.extract_text() or "") for p in reader.pages)[:12000]
-                body = body or f"[PDF attached: {name}, no extractable text.]"
-            except Exception as e:
-                body = f"[Could not read {name}: {e}]"
-        elif mime.startswith("image/"):
-            body = f"[Image attached: {name}. The model can see this image.]"
-        else:
-            body = f"[Attached file: {name}]"
+        try:
+            body = _extract_attachment_text(name, mime, raw)
+        except Exception as e:
+            body = f"[Could not read {name}: {e}]"
         blocks.append(f"--- Attached: {name} ---\n{body}")
     return "\n\n".join(blocks)
 
@@ -709,11 +811,12 @@ def attachments_to_prompt(files) -> str:
 def attachment_images(files) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     for item in files or []:
-        mime = (item or {}).get("mime") or ""
         data = (item or {}).get("data") or ""
         name = (item or {}).get("name") or "image"
-        if mime.startswith("image/") and data:
-            out.append({"name": name, "mime": mime, "data": data})
+        mime = (item or {}).get("mime") or ""
+        if not data or not _is_image_attach(name, mime):
+            continue
+        out.append({"name": name, "mime": _image_mime(name, mime), "data": data})
     return out[:4]
 
 
@@ -994,6 +1097,22 @@ class Pipeline:
                 },
                 {"role": "user", "content": question},
             ]
+        if mode == "file_ask":
+            return [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful assistant. Read every attached file and image carefully.\n"
+                        "Answer the user's request using that content the same way a chat model would.\n"
+                        "If they only attached files, summarize the useful information, then answer any implied question.\n"
+                        "Be specific. Quote names, numbers, and claims from the files when they matter.\n"
+                        "If an image is attached, describe and analyze what you actually see.\n"
+                        "Do not invent contents that are not in the files."
+                        + out_rule
+                    ),
+                },
+                {"role": "user", "content": question},
+            ]
         if mode == "notes" or question.startswith("Write structured notes"):
             return [
                 {
@@ -1041,7 +1160,14 @@ class Pipeline:
             {"role": "user", "content": f"Interviewer question: {question}\n\n{lang_line}\n\nAnswer:"},
         ]
 
-    def process_text(self, question: str, mode: str = "ask", heard_lang: str | None = None, images: list | None = None) -> None:
+    def process_text(
+        self,
+        question: str,
+        mode: str = "ask",
+        heard_lang: str | None = None,
+        images: list | None = None,
+        display_text: str | None = None,
+    ) -> None:
         t = (question or "").strip()
         self._heard_lang = _normalize_stt_lang(heard_lang)
         if not t:
@@ -1067,16 +1193,17 @@ class Pipeline:
         # Always emit question so the client can bind a pending Ask/Notes card
         # to this generation id. Tagged internal prompts are filtered in the UI
         # and must not be omitted — otherwise the next transcript line steals the card.
-        ev: dict[str, Any] = {"type": "question", "id": qid, "text": t}
+        shown = (display_text or t).strip() if not internal else t
+        ev: dict[str, Any] = {"type": "question", "id": qid, "text": shown}
         if not internal:
-            heard = self._heard_lang or (detect_question_lang(t) if mode == "ask" else None)
+            heard = self._heard_lang or (detect_question_lang(display_text or t) if mode in ("ask", "file_ask") else None)
             if heard:
                 ev["language"] = heard
         self.emit(ev)
         t0 = time.time()
         llm = self.cfg.get("llm") or {}
         max_tokens = int(llm.get("max_tokens") or 800)
-        if mode == "ask":
+        if mode in ("ask", "file_ask"):
             max_tokens = max(max_tokens, 1600)
         elif mode in ("summary", "notes", "catchup", "listen_ask"):
             max_tokens = max(max_tokens, 1600)
@@ -1338,7 +1465,7 @@ class Session:
         # for one question and both get billed.
         self._busy_lock = threading.Lock()
         self._pending: tuple[str, str | None] | None = None
-        self._pending_asks: list[tuple[str, str]] = []
+        self._pending_asks: list[tuple[str, str, Any]] = []
         self._pending_wait: tuple[str | None, float, str | None] = (None, 0.0, None)
         self._meeting_flush_timer: threading.Timer | None = None
         self._interview_wait_timer: threading.Timer | None = None
@@ -2154,22 +2281,30 @@ class Session:
         # generation, no matter which path (ask, manual, interview voice)
         # held the busy flag — otherwise they sit until the next question.
         if self._pending_asks:
-            nxt, md = self._pending_asks.pop(0)
-            self.ask(nxt, None, md)
+            nxt, md, fl = self._pending_asks.pop(0)
+            self.ask(nxt, fl, md)
 
     def ask(self, text, files=None, mode="ask") -> None:
         extra = attachments_to_prompt(files)
         images = attachment_images(files)
-        text = (text or "").strip()
-        if extra:
-            text = f"{extra}\n\n{text}".strip() if text else extra
-        if not text and not images:
+        user_text = (text or "").strip()
+        names = [str((item or {}).get("name") or "file") for item in (files or []) if item]
+        display = user_text
+        if names and (not display or display in {"Please review the attached files.", "Please review the attached images."}):
+            display = f"Please review: {', '.join(names)}"
+        elif names and display and "--- Attached:" not in display:
+            display = f"{display} ({', '.join(names)})"
+        llm_text = f"{extra}\n\n{user_text}".strip() if extra and user_text else (extra or user_text)
+        if not llm_text and not images:
             return
-        if not text:
-            text = "Please review the attached images."
+        if not llm_text:
+            llm_text = "Please review the attached images."
+            display = display or llm_text
+        if files and mode == "ask":
+            mode = "file_ask"
         if not self._ensure_usage():
             return
-        body = text
+        body = llm_text
         if body.startswith(("[NOD_TRANSLATE", "[NOD_SUMMARY", "[NOD_CATCH", "[NOD_ASK", "[NOD_NOTES")):
             nl = body.find("\n")
             body = body[nl + 1:].strip() if nl >= 0 else body
@@ -2177,15 +2312,15 @@ class Session:
             mode = "summary"
         if mode == "ask" and body.startswith("Translate to "):
             mode = "translate"
-        if mode == "ask" and (body.startswith("Catch the listener up") or text.lstrip().startswith("[NOD_CATCH")):
+        if mode == "ask" and (body.startswith("Catch the listener up") or llm_text.lstrip().startswith("[NOD_CATCH")):
             mode = "catchup"
-        if mode == "ask" and (body.startswith("Listener question:") or text.lstrip().startswith("[NOD_ASK")):
+        if mode == "ask" and (body.startswith("Listener question:") or llm_text.lstrip().startswith("[NOD_ASK")):
             mode = "listen_ask"
-        if mode == "ask" and (body.startswith("Write structured notes") or text.lstrip().startswith("[NOD_NOTES")):
+        if mode == "ask" and (body.startswith("Write structured notes") or llm_text.lstrip().startswith("[NOD_NOTES")):
             mode = "notes"
         if not self._claim_busy():
-            if mode in ("translate", "summary", "catchup", "notes", "listen_ask"):
-                self._pending_asks.append((text, mode))
+            if mode in ("translate", "summary", "catchup", "notes", "listen_ask", "file_ask"):
+                self._pending_asks.append((user_text, mode, files))
                 return
             self.emit({"type": "status", "text": "Still working, please wait"})
             self.emit({"type": "done", "id": "", "stt": 0, "llm": 0, "ok": False})
@@ -2195,7 +2330,7 @@ class Session:
 
         def work():
             try:
-                self.pipeline.process_text(text, mode, images=images)
+                self.pipeline.process_text(llm_text, mode, images=images, display_text=display)
             finally:
                 self._release_busy()
                 listening = self._listener is not None

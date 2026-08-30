@@ -2,9 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { AudioSource, Lang, PairLang, TranslatePair } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import { isWeb } from '../platform'
-import type { AttachPayload, LocalAttach } from '../attach'
-import { toPayload } from '../attach'
-import PromptAttach from './PromptAttach'
+import type { AttachPayload } from '../attach'
 import EmptyState from './EmptyState'
 
 interface Props {
@@ -63,7 +61,6 @@ export default function TranslatePane({
   onRetry,
 }: Props) {
   const [input, setInput] = useState('')
-  const [files, setFiles] = useState<LocalAttach[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -72,10 +69,9 @@ export default function TranslatePane({
 
   const submit = () => {
     const t = input.trim()
-    if (!t && files.length === 0) return
-    onTranslate(t, files.length ? toPayload(files) : undefined)
+    if (!t) return
+    onTranslate(t)
     setInput('')
-    setFiles([])
   }
 
   const empty = pairs.length === 0 && !partial
@@ -208,21 +204,23 @@ export default function TranslatePane({
         </div>
       </div>
 
-      <PromptAttach files={files} onChange={setFiles}>
-        <input
-          className="prompt-input"
-          placeholder="Type to translate..."
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') submit()
-          }}
-        />
-        <button className="gen-btn" onClick={submit} disabled={!input.trim() && files.length === 0}>
-          <Sparkle />
-          Translate
-        </button>
-      </PromptAttach>
+      <div className="prompt-block">
+        <div className="prompt-row">
+          <input
+            className="prompt-input"
+            placeholder="Type to translate..."
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submit()
+            }}
+          />
+          <button className="gen-btn" onClick={submit} disabled={!input.trim()}>
+            <Sparkle />
+            Translate
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

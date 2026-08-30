@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react'
+import { useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { ATTACH_ACCEPT, collectAttaches, type LocalAttach } from '../attach'
 
 interface Props {
@@ -25,8 +25,20 @@ export default function PromptAttach({ files, onChange, disabled, children }: Pr
     if (inputRef.current) inputRef.current.value = ''
   }
 
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    if (disabled) return
+    void onFiles(e.dataTransfer.files)
+  }
+
   return (
-    <div className="prompt-block">
+    <div
+      className="prompt-block"
+      onDragOver={(e) => {
+        e.preventDefault()
+      }}
+      onDrop={onDrop}
+    >
       {files.length > 0 && (
         <div className="attach-chips">
           {files.map((f) => (

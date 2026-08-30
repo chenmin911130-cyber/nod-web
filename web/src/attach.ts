@@ -39,6 +39,20 @@ export function kindOf(name: string, mime: string): AttachKind | null {
   return null
 }
 
+const IMAGE_MIME: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  bmp: 'image/bmp',
+}
+
+function mimeOf(name: string, mime: string): string {
+  if (mime && mime !== 'application/octet-stream') return mime
+  return IMAGE_MIME[extOf(name)] || mime || 'application/octet-stream'
+}
+
 function readBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -50,6 +64,51 @@ function readBase64(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error || new Error('Failed to read file'))
     reader.readAsDataURL(file)
   })
+}
+
+function compressImage(file: File, mime: string): Promise<{ data: string; mime: string }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      const edge = Math.max(img.width, img.height)
+      const scale = edge > 1600 ? 1600 / edge : 1
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(img.width * scale))
+      canvas.height = Math.max(1, Math.round(img.height * scale))
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        reject(new Error('no canvas'))
+        return
+      }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      const outMime = mime === 'image/png' ? 'image/png' : 'image/jpeg'
+      const dataUrl = canvas.toDataURL(outMime, 0.82)
+      const comma = dataUrl.indexOf(',')
+      resolve({ data: comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl, mime: outMime })
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('image load failed'))
+    }
+    img.src = url
+  })
+}
+
+async function readAttachData(file: File, kind: AttachKind): Promise<{ data: string; mime: string }> {
+  const mime = mimeOf(file.name, file.type)
+  if (kind !== 'image') {
+    return { data: await readBase64(file), mime }
+  }
+  if (file.size <= 900_000 && (mime === 'image/jpeg' || mime === 'image/png' || mime === 'image/webp')) {
+    return { data: await readBase64(file), mime }
+  }
+  try {
+    return await compressImage(file, mime)
+  } catch {
+    return { data: await readBase64(file), mime }
+  }
 }
 
 export async function collectAttaches(
@@ -68,11 +127,11 @@ export async function collectAttaches(
     if (!kind) {
       return { files: next, error: 'Use Office, PDF, or image files' }
     }
-    const data = await readBase64(file)
+    const { data, mime } = await readAttachData(file, kind)
     next.push({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       name: file.name,
-      mime: file.type || 'application/octet-stream',
+      mime,
       size: file.size,
       data,
       kind,

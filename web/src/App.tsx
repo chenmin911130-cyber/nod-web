@@ -1662,14 +1662,15 @@ export default function App() {
     generateNotes()
   }, [generateNotes])
 
-  const handleListenAsk = useCallback((text: string) => {
+  const handleListenAsk = useCallback((text: string, files?: AttachPayload[]) => {
     const s = stateRef.current
-    const question = text.trim()
+    const question = text.trim() || (files?.length ? `Please review: ${files.map((f) => f.name).join(', ')}` : '')
     if (!question) return
     dispatch({ type: 'expect_catch', kind: 'ask', title: 'Ask', question })
     window.api.send({
       type: 'ask',
       text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, s.translateOn, s.speakerNames),
+      files,
       mode: 'listen_ask',
     })
   }, [])

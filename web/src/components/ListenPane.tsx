@@ -1,4 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import type { AttachPayload, LocalAttach } from '../attach'
+import { toPayload } from '../attach'
+import PromptAttach from './PromptAttach'
 import type { CatchNote, Lang, MeetingLine, PairLang } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import {
@@ -36,7 +39,7 @@ interface Props {
   onTranslate: (on: boolean) => void
   onTranslateTo: (lang: Lang) => void
   onSummary: () => void
-  onAsk: (text: string) => void
+  onAsk: (text: string, files?: AttachPayload[]) => void
 }
 
 const NOTES_W_MIN = 28
@@ -477,6 +480,7 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
 
 export default function ListenPane(props: Props) {
   const [input, setInput] = useState('')
+  const [files, setFiles] = useState<LocalAttach[]>([])
   const [notesOpen, setNotesOpen] = useState(Boolean(props.notesDefaultOpen))
   const [mobilePane, setMobilePane] = useState<'live' | 'notes'>('live')
   const [notesW, setNotesW] = useState(() => readNotesW(props.scene))
@@ -546,10 +550,11 @@ export default function ListenPane(props: Props) {
 
   const submit = () => {
     const text = input.trim()
-    if (!text || props.busy) return
+    if (props.busy || (!text && files.length === 0)) return
     openNotes()
-    props.onAsk(text)
+    props.onAsk(text || 'Please review the attached files.', files.length ? toPayload(files) : undefined)
     setInput('')
+    setFiles([])
   }
 
   const stackedPane = !notesOpen || mobilePane === 'live' ? 'live' : 'notes'
@@ -763,19 +768,21 @@ export default function ListenPane(props: Props) {
           </div>
 
           <div className="listen-prompt">
-            <input
-              value={input}
-              placeholder="Ask anything — the answer shows in Notes"
-              onChange={(e) => {
-                setInput(e.target.value)
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') submit()
-              }}
-            />
-            <button type="button" className="listen-go" disabled={props.busy || !input.trim()} onClick={submit}>
-              Ask
-            </button>
+            <PromptAttach files={files} onChange={setFiles} disabled={props.busy}>
+              <input
+                value={input}
+                placeholder="Ask anything — the answer shows in Notes"
+                onChange={(e) => {
+                  setInput(e.target.value)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') submit()
+                }}
+              />
+              <button type="button" className="listen-go" disabled={props.busy || (!input.trim() && files.length === 0)} onClick={submit}>
+                Ask
+              </button>
+            </PromptAttach>
           </div>
         </>
       )}
