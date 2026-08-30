@@ -7,6 +7,7 @@ ios/App/App/capacitor.config.json
 ios/App/App/config.xml
 ios/capacitor-cordova-ios-plugins
 ios/DerivedData
+ios/dist
 ios/App/App.xcworkspace/xcuserdata
 ios/App/App.xcodeproj/xcuserdata
 ios/App/App.xcodeproj/project.xcworkspace/xcuserdata

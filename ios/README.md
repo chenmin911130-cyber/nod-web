@@ -2,22 +2,32 @@
 
 The iPhone app is the existing web workspace in a WKWebView, plus a native microphone session so listening continues after the screen locks. The Watch app records from the **Watch microphone** (Summary AI–style), then sends 16 kHz PCM to the iPhone for the existing live transcript and notes.
 
-Xcode only runs on a Mac. This repo prepares the project; you compile, run on a device, and upload TestFlight from that Mac.
+Xcode only runs on a Mac. This Linux/cloud checkout prepares the project; you compile the IPA on that Mac.
 
-## One-time Mac setup
+## Package on a Mac (this is the iOS build)
 
-1. Install Xcode, CocoaPods (`sudo gem install cocoapods`), and Node 20+.
-2. Open an Apple Developer account. Create an iOS App ID `com.nodpilot.app` and a Watch App ID `com.nodpilot.app.watchkitapp` (Xcode can create both when you pick a Team).
-3. From the repo root:
+1. Install **Xcode** from the App Store. Open it once and accept the license.
+2. Install **Node 20+** and CocoaPods (`sudo gem install cocoapods` or `brew install cocoapods`).
+3. Sign in to an Apple Developer account in Xcode → Settings → Accounts. Xcode can create App IDs `com.nodpilot.app` and `com.nodpilot.app.watchkitapp` when you pick a Team.
+4. In this repo on the Mac:
 
 ```bash
-cd web && npm ci && cd ..
+git pull
 npm ci
-npm run cap:sync
-npx cap open ios
+(cd web && npm ci)
+npm run cap:ios
 ```
 
-`cap:sync` builds `web/dist`, points the app at `app.html` (not the marketing site), and copies assets into `ios/`.
+That builds `web/dist`, syncs Capacitor, installs pods, and opens Xcode. Select **Team** on both the **App** and **WatchApp** targets, plug in an iPhone, press Run.
+
+To make an archive / IPA after Team is set (10-character Team ID from Xcode → Settings → Accounts):
+
+```bash
+TEAM_ID=XXXXXXXXXX npm run cap:ios -- --archive
+TEAM_ID=XXXXXXXXXX npm run cap:ios -- --ipa
+```
+
+`cap:sync` (also run by `cap:ios`) builds `web/dist`, points the app at `app.html` (not the marketing site), and copies assets into `ios/`.
 
 ## Run on a phone + Watch
 

@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "cap:sync": "npm run build --prefix web && node scripts/prepare-ios-web.mjs && npx cap sync ios && node scripts/patch-ios-plist.mjs",
-    "cap:open": "npx cap open ios"
+    "cap:open": "npx cap open ios",
+    "cap:ios": "bash scripts/package-ios.sh"
   },
   "dependencies": {
     "@capacitor/app": "^7.1.0",
