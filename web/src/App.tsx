@@ -184,6 +184,8 @@ type Action =
   | { type: 'retry_translate'; id: string }
   | { type: 'fail_translate'; id: string }
   | { type: 'ask_start' }
+  | { type: 'seed_ask'; text: string }
+  | { type: 'fail_ask'; text: string }
   | { type: 'expect_meeting_ask' }
   | { type: 'listen_scene'; scene: ListenScene }
   | { type: 'translate_on'; on: boolean }
@@ -428,7 +430,10 @@ function reducer(state: AppState, action: Action): AppState {
             }]
             return { ...state, translatePairs, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
           }
-          const turns = [...state.turns, { id: qid, q: text, a: '' }]
+          const pending = state.turns.findIndex((t) => t.id === '__pending_ask__')
+          const turns = state.turns.slice()
+          if (pending >= 0) turns[pending] = { ...turns[pending], id: qid, q: text }
+          else turns.push({ id: qid, q: text, a: '' })
           return { ...state, turns, currentQ: text, currentQId: qid, partial: '', busy: true, heardLang: heard ?? state.heardLang }
         }
         case 'chunk': {
@@ -756,6 +761,16 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case 'ask_start':
       return { ...state, busy: true, status: 'Asking…' }
+    case 'seed_ask': {
+      const turns = [...state.turns, { id: '__pending_ask__', q: action.text, a: '' }]
+      return { ...state, turns, currentQ: action.text, busy: true, status: 'Asking…' }
+    }
+    case 'fail_ask': {
+      const turns = state.turns.map((t) =>
+        t.id === '__pending_ask__' && !t.a ? { ...t, a: action.text } : t,
+      )
+      return { ...state, turns, busy: false, status: action.text }
+    }
     case 'expect_meeting_ask':
       return { ...state, summaryAskId: '__pending__', meetingSummary: '', busy: true, status: 'Asking…', translateBindId: '', translateAskId: '' }
     case 'fail_translate': {
@@ -1241,9 +1256,29 @@ export default function App() {
     setClearOpen(true)
   }, [doClear])
   requestClearRef.current = handleClear
+  const parkAttaches = async (files?: AttachPayload[]) => {
+    if (!files?.length) return undefined
+    const out = await authApi<{ id: string }>('/api/attach/extract', {
+      method: 'POST',
+      body: JSON.stringify({ files }),
+    })
+    return out.id
+  }
+
   const handleAsk = useCallback((text: string, files?: AttachPayload[]) => {
-    dispatch({ type: 'ask_start' })
-    window.api.send({ type: 'ask', text, files })
+    const label = text.trim() || (files?.length ? `Please review: ${files.map((f) => f.name).join(', ')}` : '')
+    dispatch({ type: 'seed_ask', text: label })
+    void (async () => {
+      try {
+        const attach_id = await parkAttaches(files)
+        window.api.send({ type: 'ask', text, attach_id })
+      } catch (ex) {
+        dispatch({
+          type: 'fail_ask',
+          text: ex instanceof Error ? ex.message : 'Could not send the file',
+        })
+      }
+    })()
   }, [])
 
   const handleOpacity = useCallback((n: number) => {
@@ -1667,12 +1702,22 @@ export default function App() {
     const question = text.trim() || (files?.length ? `Please review: ${files.map((f) => f.name).join(', ')}` : '')
     if (!question) return
     dispatch({ type: 'expect_catch', kind: 'ask', title: 'Ask', question })
-    window.api.send({
-      type: 'ask',
-      text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, s.translateOn, s.speakerNames),
-      files,
-      mode: 'listen_ask',
-    })
+    void (async () => {
+      try {
+        const attach_id = await parkAttaches(files)
+        window.api.send({
+          type: 'ask',
+          text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, s.translateOn, s.speakerNames),
+          attach_id,
+          mode: 'listen_ask',
+        })
+      } catch (ex) {
+        dispatch({
+          type: 'engine',
+          ev: { type: 'error', text: ex instanceof Error ? ex.message : 'Could not send the file' },
+        })
+      }
+    })()
   }, [])
 
   const copyPairField = useCallback((pair: TranslatePair, field: 'original' | 'translation') => {

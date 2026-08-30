@@ -20,7 +20,7 @@ from typing import Any, Callable
 from urllib.parse import urlencode, urlparse
 
 import httpx
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -818,6 +818,42 @@ def attachment_images(files) -> list[dict[str, str]]:
             continue
         out.append({"name": name, "mime": _image_mime(name, mime), "data": data})
     return out[:4]
+
+
+_ATTACH_TTL = 600.0
+_ATTACH_CACHE: dict[str, dict[str, Any]] = {}
+_ATTACH_LOCK = threading.Lock()
+
+
+def _prune_attach_cache(now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    with _ATTACH_LOCK:
+        dead = [k for k, row in _ATTACH_CACHE.items() if now - float(row.get("at") or 0) > _ATTACH_TTL]
+        for key in dead:
+            _ATTACH_CACHE.pop(key, None)
+        while len(_ATTACH_CACHE) > 32:
+            oldest = min(_ATTACH_CACHE, key=lambda k: float(_ATTACH_CACHE[k].get("at") or 0))
+            _ATTACH_CACHE.pop(oldest, None)
+
+
+def store_attach_files(files) -> str:
+    _prune_attach_cache()
+    aid = uuid.uuid4().hex
+    with _ATTACH_LOCK:
+        _ATTACH_CACHE[aid] = {"at": time.time(), "files": list(files or [])}
+    return aid
+
+
+def take_attach_files(aid: str):
+    if not aid:
+        return None
+    with _ATTACH_LOCK:
+        row = _ATTACH_CACHE.pop(str(aid), None)
+    if not row:
+        return None
+    if time.time() - float(row.get("at") or 0) > _ATTACH_TTL:
+        return None
+    return row.get("files")
 
 
 def assemblyai_transcribe_pcm(api_key: str, pcm: bytes, cfg: dict[str, Any], timeout: float = 18.0) -> tuple[str, str | None]:
@@ -1715,7 +1751,10 @@ class Session:
         elif mtype == "discard_history":
             self.discard_history()
         elif mtype == "ask":
-            self.ask(msg.get("text", ""), msg.get("files"), msg.get("mode") or "ask")
+            files = msg.get("files")
+            if not files:
+                files = take_attach_files(str(msg.get("attach_id") or ""))
+            self.ask(msg.get("text", ""), files, msg.get("mode") or "ask")
         elif mtype == "set_workspace":
             self.set_workspace(msg.get("mode") or "interview", msg.get("scene"), msg.get("speakers_expected"))
         elif mtype == "set_llm":
@@ -2530,6 +2569,27 @@ def health():
     return {"ok": db_ok, "stt": "assemblyai", "audio": "browser-mic", "auth": not AUTH_DISABLED}
 
 
+@app.post("/api/attach/extract")
+async def attach_extract(request: Request):
+    """Park uploaded files off the WebSocket. Ask messages over 200KB are dropped."""
+    from server.ratelimit import allow, client_ip
+
+    if not allow(f"attach:{client_ip(request)}", 20, 60.0):
+        raise HTTPException(429, "Too many uploads. Wait a moment.")
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(400, "Invalid upload") from exc
+    files = body.get("files") if isinstance(body, dict) else None
+    if not isinstance(files, list) or not files:
+        raise HTTPException(400, "Attach a file first")
+    if len(files) > 5:
+        raise HTTPException(400, "Up to 5 files")
+    aid = store_attach_files(files)
+    names = [str((item or {}).get("name") or "file") for item in files]
+    return {"id": aid, "names": names}
+
+
 @app.get("/api/config")
 def api_config():
     # Public on purpose: the landing page bootstraps Clerk from this payload.
@@ -2628,6 +2688,7 @@ async def ws_endpoint(ws: WebSocket):
                 await run_in_threadpool(session.push_pcm, data)
             elif text:
                 if len(text) > 200_000:
+                    emit({"type": "error", "text": "That file is too large to send this way. Try a smaller file."})
                     continue
                 try:
                     payload = json.loads(text)

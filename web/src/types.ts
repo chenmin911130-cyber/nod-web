@@ -144,7 +144,7 @@ export type EngineMsg =
   | { type: 'keep_history' }
   | { type: 'discard_history' }
   | { type: 'auth'; token: string }
-  | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; mode?: string }
+  | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; attach_id?: string; mode?: string }
   | { type: 'set_workspace'; mode: WorkspaceMode; scene?: 'meeting' | 'lecture' | 'interview'; speakers_expected?: number }
   | { type: 'set_llm'; provider: string; model: string }
   | { type: 'set_lang'; language: string | null }

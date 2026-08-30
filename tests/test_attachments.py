@@ -37,3 +37,11 @@ class AttachmentExtractTests(unittest.TestCase):
     def test_old_doc_is_rejected_clearly(self):
         body = _extract_attachment_text("resume.doc", "", b"not a real doc")
         self.assertIn(".docx", body)
+
+    def test_store_and_take_attach(self):
+        from server.app import store_attach_files, take_attach_files
+
+        aid = store_attach_files([{"name": "a.pdf", "mime": "application/pdf", "data": "xx"}])
+        files = take_attach_files(aid)
+        self.assertEqual(files[0]["name"], "a.pdf")
+        self.assertIsNone(take_attach_files(aid))
