@@ -11,6 +11,7 @@ import {
   type ListenScene,
   type NotesSectionId,
 } from '../listen'
+import { CaptionMode } from './SideRail'
 
 interface Props {
   scene: ListenScene
@@ -117,25 +118,6 @@ function SceneMark({ scene, size = 22 }: { scene: ListenScene; size?: number }) 
   )
 }
 
-function TranslateIcon() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
-      <path d="M1 18.8 6.6 3.4 12.2 18.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M2.9 13.2h7.4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-      <text
-        x="10.6"
-        y="19.2"
-        fill="currentColor"
-        fontSize="14.5"
-        fontWeight="700"
-        fontFamily="Microsoft YaHei UI, Microsoft YaHei, PingFang SC, Noto Sans SC, sans-serif"
-      >
-        文
-      </text>
-    </svg>
-  )
-}
-
 function NotesIcon() {
   return (
     <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
@@ -227,9 +209,6 @@ function SceneSelect({ scene, onScene }: { scene: ListenScene; onScene: (scene: 
 
   return (
     <div className={`listen-scene${open ? ' open' : ''}`} ref={boxRef}>
-      <span className="listen-scene-kicker" title={sceneLabel(scene)}>
-        <SceneMark scene={scene} />
-      </span>
       <button
         type="button"
         className="listen-scene-btn"
@@ -564,21 +543,22 @@ export default function ListenPane(props: Props) {
   return (
     <div className={`listen-main scene-${props.scene}${props.translateOn ? ' tr-on' : ' tr-off'}${props.ended ? ' ended' : ''}${props.qa ? ' qa' : ''}`}>
       <div className="listen-controls">
-        {!props.qa && (
-          <button
-            type="button"
-            className={`listen-icon-btn listen-side-left${props.translateOn ? ' on' : ''}`}
-            role="switch"
-            aria-checked={props.translateOn}
-            title={props.translateOn ? 'Translate on' : 'Translate off'}
-            onClick={() => props.onTranslate(!props.translateOn)}
-          >
-            <TranslateIcon />
-          </button>
-        )}
         <SceneSelect scene={props.scene} onScene={props.onScene} />
         {!props.qa && (
+          <CaptionMode bilingual={props.translateOn} onChange={props.onTranslate} />
+        )}
+        {!props.qa && (
           <div className="listen-tools">
+            {props.lines.length > 0 && (
+              <button
+                type="button"
+                className="listen-catch"
+                disabled={props.busy}
+                onClick={runSummary}
+              >
+                Summarize
+              </button>
+            )}
             <LangSelect value={props.notesLang} onChange={props.onTranslateTo} />
             <button
               type="button"
@@ -636,28 +616,14 @@ export default function ListenPane(props: Props) {
             style={notesOpen ? { ['--notes-w' as string]: `${notesW}%` } : undefined}
           >
             <section className="listen-pane">
-              <div className="listen-kicker">
-                {lecture ? 'Classroom' : 'Transcript'}
-                <span className={`listen-timer${props.listening ? ' live' : ''}`}>
-                  {props.elapsedLabel === '00:00:00' && !props.listening ? '' : props.elapsedLabel}
-                </span>
-                {props.lines.length > 0 && !notesOpen && (
-                  <button
-                    type="button"
-                    className="listen-catch"
-                    disabled={props.busy}
-                    onClick={runSummary}
-                  >
-                    Summarize
-                  </button>
-                )}
-              </div>
               <div className="listen-scroll" ref={leftRef}>
                 {props.lines.length === 0 && !props.partial ? (
                   <div className="listen-empty">
-                    {lecture
-                      ? 'Start listening. This side is the lecture stream. Notes stay closed until you ask or tap Summarize.'
-                      : 'Start listening. The left side keeps what was said. Notes stay closed until you ask or tap Summarize.'}
+                    {props.scene === 'lecture'
+                      ? 'Make lectures simpler'
+                      : props.scene === 'interview'
+                        ? 'Make interviews simpler'
+                        : 'Make meetings simpler'}
                   </div>
                 ) : (
                   props.lines.map((line, i) => (

@@ -10,7 +10,9 @@ from server.headers import origin_allowed
 from server.mailer import send_reset_email
 from server.ratelimit import allow
 from server.app import (
+    ASSEMBLYAI_FILE_MODELS,
     ASSEMBLYAI_MODEL,
+    MANUAL_MAX_SEC,
     WEB_DIST,
     Pipeline,
     Session,
@@ -19,6 +21,7 @@ from server.app import (
     _same_speech_script,
     _stt_keyterms,
     _stt_prompt,
+    assemblyai_prerecorded_body,
     assemblyai_ws_url,
     clean_transcript,
     guard_question,
@@ -95,6 +98,46 @@ class TranscriptKeepTests(unittest.TestCase):
         self.assertNotIn("word_boost=", url)
         self.assertIn("Lisinopril", url)
 
+    def test_prerecorded_uses_file_models_and_detects_language(self):
+        body = assemblyai_prerecorded_body({"stt": {"vocabulary": ["Lisinopril"]}}, "https://example/a.wav")
+        self.assertEqual(body["speech_models"], ASSEMBLYAI_FILE_MODELS)
+        self.assertTrue(body["language_detection"])
+        self.assertNotIn("language_code", body)
+        self.assertNotIn("speech_model", body)
+        self.assertTrue(body["punctuate"])
+        self.assertIn("Lisinopril", body["keyterms_prompt"])
+        self.assertTrue(body["prompt"])
+
+    def test_prerecorded_locks_language_when_set(self):
+        body = assemblyai_prerecorded_body({"stt": {"language": "zh"}}, "https://example/a.wav")
+        self.assertEqual(body["language_code"], "zh")
+        self.assertNotIn("language_detection", body)
+
+    def test_accurate_stt_uploads_and_polls_completed_text(self):
+        from server.app import assemblyai_transcribe_accurate
+
+        upload = mock.Mock()
+        upload.raise_for_status.return_value = None
+        upload.json.return_value = {"upload_url": "https://example/up.wav"}
+        created = mock.Mock()
+        created.raise_for_status.return_value = None
+        created.json.return_value = {"id": "tr_1"}
+        done = mock.Mock()
+        done.raise_for_status.return_value = None
+        done.json.return_value = {"status": "completed", "text": "Hello from file STT.", "language_code": "en"}
+        client = mock.Mock()
+        client.post.side_effect = [upload, created]
+        client.get.return_value = done
+        client.__enter__ = mock.Mock(return_value=client)
+        client.__exit__ = mock.Mock(return_value=False)
+        with mock.patch("server.app.httpx.Client", return_value=client):
+            text, lang = assemblyai_transcribe_accurate("key", b"\x00\x00" * 1600, {"stt": {}})
+        self.assertEqual(text, "Hello from file STT.")
+        self.assertEqual(lang, "en")
+        self.assertEqual(client.post.call_count, 2)
+        self.assertIn("/v2/upload", client.post.call_args_list[0].args[0])
+        self.assertIn("/v2/transcript", client.post.call_args_list[1].args[0])
+
     def test_chinese_commerce_keyterms_and_resume_tokens(self):
         from urllib.parse import unquote
 
@@ -142,6 +185,12 @@ class TranscriptKeepTests(unittest.TestCase):
 class QuotaSettingsTests(unittest.TestCase):
     def test_daily_stt_default_is_two_hours(self):
         self.assertGreaterEqual(DAILY_STT_SECONDS, 2 * 3600)
+
+    def test_record_uses_the_same_max_as_listen(self):
+        from server.settings import LISTEN_MAX_SECONDS
+
+        self.assertEqual(MANUAL_MAX_SEC, float(LISTEN_MAX_SECONDS))
+        self.assertGreaterEqual(MANUAL_MAX_SEC, 2 * 3600)
 
 
 class RateLimitTests(unittest.TestCase):

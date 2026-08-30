@@ -15,6 +15,7 @@ import StatusToast from './components/StatusToast'
 import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
 import { api as authApi, fetchMe } from './auth'
+import { readTtsMode, readTtsVoice, speakTranslation, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
 import { isNativeApp, nativeGo } from './native'
 import { installWatchRemote, pushWatchStatus } from './watch'
 import {
@@ -899,6 +900,10 @@ export default function App() {
   const autoNotesTried = useRef(false)
   const tickRef = useRef(0)
   const [consent, setConsent] = useState<boolean | null>(demoScene ? true : null)
+  const [ttsMode, setTtsMode] = useState<TtsMode>(readTtsMode)
+  const [ttsVoice, setTtsVoice] = useState<TtsVoice>(readTtsVoice)
+  const [ttsReady, setTtsReady] = useState(false)
+  const spokenTranslate = useRef<Set<string>>(new Set())
   const consentRef = useRef<boolean | null>(demoScene ? true : null)
   const [consentOpen, setConsentOpen] = useState(false)
   const pendingMic = useRef<(() => void) | null>(null)
@@ -1164,7 +1169,10 @@ export default function App() {
         dispatch({ type: 'engine', ev: { type: 'status', text: next ? 'Stealth on — hidden from screen capture' : 'Stealth off' } })
       }
     })
-    api.getConfig().then((cfg) => dispatch({ type: 'config', cfg }))
+    api.getConfig().then((cfg) => {
+      dispatch({ type: 'config', cfg })
+      setTtsReady(Boolean(cfg.has_tts))
+    })
     return () => {
       offEvent()
       offShortcut()
@@ -1609,6 +1617,8 @@ export default function App() {
     if (s.workspaceMode !== 'translate') return
     for (let i = s.translatePairs.length - 1; i >= 0; i--) {
       const p = s.translatePairs[i]
+      const typed = p.id.startsWith('typed-')
+      if (!s.bilingual && !typed) continue
       if (!p.translation && !p.failed && !askedTranslate.current.has(p.id) && !isTranslatePrompt(p.original)) {
         askTranslate(p.original, p.id)
         return
@@ -1653,7 +1663,33 @@ export default function App() {
     }
     if (state.workspaceMode !== 'translate') return
     pumpTranslate()
-  }, [state.translatePairs, state.meetingLines, state.translateOn, state.workspaceMode, pumpTranslate])
+  }, [state.translatePairs, state.meetingLines, state.translateOn, state.bilingual, state.workspaceMode, pumpTranslate])
+
+  useEffect(() => {
+    if (ttsMode !== 'live' || state.workspaceMode !== 'translate') {
+      if (state.workspaceMode !== 'translate') stopSpeech()
+      return
+    }
+    for (const pair of state.translatePairs) {
+      if (
+        pair.passthrough
+        || pair.failed
+        || pair.id === state.translateBindId
+        || spokenTranslate.current.has(pair.id)
+      ) continue
+      const text = (pair.translation || '').trim()
+      if (!text) continue
+      spokenTranslate.current.add(pair.id)
+      void speakTranslation(text, ttsVoice).catch((err) => {
+        spokenTranslate.current.delete(pair.id)
+        dispatch({
+          type: 'engine',
+          ev: { type: 'status', text: err instanceof Error ? err.message : 'Could not speak translation' },
+        })
+      })
+      break
+    }
+  }, [state.translatePairs, state.translateBindId, state.workspaceMode, ttsMode, ttsVoice])
 
   const handleGenerateSummary = useCallback((note?: string, files?: AttachPayload[]) => {
     const s = stateRef.current
@@ -1829,6 +1865,7 @@ export default function App() {
     if (inflightTranslate.current === id) return
     askedTranslate.current.delete(id)
     translateRetries.current.delete(id)
+    spokenTranslate.current.delete(id)
     dispatch({ type: 'retry_translate', id })
     queueMicrotask(() => pumpTranslateRef.current())
   }, [])
@@ -2154,14 +2191,12 @@ export default function App() {
             mode={state.workspaceMode}
             run={state.run}
             autoOn={state.autoOn}
-            bilingual={state.bilingual}
             onPrimary={handlePrimary}
             onRecord={handleRecord}
             onClear={handleClear}
             onPause={handlePause}
             onMark={handleMark}
             onExport={() => { void handleExportPdf() }}
-            onBilingual={() => dispatch({ type: 'bilingual', on: !state.bilingual })}
             onClose={study && inQa ? hideRail : undefined}
             meetingPaused={
               state.workspaceMode === 'meeting'
@@ -2179,6 +2214,12 @@ export default function App() {
             partial={state.partial}
             bindId={state.translateBindId}
             bilingual={state.bilingual}
+            onBilingual={(on) => {
+              if (on === state.bilingual) return
+              dispatch({ type: 'bilingual', on })
+              if (!on) killInflightTranslation()
+              if (on) queueMicrotask(() => pumpTranslateRef.current())
+            }}
             to={state.translateTo}
             from={state.translateFrom}
             heardFrom={state.translateFrom === 'auto' ? state.heardLang : state.translateFrom}
@@ -2189,6 +2230,28 @@ export default function App() {
             onSwap={handleSwapTranslate}
             onCopyField={copyPairField}
             onRetry={handleRetryTranslate}
+            ttsMode={ttsMode}
+            ttsVoice={ttsVoice}
+            ttsReady={ttsReady}
+            onTtsMode={(mode) => {
+              setTtsMode(mode)
+              writeTtsMode(mode)
+              if (mode === 'live') unlockSpeech()
+              else stopSpeech()
+            }}
+            onTtsVoice={(voice) => {
+              setTtsVoice(voice)
+              writeTtsVoice(voice)
+            }}
+            onSpeak={(text) => {
+              unlockSpeech()
+              void speakTranslation(text, ttsVoice).catch((err) => {
+                dispatch({
+                  type: 'engine',
+                  ev: { type: 'status', text: err instanceof Error ? err.message : 'Could not speak translation' },
+                })
+              })
+            }}
           />
         ) : (
           <ListenPane
@@ -2228,8 +2291,8 @@ export default function App() {
               else window.api.send({ type: 'set_workspace', mode: 'meeting', scene, speakers_expected: speakersExpected(scene) })
             }}
             onTranslate={(on) => {
+              if (on === state.translateOn) return
               dispatch({ type: 'translate_on', on })
-              // 关闭翻译时取消在途生成并清掉半截译文，重新开启时整句重译
               if (!on) killInflightTranslation()
               if (on) queueMicrotask(() => pumpTranslateRef.current())
             }}
