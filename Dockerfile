@@ -1,6 +1,8 @@
 FROM node:20-alpine AS frontend
-WORKDIR /web
-COPY web/package.json web/package-lock.json ./
+WORKDIR /src
+COPY plugins/nod-mic ./plugins/nod-mic
+COPY web/package.json web/package-lock.json ./web/
+WORKDIR /src/web
 RUN npm ci
 COPY web/ .
 RUN npm run build
@@ -11,7 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY server ./server
 COPY config.json .
-COPY --from=frontend /web/dist ./web/dist
+COPY --from=frontend /src/web/dist ./web/dist
 ENV PORT=8080
 ENV DATA_DIR=/data
 EXPOSE 8080

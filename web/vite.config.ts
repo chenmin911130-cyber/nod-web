@@ -29,6 +29,11 @@ function appHtmlPlugin() {
 
 export default defineConfig({
   plugins: [react(), appHtmlPlugin()],
+  resolve: {
+    alias: {
+      'nod-mic': fileURLToPath(new URL('./src/shims/nod-mic.ts', import.meta.url)),
+    },
+  },
   server: {
     host: '127.0.0.1',
     port: 5174,
