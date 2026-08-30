@@ -14,36 +14,56 @@ HSTS = "max-age=63072000; includeSubDomains; preload"
 # microphone=(self): Nod's product is live browser-mic capture. camera/geo stay off.
 PERMISSIONS_POLICY = "camera=(), microphone=(self), geolocation=()"
 
-# Tight default, plus the third parties this build actually loads.
-# Do not add https: / http: wildcards.
-CSP = (
-    "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev https://*.clerk.com "
-    "https://challenges.cloudflare.com https://accounts.google.com https://apis.google.com; "
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "font-src 'self' data: https://fonts.gstatic.com; "
-    "img-src 'self' data: blob: https://img.clerk.com https://*.clerk.com https://www.google.com "
-    "https://*.googleusercontent.com; "
-    "connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com wss://*.clerk.accounts.dev "
-    "https://accounts.google.com https://www.googleapis.com https://streaming.assemblyai.com "
-    "wss://streaming.assemblyai.com https://*.sentry.io https://*.ingest.sentry.io; "
-    "frame-src https://*.clerk.accounts.dev https://*.clerk.com https://challenges.cloudflare.com "
-    "https://accounts.google.com; "
-    "worker-src 'self' blob:; "
-    "media-src 'self' blob:; "
-    "object-src 'none'; "
-    "base-uri 'self'; "
-    "form-action 'self' https://accounts.google.com; "
-    "frame-ancestors 'none'; "
-    "upgrade-insecure-requests"
-)
+def _clerk_csp_hosts() -> list[str]:
+    try:
+        from server.clerk_auth import clerk_browser_hosts
+
+        return [h for h in clerk_browser_hosts() if h and "/" not in h and " " not in h]
+    except Exception:
+        return []
+
+
+def content_security_policy() -> str:
+    # Tight default, plus the third parties this build actually loads.
+    # Custom Clerk domains (clerk.example.com / accounts.example.com) come
+    # from the live publishable key — without them Clerk never loads.
+    extra = _clerk_csp_hosts()
+    extra_https = " ".join(f"https://{h}" for h in extra)
+    extra_wss = " ".join(f"wss://{h}" for h in extra)
+    extra_h = f" {extra_https}" if extra_https else ""
+    extra_w = f" {extra_wss}" if extra_wss else ""
+    return (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev https://*.clerk.com "
+        f"https://challenges.cloudflare.com https://accounts.google.com https://apis.google.com{extra_h}; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' data: https://fonts.gstatic.com; "
+        "img-src 'self' data: blob: https://img.clerk.com https://*.clerk.com https://www.google.com "
+        f"https://*.googleusercontent.com{extra_h}; "
+        "connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com wss://*.clerk.accounts.dev "
+        "https://accounts.google.com https://www.googleapis.com https://streaming.assemblyai.com "
+        f"wss://streaming.assemblyai.com https://*.sentry.io https://*.ingest.sentry.io{extra_h}{extra_w}; "
+        "frame-src https://*.clerk.accounts.dev https://*.clerk.com https://challenges.cloudflare.com "
+        f"https://accounts.google.com{extra_h}; "
+        "worker-src 'self' blob:; "
+        "media-src 'self' blob:; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        f"form-action 'self' https://accounts.google.com{extra_h}; "
+        "frame-ancestors 'none'; "
+        "upgrade-insecure-requests"
+    )
+
+
+# Snapshot for tests / imports. Middleware rebuilds per request so a live
+# Clerk key's custom domain is always included.
+CSP = content_security_policy()
 
 ALWAYS_HEADERS = (
     ("X-Content-Type-Options", "nosniff"),
     ("X-Frame-Options", "DENY"),
     ("Referrer-Policy", "strict-origin-when-cross-origin"),
     ("Permissions-Policy", PERMISSIONS_POLICY),
-    ("Content-Security-Policy", CSP),
     ("X-DNS-Prefetch-Control", "off"),
     ("Cross-Origin-Opener-Policy", "same-origin-allow-popups"),
 )
@@ -114,6 +134,7 @@ class SecurityHeadersMiddleware:
                 headers = MutableHeaders(raw=message.setdefault("headers", []))
                 for key, value in ALWAYS_HEADERS:
                     headers.setdefault(key, value)
+                headers.setdefault("Content-Security-Policy", content_security_policy())
                 if https:
                     headers.setdefault("Strict-Transport-Security", HSTS)
             await send(message)

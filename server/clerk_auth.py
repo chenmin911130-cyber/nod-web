@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 from functools import lru_cache
 from urllib.parse import urlparse
 
@@ -15,9 +16,13 @@ from server.settings import CLERK_PUBLISHABLE_KEY, CLERK_SECRET_KEY, PUBLIC_URL
 log = logging.getLogger("nod.clerk")
 
 
+def _publishable_key() -> str:
+    return (os.environ.get("CLERK_PUBLISHABLE_KEY") or CLERK_PUBLISHABLE_KEY or "").strip()
+
+
 def _frontend_api() -> str:
-    """Hostname encoded in the Clerk publishable key, e.g. foo.clerk.accounts.dev."""
-    key = CLERK_PUBLISHABLE_KEY
+    """Hostname encoded in the Clerk publishable key, e.g. clerk.nodpilot.com."""
+    key = _publishable_key()
     if not key or "_" not in key:
         return ""
     try:
@@ -30,6 +35,35 @@ def _frontend_api() -> str:
         return host
     except Exception:
         return ""
+
+
+def clerk_browser_hosts() -> list[str]:
+    """Custom Clerk Frontend API + account-portal hosts the browser must reach.
+
+    Production keys encode clerk.example.com. Clerk's satellite is usually
+    accounts.example.com. Without these in CSP, Clerk never loads and the
+    Google button stays disabled.
+    """
+    hosts: list[str] = []
+    fapi = _frontend_api()
+    if fapi:
+        hosts.append(fapi)
+        if fapi.startswith("clerk.") and fapi.count(".") >= 2:
+            satellite = "accounts." + fapi.split(".", 1)[1]
+            if satellite not in hosts:
+                hosts.append(satellite)
+    public = (os.environ.get("PUBLIC_URL") or PUBLIC_URL or "").strip()
+    if public and "://" not in public:
+        public = "https://" + public
+    apex = (urlparse(public).hostname or "").lower()
+    if apex.startswith("www."):
+        apex = apex[4:]
+    if apex and "." in apex and apex not in {"127.0.0.1", "localhost"}:
+        for prefix in ("clerk", "accounts"):
+            host = f"{prefix}.{apex}"
+            if host not in hosts:
+                hosts.append(host)
+    return hosts
 
 
 def _origin(url: str) -> str:
@@ -55,6 +89,8 @@ def _app_origins() -> set[str]:
     fapi = _frontend_api()
     if fapi:
         origins.add(f"https://{fapi}")
+    for host in clerk_browser_hosts():
+        origins.add(f"https://{host}")
     return origins
 
 

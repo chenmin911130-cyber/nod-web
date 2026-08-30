@@ -10,6 +10,7 @@ from server.headers import (
     HSTS,
     CloudflareOriginMiddleware,
     SecurityHeadersMiddleware,
+    content_security_policy,
 )
 
 
@@ -77,6 +78,19 @@ class SecurityHeadersTests(unittest.TestCase):
         self.assertEqual(client.get("/api/health").status_code, 200)
         self.assertEqual(client.get("/", headers={"x-nod-origin": "wrong"}).status_code, 403)
         self.assertEqual(client.get("/", headers={"x-nod-origin": "origin-test-secret"}).status_code, 200)
+
+    def test_csp_allows_clerk_custom_domain_from_live_key(self):
+        import base64
+
+        payload = base64.b64encode(b"clerk.nodpilot.com$").decode("ascii").rstrip("=")
+        os.environ["CLERK_PUBLISHABLE_KEY"] = f"pk_live_{payload}"
+        self.addCleanup(lambda: os.environ.pop("CLERK_PUBLISHABLE_KEY", None))
+        client = TestClient(_app())
+        csp = client.get("/").headers["content-security-policy"]
+        self.assertIn("https://clerk.nodpilot.com", csp)
+        self.assertIn("https://accounts.nodpilot.com", csp)
+        self.assertIn("wss://clerk.nodpilot.com", csp)
+        self.assertIn("clerk.nodpilot.com", content_security_policy())
 
 
 if __name__ == "__main__":
