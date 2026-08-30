@@ -14,13 +14,16 @@ from server.app import (
     ASSEMBLYAI_MODEL,
     MANUAL_MAX_SEC,
     WEB_DIST,
+    manual_chunk_ready,
     Pipeline,
     Session,
     _join_speech_frags,
     _meeting_should_hold,
     _same_speech_script,
+    _stt_context_terms,
     _stt_keyterms,
     _stt_prompt,
+    apply_caption_repair,
     assemblyai_prerecorded_body,
     assemblyai_ws_url,
     clean_transcript,
@@ -191,6 +194,52 @@ class QuotaSettingsTests(unittest.TestCase):
 
         self.assertEqual(MANUAL_MAX_SEC, float(LISTEN_MAX_SECONDS))
         self.assertGreaterEqual(MANUAL_MAX_SEC, 2 * 3600)
+
+    def test_record_chunks_on_pause_or_max_length(self):
+        self.assertFalse(manual_chunk_ready(1.0, 1.0))
+        self.assertFalse(manual_chunk_ready(3.0, 0.1))
+        self.assertTrue(manual_chunk_ready(3.0, 0.7))
+        self.assertTrue(manual_chunk_ready(10.0, 0.0))
+        self.assertFalse(manual_chunk_ready(0.2, 2.0, force=True))
+        self.assertTrue(manual_chunk_ready(0.5, 0.0, force=True))
+
+    def test_stt_context_keeps_names_and_prompt(self):
+        terms = _stt_context_terms([
+            "David sent the Nodpilot deck.",
+            "David will walk through Nodpilot after lunch.",
+        ])
+        self.assertIn("David", terms)
+        self.assertIn("Nodpilot", terms)
+        prompt = _stt_prompt({
+            "stt": {
+                "listen_scene": "meeting",
+                "context_prompt": "David sent the Nodpilot deck.",
+            }
+        })
+        self.assertIn("Recent names and topic", prompt)
+        self.assertIn("Nodpilot", prompt)
+
+    def test_recording_stays_record_after_translate(self):
+        sess = Session.__new__(Session)
+        sess._manual = True
+        sess._listener = None
+        self.assertEqual(sess._active_run_state(), "record")
+        sess._manual = False
+        self.assertEqual(sess._active_run_state(), "idle")
+        sess._listener = object()
+        self.assertEqual(sess._active_run_state(), "listen")
+
+    def test_caption_repair_keeps_wild_rewrites_out(self):
+        src = "David will walk through Nodpilot after lunch."
+        self.assertEqual(apply_caption_repair(src, "Let's summarize the whole meeting instead."), src)
+        self.assertEqual(
+            apply_caption_repair("David sent the PPT.", "David sent the PPT."),
+            "David sent the PPT.",
+        )
+        self.assertEqual(
+            apply_caption_repair("Daved sent the PPT.", "David sent the PPT."),
+            "David sent the PPT.",
+        )
 
 
 class RateLimitTests(unittest.TestCase):

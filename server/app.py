@@ -52,7 +52,7 @@ ASSEMBLYAI_API = "https://api.assemblyai.com"
 ASSEMBLYAI_MODEL = "universal-3-5-pro"
 ASSEMBLYAI_FILE_MODELS = ["universal-3-5-pro", "universal-2"]
 STATUS_READY = "Ready · F2 record / F3 listen / F4 clear · browser mic + cloud STT"
-STATUS_RECORD = "Recording · F2 to stop, then accurate transcribe"
+STATUS_RECORD = "Recording · accurate captions follow shortly"
 STATUS_LISTEN = "Listening for the next question…"
 STATUS_TRANSCRIBE = "Transcribing carefully — this can take a moment…"
 STATUS_CHECK = "Checking question…"
@@ -62,6 +62,22 @@ STATUS_WAIT_MORE = "I caught part of a question. Keep listening…"
 STATUS_EMPTY = "No speech detected, please try again"
 MANUAL_MAX_SEC = float(LISTEN_MAX_SECONDS)
 MANUAL_MIN_SEC = 0.4
+MANUAL_CHUNK_SEC = 10.0
+MANUAL_CHUNK_MIN_SEC = 2.0
+MANUAL_CHUNK_SILENCE_SEC = 0.65
+MANUAL_CHUNK_OVERLAP_SEC = 0.25
+MANUAL_MAX_JOBS = 2
+
+
+def manual_chunk_ready(pending_sec: float, silent_sec: float, *, force: bool = False) -> bool:
+    """Cut a record clip when the speaker pauses, or when the clip gets long."""
+    if pending_sec < MANUAL_MIN_SEC:
+        return False
+    if force:
+        return True
+    if pending_sec < MANUAL_CHUNK_MIN_SEC:
+        return False
+    return silent_sec >= MANUAL_CHUNK_SILENCE_SEC or pending_sec >= MANUAL_CHUNK_SEC
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = ROOT / "config.json"
@@ -323,9 +339,61 @@ def _stt_keyterms(cfg: dict[str, Any]) -> list[str]:
             han = len(re.findall(r"[\u4e00-\u9fff]", tok))
             if len(tok) >= 2 and (re.search(r"[A-Za-z]", tok) or 2 <= han <= 6):
                 _stt_add_keyterm(terms, seen, tok)
+    for tok in (cfg.get("stt") or {}).get("context_terms") or []:
+        _stt_add_keyterm(terms, seen, tok)
     for tok in (cfg.get("stt") or {}).get("vocabulary") or []:
         _stt_add_keyterm(terms, seen, tok)
     return terms[:100]
+
+
+_STT_CONTEXT_STOP = frozenset({
+    "the", "and", "for", "that", "this", "with", "from", "have", "been", "will",
+    "your", "their", "what", "when", "where", "which", "about", "just", "then",
+    "我们", "你们", "他们", "这个", "那个", "然后", "所以", "但是", "因为", "如果",
+    "可以", "不是", "没有", "一个", "什么", "怎么", "现在", "今天", "一下",
+})
+
+
+def _stt_context_terms(texts: list[str]) -> list[str]:
+    """Pull names and repeated topic words from captions already confirmed."""
+    terms: list[str] = []
+    seen: set[str] = set()
+    counts: dict[str, int] = {}
+    for text in texts:
+        for tok in re.findall(r"[A-Z][A-Za-z0-9+#\-]{1,24}|[A-Z]{2,10}", text or ""):
+            if tok.lower() not in _STT_CONTEXT_STOP:
+                _stt_add_keyterm(terms, seen, tok)
+        for tok in re.findall(r"[\u4e00-\u9fff]{2,6}", text or ""):
+            if tok in _STT_CONTEXT_STOP:
+                continue
+            counts[tok] = counts.get(tok, 0) + 1
+    for tok, n in counts.items():
+        if n >= 2 or len(tok) >= 4:
+            _stt_add_keyterm(terms, seen, tok)
+    return terms[:40]
+
+
+def _stt_context_prompt(texts: list[str], limit: int = 220) -> str:
+    parts = [re.sub(r"\s+", " ", (t or "").strip()) for t in texts if (t or "").strip()]
+    blob = " ".join(parts)
+    if len(blob) > limit:
+        blob = blob[-limit:].lstrip()
+    return blob
+
+
+def apply_caption_repair(original: str, repaired: str) -> str:
+    """Keep an AI fix only when it still looks like the same spoken line."""
+    src = (original or "").strip()
+    out = (repaired or "").strip().strip('"').strip("“”")
+    if not src or not out or out == src:
+        return src
+    if abs(len(out) - len(src)) > max(12, int(len(src) * 0.35)):
+        return src
+    if _ratio(src.lower(), out.lower()) < 0.55:
+        return src
+    if not _same_speech_script(src, out):
+        return src
+    return out
 
 
 def _stt_prompt(cfg: dict[str, Any]) -> str:
@@ -335,20 +403,29 @@ def _stt_prompt(cfg: dict[str, Any]) -> str:
     if lang:
         name = _LANG_NAMES.get(lang, lang)
         if scene == "lecture":
-            return f"{name} lecture."
-        if scene == "interview":
-            return f"{name} job interview. Interviewer and candidate take turns."
-        if scene == "meeting":
-            return f"{name} two-speaker conversation. The host asks short questions. The guest gives longer answers."
-        return f"{name} conversation."
-    if scene == "lecture":
-        return "Mandarin, English, and Japanese lecture. People switch languages mid-sentence."
-    if scene == "interview":
-        return "Mandarin, English, and Japanese job interview. Interviewer and candidate take turns."
-    return (
-        "Mandarin, English, and Japanese two-speaker conversation. "
-        "The host asks short questions. The guest gives longer answers. People switch languages mid-sentence."
-    )
+            base = f"{name} lecture."
+        elif scene == "interview":
+            base = f"{name} job interview. Interviewer and candidate take turns."
+        elif scene == "meeting":
+            base = (
+                f"{name} two-speaker conversation. The host asks short questions. "
+                "The guest gives longer answers."
+            )
+        else:
+            base = f"{name} conversation."
+    elif scene == "lecture":
+        base = "Mandarin, English, and Japanese lecture. People switch languages mid-sentence."
+    elif scene == "interview":
+        base = "Mandarin, English, and Japanese job interview. Interviewer and candidate take turns."
+    else:
+        base = (
+            "Mandarin, English, and Japanese two-speaker conversation. "
+            "The host asks short questions. The guest gives longer answers. People switch languages mid-sentence."
+        )
+    extra = _stt_context_prompt([str(stt.get("context_prompt") or "")])
+    if extra:
+        return f"{base} Recent names and topic: {extra}"
+    return base
 
 
 def _stt_max_speakers(cfg: dict[str, Any]) -> int | None:
@@ -1063,6 +1140,62 @@ class Pipeline:
             "has_stt": bool(self.assemblyai_key()),
         }
 
+    def repair_caption(self, text: str, recent: list[str]) -> str:
+        """Light STT polish. Skip when there is no context, and keep the original if the model rewrites too much."""
+        src = (text or "").strip()
+        ctx_lines = [t.strip() for t in recent if (t or "").strip()]
+        if not src or len(src) < 8 or not ctx_lines:
+            return src
+        if not self.key_status().get("has_llm"):
+            return src
+        if self.user_id:
+            try:
+                from server.meter import check_can_generate
+
+                ok, _snap = check_can_generate(self.user_id)
+                if not ok:
+                    return src
+            except Exception:
+                return src
+        ctx = "\n".join(f"- {t}" for t in ctx_lines[-4:])
+        try:
+            kwargs: dict[str, Any] = dict(
+                model=self._model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Correct speech-to-text errors only. Use previous lines for names and topic. "
+                            "Do not translate, summarize, or add meaning. "
+                            "If the line is already fine, return it unchanged. Output the line only."
+                        ),
+                    },
+                    {"role": "user", "content": f"Previous lines:\n{ctx}\n\nCaption:\n{src}"},
+                ],
+                max_tokens=min(220, max(64, len(src) + 24)),
+                stream=False,
+                temperature=0.1,
+            )
+            if self._provider == "deepseek":
+                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            resp = self.client.with_options(timeout=8.0).chat.completions.create(**kwargs)
+            out = ""
+            if resp and getattr(resp, "choices", None):
+                out = (resp.choices[0].message.content or "").strip()
+            fixed = apply_caption_repair(src, out)
+            if self.user_id:
+                from server.meter import consume_llm
+
+                consume_llm(
+                    self.user_id,
+                    self.usage_session_id,
+                    max(1, len(src) // 4),
+                    max(1, len(out or src) // 4),
+                )
+            return fixed
+        except Exception:
+            return src
+
     def _answer_lang(self, question: str) -> str:
         locked = _normalize_stt_lang((self.cfg.get("stt") or {}).get("language"))
         if locked:
@@ -1412,7 +1545,7 @@ class Pipeline:
             if not internal:
                 save_history(self.user_id, self.usage_session_id, kind_q, self._strip_nod_tag(t), qid)
             save_history(self.user_id, self.usage_session_id, "answer" if mode == "ask" else mode, answer, qid)
-            if mode in ("ask", "summary", "translate", "notes"):
+            if mode in ("ask", "summary", "notes"):
                 try:
                     from server.meter import write_session_notes
 
@@ -1588,6 +1721,9 @@ class Session:
         self._manual = False
         self._manual_started = 0.0
         self._manual_last_voice = 0.0
+        self._manual_offset = 0
+        self._manual_jobs = 0
+        self._manual_lock = threading.Lock()
         self._busy = False
         # Finals arrive on the STT thread while dispatch runs on a worker, so
         # the busy flag has to be claimed atomically or two generations start
@@ -1815,8 +1951,7 @@ class Session:
                         self._stop_listening()
                         self._offer_save_history()
                     if self._manual:
-                        self._manual = False
-                        self._manual_buf = bytearray()
+                        self._stop_manual()
                     return
         if self._manual:
             self._manual_buf.extend(pcm)
@@ -1828,6 +1963,8 @@ class Session:
             last = self._manual_last_voice or started
             if now - started >= MANUAL_MAX_SEC or now - last >= LISTEN_IDLE_SECONDS:
                 self._stop_manual()
+            else:
+                self._maybe_flush_manual_chunk()
             return
         if self._listener:
             self._archive_append(pcm)
@@ -1845,7 +1982,7 @@ class Session:
         elif mtype == "stop_listen":
             self.stop_listen()
         elif mtype == "keep_history":
-            self.keep_history()
+            self.keep_history(content=msg.get("content", True), audio=msg.get("audio", True))
         elif mtype == "discard_history":
             self.discard_history()
         elif mtype == "ask":
@@ -1961,6 +2098,9 @@ class Session:
                 stt["speakers_expected"] = 4 if scene == "lecture" else 2
         else:
             stt["speaker_labels"] = False
+        recent = [t for t, _ in self._recent_finals[-6:]]
+        stt["context_terms"] = _stt_context_terms(recent)
+        stt["context_prompt"] = _stt_context_prompt(recent[-3:])
         cfg["stt"] = stt
         return cfg
 
@@ -2185,9 +2325,7 @@ class Session:
             self._listener.set_muted(muted)
         if muted:
             if self._manual:
-                self._manual = False
-                self._manual_buf = bytearray()
-                self.emit({"type": "state", "state": "idle"})
+                self._stop_manual()
             self.emit({"type": "status", "text": "Microphone muted"})
         else:
             self.emit({"type": "status", "text": "Microphone unmuted"})
@@ -2225,14 +2363,20 @@ class Session:
             "text": "Save this session to History?",
         })
 
-    def keep_history(self) -> None:
+    def keep_history(self, content: Any = True, audio: Any = True) -> None:
         sid = self.usage_session_id
         if not self.user_id or not sid:
             return
+        keep_content = content is not False
+        keep_audio = audio is not False
+        if not keep_content and not keep_audio:
+            self.discard_history()
+            return
         from server.meter import keep_usage_session
 
-        keep_usage_session(self.user_id, sid)
-        self.emit({"type": "status", "text": "Saved to History"})
+        keep_usage_session(self.user_id, sid, keep_content=keep_content, keep_audio=keep_audio)
+        parts = [name for on, name in ((keep_content, "session"), (keep_audio, "recording")) if on]
+        self.emit({"type": "status", "text": "Saved to History · " + " and ".join(parts)})
 
     def discard_history(self) -> None:
         sid = self.usage_session_id
@@ -2345,14 +2489,101 @@ class Session:
             return
         self._manual = True
         self._manual_buf = bytearray()
+        self._manual_offset = 0
         self._manual_started = time.time()
         self.emit({"type": "state", "state": "record"})
         self.emit({"type": "status", "text": STATUS_RECORD})
 
+    def _live_manual_captions(self) -> bool:
+        return self._workspace in ("meeting", "translate")
+
+    def _active_run_state(self) -> str:
+        if self._manual:
+            return "record"
+        if self._listener is not None:
+            return "listen"
+        return "idle"
+
+    def _maybe_flush_manual_chunk(self, force: bool = False) -> None:
+        if not self._live_manual_captions():
+            return
+        pending = len(self._manual_buf) - self._manual_offset
+        pending_sec = pending / float(SR * 2)
+        now = time.time()
+        last = self._manual_last_voice or self._manual_started or now
+        silent_sec = max(0.0, now - last)
+        if not manual_chunk_ready(pending_sec, silent_sec, force=force):
+            return
+        with self._manual_lock:
+            if not force and self._manual_jobs >= MANUAL_MAX_JOBS:
+                return
+        overlap = int(MANUAL_CHUNK_OVERLAP_SEC * SR * 2)
+        start = 0 if self._manual_offset <= 0 else max(0, self._manual_offset - overlap)
+        chunk = bytes(self._manual_buf[start:])
+        self._manual_offset = len(self._manual_buf)
+        if len(chunk) < int(MANUAL_MIN_SEC * SR * 2):
+            return
+        self._kick_manual_chunk(chunk)
+
+    def _kick_manual_chunk(self, pcm: bytes) -> None:
+        with self._manual_lock:
+            self._manual_jobs += 1
+        threading.Thread(target=self._finish_manual_chunk, args=(pcm,), daemon=True).start()
+
+    def _transcribe_manual_pcm(self, pcm: bytes) -> tuple[str, str | None]:
+        key = self.pipeline.assemblyai_key()
+        if not key:
+            raise RuntimeError("Missing AssemblyAI key")
+        cfg = self._stt_cfg()
+        try:
+            return assemblyai_transcribe_accurate(key, pcm, cfg)
+        except Exception as e:
+            log.warning("accurate STT failed, falling back to realtime: %s", e)
+            dur = len(pcm) / float(SR * 2)
+            return assemblyai_transcribe_pcm(key, pcm, cfg, timeout=min(90.0, max(24.0, dur * 2 + 12)))
+
+    def _polish_manual_text(self, text: str) -> str:
+        src = (text or "").strip()
+        if self._manual:
+            return src
+        recent = [t for t, _ in self._recent_finals[-4:]]
+        return self.pipeline.repair_caption(src, recent)
+
+    def _finish_manual_chunk(self, pcm: bytes) -> None:
+        try:
+            text, lang = self._transcribe_manual_pcm(pcm)
+            if (text or "").strip():
+                self._on_final(self._polish_manual_text(text), lang)
+        except Exception as e:
+            log.warning("record chunk failed: %s", e)
+            if not self._manual:
+                self.emit({"type": "error", "text": f"Transcription failed:{e}"})
+        finally:
+            with self._manual_lock:
+                self._manual_jobs = max(0, self._manual_jobs - 1)
+                if not self._manual and self._manual_jobs == 0:
+                    self.emit({"type": "state", "state": "idle"})
+                    self.emit({"type": "status", "text": STATUS_READY})
+
     def _stop_manual(self) -> None:
+        if self._live_manual_captions():
+            self._manual = False
+            self._maybe_flush_manual_chunk(force=True)
+            self._manual_buf = bytearray()
+            self._manual_offset = 0
+            with self._manual_lock:
+                if self._manual_jobs <= 0:
+                    self.emit({"type": "state", "state": "idle"})
+                    self.emit({"type": "status", "text": STATUS_READY})
+                else:
+                    self.emit({"type": "state", "state": "think"})
+                    self.emit({"type": "status", "text": STATUS_TRANSCRIBE})
+            self._offer_save_history()
+            return
         pcm = bytes(self._manual_buf)
         self._manual = False
         self._manual_buf = bytearray()
+        self._manual_offset = 0
         dur = len(pcm) / (SR * 2)
         if dur < MANUAL_MIN_SEC:
             self.emit({"type": "state", "state": "idle"})
@@ -2364,23 +2595,13 @@ class Session:
         self._offer_save_history()
 
     def _finish_manual(self, pcm: bytes) -> None:
-        key = self.pipeline.assemblyai_key()
-        if not key:
-            self.emit({"type": "error", "text": "Missing AssemblyAI key"})
+        try:
+            text, lang = self._transcribe_manual_pcm(pcm)
+        except Exception as e:
+            self.emit({"type": "error", "text": f"Transcription failed:{e}"})
             self.emit({"type": "state", "state": "idle"})
             return
-        cfg = self._stt_cfg()
-        try:
-            text, lang = assemblyai_transcribe_accurate(key, pcm, cfg)
-        except Exception as e:
-            log.warning("accurate STT failed, falling back to realtime: %s", e)
-            try:
-                dur = len(pcm) / float(SR * 2)
-                text, lang = assemblyai_transcribe_pcm(key, pcm, cfg, timeout=min(90.0, max(24.0, dur * 2 + 12)))
-            except Exception as e2:
-                self.emit({"type": "error", "text": f"Transcription failed:{e2}"})
-                self.emit({"type": "state", "state": "idle"})
-                return
+        text = self._polish_manual_text(text)
         if not (text or "").strip():
             self.emit({"type": "status", "text": STATUS_EMPTY})
             self.emit({"type": "state", "state": "idle"})
@@ -2466,8 +2687,7 @@ class Session:
                 self.pipeline.process_text(llm_text, mode, images=images, display_text=display)
             finally:
                 self._release_busy()
-                listening = self._listener is not None
-                self.emit({"type": "state", "state": "listen" if listening else "idle"})
+                self.emit({"type": "state", "state": self._active_run_state()})
                 self._drain_pending_ask()
 
         threading.Thread(target=work, daemon=True).start()
@@ -2573,8 +2793,7 @@ class Session:
                 self.pipeline.process_text(cleaned, "ask", heard)
             finally:
                 self._release_busy()
-                listening = self._listener is not None
-                self.emit({"type": "state", "state": "listen" if listening else "idle"})
+                self.emit({"type": "state", "state": self._active_run_state()})
                 pending = self._pending
                 self._pending = None
                 if pending:

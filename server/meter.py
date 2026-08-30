@@ -199,9 +199,19 @@ def is_session_kept(session_id: str | None) -> bool:
         return bool(row and row.kept)
 
 
-def keep_usage_session(user_id: str, session_id: str) -> None:
+def keep_usage_session(
+    user_id: str,
+    session_id: str,
+    keep_content: bool = True,
+    keep_audio: bool = True,
+) -> None:
     if not user_id or not session_id:
         return
+    if not keep_content and not keep_audio:
+        discard_usage_session(user_id, session_id)
+        return
+    from server.r2 import delete_prefix
+
     with db_session() as db:
         row = db.get(UsageSession, session_id)
         if not row or row.user_id != user_id:
@@ -209,6 +219,14 @@ def keep_usage_session(user_id: str, session_id: str) -> None:
         row.kept = True
         if row.ended_at is None:
             row.ended_at = utcnow()
+        if not keep_audio:
+            delete_prefix(f"users/{user_id}/sessions/{session_id}/audio/")
+            row.audio_key = None
+        if not keep_content:
+            db.execute(delete(HistoryItem).where(HistoryItem.session_id == session_id))
+            if row.notes_key:
+                delete_prefix(f"users/{user_id}/sessions/{session_id}/")
+            row.notes_key = None
 
 
 def discard_usage_session(user_id: str | None, session_id: str | None) -> None:

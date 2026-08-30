@@ -142,7 +142,7 @@ export type EngineMsg =
   | { type: 'toggle_listen' }
   | { type: 'start_listen' }
   | { type: 'stop_listen' }
-  | { type: 'keep_history' }
+  | { type: 'keep_history'; content?: boolean; audio?: boolean }
   | { type: 'discard_history' }
   | { type: 'auth'; token: string }
   | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; attach_id?: string; mode?: string }

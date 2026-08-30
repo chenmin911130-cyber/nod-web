@@ -100,6 +100,20 @@ def _set_session(response: Response, request: Request, user: User) -> str:
 LOCAL_TEST_EMAIL = "local@nod.test"
 
 
+def workspace_user(
+    request: Request,
+    user: User | None = Depends(optional_user),
+) -> User:
+    """Same identity as /api/me: a real session if present, local test user on this machine."""
+    if user is not None:
+        return user
+    from server.settings import AUTH_DISABLED
+
+    if AUTH_DISABLED or is_local_request(request):
+        return _ensure_local_user()
+    raise HTTPException(status_code=401, detail="Please sign in")
+
+
 def _ensure_local_user() -> User:
     with db_session() as db:
         user = db.execute(select(User).where(User.email == LOCAL_TEST_EMAIL)).scalar_one_or_none()
@@ -329,12 +343,12 @@ def funnel_event(request: Request, body: EventIn, _: None = Depends(rate_limit("
 
 
 @router.get("/api/account/history")
-def history(user: User = Depends(current_user)):
+def history(user: User = Depends(workspace_user)):
     return {"ok": True, "sessions": list_history(user.id)}
 
 
 @router.delete("/api/account/history/{session_id}")
-def delete_history(session_id: str, user: User = Depends(current_user)):
+def delete_history(session_id: str, user: User = Depends(workspace_user)):
     if not delete_history_session(user.id, session_id):
         raise HTTPException(404, "Session not found")
     return {"ok": True}
@@ -346,7 +360,7 @@ def download_session_file(
     kind: str,
     part: str | None = None,
     filename: str = "",
-    user: User = Depends(current_user),
+    user: User = Depends(workspace_user),
 ):
     if kind not in ("audio", "notes"):
         raise HTTPException(404, "Unknown file")

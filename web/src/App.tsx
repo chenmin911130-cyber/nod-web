@@ -2243,9 +2243,9 @@ export default function App() {
       <HistoryPane open={historyOpen} onClose={() => setHistoryOpen(false)} onRestore={restoreHistory} />
       <SavePrompt
         open={savePrompt}
-        onKeep={() => {
+        onKeep={(opts) => {
           setSavePrompt(false)
-          window.api.send({ type: 'keep_history' })
+          window.api.send({ type: 'keep_history', content: opts.content, audio: opts.audio })
         }}
         onDiscard={() => {
           setSavePrompt(false)

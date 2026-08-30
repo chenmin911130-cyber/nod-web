@@ -10,6 +10,7 @@ class HistoryKeepTests(unittest.TestCase):
         sess = Session.__new__(Session)
         sess._listener = None
         sess._listen_wanted = True
+        sess._manual = False
         sess.user_id = "user-1"
         sess.usage_session_id = "sess-1"
         sess.pipeline = mock.Mock()
@@ -29,7 +30,13 @@ class HistoryKeepTests(unittest.TestCase):
         sess = self._session()
         with mock.patch("server.meter.keep_usage_session") as keep:
             sess.keep_history()
-        keep.assert_called_once_with("user-1", "sess-1")
+        keep.assert_called_once_with("user-1", "sess-1", keep_content=True, keep_audio=True)
+
+    def test_keep_history_can_save_content_only(self):
+        sess = self._session()
+        with mock.patch("server.meter.keep_usage_session") as keep:
+            sess.keep_history(content=True, audio=False)
+        keep.assert_called_once_with("user-1", "sess-1", keep_content=True, keep_audio=False)
         self.assertEqual(sess.usage_session_id, "sess-1")
         self.assertFalse(sess.pipeline._cancel.is_set())
 
