@@ -2022,6 +2022,9 @@ class Session:
 
     def stop_listen(self) -> None:
         self._listen_wanted = False
+        if self._manual:
+            self._stop_manual()
+            return
         if self._listener:
             self._stop_listening()
         else:

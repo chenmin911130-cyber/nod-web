@@ -945,6 +945,7 @@ export default function App() {
   const [railDismissed, setRailDismissed] = useState(inQa)
   const wasInQa = useRef(inQa)
   const requestClearRef = useRef<() => void>(() => {})
+  const handleRecordRef = useRef<() => void>(() => {})
 
   useEffect(() => {
     if (inQa && !wasInQa.current) setRailDismissed(true)
@@ -1151,7 +1152,7 @@ export default function App() {
     })
     const offShortcut = api.onShortcut((k) => {
       const mode = stateRef.current.workspaceMode
-      if (k === 'f2') guardMic(() => api.send({ type: 'manual' }))
+      if (k === 'f2') handleRecordRef.current()
       else if (k === 'f3') {
         const running = stateRef.current.run === 'listen' || stateRef.current.run === 'record'
         if (running) stopListen()
@@ -1490,8 +1491,20 @@ export default function App() {
   }, [])
 
   const handleRecord = useCallback(() => {
-    guardMic(() => window.api.send({ type: 'manual' }))
+    guardMic(() => {
+      const s = stateRef.current
+      if (s.run === 'listen') return
+      if (s.workspaceMode === 'meeting' && s.run !== 'record') {
+        if (s.meetingEnded || s.meetingStartedAt == null) {
+          dispatch({ type: 'listen_new' })
+        } else {
+          dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
+        }
+      }
+      window.api.send({ type: 'manual' })
+    })
   }, [])
+  handleRecordRef.current = handleRecord
 
   const handlePause = useCallback(() => {
     const s = stateRef.current

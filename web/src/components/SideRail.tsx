@@ -205,7 +205,7 @@ export default function SideRail(props: Props) {
   const recording = run === 'record'
   const listening = run === 'listen' || recording
   const primaryOn = mode === 'interview' ? autoOn || run === 'listen' : listening
-  const primaryDisabled = mode === 'interview' || mode === 'translate' ? recording : false
+  const primaryDisabled = recording
   const live = primaryOn || recording
   const [moreOpen, setMoreOpen] = useState(false)
   const moreRef = useRef<HTMLDivElement>(null)
@@ -271,10 +271,21 @@ export default function SideRail(props: Props) {
       )}
 
       {mode === 'meeting' && (
-        <button className="rail-icon-btn" onClick={props.onExport} title="Summarize all sections and export PDF">
-          <PdfIcon />
-          <span>Export PDF</span>
-        </button>
+        <>
+          <button
+            className={`rail-icon-btn${recording ? ' live' : ''}`}
+            onClick={props.onRecord}
+            disabled={run === 'listen'}
+            title={recording ? 'Stop recording (F2)' : 'Record, then transcribe accurately (F2)'}
+          >
+            <RecIcon />
+            <span>{recording ? 'Recording' : 'Record'}</span>
+          </button>
+          <button className="rail-icon-btn" onClick={props.onExport} title="Summarize all sections and export PDF">
+            <PdfIcon />
+            <span>Export PDF</span>
+          </button>
+        </>
       )}
 
       {mode === 'translate' && (
