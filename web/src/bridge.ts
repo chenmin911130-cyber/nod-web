@@ -2,6 +2,7 @@ import type { Api, AppConfig, EngineEvent, EngineMsg } from './types'
 import { getToken } from './auth'
 import { MicCapture } from './audio'
 import { apiUrl, isNativeApp, wsUrl } from './native'
+import { micSilenceShouldWarn } from './micGuard'
 import { setWatchPcmSink } from './watch'
 
 const EVENT_TYPES = new Set([
@@ -104,6 +105,9 @@ export function installWebApi(): void {
 
   const pending: Array<{ msg: EngineMsg; at: number }> = []
   let micMuted = false
+  let pcmBytes = 0
+  let listenSince = 0
+  let silenceWatch = 0
 
   const queueMsg = (msg: EngineMsg) => {
     if (msg.type === 'ping') return
@@ -140,16 +144,39 @@ export function installWebApi(): void {
     if (run && run !== 'think') lastRun = run
     window.clearTimeout(micStopTimer)
     const need = lastRun === 'listen' || lastRun === 'record'
-    if (need && !mic.active) {
+    if (need) {
       try {
         await mic.start()
+        if (!listenSince) {
+          listenSince = Date.now()
+          pcmBytes = 0
+          window.clearInterval(silenceWatch)
+          silenceWatch = window.setInterval(() => {
+            if (
+              micSilenceShouldWarn({
+                listening: lastRun === 'listen' || lastRun === 'record',
+                pcmBytes,
+                elapsedMs: Date.now() - listenSince,
+              })
+            ) {
+              window.clearInterval(silenceWatch)
+              emit({
+                type: 'error',
+                text: 'Microphone is silent. Check iPhone Control Centre mic access, then Stop and Start again.',
+              })
+            }
+          }, 500)
+        }
       } catch (err) {
         emit({
           type: 'error',
           text: `Microphone permission denied: ${err instanceof Error ? err.message : String(err)}`,
         })
       }
-    } else if (!need && mic.active) {
+    } else if (mic.active) {
+      listenSince = 0
+      pcmBytes = 0
+      window.clearInterval(silenceWatch)
       micStopTimer = window.setTimeout(() => {
         if (lastRun !== 'listen' && lastRun !== 'record' && mic.active) mic.stop()
       }, 500)
@@ -225,7 +252,15 @@ export function installWebApi(): void {
     if (mic.active) mic.onPcm(buf)
   })
 
+  mic.onFallbackFailed = () => {
+    emit({
+      type: 'error',
+      text: 'Microphone is silent. Check iPhone Control Centre mic access, then Stop and Start again.',
+    })
+  }
+
   mic.onPcm = (buf) => {
+    pcmBytes += buf.byteLength
     if (micMuted) return
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(buf)

@@ -221,12 +221,12 @@ def keep_usage_session(
             row.ended_at = utcnow()
         if not keep_audio:
             delete_prefix(f"users/{user_id}/sessions/{session_id}/audio/")
-            row.audio_key = None
+            row.audio_key = ""
         if not keep_content:
             db.execute(delete(HistoryItem).where(HistoryItem.session_id == session_id))
             if row.notes_key:
                 delete_prefix(f"users/{user_id}/sessions/{session_id}/")
-            row.notes_key = None
+            row.notes_key = ""
 
 
 def discard_usage_session(user_id: str | None, session_id: str | None) -> None:

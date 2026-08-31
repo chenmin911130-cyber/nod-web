@@ -2474,6 +2474,12 @@ html.nod-web .ov-root {
   background: rgba(93, 211, 245, 0.12);
 }
 
+.tr-voice-btn.tr-stop {
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #fecaca;
+  background: rgba(248, 113, 113, 0.12);
+}
+
 .tr-voice-btn.labeled {
   width: auto;
   min-width: 44px;
@@ -2525,6 +2531,12 @@ html.nod-web .ov-root {
 .tr-speak:focus-visible {
   color: #e8fbff;
   background: rgba(34, 211, 238, 0.14);
+}
+
+.tr-speak.stop {
+  opacity: 1;
+  pointer-events: auto;
+  color: #fecaca;
 }
 
 @media (hover: none) {
@@ -4285,6 +4297,30 @@ a.tb-menu-action {
   grid-template-rows: auto 1fr;
 }
 
+.listen-lang-single {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 88px;
+  max-width: 128px;
+}
+
+.listen-lang-single .listen-lang-pair-btn {
+  width: auto;
+  min-width: 72px;
+  padding: 0 8px;
+}
+
+.listen-main.qa .listen-scene {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.listen-main.qa .listen-speech,
+.listen-lang-single .listen-speech {
+  flex: 0 0 auto;
+  min-width: 72px;
+}
+
 .listen-mobile-tabs {
   display: none;
 }
@@ -4567,6 +4603,21 @@ a.tb-menu-action {
 .listen-qa {
   min-height: 0;
   display: flex;
+  flex-direction: column;
+}
+
+.listen-qa-live {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(34, 211, 238, 0.1);
+  color: #9ec9d6;
+  font: 650 13px/1.35 inherit;
+}
+
+.listen-qa-live b {
+  color: #22d3ee;
+  font-weight: 750;
+  margin-right: 6px;
 }
 
 .listen-qa .main {

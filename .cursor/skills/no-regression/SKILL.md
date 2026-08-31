@@ -27,6 +27,8 @@ description: >-
 | `state: listen/idle/think` | 听写、生成 | `listen` 只表示在听，不表示生成结束 |
 | `_cancel` / `_gen_seq` | LLM 生成 | 停听不得取消正在写的答案 |
 | `start_listen` / `stop_listen` | Meeting / Interview / Translate | 旧进程或漏掉的 command 会表现为「不能听」 |
+| 手表残留 file / queued start | iPhone 听写 | 不得自动 `start_listen`，也不得 `preferWatchMic`；只有手表当场 Listen/Record 才能走手表麦 |
+| 手机麦 dummy / 无 PCM | Meeting / Interview / Translate | 手机 Start 必须重开 NodMic；听写中 4 秒无 PCM 必须报错，不能静默 Listening |
 | `inQa` / rail | Interview 侧栏 | 只控制显隐，不得 `stop_listen` 或 `cancel_generate` |
 | `done` / `error` | 前端收尾 | 任何提前 `return` 或 `_cancel` 必须发 `done` 或 `error` |
 
@@ -54,6 +56,12 @@ description: >-
 
 - 开着听写再来一句，翻译会完成，不能 Failed / 一直 Translating
 - 切语言或停听，不打断无关的问答（Interview 不在此页）
+
+**iPhone / Watch mic**
+
+- 手机 Start Listening → 必须出 PCM 或明确报 Microphone is silent，不能只亮 Listening
+- 今天没碰手表时，打开 App 不得自己开始听写
+- 手表 Listen/Record 仍能用手表麦；手机再点 Start 必须抢回手机麦
 
 **空 / 失败**
 

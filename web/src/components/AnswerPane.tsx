@@ -11,6 +11,7 @@ interface Props {
   partial: string
   turns: Turn[]
   busy: boolean
+  listening?: boolean
   onAsk: (text: string, files?: AttachPayload[]) => void
   onCompose?: (on: boolean) => void
 }
@@ -24,7 +25,7 @@ function Sparkle() {
   )
 }
 
-export default function AnswerPane({ currentQ, partial, turns, busy, onAsk, onCompose }: Props) {
+export default function AnswerPane({ currentQ, partial, turns, busy, listening, onAsk, onCompose }: Props) {
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<LocalAttach[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -81,7 +82,7 @@ export default function AnswerPane({ currentQ, partial, turns, busy, onAsk, onCo
         </div>
         <div className="tr-body" ref={scrollRef} onScroll={handleScroll}>
           {isEmpty ? (
-            <EmptyState compact title="Waiting for the next question" />
+            <EmptyState compact title={listening ? 'Listening for the next question' : 'Waiting for the next question'} />
           ) : (
             <>
               {turns.map((t) => {

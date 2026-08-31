@@ -16,9 +16,9 @@ import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
 import { api as authApi, fetchMe } from './auth'
 import { isNativeApp, nativeGo } from './native'
-import { installWatchRemote, pushWatchStatus } from './watch'
+import { installWatchRemote, pushWatchStatus, takePhoneMic } from './watch'
 import { buildWatchFace } from './watchStatus'
-import { nextLiveUtterances, readTtsMode, readTtsVoice, speakTranslation, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
+import { isSpeaking, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
 import { shouldGenerateAutoReport } from './recordReport'
 import {
   clearWatchReport,
@@ -906,7 +906,8 @@ export default function App() {
     setWatchReportOpen(true)
     setWatchReportReveal((n) => n + 1)
   }
-  const startListen = () => {
+  const startListen = (opts?: { fromWatch?: boolean }) => {
+    if (!opts?.fromWatch) takePhoneMic()
     listenWanted.current = true
     sessionPaused.current = false
     setSavePrompt(false)
@@ -937,6 +938,7 @@ export default function App() {
   const [consent, setConsent] = useState<boolean | null>(demoScene ? true : null)
   const [ttsMode, setTtsMode] = useState<TtsMode>(readTtsMode)
   const [ttsVoice, setTtsVoice] = useState<TtsVoice>(readTtsVoice)
+  const [speaking, setSpeaking] = useState(isSpeaking)
   const spokenTranslate = useRef<Set<string>>(new Set())
   const ttsVoiceRef = useRef(ttsVoice)
   ttsVoiceRef.current = ttsVoice
@@ -1006,6 +1008,8 @@ export default function App() {
     })
   }, [])
 
+  useEffect(() => onSpeakingChange(setSpeaking), [])
+
   const guardMic = (fn: () => void) => {
     const running = stateRef.current.run === 'listen' || stateRef.current.run === 'record'
     if (running || consentRef.current === true) {
@@ -1036,7 +1040,7 @@ export default function App() {
     return installWatchRemote({
       onStart: () => {
         if (sessionPaused.current) {
-          guardMic(startListen)
+          guardMic(() => startListen({ fromWatch: true }))
           return
         }
         watchAutoNotes.current = true
@@ -1044,11 +1048,11 @@ export default function App() {
         watchRestoreTried.current = false
         clearWatchReport()
         setWatchReportOpen(false)
-        guardMic(startListen)
+        guardMic(() => startListen({ fromWatch: true }))
       },
       onRecord: () => {
         if (sessionPaused.current) {
-          guardMic(startListen)
+          guardMic(() => startListen({ fromWatch: true }))
           return
         }
         watchAutoNotes.current = true
@@ -1066,7 +1070,7 @@ export default function App() {
         if (s.workspaceMode === 'meeting' && (s.meetingEnded || s.meetingStartedAt == null)) {
           dispatch({ type: 'listen_new' })
         }
-        guardMic(startListen)
+        guardMic(() => startListen({ fromWatch: true }))
       },
       onPause: () => {
         sessionPaused.current = true
@@ -1081,7 +1085,7 @@ export default function App() {
         if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
           dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
         }
-        guardMic(startListen)
+        guardMic(() => startListen({ fromWatch: true }))
       },
       onStop: () => {
         sessionPaused.current = false
@@ -2341,7 +2345,6 @@ export default function App() {
   }
 
   const listening = state.run === 'listen' || state.run === 'record'
-  const elapsedLabel = formatElapsed(state.meetingElapsedMs)
   const study = studyMode
   const hideRail = () => {
     setRailDismissed(true)
@@ -2480,7 +2483,13 @@ export default function App() {
                 onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
               />
             )}
+            speaking={speaking}
+            onStopSpeech={stopSpeech}
             onSpeak={(text) => {
+              if (speechTapShouldStop(speaking)) {
+                stopSpeech()
+                return
+              }
               unlockSpeech()
               void speakTranslation(text, ttsVoice).catch((err) => {
                 dispatch({
@@ -2504,7 +2513,6 @@ export default function App() {
             partialSpeaker={state.partialSpeaker}
             onRenameSpeaker={handleRenameSpeaker}
             partial={state.partial}
-            elapsedLabel={elapsedLabel}
             listening={listening}
             ended={state.meetingEnded}
             catchNotes={state.catchNotes}
@@ -2520,6 +2528,7 @@ export default function App() {
                 partial={state.partial}
                 turns={state.turns}
                 busy={state.busy}
+                listening={listening}
                 onAsk={handleAsk}
                 onCompose={setComposeOpen}
               />

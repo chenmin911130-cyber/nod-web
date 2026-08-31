@@ -22,7 +22,6 @@ interface Props {
   partialSpeaker?: string
   onRenameSpeaker: (id: string, name: string) => void
   partial: string
-  elapsedLabel: string
   listening: boolean
   ended: boolean
   catchNotes: CatchNote[]
@@ -651,11 +650,13 @@ export default function ListenPane(props: Props) {
           </div>
         )}
         {props.qa && (
-          <SpeechLangSelect
-            value={props.speechLang}
-            heard={props.heardLang}
-            onChange={props.onSpeechLang}
-          />
+          <div className="listen-lang-pair listen-lang-single" title="Speech recognition language">
+            <SpeechLangSelect
+              value={props.speechLang}
+              heard={props.heardLang}
+              onChange={props.onSpeechLang}
+            />
+          </div>
         )}
         {!props.qa && (
           <div className="listen-tools">
@@ -706,7 +707,15 @@ export default function ListenPane(props: Props) {
       )}
 
       {props.qa ? (
-        <div className="listen-qa">{props.qaSlot}</div>
+        <div className="listen-qa">
+          {props.listening || props.partial ? (
+            <div className="listen-qa-live" aria-live="polite">
+              <b>{props.listening ? 'Listening' : 'Heard'}</b>
+              {props.partial.trim() || (props.listening ? 'Speak a question — it will appear here.' : '')}
+            </div>
+          ) : null}
+          {props.qaSlot}
+        </div>
       ) : (
         <>
           <div
@@ -717,9 +726,6 @@ export default function ListenPane(props: Props) {
             <section className="listen-pane">
               <div className="listen-kicker">
                 {lecture ? 'Classroom' : 'Transcript'}
-                <span className={`listen-timer${props.listening ? ' live' : ''}`}>
-                  {props.elapsedLabel === '00:00:00' && !props.listening ? '' : props.elapsedLabel}
-                </span>
                 {props.lines.length > 0 && !notesOpen && (
                   <button
                     type="button"

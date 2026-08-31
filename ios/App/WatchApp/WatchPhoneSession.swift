@@ -82,7 +82,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
         liveStreamed = false
         elapsedMs = 0
         send(action: "record")
-        setSpeechLive(true)
         beginMic(hint: "Recording · Pause anytime, Done for report")
     }
 
@@ -104,7 +103,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
         paused = false
         startedAt = Date().addingTimeInterval(-elapsedMs)
         send(action: "resume")
-        setSpeechLive(true)
         beginMic(hint: reachable ? "Watch mic" : "Recording on Watch", resetClock: false)
     }
 
@@ -161,7 +159,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
         liveStreamed = false
         elapsedMs = 0
         send(action: "start")
-        setSpeechLive(true)
         beginMic(hint: reachable ? "Watch mic" : "Recording on Watch")
     }
 
@@ -211,7 +208,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
     }
 
     func send(action: String) {
-        let payload = ["action": action]
+        let payload: [String: Any] = ["action": action, "at": Date().timeIntervalSince1970]
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         if session.isReachable {

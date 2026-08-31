@@ -17,6 +17,7 @@ type WatchPlugin = {
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   playSpeech(opts: { data: string }): Promise<void>
+  stopSpeech(): Promise<void>
   addListener(event: 'command', cb: (ev: WatchCommand) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'pcm', cb: (ev: WatchPcm) => void): Promise<{ remove: () => Promise<void> }>
 }
@@ -38,6 +39,31 @@ export function isWatchMicPreferred(): boolean {
 export function setPreferWatchMic(on: boolean): void {
   preferWatchMic = on
   if (!on) preRoll.length = 0
+}
+
+/** Phone Start Listening must win over a stale Watch claim. */
+export function takePhoneMic(): void {
+  setPreferWatchMic(false)
+}
+
+/** Incoming Watch audio must not claim the phone mic by itself. */
+export function watchPcmShouldClaimMic(): boolean {
+  return false
+}
+
+/** A leftover Watch file transfer is PCM only. It must not start_listen. */
+export function watchFileShouldStartListen(): boolean {
+  return false
+}
+
+const LISTEN_CMDS = new Set(['start', 'stop', 'record', 'pause', 'resume'])
+const QUEUED_START_MAX_AGE_SEC = 30
+
+/** Live sendMessage from the Watch is a real tap. Queued leftovers need a fresh timestamp. */
+export function watchQueuedCommandShouldRun(action: string, at: number | undefined, now: number): boolean {
+  if (!LISTEN_CMDS.has(action)) return true
+  if (at == null || !Number.isFinite(at)) return false
+  return now - at <= QUEUED_START_MAX_AGE_SEC
 }
 
 export function setWatchPcmSink(fn: ((buf: ArrayBuffer) => void) | null): void {
@@ -116,7 +142,7 @@ export function installWatchRemote(handlers: {
     })
     const pcm = await NodWatch.addListener('pcm', (ev) => {
       if (gone) return
-      setPreferWatchMic(true)
+      if (watchPcmShouldClaimMic()) setPreferWatchMic(true)
       deliverPcm(ev.data || '')
     })
     handles.push(command, pcm)
@@ -144,6 +170,11 @@ export function pushWatchStatus(face: {
     translation: (face.translation || '').slice(0, 400),
     history: (face.history || []).slice(0, 8),
   }).catch(() => undefined)
+}
+
+export async function stopWatchSpeech(): Promise<void> {
+  if (!isNativeApp()) return
+  await NodWatch.stopSpeech().catch(() => undefined)
 }
 
 export async function playWatchSpeech(bytes: Uint8Array): Promise<void> {

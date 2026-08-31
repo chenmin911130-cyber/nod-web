@@ -535,6 +535,12 @@ class InterviewWaitFlushTests(unittest.TestCase):
         sess.emit.assert_any_call({"type": "partial", "text": ""})
         sess.pipeline.process_text.assert_not_called()
 
+    def test_wait_keeps_partial_so_mic_is_visible(self):
+        sess = self._session()
+        sess._on_final("当下经济", "zh")
+        sess.emit.assert_any_call({"type": "partial", "text": "当下经济"})
+        sess.pipeline.process_text.assert_not_called()
+
     def test_wait_join_does_not_insert_space_between_chinese(self):
         sess = self._session()
         sess._pending_wait = ("当下", time.time(), "zh")

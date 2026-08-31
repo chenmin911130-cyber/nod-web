@@ -99,7 +99,6 @@ struct WatchRootView: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    speechBar
                 } else if !session.original.isEmpty {
                     Text(session.original)
                         .font(.headline)
@@ -109,9 +108,6 @@ struct WatchRootView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                }
-                if session.translation.isEmpty, session.listening || session.speechLive {
-                    speechBar
                 }
                 if session.listening {
                     Button("Pause") {
@@ -144,23 +140,6 @@ struct WatchRootView: View {
             }
             .padding(.horizontal, 4)
         }
-    }
-
-    private var speechBar: some View {
-        HStack(spacing: 6) {
-            Button(session.speechLive ? "Live" : "Tap") {
-                session.setSpeechLive(!session.speechLive)
-            }
-            .tint(session.speechLive ? .orange : .gray)
-            Button(session.speechVoice == "male" ? "Male" : "Female") {
-                session.setSpeechVoice(session.speechVoice == "male" ? "female" : "male")
-            }
-            Button("Play") {
-                session.speakCurrent()
-            }
-            .tint(Color(red: 0, green: 0.82, blue: 1))
-        }
-        .font(.caption2)
     }
 
     private var historyPage: some View {

@@ -25,6 +25,8 @@ interface Props {
   onTtsMode: (mode: TtsMode) => void
   onTtsVoice: (voice: TtsVoice) => void
   onSpeak: (text: string) => void
+  speaking?: boolean
+  onStopSpeech?: () => void
   voiceChrome?: ReactNode
 }
 
@@ -46,6 +48,14 @@ function Sparkle() {
     <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
       <path d="M10 1.2l1.05 5.1L16.3 7.4 11.05 8.7 10 13.8 8.95 8.7 3.7 7.4l5.25-1.1L10 1.2z" />
       <path d="M15.6 11.6l.5 2.05 2.05.5-2.05.5-.5 2.05-.5-2.05-2.05-.5 2.05-.5.5-2.05z" />
+    </svg>
+  )
+}
+
+function LineStopIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="4" y="4" width="8" height="8" rx="1.2" fill="currentColor" />
     </svg>
   )
 }
@@ -132,6 +142,8 @@ export default function TranslatePane({
   onTtsMode,
   onTtsVoice,
   onSpeak,
+  speaking = false,
+  onStopSpeech,
   voiceChrome,
 }: Props) {
   const [input, setInput] = useState('')
@@ -239,6 +251,18 @@ export default function TranslatePane({
             >
               <MaleVoiceIcon />
             </button>
+            {speaking ? (
+              <button
+                type="button"
+                className="tr-voice-btn labeled on tr-stop"
+                onClick={() => onStopSpeech?.()}
+                title="Stop speech"
+                aria-label="Stop speech"
+              >
+                <LineStopIcon />
+                <span>Stop</span>
+              </button>
+            ) : null}
             {voiceChrome ? (
               <>
                 <span className="tr-voice-split" aria-hidden="true" />
@@ -282,12 +306,12 @@ export default function TranslatePane({
                       {p.original.trim() ? (
                         <button
                           type="button"
-                          className="tr-speak"
-                          onClick={() => onSpeak(p.original)}
-                          title="Play"
-                          aria-label="Play original"
+                          className={`tr-speak${speaking ? ' stop' : ''}`}
+                          onClick={() => (speaking ? onStopSpeech?.() : onSpeak(p.original))}
+                          title={speaking ? 'Stop' : 'Play'}
+                          aria-label={speaking ? 'Stop speech' : 'Play original'}
                         >
-                          <LinePlayIcon />
+                          {speaking ? <LineStopIcon /> : <LinePlayIcon />}
                         </button>
                       ) : null}
                     </div>
@@ -308,12 +332,12 @@ export default function TranslatePane({
                       {p.translation && !p.failed ? (
                         <button
                           type="button"
-                          className="tr-speak"
-                          onClick={() => onSpeak(p.translation)}
-                          title="Play"
-                          aria-label="Play translation"
+                          className={`tr-speak${speaking ? ' stop' : ''}`}
+                          onClick={() => (speaking ? onStopSpeech?.() : onSpeak(p.translation))}
+                          title={speaking ? 'Stop' : 'Play'}
+                          aria-label={speaking ? 'Stop speech' : 'Play translation'}
                         >
-                          <LinePlayIcon />
+                          {speaking ? <LineStopIcon /> : <LinePlayIcon />}
                         </button>
                       ) : null}
                       {p.failed ? (

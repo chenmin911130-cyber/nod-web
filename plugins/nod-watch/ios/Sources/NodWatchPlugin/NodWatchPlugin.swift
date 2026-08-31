@@ -11,6 +11,7 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "setStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "shareFile", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "playSpeech", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stopSpeech", returnType: CAPPluginReturnPromise),
     ]
 
     override public func load() {
@@ -101,5 +102,10 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
             }
             call.resolve()
         }
+    }
+
+    @objc func stopSpeech(_ call: CAPPluginCall) {
+        WatchBridge.shared.stopSpeechPlayback()
+        call.resolve()
     }
 }

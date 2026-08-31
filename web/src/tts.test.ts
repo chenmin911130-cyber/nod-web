@@ -1,4 +1,4 @@
-import { defaultTtsMode, nextLiveUtterances, shouldKickDrain } from './tts'
+import { defaultTtsMode, nextLiveUtterances, shouldKickDrain, speechTapShouldStop } from './tts'
 
 function eq<T>(got: T, want: T) {
   if (JSON.stringify(got) !== JSON.stringify(want)) {
@@ -62,3 +62,6 @@ eq(nextLiveUtterances({
 eq(shouldKickDrain(true, 1), false)
 eq(shouldKickDrain(false, 0), false)
 eq(shouldKickDrain(false, 1), true)
+
+eq(speechTapShouldStop(false), false)
+eq(speechTapShouldStop(true), true)

@@ -13,8 +13,9 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "isActive", returnType: CAPPluginReturnPromise),
     ]
 
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
     private var running = false
+    private var captureGen = 0
     private let targetSampleRate: Double = 16_000
     private var converter: AVAudioConverter?
     private let listenNotificationId = "nod.listening"
@@ -31,20 +32,15 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
                 return
             }
             DispatchQueue.main.async {
-                do {
-                    try self.beginCapture()
-                    self.showListeningNotification()
-                    call.resolve()
-                } catch {
-                    self.teardown()
-                    call.reject(error.localizedDescription)
-                }
+                self.captureGen += 1
+                self.startCapture(call, attempt: 0, gen: self.captureGen)
             }
         }
     }
 
     @objc func stop(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
+            self.captureGen += 1
             self.teardown()
             self.clearListeningNotification()
             call.resolve()
@@ -53,6 +49,30 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func isActive(_ call: CAPPluginCall) {
         call.resolve(["active": running])
+    }
+
+    private func startCapture(_ call: CAPPluginCall, attempt: Int, gen: Int) {
+        guard gen == captureGen else {
+            call.reject("Microphone stopped")
+            return
+        }
+        do {
+            try beginCapture()
+            showListeningNotification()
+            call.resolve()
+        } catch {
+            teardown()
+            // First listen after Watch/TTS often sees sampleRate 0. Retry
+            // before telling the JS layer the mic failed.
+            if attempt < 5 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+                    guard let self else { return }
+                    self.startCapture(call, attempt: attempt + 1, gen: gen)
+                }
+                return
+            }
+            call.reject(error.localizedDescription)
+        }
     }
 
     private func beginCapture() throws {
@@ -71,9 +91,21 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         try? session.overrideOutputAudioPort(.speaker)
 
+        if engine.isRunning {
+            engine.stop()
+        }
+        engine.inputNode.removeTap(onBus: 0)
         engine.reset()
-        let input = engine.inputNode
-        let format = input.inputFormat(forBus: 0)
+        engine.prepare()
+
+        var input = engine.inputNode
+        var format = input.inputFormat(forBus: 0)
+        if format.sampleRate <= 0 || format.channelCount <= 0 {
+            engine = AVAudioEngine()
+            engine.prepare()
+            input = engine.inputNode
+            format = input.inputFormat(forBus: 0)
+        }
         guard format.sampleRate > 0, format.channelCount > 0 else {
             throw NSError(
                 domain: "NodMic",
@@ -127,7 +159,10 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
         if error != nil { return }
         guard let channel = out.int16ChannelData?[0], out.frameLength > 0 else { return }
         let data = Data(bytes: channel, count: Int(out.frameLength) * MemoryLayout<Int16>.size)
-        notifyListeners("pcm", data: ["data": data.base64EncodedString()])
+        let payload = data.base64EncodedString()
+        DispatchQueue.main.async { [weak self] in
+            self?.notifyListeners("pcm", data: ["data": payload])
+        }
     }
 
     private func teardown() {

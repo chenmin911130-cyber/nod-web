@@ -9,7 +9,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
 
     weak var plugin: NodWatchPlugin?
     private(set) var jsReady = false
-    private var pending: [String] = []
+    private var pending: [(action: String, at: Double?, live: Bool)] = []
     private var pendingPcm: [String] = []
     private var lastListening = false
     private var lastHint = "Ready"
@@ -45,8 +45,11 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         jsReady = true
         let queued = pending
         pending.removeAll()
-        for action in queued {
-            emit(action)
+        let now = Date().timeIntervalSince1970
+        for item in queued {
+            if Self.shouldRunWatchCommand(item.action, at: item.at, live: item.live, now: now) {
+                emit(item.action)
+            }
         }
         let pcm = pendingPcm
         pendingPcm.removeAll()
@@ -94,7 +97,16 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
     }
 
-    private func handle(_ message: [String: Any]) {
+    /// Live sendMessage is a Watch tap. Queued leftovers need a fresh `at`.
+    static func shouldRunWatchCommand(_ action: String, at: Double?, live: Bool, now: Double) -> Bool {
+        let listenCtl = action == "start" || action == "stop" || action == "record" || action == "pause" || action == "resume"
+        if !listenCtl { return true }
+        if live { return true }
+        guard let at else { return false }
+        return now - at <= 30
+    }
+
+    private func handle(_ message: [String: Any], live: Bool) {
         if let pcm = message["pcm"] as? String, !pcm.isEmpty {
             emitPcm(pcm)
         }
@@ -102,10 +114,23 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let allowed = ["stop", "start", "record", "pause", "resume", "speak", "tts_live", "tts_tap", "tts_female", "tts_male"]
         let action = allowed.contains(raw) ? raw : ""
         guard !action.isEmpty else { return }
+        let at = message["at"] as? Double
+        let now = Date().timeIntervalSince1970
+        guard Self.shouldRunWatchCommand(action, at: at, live: live, now: now) else { return }
         if jsReady {
             emit(action)
         } else {
-            pending.append(action)
+            pending.append((action, at, live))
+        }
+    }
+
+    func stopSpeechPlayback() {
+        DispatchQueue.main.async {
+            self.speechPlayer?.stop()
+            self.speechPlayer = nil
+            self.restoreListenSession()
+            self.speechFinish?(nil)
+            self.speechFinish = nil
         }
     }
 
@@ -234,32 +259,25 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     }
 
     public func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
-        handle(message)
+        handle(message, live: true)
     }
 
     public func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
-        handle(message)
+        handle(message, live: true)
         replyHandler(["ok": true, "listening": lastListening, "hint": lastHint])
     }
 
     public func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
-        handle(userInfo)
+        handle(userInfo, live: false)
     }
 
     public func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
-        handle(applicationContext)
+        handle(applicationContext, live: false)
     }
 
     public func session(_ session: WCSession, didReceive file: WCSessionFile) {
         guard let data = try? Data(contentsOf: file.fileURL), !data.isEmpty else { return }
-        if jsReady {
-            if pending.last != "start" {
-                emit("start")
-            }
-            emitPcmData(data)
-        } else {
-            pending.append("start")
-            emitPcmData(data)
-        }
+        // Leftover PCM files must not start_listen. Watch already sent start/record live.
+        emitPcmData(data)
     }
 }

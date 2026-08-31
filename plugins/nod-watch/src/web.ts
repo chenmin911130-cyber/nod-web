@@ -17,4 +17,8 @@ export class NodWatchWeb extends WebPlugin implements NodWatchPlugin {
   async playSpeech(): Promise<void> {
     return
   }
+
+  async stopSpeech(): Promise<void> {
+    return
+  }
 }

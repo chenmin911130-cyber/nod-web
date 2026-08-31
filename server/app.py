@@ -2785,6 +2785,7 @@ class Session:
             else:
                 self._pending_wait = (cleaned, time.time(), lang)
                 self._schedule_interview_wait_flush()
+                self.emit({"type": "partial", "text": cleaned})
                 self.emit({"type": "status", "text": STATUS_WAIT_MORE})
             return
         self._cancel_interview_wait_timer()

@@ -11,4 +11,5 @@ export interface NodWatchPlugin {
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   playSpeech(opts: { data: string }): Promise<void>
+  stopSpeech(): Promise<void>
 }

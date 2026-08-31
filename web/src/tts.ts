@@ -1,6 +1,6 @@
 import { apiUrl, isNativeApp } from './native'
 import { getToken } from './auth'
-import { playWatchSpeech } from './watch'
+import { playWatchSpeech, stopWatchSpeech } from './watch'
 
 export type TtsVoice = 'male' | 'female'
 export type TtsMode = 'tap' | 'live'
@@ -12,6 +12,30 @@ const ON_KEY = 'nod_tts_on'
 let current: HTMLAudioElement | null = null
 let objectUrl = ''
 let settlePlay: (() => void) | null = null
+let playGen = 0
+let playAbort: AbortController | null = null
+let speaking = false
+const speechListeners = new Set<(on: boolean) => void>()
+
+function setSpeaking(on: boolean): void {
+  if (speaking === on) return
+  speaking = on
+  speechListeners.forEach((cb) => cb(on))
+}
+
+export function isSpeaking(): boolean {
+  return speaking
+}
+
+export function onSpeakingChange(cb: (on: boolean) => void): () => void {
+  speechListeners.add(cb)
+  return () => speechListeners.delete(cb)
+}
+
+/** A second Play while audio is running must stop, not queue another clip. */
+export function speechTapShouldStop(playing: boolean): boolean {
+  return playing
+}
 
 export function readTtsVoice(): TtsVoice {
   try {
@@ -101,8 +125,13 @@ function haltAudio(): void {
 }
 
 export function stopSpeech(): void {
+  playGen += 1
+  playAbort?.abort()
+  playAbort = null
   jobs.length = 0
   haltAudio()
+  void stopWatchSpeech()
+  setSpeaking(false)
 }
 
 /** Restart drain if work arrived while the previous pass was closing. */
@@ -119,10 +148,12 @@ export function unlockSpeech(): void {
 async function playOnce(text: string, voice: TtsVoice): Promise<void> {
   const clean = text.trim()
   if (!clean) return
+  const gen = playGen
   const headers = new Headers({ 'Content-Type': 'application/json' })
   const token = getToken()
   if (token) headers.set('Authorization', `Bearer ${token}`)
   const ac = new AbortController()
+  playAbort = ac
   const timer = window.setTimeout(() => ac.abort(), 20_000)
   let res: Response
   try {
@@ -134,13 +165,16 @@ async function playOnce(text: string, voice: TtsVoice): Promise<void> {
       signal: ac.signal,
     })
   } catch (err) {
+    if (gen !== playGen) return
     if (err instanceof DOMException && err.name === 'AbortError') {
       throw new Error('Speech timed out')
     }
     throw err
   } finally {
     window.clearTimeout(timer)
+    if (playAbort === ac) playAbort = null
   }
+  if (gen !== playGen) return
   if (!res.ok) {
     const detail = await res.json().catch(() => ({})) as { detail?: string }
     throw new Error(typeof detail.detail === 'string' ? detail.detail : `Speech failed (${res.status})`)
@@ -148,6 +182,7 @@ async function playOnce(text: string, voice: TtsVoice): Promise<void> {
   const blob = await res.blob()
   const bytes = new Uint8Array(await blob.arrayBuffer())
   if (!bytes.byteLength) throw new Error('Speech returned empty audio')
+  if (gen !== playGen) return
   if (isNativeApp()) {
     try {
       await Promise.race([
@@ -199,6 +234,7 @@ let draining = false
 async function drain(): Promise<void> {
   if (draining) return
   draining = true
+  setSpeaking(true)
   try {
     while (jobs.length) {
       const job = jobs.shift()
@@ -213,6 +249,7 @@ async function drain(): Promise<void> {
   } finally {
     draining = false
     if (shouldKickDrain(draining, jobs.length)) void drain()
+    else setSpeaking(false)
   }
 }
 
