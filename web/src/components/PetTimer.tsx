@@ -20,9 +20,7 @@ function PetMark() {
   )
 }
 
-// elapsedMs: session clock from the workspace (survives pause/resume). The
-// internal stopwatch is only a fallback for workspaces without one.
-export default function PetTimer({ listening, elapsedMs }: { listening: boolean; elapsedMs?: number }) {
+export default function PetTimer({ listening }: { listening: boolean }) {
   const [phase, setPhase] = useState<'hidden' | 'hello' | 'live' | 'bye'>('hidden')
   const [ms, setMs] = useState(0)
   const started = useRef(0)
@@ -50,14 +48,10 @@ export default function PetTimer({ listening, elapsedMs }: { listening: boolean;
   if (!visible) return null
 
   const line = phase === 'bye' ? BYE : HELLO
-  const clock = formatClock(elapsedMs ?? ms)
+  const clock = formatClock(ms)
 
   return (
-    <div
-      className={`pet-track${phase === 'bye' ? ' bye' : ''}`}
-      role="status"
-      aria-live="polite"
-    >
+    <div className={`pet-track${phase === 'bye' ? ' bye' : ''}`} role="status" aria-live="polite">
       <div className="pet-timer">
         <PetMark />
         <div className="pet-timer-copy">

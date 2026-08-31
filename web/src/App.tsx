@@ -3,7 +3,7 @@ import type { AttachPayload } from './attach'
 import type { AppConfig, AppState, AudioSource, EngineEvent, Lang, MeetingLine, PairLang, TranslatePair, ViewMode, WorkspaceMode } from './types'
 import { TRANSLATE_LANGS } from './types'
 import { isWeb } from './platform'
-import TitleBar from './components/TitleBar'
+import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
 import { restoreFromSession } from './historyRestore'
 import SavePrompt from './components/SavePrompt'
@@ -2303,7 +2303,6 @@ export default function App() {
             to={state.translateTo}
             from={state.translateFrom}
             heardFrom={state.translateFrom === 'auto' ? state.heardLang : state.translateFrom}
-            source={state.source}
             onTranslate={handleTranslateTyped}
             onTranslateTo={handleTranslateTo}
             onTranslateFrom={handleTranslateFrom}
@@ -2312,7 +2311,6 @@ export default function App() {
             onRetry={handleRetryTranslate}
             ttsMode={ttsMode}
             ttsVoice={ttsVoice}
-            ttsReady={ttsReady}
             onTtsMode={(mode) => {
               setTtsMode(mode)
               writeTtsMode(mode)
@@ -2323,6 +2321,24 @@ export default function App() {
               setTtsVoice(voice)
               writeTtsVoice(voice)
             }}
+            voiceChrome={(
+              <TitleIcons
+                mode={state.workspaceMode}
+                source={state.source}
+                opacity={state.opacity}
+                pinned={state.pinned}
+                systemMuted={state.systemMuted}
+                micMuted={state.micMuted}
+                stealth={state.stealth}
+                onSource={handleSource}
+                onOpacity={handleOpacity}
+                onPinned={handlePinned}
+                onSystemMuted={handleSystemMuted}
+                onMicMuted={handleMicMuted}
+                onStealth={handleStealth}
+                onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
+              />
+            )}
             onSpeak={(text) => {
               unlockSpeech()
               void speakTranslation(text, ttsVoice).catch((err) => {
@@ -2364,6 +2380,9 @@ export default function App() {
                 onCompose={setComposeOpen}
               />
             }
+            speechLang={state.lang}
+            heardLang={state.heardLang}
+            onSpeechLang={handleLang}
             onScene={(scene) => {
               dispatch({ type: 'listen_scene', scene })
               if (scene === 'interview') handleMode('interview', 'interview')

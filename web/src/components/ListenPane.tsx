@@ -1,7 +1,4 @@
 import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import type { AttachPayload, LocalAttach } from '../attach'
-import { toPayload } from '../attach'
-import PromptAttach from './PromptAttach'
 import type { CatchNote, Lang, MeetingLine, PairLang } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import {
@@ -14,7 +11,6 @@ import {
   type ListenScene,
   type NotesSectionId,
 } from '../listen'
-import { CaptionMode } from './SideRail'
 
 interface Props {
   scene: ListenScene
@@ -38,10 +34,13 @@ interface Props {
   qa?: boolean
   qaSlot?: ReactNode
   onScene: (scene: ListenScene) => void
+  speechLang: Lang
+  heardLang?: PairLang | null
+  onSpeechLang: (lang: Lang) => void
   onTranslate: (on: boolean) => void
   onTranslateTo: (lang: Lang) => void
   onSummary: () => void
-  onAsk: (text: string, files?: AttachPayload[]) => void
+  onAsk: (text: string, files?: import('../attach').AttachPayload[]) => void
 }
 
 const NOTES_W_MIN = 28
@@ -121,6 +120,25 @@ function SceneMark({ scene, size = 22 }: { scene: ListenScene; size?: number }) 
   )
 }
 
+function TranslateIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+      <path d="M1 18.8 6.6 3.4 12.2 18.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M2.9 13.2h7.4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <text
+        x="10.6"
+        y="19.2"
+        fill="currentColor"
+        fontSize="14.5"
+        fontWeight="700"
+        fontFamily="Microsoft YaHei UI, Microsoft YaHei, PingFang SC, Noto Sans SC, sans-serif"
+      >
+        文
+      </text>
+    </svg>
+  )
+}
+
 function NotesIcon() {
   return (
     <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
@@ -131,9 +149,22 @@ function NotesIcon() {
 }
 
 const NOTES_LANGS: Array<{ id: Lang; tag: string; name: string }> = [
-  { id: 'auto', tag: 'AU', name: 'Auto · all languages' },
+  { id: 'auto', tag: 'Auto', name: 'Follow speech' },
   ...TRANSLATE_LANGS,
 ]
+
+function useDismiss(open: boolean, onClose: () => void) {
+  const boxRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => {
+      if (!boxRef.current?.contains(e.target as Node)) onClose()
+    }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  }, [open, onClose])
+  return boxRef
+}
 
 function LangSelect({
   value,
@@ -143,35 +174,28 @@ function LangSelect({
   onChange: (lang: Lang) => void
 }) {
   const [open, setOpen] = useState(false)
-  const boxRef = useRef<HTMLDivElement>(null)
+  const boxRef = useDismiss(open, () => setOpen(false))
   const current = NOTES_LANGS.find((l) => l.id === value)
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (!boxRef.current?.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [open])
 
   return (
     <div className={`listen-lang-box${open ? ' open' : ''}`} ref={boxRef}>
       <button
         type="button"
-        className={`listen-icon-btn${open ? ' on' : ''}`}
+        className={`listen-lang-pair-btn${open ? ' on' : ''}`}
         title={
           value === 'auto'
-            ? 'Auto. Notes follow the language you speak.'
+            ? 'Notes follow the language you speak.'
             : current
               ? `Notes language · ${current.name}`
               : 'Choose notes language'
         }
+        aria-label="Notes language"
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="listen-lang-tag">{current?.tag ?? 'AU'}</span>
+        <span className="listen-lang-tag">{current?.tag ?? 'EN'}</span>
+        <Chevron />
       </button>
       {open && (
         <div className="listen-lang-menu" role="listbox">
@@ -197,18 +221,73 @@ function LangSelect({
   )
 }
 
+const SPEECH_LANGS: Array<{ id: Lang; tag: string; name: string }> = [
+  { id: 'auto', tag: 'Auto', name: 'Detect automatically' },
+  ...TRANSLATE_LANGS,
+]
+
+function SpeechLangSelect({
+  value,
+  heard,
+  onChange,
+}: {
+  value: Lang
+  heard?: PairLang | null
+  onChange: (lang: Lang) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const boxRef = useDismiss(open, () => setOpen(false))
+  const current = SPEECH_LANGS.find((l) => l.id === value) ?? SPEECH_LANGS[0]
+  const heardTag = heard ? TRANSLATE_LANGS.find((l) => l.id === heard)?.tag : ''
+  const label = value === 'auto' && heardTag ? `Auto · ${heardTag}` : current.tag
+
+  return (
+    <div className={`listen-speech${open ? ' open' : ''}`} ref={boxRef}>
+      <button
+        type="button"
+        className={`listen-lang-pair-btn${open ? ' on' : ''}`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="Speech recognition language"
+        title={
+          value === 'auto'
+            ? heardTag
+              ? `Speech recognition · Auto (hearing ${heardTag})`
+              : 'Speech recognition · Auto'
+            : `Speech recognition · ${current.name}`
+        }
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="listen-lang-tag">{label}</span>
+        <Chevron />
+      </button>
+      {open && (
+        <div className="listen-lang-menu" role="listbox" aria-label="Speech recognition language">
+          {SPEECH_LANGS.map((lang) => (
+            <button
+              key={lang.id}
+              type="button"
+              role="option"
+              aria-selected={value === lang.id}
+              className={lang.id === value ? 'on' : ''}
+              onClick={() => {
+                onChange(lang.id)
+                setOpen(false)
+              }}
+            >
+              <b>{lang.tag}</b>
+              <span>{lang.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SceneSelect({ scene, onScene }: { scene: ListenScene; onScene: (scene: ListenScene) => void }) {
   const [open, setOpen] = useState(false)
-  const boxRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (!boxRef.current?.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [open])
+  const boxRef = useDismiss(open, () => setOpen(false))
 
   return (
     <div className={`listen-scene${open ? ' open' : ''}`} ref={boxRef}>
@@ -460,7 +539,6 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
 
 export default function ListenPane(props: Props) {
   const [input, setInput] = useState('')
-  const [files, setFiles] = useState<LocalAttach[]>([])
   const [notesOpen, setNotesOpen] = useState(Boolean(props.notesDefaultOpen))
   const [mobilePane, setMobilePane] = useState<'live' | 'notes'>(props.notesDefaultOpen ? 'notes' : 'live')
   const [notesW, setNotesW] = useState(() => readNotesW(props.scene))
@@ -536,11 +614,10 @@ export default function ListenPane(props: Props) {
 
   const submit = () => {
     const text = input.trim()
-    if (props.busy || (!text && files.length === 0)) return
+    if (!text || props.busy) return
     openNotes()
-    props.onAsk(text || 'Please review the attached files.', files.length ? toPayload(files) : undefined)
+    props.onAsk(text)
     setInput('')
-    setFiles([])
   }
 
   const stackedPane = !notesOpen || mobilePane === 'live' ? 'live' : 'notes'
@@ -548,23 +625,40 @@ export default function ListenPane(props: Props) {
   return (
     <div className={`listen-main scene-${props.scene}${props.translateOn ? ' tr-on' : ' tr-off'}${props.ended ? ' ended' : ''}${props.qa ? ' qa' : ''}`}>
       <div className="listen-controls">
+        {!props.qa && (
+          <button
+            type="button"
+            className={`listen-icon-btn listen-side-left listen-bi-btn${props.translateOn ? ' on' : ''}`}
+            role="switch"
+            aria-checked={props.translateOn}
+            title={props.translateOn ? 'Bilingual on — tap to turn off' : 'Bilingual off — tap to show translations'}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => props.onTranslate(!props.translateOn)}
+          >
+            <TranslateIcon />
+          </button>
+        )}
         <SceneSelect scene={props.scene} onScene={props.onScene} />
         {!props.qa && (
-          <CaptionMode bilingual={props.translateOn} onChange={props.onTranslate} />
+          <div className="listen-lang-pair" title="Speech to notes language">
+            <SpeechLangSelect
+              value={props.speechLang}
+              heard={props.heardLang}
+              onChange={props.onSpeechLang}
+            />
+            <span className="listen-lang-dash" aria-hidden="true">-</span>
+            <LangSelect value={props.notesLang} onChange={props.onTranslateTo} />
+          </div>
+        )}
+        {props.qa && (
+          <SpeechLangSelect
+            value={props.speechLang}
+            heard={props.heardLang}
+            onChange={props.onSpeechLang}
+          />
         )}
         {!props.qa && (
           <div className="listen-tools">
-            {props.lines.length > 0 && (
-              <button
-                type="button"
-                className="listen-catch"
-                disabled={props.busy}
-                onClick={runSummary}
-              >
-                Summarize
-              </button>
-            )}
-            <LangSelect value={props.notesLang} onChange={props.onTranslateTo} />
             <button
               type="button"
               className={`listen-icon-btn${notesOpen ? ' on' : ''}`}
@@ -623,11 +717,9 @@ export default function ListenPane(props: Props) {
             <section className="listen-pane">
               <div className="listen-kicker">
                 {lecture ? 'Classroom' : 'Transcript'}
-                {/* While listening the pet timer in the title bar shows the clock —
-                    keep only the post-session total here to avoid two timers. */}
-                {!props.listening && props.elapsedLabel !== '00:00:00' && (
-                  <span className="listen-timer">{props.elapsedLabel}</span>
-                )}
+                <span className={`listen-timer${props.listening ? ' live' : ''}`}>
+                  {props.elapsedLabel === '00:00:00' && !props.listening ? '' : props.elapsedLabel}
+                </span>
                 {props.lines.length > 0 && !notesOpen && (
                   <button
                     type="button"
@@ -642,11 +734,9 @@ export default function ListenPane(props: Props) {
               <div className="listen-scroll" ref={leftRef}>
                 {props.lines.length === 0 && !props.partial ? (
                   <div className="listen-empty">
-                    {props.scene === 'lecture'
-                      ? 'Make lectures simpler'
-                      : props.scene === 'interview'
-                        ? 'Make interviews simpler'
-                        : 'Make meetings simpler'}
+                    {lecture
+                      ? 'Start listening. This side is the lecture stream. Notes stay closed until you ask or tap Summarize.'
+                      : 'Start listening. The left side keeps what was said. Notes stay closed until you ask or tap Summarize.'}
                   </div>
                 ) : (
                   props.lines.map((line, i) => (
@@ -757,21 +847,19 @@ export default function ListenPane(props: Props) {
           </div>
 
           <div className="listen-prompt">
-            <PromptAttach files={files} onChange={setFiles} disabled={props.busy}>
-              <input
-                value={input}
-                placeholder="Ask anything — the answer shows in Notes"
-                onChange={(e) => {
-                  setInput(e.target.value)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') submit()
-                }}
-              />
-              <button type="button" className="listen-go" disabled={props.busy || (!input.trim() && files.length === 0)} onClick={submit}>
-                Ask
-              </button>
-            </PromptAttach>
+            <input
+              value={input}
+              placeholder="Ask anything — the answer shows in Notes"
+              onChange={(e) => {
+                setInput(e.target.value)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submit()
+              }}
+            />
+            <button type="button" className="listen-go" disabled={props.busy || !input.trim()} onClick={submit}>
+              Ask
+            </button>
           </div>
         </>
       )}

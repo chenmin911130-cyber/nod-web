@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from 'react'
 import type { RunState, WorkspaceMode } from '../types'
 
 interface Props {
@@ -15,73 +14,6 @@ interface Props {
   onClose?: () => void
   onOpenHistory?: () => void
   onNewSession?: () => void
-}
-
-export function CaptionMode({
-  bilingual,
-  onChange,
-}: {
-  bilingual: boolean
-  onChange: (on: boolean) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const boxRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (!boxRef.current?.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [open])
-
-  return (
-    <div className={`listen-scene caption-mode${open ? ' open' : ''}`} ref={boxRef}>
-      <button
-        type="button"
-        className="listen-scene-btn"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label="Caption mode"
-        title={bilingual ? 'Show original and translation together' : 'Show the transcript only'}
-        onClick={() => setOpen((v) => !v)}
-      >
-        {bilingual ? 'Bilingual' : 'Original'}
-        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-          <path d="M2.2 3.4 5 6.4 7.8 3.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-        </svg>
-      </button>
-      {open && (
-        <div className="listen-scene-menu caption-mode-menu" role="listbox">
-          <button
-            type="button"
-            role="option"
-            aria-selected={!bilingual}
-            className={bilingual ? '' : 'on'}
-            onClick={() => {
-              onChange(false)
-              setOpen(false)
-            }}
-          >
-            Original
-          </button>
-          <button
-            type="button"
-            role="option"
-            aria-selected={bilingual}
-            className={bilingual ? 'on' : ''}
-            onClick={() => {
-              onChange(true)
-              setOpen(false)
-            }}
-          >
-            Bilingual
-          </button>
-        </div>
-      )}
-    </div>
-  )
 }
 
 function MicIcon() {
@@ -180,16 +112,6 @@ function HistoryIcon() {
   )
 }
 
-function MoreIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor" aria-hidden="true">
-      <circle cx="4.5" cy="10" r="1.55" />
-      <circle cx="10" cy="10" r="1.55" />
-      <circle cx="15.5" cy="10" r="1.55" />
-    </svg>
-  )
-}
-
 function primaryLabel(mode: WorkspaceMode, listening: boolean, paused = false): string {
   if (mode === 'meeting') {
     if (listening) return 'Stop Listening'
@@ -205,34 +127,21 @@ export default function SideRail(props: Props) {
   const recording = run === 'record'
   const listening = run === 'listen' || recording
   const primaryOn = mode === 'interview' ? autoOn || run === 'listen' : listening
-  const primaryDisabled = recording
+  const primaryDisabled = mode === 'interview' || mode === 'translate' ? recording : false
   const live = primaryOn || recording
-  const [moreOpen, setMoreOpen] = useState(false)
-  const moreRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    setMoreOpen(false)
-  }, [mode])
-
-  useEffect(() => {
-    if (!moreOpen) return
-    const onDown = (e: MouseEvent) => {
-      if (!moreRef.current?.contains(e.target as Node)) setMoreOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [moreOpen])
 
   const statusLabel = recording
     ? 'Recording'
     : listening
       ? (mode === 'meeting' ? 'In meeting' : 'Listening')
-      : run === 'think'
-        ? 'Thinking'
-        : 'Ready'
+      : meetingPaused
+        ? 'Paused'
+        : run === 'think'
+          ? 'Thinking'
+          : 'Ready'
 
   return (
-    <div className="side-rail">
+    <div className={`side-rail${mode === 'translate' ? ' translate-rail' : ''}`}>
       {props.onClose && (
         <button className="rail-close" type="button" onClick={props.onClose} title="Hide sidebar">
           <span aria-hidden="true">×</span>
@@ -265,39 +174,59 @@ export default function SideRail(props: Props) {
           </button>
           <button className="rail-icon-btn" onClick={props.onExport} title="Export answers as PDF">
             <PdfIcon />
-            <span>Export PDF</span>
+            <span className="rail-lbl-full">Export PDF</span>
+            <span className="rail-lbl-short">PDF</span>
           </button>
         </>
       )}
 
       {mode === 'meeting' && (
         <>
+          {listening && (
+            <button
+              className="rail-icon-btn"
+              onClick={props.onPause}
+              title="Pause and keep this session"
+            >
+              <PauseIcon />
+              <span>Pause</span>
+            </button>
+          )}
           <button
             className={`rail-icon-btn${recording ? ' live' : ''}`}
             onClick={props.onRecord}
-            disabled={run === 'listen'}
-            title={recording ? 'Stop recording (F2)' : 'Record, then transcribe accurately (F2)'}
+            disabled={autoOn}
+            title={
+              recording || run === 'listen' || meetingPaused
+                ? 'Finish and write report'
+                : 'Record, then auto-write a report'
+            }
           >
             <RecIcon />
-            <span>{recording ? 'Recording' : 'Record'}</span>
+            <span className="rail-lbl-full">{recording || run === 'listen' || meetingPaused ? 'Stop + Report' : 'Record'}</span>
+            <span className="rail-lbl-short">Rec</span>
           </button>
           <button className="rail-icon-btn" onClick={props.onExport} title="Summarize all sections and export PDF">
             <PdfIcon />
-            <span>Export PDF</span>
+            <span className="rail-lbl-full">Export PDF</span>
+            <span className="rail-lbl-short">PDF</span>
           </button>
         </>
       )}
 
       {mode === 'translate' && (
-        <button
-          className={`rail-icon-btn${recording ? ' live' : ''}`}
-          onClick={props.onRecord}
-          disabled={autoOn || run === 'listen'}
-          title={recording ? 'Stop recording (F2)' : 'Record, then transcribe accurately (F2)'}
-        >
-          <RecIcon />
-          <span>{recording ? 'Recording' : 'Record'}</span>
-        </button>
+        <>
+          <button
+            className={`rail-icon-btn${recording ? ' live' : ''}`}
+            onClick={props.onRecord}
+            disabled={autoOn || run === 'listen'}
+            title={recording ? 'Stop recording (F2)' : 'Record your microphone (F2)'}
+          >
+            <RecIcon />
+            <span className="rail-lbl-full">{recording ? 'Recording' : 'Record'}</span>
+            <span className="rail-lbl-short">Rec</span>
+          </button>
+        </>
       )}
 
       <button
@@ -316,43 +245,20 @@ export default function SideRail(props: Props) {
         title="Start a new session"
       >
         <NewSessionIcon />
-        <span>New session</span>
+        <span className="rail-lbl-full">New session</span>
+        <span className="rail-lbl-short">New</span>
       </button>
+      {mode === 'translate' && (
+        <button className="rail-icon-btn" onClick={props.onExport} title="Export translation as PDF">
+          <PdfIcon />
+          <span className="rail-lbl-full">Export PDF</span>
+          <span className="rail-lbl-short">PDF</span>
+        </button>
+      )}
 
       <div className="rail-status">
         <span className={`rail-dot-live${listening ? ' on' : ''}`} />
         <span>{statusLabel}</span>
-        {mode === 'translate' && (
-          <div className="rail-more-wrap" ref={moreRef}>
-            <button
-              className={`rail-more-btn${moreOpen ? ' on' : ''}`}
-              onClick={() => setMoreOpen((v) => !v)}
-              title="Clear and export"
-            >
-              <MoreIcon />
-            </button>
-            {moreOpen && (
-              <div className="rail-menu">
-                <button
-                  onClick={() => {
-                    props.onClear()
-                    setMoreOpen(false)
-                  }}
-                >
-                  Clear (F4)
-                </button>
-                <button
-                  onClick={() => {
-                    props.onExport()
-                    setMoreOpen(false)
-                  }}
-                >
-                  Export PDF
-                </button>
-              </div>
-            )}
-          </div>
-        )}
       </div>
     </div>
   )

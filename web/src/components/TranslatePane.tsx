@@ -1,13 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
-import type { AudioSource, Lang, PairLang, TranslatePair } from '../types'
-import type { TtsMode, TtsVoice } from '../tts'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import type { Lang, PairLang, TranslatePair } from '../types'
 import { TRANSLATE_LANGS } from '../types'
-import { isWeb } from '../platform'
-import { isNativeApp } from '../native'
 import type { AttachPayload, LocalAttach } from '../attach'
 import { toPayload } from '../attach'
 import PromptAttach from './PromptAttach'
 import EmptyState from './EmptyState'
+import type { TtsMode, TtsVoice } from '../tts'
 
 interface Props {
   pairs: TranslatePair[]
@@ -16,7 +14,6 @@ interface Props {
   to: PairLang
   from: Lang
   heardFrom?: PairLang | null
-  source: AudioSource
   onTranslate: (text: string, files?: AttachPayload[]) => void
   onTranslateTo: (lang: PairLang) => void
   onTranslateFrom: (lang: Lang) => void
@@ -25,10 +22,10 @@ interface Props {
   onRetry: (id: string) => void
   ttsMode: TtsMode
   ttsVoice: TtsVoice
-  ttsReady: boolean
   onTtsMode: (mode: TtsMode) => void
   onTtsVoice: (voice: TtsVoice) => void
   onSpeak: (text: string) => void
+  voiceChrome?: ReactNode
 }
 
 function langTag(code: PairLang): string {
@@ -53,6 +50,62 @@ function Sparkle() {
   )
 }
 
+function TapPlayIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="8.2" cy="8.2" r="6.1" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M6.7 5.7v5L11.2 8.2 6.7 5.7z" fill="currentColor" />
+      <path d="M12.4 13.2c.55.85 1.7 1.7 2.85 1.55M11.7 16.4c1.15.35 2.7.15 3.7-.85" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function AutoPlayIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M4.2 10.2a5.8 5.8 0 0 1 9.7-4.2l.4-1.7M15.8 9.8a5.8 5.8 0 0 1-9.7 4.2l-.4 1.7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M13.6 3.6h2.5v2.4M6.4 16.4H3.9v-2.4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8.2 7.3v5.4L12.6 10 8.2 7.3z" fill="currentColor" />
+    </svg>
+  )
+}
+
+function FemaleVoiceIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="8.4" cy="6.2" r="2.35" stroke="currentColor" strokeWidth="1.55" />
+      <path
+        d="M6.15 6.4c-.7.55-1.15 1.7-1.05 2.85M10.65 6.4c.7.55 1.15 1.7 1.05 2.85M5.7 5.15c.55-1.35 1.7-2.05 2.7-2.05s2.15.7 2.7 2.05"
+        stroke="currentColor"
+        strokeWidth="1.55"
+        strokeLinecap="round"
+      />
+      <path
+        d="M4.85 16.6c.25-2.55 1.45-3.85 3.55-3.85s3.3 1.3 3.55 3.85"
+        stroke="currentColor"
+        strokeWidth="1.55"
+        strokeLinecap="round"
+      />
+      <path d="M15.05 8.1c.85.55.85 2.05 0 2.6M16.85 7.15c1.45.95 1.45 3.55 0 4.5" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function MaleVoiceIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="8.4" cy="6.35" r="2.3" stroke="currentColor" strokeWidth="1.55" />
+      <path
+        d="M4.55 16.6c.35-2.85 1.7-4.15 3.85-4.15s3.5 1.3 3.85 4.15"
+        stroke="currentColor"
+        strokeWidth="1.55"
+        strokeLinecap="round"
+      />
+      <path d="M15.05 8.1c.85.55.85 2.05 0 2.6M16.85 7.15c1.45.95 1.45 3.55 0 4.5" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export default function TranslatePane({
   pairs,
   partial,
@@ -60,7 +113,6 @@ export default function TranslatePane({
   to,
   from,
   heardFrom,
-  source,
   onTranslate,
   onTranslateTo,
   onTranslateFrom,
@@ -69,12 +121,13 @@ export default function TranslatePane({
   onRetry,
   ttsMode,
   ttsVoice,
-  ttsReady,
   onTtsMode,
   onTtsVoice,
   onSpeak,
+  voiceChrome,
 }: Props) {
   const [input, setInput] = useState('')
+  const [files, setFiles] = useState<LocalAttach[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -83,85 +136,35 @@ export default function TranslatePane({
 
   const submit = () => {
     const t = input.trim()
-    if (!t) return
-    onTranslate(t)
+    if (!t && files.length === 0) return
+    onTranslate(t, files.length ? toPayload(files) : undefined)
     setInput('')
+    setFiles([])
   }
 
   const empty = pairs.length === 0 && !partial
   const queued = pairs.filter((p) => !p.translation && !p.failed && p.id !== bindId).length
-  const sourceHint = isNativeApp()
-    ? 'iPhone mic'
-    : isWeb
-    ? 'Browser mic'
-    : source === 'both'
-      ? 'System + mic'
-      : 'System audio'
-
-  const fromTag = from === 'auto' ? (heardFrom ? langTag(heardFrom) : 'Auto') : langTag(from)
-  const sameLang = from !== 'auto' && from === to
 
   return (
     <div className="main translate-main">
-      <div className="kicker">
-        Captions · {fromTag} → {langTag(to)}
-        {sameLang ? ' · same language' : ''}
-        {queued > 0 ? ` · ${queued} queued` : ''}
-        <span className="kicker-hint">
-          {' '}
-          · F3 {sourceHint}
-          {ttsMode === 'live'
-            ? ' · headphones: live translation in your language'
-            : ' · tap a line to hear it'}
-        </span>
-      </div>
-      <div className="tr-voice-row">
-        <button
-          type="button"
-          className={`tr-voice-btn${ttsMode === 'tap' ? ' on' : ''}`}
-          onClick={() => onTtsMode('tap')}
-          title="Phone or computer: tap a caption when you want it read aloud"
-        >
-          Tap to hear
-        </button>
-        <button
-          type="button"
-          className={`tr-voice-btn${ttsMode === 'live' ? ' on' : ''}`}
-          onClick={() => onTtsMode('live')}
-          title="Headphones: speak translations as soon as each line is ready"
-        >
-          Headphones
-        </button>
-        <span className="tr-voice-split" aria-hidden="true" />
-        <button
-          type="button"
-          className={`tr-voice-btn${ttsVoice === 'female' ? ' on' : ''}`}
-          onClick={() => onTtsVoice('female')}
-        >
-          Female
-        </button>
-        <button
-          type="button"
-          className={`tr-voice-btn${ttsVoice === 'male' ? ' on' : ''}`}
-          onClick={() => onTtsVoice('male')}
-        >
-          Male
-        </button>
-        {!ttsReady ? <span className="tr-voice-hint">Speech key missing</span> : null}
-      </div>
       <div className="tr-sheet">
-        <div className="tr-head-row">
+        <div className="tr-toolbar">
+          <div className="tr-head-row">
           <label className="tr-col-head tr-to-head tr-from-head">
-            <span>From</span>
             <select
               className="tr-to-select"
               value={from}
               onChange={(e) => onTranslateFrom(e.target.value as Lang)}
-              title="Speech to recognize. Lock English to ignore other languages — they will not appear."
+              title={
+                heardFrom
+                  ? `Speech to recognize. Hearing ${langTag(heardFrom)}. Lock a language to ignore others.`
+                  : 'Speech to recognize. Lock English to ignore other languages — they will not appear.'
+              }
+              aria-label="From"
             >
               <option value="auto">Auto · detect</option>
               {TRANSLATE_LANGS.map((l) => (
-                <option key={l.id} value={l.id}>{l.tag} · {l.name} only</option>
+                <option key={l.id} value={l.id}>{l.tag} · {l.name}</option>
               ))}
             </select>
           </label>
@@ -175,22 +178,75 @@ export default function TranslatePane({
             <SwapIcon />
           </button>
           <label className="tr-col-head tr-to-head">
-            <span>To</span>
             <select
               className="tr-to-select"
               value={to}
               onChange={(e) => onTranslateTo(e.target.value as PairLang)}
               title="Language of the translated captions"
+              aria-label="To"
             >
               {TRANSLATE_LANGS.map((l) => (
                 <option key={l.id} value={l.id}>{l.tag} · {l.name}</option>
               ))}
             </select>
           </label>
+          </div>
+          <div className="tr-voice-row">
+            <button
+              type="button"
+              className={`tr-voice-btn labeled${ttsMode === 'tap' ? ' on' : ''}`}
+              onClick={() => onTtsMode('tap')}
+              title="Tap a line to play"
+              aria-label="Tap to play"
+            >
+              <TapPlayIcon />
+              <span>Tap</span>
+            </button>
+            <button
+              type="button"
+              className={`tr-voice-btn labeled${ttsMode === 'live' ? ' on' : ''}`}
+              onClick={() => onTtsMode('live')}
+              title="Play each new line automatically"
+              aria-label="Auto play"
+            >
+              <AutoPlayIcon />
+              <span>Auto</span>
+            </button>
+            <span className="tr-voice-split" aria-hidden="true" />
+            <button
+              type="button"
+              className={`tr-voice-btn${ttsVoice === 'female' ? ' on' : ''}`}
+              onClick={() => onTtsVoice('female')}
+              title="Female voice"
+              aria-label="Female voice"
+            >
+              <FemaleVoiceIcon />
+            </button>
+            <button
+              type="button"
+              className={`tr-voice-btn${ttsVoice === 'male' ? ' on' : ''}`}
+              onClick={() => onTtsVoice('male')}
+              title="Male voice"
+              aria-label="Male voice"
+            >
+              <MaleVoiceIcon />
+            </button>
+            {voiceChrome ? (
+              <>
+                <span className="tr-voice-split" aria-hidden="true" />
+                {voiceChrome}
+              </>
+            ) : null}
+            {queued > 0 ? <span className="tr-queued">{queued} queued</span> : null}
+          </div>
         </div>
         <div className="tr-body">
           {empty ? (
-            <EmptyState compact title="Make communication simpler." />
+            <EmptyState
+              compact
+              title="Start Listen or type a line."
+              sub="Spoken captions show up here."
+            />
           ) : (
             <>
               {pairs.map((p) => {
@@ -204,17 +260,29 @@ export default function TranslatePane({
                 }
                 return (
                   <div key={p.id} className="tr-pair">
-                    <button
-                      type="button"
-                      className="tr-cell"
-                      onClick={() => onCopyField(p, 'original')}
-                      title="Copy original"
-                    >
+                    <div className="tr-cell origin">
                       <span className="meet-ts">{p.ts}</span>
-                      <span>{p.original}</span>
-                      {p.from ? <span className="tr-lang-chip">{langTag(p.from)}</span> : null}
-                    </button>
-                    <div className={`tr-cell${p.translation ? '' : ' pending'}${p.failed ? ' failed' : ''}`}>
+                      <button
+                        type="button"
+                        className="tr-copy-hit"
+                        onClick={() => onCopyField(p, 'original')}
+                        title="Copy original"
+                      >
+                        <span className="tr-text">{p.original}</span>
+                        {p.from ? <span className="tr-lang-chip">{langTag(p.from)}</span> : null}
+                      </button>
+                      {p.original.trim() ? (
+                        <button
+                          type="button"
+                          className="tr-speak"
+                          onClick={() => onSpeak(p.original)}
+                          title="Play original"
+                        >
+                          Play
+                        </button>
+                      ) : null}
+                    </div>
+                    <div className={`tr-cell target${p.translation ? '' : ' pending'}${p.failed ? ' failed' : ''}`}>
                       <button
                         type="button"
                         className="tr-copy-hit"
@@ -222,7 +290,7 @@ export default function TranslatePane({
                         title={p.translation ? 'Copy translation' : undefined}
                         disabled={!p.translation}
                       >
-                        <span>{status}</span>
+                        <span className="tr-text">{status}</span>
                         {p.passthrough && p.translation ? <span className="tr-lang-chip">Same lang</span> : null}
                         {p.to && p.to !== to && p.translation ? (
                           <span className="tr-lang-chip">{langTag(p.to)}</span>
@@ -233,7 +301,7 @@ export default function TranslatePane({
                           type="button"
                           className="tr-speak"
                           onClick={() => onSpeak(p.translation)}
-                          title="Read this line"
+                          title="Play translation"
                         >
                           Play
                         </button>
@@ -249,11 +317,11 @@ export default function TranslatePane({
               })}
               {partial && (
                 <div className="tr-pair live">
-                  <div className="tr-cell">
+                  <div className="tr-cell origin">
                     <span className="meet-ts">live</span>
-                    <span>{partial}</span>
+                    <span className="tr-text">{partial}</span>
                   </div>
-                  <div className="tr-cell pending">
+                  <div className="tr-cell target pending">
                     <span>Listening…</span>
                   </div>
                 </div>
@@ -264,23 +332,21 @@ export default function TranslatePane({
         </div>
       </div>
 
-      <div className="prompt-block">
-        <div className="prompt-row">
-          <input
-            className="prompt-input"
-            placeholder="Type to translate..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') submit()
-            }}
-          />
-          <button className="gen-btn" onClick={submit} disabled={!input.trim()}>
-            <Sparkle />
-            Translate
-          </button>
-        </div>
-      </div>
+      <PromptAttach files={files} onChange={setFiles}>
+        <input
+          className="prompt-input"
+          placeholder="Type to translate..."
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit()
+          }}
+        />
+        <button className="gen-btn" onClick={submit} disabled={!input.trim() && files.length === 0}>
+          <Sparkle />
+          Translate
+        </button>
+      </PromptAttach>
     </div>
   )
 }

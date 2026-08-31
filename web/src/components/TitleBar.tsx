@@ -1,11 +1,28 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AudioSource, Lang, PairLang, WorkspaceMode } from '../types'
-import { TRANSLATE_LANGS } from '../types'
 import { isWeb } from '../platform'
 import { logout } from '../auth'
 import { isNativeApp, nativeGo } from '../native'
 import OpacityBar from './OpacityBar'
 import PetTimer from './PetTimer'
+
+export interface TitleIconsProps {
+  mode: WorkspaceMode
+  source: AudioSource
+  opacity: number
+  pinned: boolean
+  systemMuted: boolean
+  micMuted: boolean
+  stealth: boolean
+  onSource: (s: AudioSource) => void
+  onOpacity: (n: number) => void
+  onPinned: (b: boolean) => void
+  onSystemMuted: (muted: boolean) => void
+  onMicMuted: (muted: boolean) => void
+  onStealth: (on: boolean) => void
+  onFullScreen: () => void
+  onMenuOpen?: () => void
+}
 
 interface Props {
   listening?: boolean
@@ -30,13 +47,8 @@ interface Props {
   onFullScreen: () => void
 }
 
-const LANGS: Array<{ label: string; value: Lang; name: string }> = [
-  { label: 'Auto', value: 'auto', name: '' },
-  ...TRANSLATE_LANGS.map((l) => ({ label: l.tag, value: l.id as Lang, name: l.name })),
-]
-
 const MODES: Array<{ id: WorkspaceMode; label: string }> = [
-  { id: 'meeting', label: 'AI Listening Assistant' },
+  { id: 'meeting', label: 'Listen' },
   { id: 'translate', label: 'Translate' },
 ]
 
@@ -111,51 +123,151 @@ function SettingsIcon() {
   )
 }
 
-function Chevron() {
+export function TitleIcons(props: TitleIconsProps) {
+  const { mode, source, opacity, pinned, systemMuted, micMuted, stealth } = props
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [menuOpen])
+
+  useEffect(() => {
+    setMenuOpen(false)
+  }, [mode])
+
   return (
-    <svg width="8" height="6" viewBox="0 0 8 6" fill="none" aria-hidden="true">
-      <path d="M1 1.2L4 4.4L7 1.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
+    <div className="tb-icons">
+      {isWeb ? (
+        <button
+          type="button"
+          className={`tb-icon src-btn${micMuted ? ' muted' : ' on'}`}
+          onClick={() => props.onMicMuted(!micMuted)}
+          title={micMuted ? 'Unmute microphone' : 'Mute microphone'}
+          aria-label={micMuted ? 'Unmute microphone' : 'Mute microphone'}
+          aria-pressed={!micMuted}
+        >
+          {micMuted ? <SourceOffIcon /> : <SourceIcon />}
+        </button>
+      ) : (
+        <button
+          type="button"
+          className={`tb-icon src-btn${source === 'both' ? ' on' : ' muted'}`}
+          onClick={() => props.onSource(source === 'both' ? 'system' : 'both')}
+          title={
+            source === 'both'
+              ? 'Microphone on — click to mute'
+              : 'Microphone muted — click to unmute'
+          }
+        >
+          {source === 'both' ? <SourceIcon /> : <SourceOffIcon />}
+        </button>
+      )}
+
+      {!isWeb && (
+        <button
+          type="button"
+          className={`tb-icon mic-btn${systemMuted ? ' muted' : ''}`}
+          onClick={() => props.onSystemMuted(!systemMuted)}
+          title={
+            systemMuted
+              ? 'System audio off — click to capture speaker output'
+              : 'System audio on — click to stop capturing speaker output'
+          }
+        >
+          {systemMuted ? <SpeakerOffIcon /> : <SpeakerIcon />}
+        </button>
+      )}
+
+      {!isWeb && (
+        <button
+          type="button"
+          className={`tb-icon pin-btn${pinned ? ' on' : ''}`}
+          onClick={() => props.onPinned(!pinned)}
+          title={pinned ? 'Pinned on top' : 'Pin on top'}
+        >
+          <PinIcon />
+        </button>
+      )}
+
+      <div className="tb-more" ref={menuRef}>
+        <button
+          type="button"
+          className={`tb-icon more-btn${menuOpen ? ' on' : ''}`}
+          onClick={() => {
+            setMenuOpen((v) => !v)
+            props.onMenuOpen?.()
+          }}
+          title="Settings"
+          aria-expanded={menuOpen}
+        >
+          <SettingsIcon />
+        </button>
+        {menuOpen && (
+          <div className="tb-menu">
+            <div className="tb-menu-row tb-menu-opacity">
+              <span>Opacity</span>
+              <OpacityBar value={opacity} onChange={props.onOpacity} />
+            </div>
+            {mode === 'interview' && (
+              <>
+                {!isWeb && (
+                  <button
+                    type="button"
+                    className="tb-menu-action"
+                    onClick={() => {
+                      props.onStealth(!stealth)
+                      setMenuOpen(false)
+                    }}
+                  >
+                    {stealth ? 'Stealth on' : 'Stealth — hide from capture'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="tb-menu-action"
+                  onClick={() => {
+                    props.onFullScreen()
+                    setMenuOpen(false)
+                  }}
+                >
+                  Compact view
+                </button>
+              </>
+            )}
+            {isWeb && (
+              <>
+                <a className="tb-menu-action" href="/account">
+                  Account
+                </a>
+                <button
+                  type="button"
+                  className="tb-menu-action"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    void logout().finally(() => {
+                      nativeGo(isNativeApp() ? '/login' : '/?signout=1')
+                    })
+                  }}
+                >
+                  Sign out
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
 export default function TitleBar(props: Props) {
-  const { mode, lang, heardLang, source, opacity, pinned, systemMuted, micMuted, stealth } = props
-  const [menuOpen, setMenuOpen] = useState(false)
-  const [langOpen, setLangOpen] = useState(false)
-  const menuRef = useRef<HTMLDivElement>(null)
-  const langRef = useRef<HTMLDivElement>(null)
-  const currentLang = LANGS.find((l) => l.value === lang) ?? LANGS[0]
-  const heardTag = heardLang ? TRANSLATE_LANGS.find((l) => l.id === heardLang)?.tag : ''
-  const langLabel = lang === 'auto' && heardTag ? `Auto · ${heardTag}` : currentLang.label
-
-  useEffect(() => {
-    if (!menuOpen && !langOpen) return
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node
-      if (menuOpen && !menuRef.current?.contains(t)) setMenuOpen(false)
-      if (langOpen && !langRef.current?.contains(t)) setLangOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [menuOpen, langOpen])
-
-  useEffect(() => {
-    setMenuOpen(false)
-    setLangOpen(false)
-  }, [mode])
-
-  useLayoutEffect(() => {
-    if (!langOpen) return
-    const menu = langRef.current?.querySelector('.lang-menu')
-    if (!(menu instanceof HTMLElement)) return
-    const pad = 10
-    const r = menu.getBoundingClientRect()
-    let dx = 0
-    if (r.left < pad) dx = pad - r.left
-    else if (r.right > window.innerWidth - pad) dx = window.innerWidth - pad - r.right
-    menu.style.transform = dx ? `translateX(${dx}px)` : ''
-  }, [langOpen])
+  const { mode, source, opacity, pinned, systemMuted, micMuted, stealth } = props
 
   return (
     <div className="titlebar">
@@ -183,174 +295,33 @@ export default function TitleBar(props: Props) {
             onClick={() => props.onMode(m.id)}
           >
             <span className="mode-pill-full">{m.label}</span>
-            <span className="mode-pill-short">{m.id === 'meeting' ? 'Listen' : 'Translate'}</span>
+            <span className="mode-pill-short">{m.label}</span>
           </button>
           )
         })}
       </div>
 
       <div className="titlebar-right no-drag">
+        <PetTimer listening={Boolean(props.listening)} />
         {mode !== 'translate' && (
-        <div className="lang-pills" ref={langRef}>
-          <button
-            type="button"
-            className={`lang-select-btn${langOpen ? ' open' : ''}`}
-            aria-haspopup="listbox"
-            aria-expanded={langOpen}
-            aria-label="Speech recognition language"
-            title={
-              currentLang.value === 'auto'
-                ? 'Speech recognition · Auto'
-                : `Speech recognition · ${currentLang.name}`
-            }
-            onClick={() => {
-              setLangOpen((v) => !v)
-              setMenuOpen(false)
-            }}
-          >
-            <span>{langLabel}</span>
-            <Chevron />
-          </button>
-          {langOpen && (
-            <div className="lang-menu" role="listbox" aria-label="Speech recognition language">
-              <div className="lang-menu-hint">Speech recognition</div>
-              {LANGS.map((l) => (
-                <button
-                  key={l.value}
-                  type="button"
-                  role="option"
-                  aria-selected={lang === l.value}
-                  className={`lang-menu-item${lang === l.value ? ' active' : ''}`}
-                  onClick={() => {
-                    props.onLang(l.value)
-                    setLangOpen(false)
-                  }}
-                >
-                  <span className="lang-menu-tag">{l.label}</span>
-                  {l.name ? <span className="lang-menu-name">{l.name}</span> : null}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+          <TitleIcons
+            mode={mode}
+            source={source}
+            opacity={opacity}
+            pinned={pinned}
+            systemMuted={systemMuted}
+            micMuted={micMuted}
+            stealth={stealth}
+            onSource={props.onSource}
+            onOpacity={props.onOpacity}
+            onPinned={props.onPinned}
+            onSystemMuted={props.onSystemMuted}
+            onMicMuted={props.onMicMuted}
+            onStealth={props.onStealth}
+            onFullScreen={props.onFullScreen}
+          />
         )}
 
-        <div className="tb-icons">
-          {isWeb ? (
-            <button
-              type="button"
-              className={`tb-icon src-btn${micMuted ? ' muted' : ' on'}`}
-              onClick={() => props.onMicMuted(!micMuted)}
-              title={micMuted ? 'Unmute microphone' : 'Mute microphone'}
-              aria-label={micMuted ? 'Unmute microphone' : 'Mute microphone'}
-              aria-pressed={!micMuted}
-            >
-              {micMuted ? <SourceOffIcon /> : <SourceIcon />}
-            </button>
-          ) : (
-            <button
-              className={`tb-icon src-btn${source === 'both' ? ' on' : ' muted'}`}
-              onClick={() => props.onSource(source === 'both' ? 'system' : 'both')}
-              title={
-                source === 'both'
-                  ? 'Microphone on — click to mute'
-                  : 'Microphone muted — click to unmute'
-              }
-            >
-              {source === 'both' ? <SourceIcon /> : <SourceOffIcon />}
-            </button>
-          )}
-
-          {!isWeb && (
-            <button
-              className={`tb-icon mic-btn${systemMuted ? ' muted' : ''}`}
-              onClick={() => props.onSystemMuted(!systemMuted)}
-              title={
-                systemMuted
-                  ? 'System audio off — click to capture speaker output'
-                  : 'System audio on — click to stop capturing speaker output'
-              }
-            >
-              {systemMuted ? <SpeakerOffIcon /> : <SpeakerIcon />}
-            </button>
-          )}
-
-          {!isWeb && (
-            <button
-              className={`tb-icon pin-btn${pinned ? ' on' : ''}`}
-              onClick={() => props.onPinned(!pinned)}
-              title={pinned ? 'Pinned on top' : 'Pin on top'}
-            >
-              <PinIcon />
-            </button>
-          )}
-
-          <div className="tb-more" ref={menuRef}>
-            <button
-              className={`tb-icon more-btn${menuOpen ? ' on' : ''}`}
-              onClick={() => {
-                setMenuOpen((v) => !v)
-                setLangOpen(false)
-              }}
-              title="Settings"
-              aria-expanded={menuOpen}
-            >
-              <SettingsIcon />
-            </button>
-            {menuOpen && (
-              <div className="tb-menu">
-                <div className="tb-menu-row tb-menu-opacity">
-                  <span>Opacity</span>
-                  <OpacityBar value={opacity} onChange={props.onOpacity} />
-                </div>
-                {mode === 'interview' && (
-                  <>
-                    {!isWeb && (
-                      <button
-                        className="tb-menu-action"
-                        onClick={() => {
-                          props.onStealth(!stealth)
-                          setMenuOpen(false)
-                        }}
-                      >
-                        {stealth ? 'Stealth on' : 'Stealth — hide from capture'}
-                      </button>
-                    )}
-                    <button
-                      className="tb-menu-action"
-                      onClick={() => {
-                        props.onFullScreen()
-                        setMenuOpen(false)
-                      }}
-                    >
-                      Compact view
-                    </button>
-                  </>
-                )}
-                {isWeb && (
-                  <>
-                    <a className="tb-menu-action" href="/account">
-                      Account
-                    </a>
-                    <button
-                      className="tb-menu-action"
-                      onClick={() => {
-                        setMenuOpen(false)
-                        void logout().finally(() => {
-                          nativeGo(isNativeApp() ? '/login' : '/?signout=1')
-                        })
-                      }}
-                    >
-                      Sign out
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <PetTimer listening={Boolean(props.listening)} elapsedMs={props.elapsedMs} />
         {!isWeb && (
           <div className="tb-win">
             <button className="win-btn" onClick={() => window.api.minimize()} title="Minimize">
