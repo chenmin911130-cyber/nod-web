@@ -3097,16 +3097,27 @@ if WEB_DIST.exists():
     if (WEB_DIST / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=str(WEB_DIST / "assets")), name="assets")
 
-    def _favicon() -> FileResponse:
-        path = WEB_DIST / "favicon.svg"
-        if not path.exists():
-            path = ROOT / "web" / "public" / "favicon.svg"
-        return FileResponse(path, media_type="image/svg+xml")
+    def _icon_file(name: str, media_type: str) -> FileResponse:
+        for path in (WEB_DIST / name, ROOT / "web" / "public" / name):
+            if path.is_file():
+                return FileResponse(path, media_type=media_type)
+        raise HTTPException(404, "Icon not found")
+
+    @app.get("/favicon.ico")
+    def favicon_ico():
+        return _icon_file("favicon.ico", "image/x-icon")
 
     @app.get("/favicon.svg")
-    @app.get("/favicon.ico")
-    def favicon():
-        return _favicon()
+    def favicon_svg():
+        return _icon_file("favicon.svg", "image/svg+xml")
+
+    @app.get("/favicon-48.png")
+    def favicon_48():
+        return _icon_file("favicon-48.png", "image/png")
+
+    @app.get("/apple-touch-icon.png")
+    def apple_touch_icon():
+        return _icon_file("apple-touch-icon.png", "image/png")
 
     @app.get("/")
     def marketing_home():
