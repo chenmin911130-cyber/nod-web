@@ -15,11 +15,16 @@ function googleError(ex: unknown): string {
   return message || 'Google sign-in failed'
 }
 
+function digitsOnly(value: string, max = 6) {
+  return value.replace(/\D/g, '').slice(0, max)
+}
+
 export default function NativeSignIn({ onSignedIn }: { onSignedIn: () => void }) {
   const [mode, setMode] = useState<'in' | 'up'>('in')
   const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
   const [name, setName] = useState('')
+  const [code, setCode] = useState('')
+  const [sent, setSent] = useState(false)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -39,19 +44,47 @@ export default function NativeSignIn({ onSignedIn }: { onSignedIn: () => void })
     }
   }
 
-  const submit = async (e: FormEvent) => {
+  const sendCode = async () => {
+    setBusy(true)
+    setErr('')
+    try {
+      const out = await api<{ message?: string; dev_code?: string }>('/api/auth/otp/request', {
+        method: 'POST',
+        body: JSON.stringify({
+          email,
+          name,
+          consent: mode === 'up',
+          intent: mode === 'up' ? 'signup' : 'login',
+        }),
+      })
+      setSent(true)
+      if (out.dev_code) setCode(out.dev_code)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Could not send the code')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const requestCode = async (e: FormEvent) => {
+    e.preventDefault()
+    await sendCode()
+  }
+
+  const verify = async (e: FormEvent) => {
     e.preventDefault()
     setBusy(true)
     setErr('')
     try {
-      const path = mode === 'in' ? '/api/auth/login' : '/api/auth/register'
-      const body =
-        mode === 'in'
-          ? { email, password }
-          : { email, password, name, consent: true }
-      const out = await api<{ token: string }>(path, {
+      const out = await api<{ token: string }>('/api/auth/otp/verify', {
         method: 'POST',
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          email,
+          code,
+          name,
+          consent: mode === 'up',
+          intent: mode === 'up' ? 'signup' : 'login',
+        }),
       })
       setToken(out.token)
       onSignedIn()
@@ -76,7 +109,13 @@ export default function NativeSignIn({ onSignedIn }: { onSignedIn: () => void })
           <circle cx="81" cy="70" r="4.5" fill="#00d2ff" />
         </svg>
         <h1>Nod</h1>
-        <p>{mode === 'in' ? 'Sign in to start listening.' : 'Create an account to start listening.'}</p>
+        <p>
+          {sent
+            ? `We sent a code to ${email}.`
+            : mode === 'in'
+              ? 'Sign in with Google or an email code.'
+              : 'Create an account with Google or an email code.'}
+        </p>
         <button
           className="native-sign-google"
           type="button"
@@ -86,41 +125,65 @@ export default function NativeSignIn({ onSignedIn }: { onSignedIn: () => void })
           <GoogleMark />
           Continue with Google
         </button>
-        <div className="native-sign-or">or email</div>
-        <form onSubmit={(e) => void submit(e)}>
-          {mode === 'up' && (
+        <div className="native-sign-or">or email a code</div>
+        {!sent ? (
+          <form onSubmit={(e) => void requestCode(e)}>
+            {mode === 'up' && (
+              <label>
+                Name
+                <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" />
+              </label>
+            )}
             <label>
-              Name
-              <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" />
+              Email
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+              />
             </label>
-          )}
-          <label>
-            Email
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              autoComplete="email"
-            />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete={mode === 'in' ? 'current-password' : 'new-password'}
-            />
-          </label>
-          {err && <div className="native-sign-err">{err}</div>}
-          <button className="native-sign-go" type="submit" disabled={busy}>
-            {busy ? 'Opening…' : mode === 'in' ? 'Continue' : 'Create account'}
-          </button>
-        </form>
-        <button className="native-sign-switch" type="button" onClick={() => setMode(mode === 'in' ? 'up' : 'in')}>
-          {mode === 'in' ? 'Need an account?' : 'Already have an account?'}
+            {err && <div className="native-sign-err">{err}</div>}
+            <button className="native-sign-go" type="submit" disabled={busy}>
+              {busy ? 'Sending…' : 'Email me a code'}
+            </button>
+          </form>
+        ) : (
+          <form onSubmit={(e) => void verify(e)}>
+            <label>
+              6-digit code
+              <input
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]*"
+                maxLength={6}
+                value={code}
+                onChange={(e) => setCode(digitsOnly(e.target.value))}
+                required
+              />
+            </label>
+            {err && <div className="native-sign-err">{err}</div>}
+            <button className="native-sign-go" type="submit" disabled={busy || code.length !== 6}>
+              {busy ? 'Opening…' : mode === 'in' ? 'Continue' : 'Create account'}
+            </button>
+          </form>
+        )}
+        <button
+          className="native-sign-switch"
+          type="button"
+          onClick={() => {
+            if (sent) {
+              setSent(false)
+              setCode('')
+              setErr('')
+              return
+            }
+            setMode(mode === 'in' ? 'up' : 'in')
+            setErr('')
+          }}
+        >
+          {sent ? 'Use a different email' : mode === 'in' ? 'Need an account?' : 'Already have an account?'}
         </button>
       </div>
     </div>

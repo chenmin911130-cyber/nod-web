@@ -36,10 +36,10 @@ export function PrivacyPage() {
   }, [])
   return (
     <Shell title="Privacy Policy">
-      <p>Last updated: 23 August 2026. Nod Web (“Nod”, “we”) is an early product operated for commercial trial.</p>
+      <p>Last updated: 31 August 2026. Nod Web (“Nod”, “we”) is an early product operated for commercial trial.</p>
       <h2>What we collect</h2>
       <ul>
-        <li>Account data: email, name, password hash, plan, and billing identifiers from Stripe if you pay.</li>
+        <li>Account data: email, name, one-time sign-in codes, optional Google account id, plan, and billing identifiers from Stripe if you pay.</li>
         <li>Usage data: session times, workspace mode, estimated transcription seconds, token counts, and cost estimates.</li>
         <li>Content you generate in the product: questions, transcripts, answers, summaries, and captions, stored so you can review history.</li>
         <li>Feedback you send through the product.</li>

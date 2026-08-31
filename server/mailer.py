@@ -96,6 +96,21 @@ def send_reset_email(to: str, token: str) -> bool:
     return sent
 
 
+def send_otp_email(to: str, code: str) -> bool:
+    text = (
+        f"Your Nod sign-in code is {code}.\n\n"
+        "It expires in 10 minutes. If you did not ask for it, ignore this email."
+    )
+    html = (
+        f"<p>Your Nod sign-in code is <strong>{html_escape.escape(code)}</strong>.</p>"
+        "<p>It expires in 10 minutes. If you did not ask for it, ignore this email.</p>"
+    )
+    sent = send_mail(to, "Your Nod sign-in code", html, text)
+    if not sent:
+        log.info("sign-in code email was not sent for %s", to)
+    return sent
+
+
 def send_feedback_copy(to_admin: str, from_email: str, message: str) -> None:
     # Both fields are user supplied and land in an inbox we read.
     safe_email = html_escape.escape(from_email or "")

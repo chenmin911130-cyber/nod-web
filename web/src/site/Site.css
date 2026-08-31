@@ -142,10 +142,28 @@
   margin-top: 1.1rem;
 }
 
-.site-links a {
+.site-links a,
+.site-text-btn {
   color: #00d2ff;
   font-size: 0.84rem;
   text-decoration: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.site-text-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.site-otp {
+  letter-spacing: 0.42em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.35rem !important;
 }
 
 .google-auth {

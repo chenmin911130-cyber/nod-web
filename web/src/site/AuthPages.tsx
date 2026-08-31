@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { api, fetchMe, getToken, setToken } from '../auth'
 import { isNativeApp, maybeReturnToNativeApp, nativeGo } from '../native'
 import { track } from './track'
@@ -41,9 +41,45 @@ function Header({ extra }: { extra?: ReactNode }) {
   )
 }
 
+function digitsOnly(value: string, max = 6) {
+  return value.replace(/\D/g, '').slice(0, max)
+}
+
+function OtpCodeField({
+  code,
+  onChange,
+  autoFocus,
+}: {
+  code: string
+  onChange: (value: string) => void
+  autoFocus?: boolean
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (autoFocus) ref.current?.focus()
+  }, [autoFocus])
+  return (
+    <label>
+      6-digit code
+      <input
+        ref={ref}
+        className="site-otp"
+        inputMode="numeric"
+        autoComplete="one-time-code"
+        pattern="[0-9]*"
+        maxLength={6}
+        value={code}
+        onChange={(e) => onChange(digitsOnly(e.target.value))}
+        required
+      />
+    </label>
+  )
+}
+
 export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) {
   const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
+  const [code, setCode] = useState('')
+  const [sent, setSent] = useState(false)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const next = new URLSearchParams(location.search).get('next') || '/app'
@@ -51,7 +87,7 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
   useEffect(() => {
     let cancelled = false
     void fetchMe().then((me) => {
-      if (!cancelled && me) {
+      if (!cancelled && me && me.email !== 'local@nod.test') {
         if (maybeReturnToNativeApp(getToken())) return
         nativeGo(next, true)
       }
@@ -61,14 +97,36 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
     }
   }, [next])
 
-  const submit = async (e: FormEvent) => {
+  const sendCode = async () => {
+    setBusy(true)
+    setErr('')
+    try {
+      const out = await api<{ message: string; dev_code?: string }>('/api/auth/otp/request', {
+        method: 'POST',
+        body: JSON.stringify({ email, intent: 'login' }),
+      })
+      setSent(true)
+      if (out.dev_code) setCode(out.dev_code)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Could not send the code')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const requestCode = async (e: FormEvent) => {
+    e.preventDefault()
+    await sendCode()
+  }
+
+  const verify = async (e: FormEvent) => {
     e.preventDefault()
     setBusy(true)
     setErr('')
     try {
-      const out = await api<{ token: string }>('/api/auth/login', {
+      const out = await api<{ token: string }>('/api/auth/otp/verify', {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, code, intent: 'login' }),
       })
       setToken(out.token)
       if (maybeReturnToNativeApp(out.token)) return
@@ -87,31 +145,56 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
           <div className="eyebrow">ACCOUNT</div>
           <Funnel current="account" />
           <h1>Sign in to Nodpilot</h1>
-          <p>Nodpilot needs an account before it can listen, translate, and summarize. Continue with Google, or use email. Google is optional.</p>
+          <p>
+            Nodpilot needs an account before it can listen, translate, and summarize. Continue with Google, or we email
+            you a one-time code. Google is optional.
+          </p>
           {(clerkEnabled || isNativeApp()) && (
             <>
               <Suspense fallback={null}>
                 {isNativeApp() ? <NativeGoogleButton /> : <GoogleButton next={next} />}
               </Suspense>
-              <div className="site-or">or email</div>
+              <div className="site-or">or email a code</div>
             </>
           )}
-          <form className="site-form" onSubmit={submit}>
-            <label>
-              Email
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
-            </label>
-            <label>
-              Password
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" />
-            </label>
-            {err && <div className="site-err">{err}</div>}
-            <button className="button button-primary" type="submit" disabled={busy}>
-              {busy ? 'Opening workspace…' : 'Sign in and open workspace'}
-            </button>
-          </form>
+          {!sent ? (
+            <form className="site-form" onSubmit={requestCode}>
+              <label>
+                Email
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
+              </label>
+              {err && <div className="site-err">{err}</div>}
+              <button className="button button-primary" type="submit" disabled={busy}>
+                {busy ? 'Sending…' : 'Email me a code'}
+              </button>
+            </form>
+          ) : (
+            <form className="site-form" onSubmit={verify}>
+              <p className="site-ok">We sent a code to {email}.</p>
+              <OtpCodeField code={code} onChange={setCode} autoFocus />
+              {err && <div className="site-err">{err}</div>}
+              <button className="button button-primary" type="submit" disabled={busy || code.length !== 6}>
+                {busy ? 'Opening workspace…' : 'Sign in and open workspace'}
+              </button>
+              <div className="site-links">
+                <button type="button" className="site-text-btn" disabled={busy} onClick={() => void sendCode()}>
+                  Resend code
+                </button>
+                <button
+                  type="button"
+                  className="site-text-btn"
+                  onClick={() => {
+                    setSent(false)
+                    setCode('')
+                    setErr('')
+                  }}
+                >
+                  Use a different email
+                </button>
+              </div>
+            </form>
+          )}
           <div className="site-links">
-            <a href="/forgot">Forgot password</a>
             <a href="/signup">Start free — Google or email</a>
           </div>
         </div>
@@ -122,16 +205,17 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
 
 export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) {
   const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
   const [name, setName] = useState('')
   const [consent, setConsent] = useState(false)
+  const [code, setCode] = useState('')
+  const [sent, setSent] = useState(false)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     void fetchMe().then((me) => {
-      if (!cancelled && me) {
+      if (!cancelled && me && me.email !== 'local@nod.test') {
         if (maybeReturnToNativeApp(getToken())) return
         nativeGo('/app', true)
       }
@@ -141,15 +225,33 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
     }
   }, [])
 
-  const submit = async (e: FormEvent) => {
+  const requestCode = async (e: FormEvent) => {
     e.preventDefault()
     setBusy(true)
     setErr('')
     track('cta_signup_email')
     try {
-      const out = await api<{ token: string }>('/api/auth/register', {
+      const out = await api<{ message: string; dev_code?: string }>('/api/auth/otp/request', {
         method: 'POST',
-        body: JSON.stringify({ email, password, name, consent }),
+        body: JSON.stringify({ email, name, consent, intent: 'signup' }),
+      })
+      setSent(true)
+      if (out.dev_code) setCode(out.dev_code)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Could not send the code')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const verify = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setErr('')
+    try {
+      const out = await api<{ token: string }>('/api/auth/otp/verify', {
+        method: 'POST',
+        body: JSON.stringify({ email, code, name, consent, intent: 'signup' }),
       })
       setToken(out.token)
       track('signup_success', { method: 'email' })
@@ -169,40 +271,60 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
           <div className="eyebrow">REGISTER</div>
           <Funnel current="account" />
           <h1>Create your Nodpilot account</h1>
-          <p>Google or email — both start the same free trial. No card required. 20 minutes of transcription included.</p>
+          <p>Google or an email code — both start the same free trial. No password. No card. 20 minutes of transcription included.</p>
           {(clerkEnabled || isNativeApp()) && (
             <>
               <Suspense fallback={null}>
                 {isNativeApp() ? <NativeGoogleButton /> : <GoogleButton next="/app" />}
               </Suspense>
-              <div className="site-or">or email</div>
+              <div className="site-or">or email a code</div>
             </>
           )}
-          <form className="site-form" onSubmit={submit}>
-            <label>
-              Name
-              <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" />
-            </label>
-            <label>
-              Email
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
-            </label>
-            <label>
-              Password
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} autoComplete="new-password" />
-            </label>
-            <label className="site-check">
-              <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} required />
-              <span>
-                I agree to the <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>. You will confirm
-                microphone and data use again before recording starts.
-              </span>
-            </label>
-            {err && <div className="site-err">{err}</div>}
-            <button className="button button-primary" type="submit" disabled={busy}>
-              {busy ? 'Opening workspace…' : 'Create account and open workspace'}
-            </button>
-          </form>
+          {!sent ? (
+            <form className="site-form" onSubmit={requestCode}>
+              <label>
+                Name
+                <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" />
+              </label>
+              <label>
+                Email
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
+              </label>
+              <label className="site-check">
+                <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} required />
+                <span>
+                  I agree to the <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>. You will confirm
+                  microphone and data use again before recording starts.
+                </span>
+              </label>
+              {err && <div className="site-err">{err}</div>}
+              <button className="button button-primary" type="submit" disabled={busy}>
+                {busy ? 'Sending…' : 'Email me a code'}
+              </button>
+            </form>
+          ) : (
+            <form className="site-form" onSubmit={verify}>
+              <p className="site-ok">We sent a code to {email}.</p>
+              <OtpCodeField code={code} onChange={setCode} autoFocus />
+              {err && <div className="site-err">{err}</div>}
+              <button className="button button-primary" type="submit" disabled={busy || code.length !== 6}>
+                {busy ? 'Opening workspace…' : 'Create account and open workspace'}
+              </button>
+              <div className="site-links">
+                <button
+                  type="button"
+                  className="site-text-btn"
+                  onClick={() => {
+                    setSent(false)
+                    setCode('')
+                    setErr('')
+                  }}
+                >
+                  Use a different email
+                </button>
+              </div>
+            </form>
+          )}
           <div className="site-links">
             <a href="/login">Already have an account</a>
           </div>
@@ -213,47 +335,18 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
 }
 
 export function ForgotPage() {
-  const [email, setEmail] = useState('')
-  const [msg, setMsg] = useState('')
-  const [err, setErr] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault()
-    setBusy(true)
-    setErr('')
-    try {
-      const out = await api<{ message: string }>('/api/auth/forgot', {
-        method: 'POST',
-        body: JSON.stringify({ email }),
-      })
-      setMsg(out.message)
-    } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Could not send reset')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   return (
     <div className="nod-site-page">
-      <Header />
+      <Header extra={<a className="button button-cyan header-cta" href="/login">Sign in</a>} />
       <div className="site-wrap">
         <div className="site-card">
-          <div className="eyebrow">PASSWORD</div>
-          <h1>Reset your password</h1>
-          <p>We will email a link if that address is registered. The link expires in two hours.</p>
-          <form className="site-form" onSubmit={submit}>
-            <label>
-              Email
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-            </label>
-            {err && <div className="site-err">{err}</div>}
-            {msg && <div className="site-ok">{msg}</div>}
-            <button className="button button-primary" type="submit" disabled={busy}>
-              {busy ? 'Sending…' : 'Send reset link'}
-            </button>
-          </form>
+          <div className="eyebrow">ACCOUNT</div>
+          <h1>No password to reset</h1>
+          <p>Email sign-in now uses a one-time code. Enter your email on the sign-in page and we will send a new code.</p>
+          <div className="site-links">
+            <a href="/login">Email me a sign-in code</a>
+            <a href="/signup">Create an account</a>
+          </div>
         </div>
       </div>
     </div>
@@ -261,52 +354,5 @@ export function ForgotPage() {
 }
 
 export function ResetPage() {
-  const token = new URLSearchParams(location.search).get('token') || ''
-  const [password, setPassword] = useState('')
-  const [err, setErr] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault()
-    setBusy(true)
-    setErr('')
-    try {
-      const out = await api<{ token: string }>('/api/auth/reset', {
-        method: 'POST',
-        body: JSON.stringify({ token, password }),
-      })
-      setToken(out.token)
-      if (maybeReturnToNativeApp(out.token)) return
-      nativeGo('/account')
-    } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Reset failed')
-      setBusy(false)
-    }
-  }
-
-  useEffect(() => {
-    if (!token) setErr('Missing reset token')
-  }, [token])
-
-  return (
-    <div className="nod-site-page">
-      <Header />
-      <div className="site-wrap">
-        <div className="site-card">
-          <div className="eyebrow">PASSWORD</div>
-          <h1>Choose a new password</h1>
-          <form className="site-form" onSubmit={submit}>
-            <label>
-              New password
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} />
-            </label>
-            {err && <div className="site-err">{err}</div>}
-            <button className="button button-primary" type="submit" disabled={busy || !token}>
-              {busy ? 'Saving…' : 'Update password'}
-            </button>
-          </form>
-        </div>
-      </div>
-    </div>
-  )
+  return <ForgotPage />
 }

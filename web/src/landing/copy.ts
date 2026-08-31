@@ -155,7 +155,7 @@ export const COPY = {
     platEyebrow: 'WEB + DESKTOP',
     platH: 'Start instantly. Go deeper when you need to.',
     platWeb: 'Web',
-    platWebP: 'Sign in with Google and start listening instantly.',
+    platWebP: 'Sign in with Google or an email code and start listening instantly.',
     platDesk: 'Desktop',
     platDeskP: 'Use Nod for longer sessions, system audio and deeper workflows.',
     platDeskNote:
@@ -368,7 +368,7 @@ export const COPY = {
     platEyebrow: '网页 + 桌面',
     platH: '立刻开始。需要时再深入。',
     platWeb: '网页版',
-    platWebP: '用 Google 登录，马上开始听。',
+    platWebP: '用 Google 或邮箱验证码登录，马上开始听。',
     platDesk: '桌面版',
     platDeskP: '适合更长的场次、系统声和更完整的工作流。',
     platDeskNote:

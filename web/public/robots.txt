@@ -5,4 +5,16 @@ Disallow: /account
 Disallow: /admin
 Disallow: /api/
 
+User-agent: GPTBot
+User-agent: OAI-SearchBot
+User-agent: ChatGPT-User
+User-agent: PerplexityBot
+User-agent: ClaudeBot
+User-agent: Google-Extended
+Allow: /
+Disallow: /app
+Disallow: /account
+Disallow: /admin
+Disallow: /api/
+
 Sitemap: https://nodpilot.com/sitemap.xml

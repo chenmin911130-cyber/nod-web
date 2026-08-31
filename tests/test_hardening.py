@@ -7,7 +7,7 @@ from unittest import mock
 from starlette.testclient import TestClient
 
 from server.headers import origin_allowed
-from server.mailer import send_reset_email
+from server.mailer import send_otp_email, send_reset_email
 from server.ratelimit import allow
 from server.app import (
     ASSEMBLYAI_FILE_MODELS,
@@ -259,6 +259,13 @@ class MailerTests(unittest.TestCase):
         joined = "\n".join(cm.output)
         self.assertNotIn(token, joined)
         self.assertNotIn("/reset?token=", joined)
+
+    def test_otp_failure_does_not_log_code(self):
+        with mock.patch("server.mailer.send_mail", return_value=False):
+            with self.assertLogs("nod.mail", level="INFO") as cm:
+                send_otp_email("nobody@example.com", "654321")
+        joined = "\n".join(cm.output)
+        self.assertNotIn("654321", joined)
 
 
 class ApiGuardTests(unittest.TestCase):

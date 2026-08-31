@@ -12,7 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from server.db import AuditLog, Feedback, Order, ResetToken, User, db_session, utcnow
-from server.mailer import send_reset_email
+from server.mailer import send_otp_email, send_reset_email
+from server.otp import OTP_OK, consume_otp, issue_otp
 from server.meter import delete_history_session, delete_user_data, list_history, plan_of, session_file_url, usage_snapshot
 from server.security import (
     cookie_kwargs,
@@ -26,7 +27,7 @@ from server.security import (
     valid_email,
     verify_password,
 )
-from server.ratelimit import rate_limit, rate_limit_global
+from server.ratelimit import allow, rate_limit, rate_limit_global
 from server.settings import CLERK_PUBLISHABLE_KEY, CONTACT_EMAIL, MAIL_FROM, PLANS, PUBLIC_URL, STRIPE_PRICE_PRO, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 
 log = logging.getLogger("nod.api")
@@ -43,6 +44,21 @@ class RegisterIn(BaseModel):
 class LoginIn(BaseModel):
     email: str
     password: str
+
+
+class OtpRequestIn(BaseModel):
+    email: str
+    intent: str = "login"
+    name: str = ""
+    consent: bool = False
+
+
+class OtpVerifyIn(BaseModel):
+    email: str
+    code: str
+    intent: str = "login"
+    name: str = ""
+    consent: bool = False
 
 
 class ForgotIn(BaseModel):
@@ -180,6 +196,86 @@ def register(
     token = _set_session(response, request, user)
     log.info("register user=%s", user.id)
     return {"ok": True, "token": token, "user": _public_user(user)}
+
+
+@router.post("/api/auth/otp/request")
+def otp_request(
+    body: OtpRequestIn,
+    request: Request,
+    _: None = Depends(rate_limit("otp-request", 4, 600)),
+    __: None = Depends(rate_limit_global("otp-request", 20, 600)),
+):
+    email = body.email.strip().lower()
+    intent = "signup" if body.intent == "signup" else "login"
+    if not valid_email(email):
+        raise HTTPException(400, "Enter a valid email")
+    if not allow_email_otp(email):
+        raise HTTPException(429, "Too many requests. Try again shortly.")
+    with db_session() as db:
+        user = db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
+        exists = user is not None
+    should_send = intent == "signup" or exists
+    code = issue_otp(email, intent, body.name, body.consent) if should_send else ""
+    sent = send_otp_email(email, code) if code else False
+    payload = {"ok": True, "message": OTP_OK}
+    if is_local_request(request) and code:
+        payload["dev_code"] = code
+    elif should_send and not sent and not is_local_request(request):
+        raise HTTPException(503, "Could not send the code. Try again shortly.")
+    return payload
+
+
+@router.post("/api/auth/otp/verify")
+def otp_verify(
+    body: OtpVerifyIn,
+    request: Request,
+    response: Response,
+    _: None = Depends(rate_limit("otp-verify", 8, 600)),
+    __: None = Depends(rate_limit_global("otp-verify", 40, 600)),
+):
+    email = body.email.strip().lower()
+    if not valid_email(email):
+        raise HTTPException(400, "Enter a valid email")
+    row = consume_otp(email, body.code)
+    if row is None:
+        raise HTTPException(401, "That code is invalid or expired")
+    with db_session() as db:
+        user = db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
+        created = False
+        if user is None:
+            if row.intent != "signup" and body.intent != "signup":
+                raise HTTPException(401, "That code is invalid or expired")
+            consented = bool(row.consent or body.consent)
+            if not consented:
+                raise HTTPException(400, "Agree to the Terms to create an account")
+            user = User(
+                id=new_id(),
+                email=email,
+                password_hash="",
+                name=(body.name or row.name or "").strip()[:120],
+                plan="free",
+                subscription_status="trialing",
+                recording_consent_at=utcnow() if consented else None,
+            )
+            db.add(user)
+            try:
+                db.flush()
+                created = True
+            except IntegrityError:
+                db.rollback()
+                existing = db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
+                if existing is None:
+                    raise HTTPException(409, "That email is already registered") from None
+                user = existing
+                created = False
+        db.expunge(user)
+    token = _set_session(response, request, user)
+    log.info("otp %s user=%s", "signup" if created else "login", user.id)
+    return {"ok": True, "token": token, "user": _public_user(user), "created": created}
+
+
+def allow_email_otp(email: str) -> bool:
+    return allow(f"otp-email:{email}", 4, 600)
 
 
 @router.post("/api/auth/login")
