@@ -12,6 +12,7 @@ ios/App/App.xcworkspace/xcuserdata
 ios/App/App.xcodeproj/xcuserdata
 ios/App/App.xcodeproj/project.xcworkspace/xcuserdata
 .venv/
+.venv311/
 __pycache__/
 *.pyc
 .env

@@ -489,6 +489,7 @@ class InterviewWaitFlushTests(unittest.TestCase):
         sess.cfg = {"stt": {}, "ui": {}, "llm": {}}
         sess._workspace = "interview"
         sess._listener = object()
+        sess._manual = False
         sess._busy = False
         sess._busy_lock = __import__("threading").Lock()
         sess._pending = None
@@ -553,6 +554,34 @@ class InterviewWaitFlushTests(unittest.TestCase):
         args, _kwargs = sess.pipeline.process_text.call_args
         self.assertEqual(args[0], "当下经济情况")
         self.assertEqual(args[1], "ask")
+
+    def test_answer_cleanup_releases_busy_and_emits_state(self):
+        # The finally block in work() is the only thing that unsticks the UI.
+        # If it raises on its first line, busy stays held and no state ships.
+        sess = self._session()
+        sess._on_final("告诉我当下经济啊。", "zh")
+        for _ in range(60):
+            if not sess._busy and sess.emit.call_args_list:
+                break
+            time.sleep(0.05)
+        self.assertFalse(sess._busy, "busy stayed held; next question would be dropped")
+        states = [
+            c.args[0]["state"]
+            for c in sess.emit.call_args_list
+            if c.args and c.args[0].get("type") == "state"
+        ]
+        self.assertIn("listen", states, f"no terminal state emitted, got {states}")
+
+    def test_answer_cleanup_runs_queued_ask(self):
+        sess = self._session()
+        sess._pending_asks = [("summarize me", "summary", None)]
+        sess.ask = mock.Mock()
+        sess._on_final("告诉我当下经济啊。", "zh")
+        for _ in range(60):
+            if sess.ask.called:
+                break
+            time.sleep(0.05)
+        sess.ask.assert_called_once_with("summarize me", None, "summary")
 
     def test_meeting_hold_flush_does_not_emit_after_leaving_meeting(self):
         sess = self._session()
@@ -629,6 +658,51 @@ class ListenAskRoutingTests(unittest.TestCase):
         self.assertTrue(any(e.get("type") == "chunk" and "Beijing" in (e.get("text") or "") for e in events))
         self.assertTrue(any(e.get("type") == "done" and e.get("ok") is True for e in events))
 
+    def test_metering_failure_still_emits_done(self):
+        # The answer already streamed. If accounting blows up after it, the
+        # client never releases the translate gate and sticks on Translating.
+        events: list[dict] = []
+        pipe = Pipeline.__new__(Pipeline)
+        pipe.cfg = {"llm": {"provider": "deepseek", "model": "deepseek-v4-flash", "max_tokens": 80}}
+        pipe.emit = events.append
+        pipe._provider = "deepseek"
+        pipe._model = "deepseek-v4-flash"
+        pipe._qa_history = []
+        pipe._last_answer = ""
+        pipe._cancel = __import__("threading").Event()
+        pipe._gen_seq = 0
+        pipe.user_id = "u1"
+        pipe.usage_session_id = "s1"
+        pipe._heard_lang = None
+
+        class _Delta:
+            content = "Beijing is the capital."
+            reasoning_content = None
+
+        class _Choice:
+            delta = _Delta()
+
+        class _Chunk:
+            choices = [_Choice()]
+
+        pipe.client = mock.Mock()
+        pipe.client.chat.completions.create.return_value = [_Chunk()]
+
+        import server.meter as meter
+
+        with mock.patch.object(meter, "check_can_generate", return_value=(True, {"ok": True})), \
+             mock.patch.object(meter, "consume_llm", side_effect=RuntimeError("db is down")):
+            pipe.process_text("Where is the capital of China?", "ask")
+
+        self.assertTrue(
+            any(e.get("type") == "chunk" and "Beijing" in (e.get("text") or "") for e in events),
+            "answer should still stream",
+        )
+        self.assertTrue(
+            any(e.get("type") == "done" for e in events),
+            f"no done emitted, client would hang; got {[e.get('type') for e in events]}",
+        )
+
     def test_cancelled_generation_still_emits_done(self):
         events: list[dict] = []
         pipe = Pipeline.__new__(Pipeline)
@@ -675,6 +749,20 @@ class ListenAskRoutingTests(unittest.TestCase):
         self.assertNotIn("that is not Chinese, English, or Japanese", sys_msg)
         self.assertIn("Italian", sys_msg)
         self.assertIn("requested target language", sys_msg)
+
+    def test_ask_prompt_is_neutral_without_role(self):
+        pipe = Pipeline.__new__(Pipeline)
+        pipe.cfg = {"profile": {}, "llm": {}, "stt": {}}
+        pipe._qa_history = []
+        pipe._heard_lang = "zh"
+        messages = pipe._build_messages("新西兰今天天气怎么样", "ask")
+        sys_msg = messages[0]["content"]
+        user_msg = messages[1]["content"]
+        self.assertNotIn("Software Engineer", sys_msg)
+        self.assertNotIn("interview coach", sys_msg.lower())
+        self.assertNotIn("Interviewer question:", user_msg)
+        self.assertIn("neutral", sys_msg.lower())
+        self.assertIn("Question:", user_msg)
 
 
 class MailerEscapeTests(unittest.TestCase):

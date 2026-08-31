@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
+    "test": "for f in src/*.test.ts; do echo \"› $f\"; tsx \"$f\" || exit 1; done",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },
@@ -23,6 +24,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "tsx": "^4.23.13",
     "typescript": "^5.6.3",
     "vite": "^6.0.3"
   }

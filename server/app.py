@@ -172,11 +172,11 @@ def load_config() -> dict[str, Any]:
     cfg: dict[str, Any] = {
         "profile": {
             "name": "",
-            "target_role": "Software Engineer",
+            "target_role": "",
             "company": "",
             "resume_summary": "",
             "jd": "",
-            "style": "简洁结构化：先给结论，再 2-3 点展开；行为题用 STAR；语言口语化、可直接照着念。",
+            "style": "中性简洁：先给结论，再两三句说明。直接回答问题。",
         },
         "llm": {"model": "deepseek-v4-flash-vision-exp", "max_tokens": 1600, "temperature": 0.5, "provider": "deepseek"},
         "stt": {"model": STT_CLOUD, "language": None, "vocabulary": []},
@@ -1209,11 +1209,11 @@ class Pipeline:
         name = _LANG_NAMES.get(lang, "English")
         if lang == "zh":
             return (
-                "LANGUAGE (hard rule): The interviewer asked in Chinese. "
+                "LANGUAGE (hard rule): The question is in Chinese. "
                 "Answer in Chinese only. Do not switch to English except for proper nouns and tech terms."
             )
         return (
-            f"LANGUAGE (hard rule): The interviewer asked in {name}. "
+            f"LANGUAGE (hard rule): The question is in {name}. "
             f"Answer in {name} only. Do not switch language except for proper nouns and tech terms."
         )
 
@@ -1398,19 +1398,27 @@ class Pipeline:
             ctx = "\n\nRecent confirmed Q&A (follow-up context only):\n" + "\n".join(
                 f"Q: {h['q']}\nA: {h['a'][:300]}" for h in hist
             )
+        extra = ""
+        if p.get("resume_summary"):
+            extra += f"\nUser background (use only if relevant): {p.get('resume_summary')}"
+        if p.get("target_role"):
+            extra += f"\nOptional job context: {p.get('target_role')}"
+            if p.get("company"):
+                extra += f" / {p.get('company')}"
+        if p.get("jd"):
+            extra += f"\nJob description (use only if the question is about that job): {p.get('jd')}"
+        style = (p.get("style") or "").strip() or "Clear and concise. Lead with the point, then a short explanation."
         sys_msg = (
-            "You are a senior interview coach helping a candidate answer questions in real time.\n"
-            f"Candidate background: {p.get('resume_summary') or ''}\n"
-            f"Target role: {p.get('target_role') or 'Software Engineer'}"
-            + (f" / Company: {p.get('company')}" if p.get("company") else "")
-            + (f"\nJob description (JD): {p.get('jd')}" if p.get("jd") else "")
+            "You are a helpful Q&A assistant. Answer the user's question directly and neutrally.\n"
+            "Do not role-play as a job candidate and do not dismiss a question as off-topic.\n"
+            "If they later ask for interview practice, then help with that. Otherwise just answer."
+            + extra
             + "\n\nYou answer ONLY the user's confirmed question.\n"
             + self._lang_rule(question)
-            + "\n\nAnswer rules:\n1. Output a complete answer the candidate can read aloud verbatim.\n"
-            f"2. Style: {p.get('style') or ''}\n"
-            "3. Speed mode: 60-100 words, 3-5 sentences, lead with the conclusion.\n"
-            "4. Technical questions: accurate answer + brief reason; behavioral: STAR.\n"
-            "5. Follow the LANGUAGE hard rule above even if the resume or style notes are in another language.\n"
+            + "\n\nAnswer rules:\n1. Answer the question itself.\n"
+            f"2. Style: {style}\n"
+            "3. Keep it short: 60-100 words, 3-5 sentences, lead with the conclusion.\n"
+            "4. Follow the LANGUAGE hard rule above even if notes are in another language.\n"
             + ctx
         )
         lang = self._answer_lang(question)
@@ -1418,7 +1426,7 @@ class Pipeline:
         lang_line = f"Answer language: {name} only."
         return [
             {"role": "system", "content": sys_msg},
-            {"role": "user", "content": f"Interviewer question: {question}\n\n{lang_line}\n\nAnswer:"},
+            {"role": "user", "content": f"Question: {question}\n\n{lang_line}\n\nAnswer:"},
         ]
 
     def process_text(
@@ -1535,26 +1543,35 @@ class Pipeline:
             self._qa_history.append({"qid": qid, "q": self._strip_nod_tag(t), "a": answer})
             self._qa_history = self._qa_history[-6:]
         if self.user_id:
-            from server.meter import consume_llm, save_history
-
-            inp = max(1, len(t) // 4)
-            out = max(1, len(answer) // 4)
-            ok, snap = consume_llm(self.user_id, self.usage_session_id, inp, out)
-            self.emit({"type": "quota", **snap})
-            kind_q = "transcript" if mode in ("translate", "summary") else "question"
-            if not internal:
-                save_history(self.user_id, self.usage_session_id, kind_q, self._strip_nod_tag(t), qid)
-            save_history(self.user_id, self.usage_session_id, "answer" if mode == "ask" else mode, answer, qid)
-            if mode in ("ask", "summary", "notes"):
-                try:
-                    from server.meter import write_session_notes
-
-                    write_session_notes(self.user_id, self.usage_session_id)
-                except Exception:
-                    logging.getLogger("nod").exception("r2 notes upload failed")
-            if not ok:
-                self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "llm"})
+            # The answer already streamed. Accounting must never swallow `done` —
+            # the client only releases the translate gate and closes the answer
+            # card on it, so a DB hiccup here would stick the UI on Translating.
+            try:
+                self._record_usage(t, answer, mode, qid, internal)
+            except Exception:
+                logging.getLogger("nod").exception("usage accounting failed")
         self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": True})
+
+    def _record_usage(self, t: str, answer: str, mode: str, qid: str, internal: bool) -> None:
+        from server.meter import consume_llm, save_history
+
+        inp = max(1, len(t) // 4)
+        out = max(1, len(answer) // 4)
+        ok, snap = consume_llm(self.user_id, self.usage_session_id, inp, out)
+        self.emit({"type": "quota", **snap})
+        kind_q = "transcript" if mode in ("translate", "summary") else "question"
+        if not internal:
+            save_history(self.user_id, self.usage_session_id, kind_q, self._strip_nod_tag(t), qid)
+        save_history(self.user_id, self.usage_session_id, "answer" if mode == "ask" else mode, answer, qid)
+        if mode in ("ask", "summary", "notes"):
+            try:
+                from server.meter import write_session_notes
+
+                write_session_notes(self.user_id, self.usage_session_id)
+            except Exception:
+                logging.getLogger("nod").exception("r2 notes upload failed")
+        if not ok:
+            self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "llm"})
 
 
 class CloudListener:

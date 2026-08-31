@@ -1,11 +1,11 @@
 {
   "profile": {
     "name": "",
-    "target_role": "Software Engineer（软件工程师）",
+    "target_role": "",
     "company": "",
     "resume_summary": "",
     "jd": "",
-    "style": "简洁结构化：先给结论，再 2-3 点展开；行为题用 STAR 结构；语言口语化、可直接照着念；中文提问用中文答，英文提问用英文答。"
+    "style": "中性简洁：先给结论，再两三句说明。直接回答问题；中文提问用中文答，英文提问用英文答。"
   },
   "llm": {
     "model": "deepseek-v4-flash-vision-exp",

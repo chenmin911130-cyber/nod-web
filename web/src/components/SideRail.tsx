@@ -6,7 +6,6 @@ interface Props {
   autoOn: boolean
   onPrimary: () => void
   onRecord: () => void
-  onClear: () => void
   onPause: () => void
   onMark: () => void
   onExport: () => void
@@ -35,16 +34,6 @@ function WaveIcon() {
       <line x1="13" y1="4" x2="13" y2="20" />
       <line x1="17" y1="7" x2="17" y2="17" />
       <line x1="21" y1="10" x2="21" y2="14" />
-    </svg>
-  )
-}
-
-function TrashIcon() {
-  return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 6h12" />
-      <path d="M8 6V4.6A1.1 1.1 0 0 1 9.1 3.5h1.8A1.1 1.1 0 0 1 12 4.6V6" />
-      <rect x="6" y="6" width="8" height="10" rx="1.4" />
     </svg>
   )
 }
@@ -167,17 +156,11 @@ export default function SideRail(props: Props) {
       </button>
 
       {mode === 'interview' && (
-        <>
-          <button className="rail-icon-btn" onClick={props.onClear} title="Clear history (F4)">
-            <TrashIcon />
-            <span>Clear</span>
-          </button>
-          <button className="rail-icon-btn" onClick={props.onExport} title="Export answers as PDF">
-            <PdfIcon />
-            <span className="rail-lbl-full">Export PDF</span>
-            <span className="rail-lbl-short">PDF</span>
-          </button>
-        </>
+        <button className="rail-icon-btn" onClick={props.onExport} title="Export answers as PDF">
+          <PdfIcon />
+          <span className="rail-lbl-full">Export PDF</span>
+          <span className="rail-lbl-short">PDF</span>
+        </button>
       )}
 
       {mode === 'meeting' && (

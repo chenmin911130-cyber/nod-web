@@ -2348,6 +2348,27 @@ export default function App() {
     setRailHover(false)
   }
   const railOn = !study || !inQa || !railDismissed || railHover
+  const sideRail = (
+    <SideRail
+      mode={state.workspaceMode}
+      run={state.run}
+      autoOn={state.autoOn}
+      onPrimary={handlePrimary}
+      onRecord={handleRecord}
+      onPause={handlePause}
+      onMark={handleMark}
+      onExport={() => { void handleExportPdf() }}
+      onClose={study && inQa ? hideRail : undefined}
+      meetingPaused={
+        state.workspaceMode === 'meeting'
+        && !listening
+        && state.meetingStartedAt != null
+        && !state.meetingEnded
+      }
+      onOpenHistory={() => setHistoryOpen(true)}
+      onNewSession={handleNewSession}
+    />
+  )
 
   return (
     <div className="app">
@@ -2413,26 +2434,7 @@ export default function App() {
           }}
           onMouseLeave={() => study && setRailHover(false)}
         >
-          <SideRail
-            mode={state.workspaceMode}
-            run={state.run}
-            autoOn={state.autoOn}
-            onPrimary={handlePrimary}
-            onRecord={handleRecord}
-            onClear={handleClear}
-            onPause={handlePause}
-            onMark={handleMark}
-            onExport={() => { void handleExportPdf() }}
-            onClose={study && inQa ? hideRail : undefined}
-            meetingPaused={
-              state.workspaceMode === 'meeting'
-              && !listening
-              && state.meetingStartedAt != null
-              && !state.meetingEnded
-            }
-            onOpenHistory={() => setHistoryOpen(true)}
-            onNewSession={handleNewSession}
-          />
+          {sideRail}
         </div>
         {state.workspaceMode === 'translate' ? (
           <TranslatePane
