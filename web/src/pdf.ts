@@ -125,6 +125,12 @@ export async function downloadPdf(title: string, blocks: PdfBlock[], options: Pd
   const name = raw
     ? (raw.toLowerCase().endsWith('.pdf') ? raw : `${raw}.pdf`)
     : `${safeName(title)}.pdf`
+  const { isNativeApp } = await import('./native')
+  if (isNativeApp()) {
+    const { shareNativeFile } = await import('./watch')
+    await shareNativeFile(bytes, name)
+    return name
+  }
   const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
   const a = document.createElement('a')
   a.href = url

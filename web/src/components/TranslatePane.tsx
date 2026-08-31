@@ -50,6 +50,14 @@ function Sparkle() {
   )
 }
 
+function LinePlayIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M5 3.4v9.2L13 8 5 3.4z" fill="currentColor" />
+    </svg>
+  )
+}
+
 function TapPlayIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -276,9 +284,10 @@ export default function TranslatePane({
                           type="button"
                           className="tr-speak"
                           onClick={() => onSpeak(p.original)}
-                          title="Play original"
+                          title="Play"
+                          aria-label="Play original"
                         >
-                          Play
+                          <LinePlayIcon />
                         </button>
                       ) : null}
                     </div>
@@ -301,9 +310,10 @@ export default function TranslatePane({
                           type="button"
                           className="tr-speak"
                           onClick={() => onSpeak(p.translation)}
-                          title="Play translation"
+                          title="Play"
+                          aria-label="Play translation"
                         >
-                          Play
+                          <LinePlayIcon />
                         </button>
                       ) : null}
                       {p.failed ? (

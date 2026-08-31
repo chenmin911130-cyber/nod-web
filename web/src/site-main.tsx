@@ -1,12 +1,16 @@
 import { createRoot } from 'react-dom/client'
 import Site from './site/Site'
-import { apiUrl, installNativeShell, isNativeApp } from './native'
+import { fetchMe, getToken } from './auth'
+import { apiUrl, installNativeShell, isNativeApp, maybeReturnToNativeApp, rememberNativeReturn } from './native'
 
 const rootEl = document.getElementById('root')
 
 async function boot() {
   if (!rootEl) return
+  rememberNativeReturn()
   installNativeShell()
+  const me = await fetchMe()
+  if (me && maybeReturnToNativeApp(getToken())) return
   document.documentElement.classList.add('nod-site')
   const root = createRoot(rootEl)
   root.render(<Site />)

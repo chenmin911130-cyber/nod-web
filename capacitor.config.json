@@ -8,7 +8,9 @@
     "backgroundColor": "#05070a",
     "scheme": "Nod",
     "preferredContentMode": "mobile",
-    "limitsNavigationsToAppBoundDomains": false
+    "limitsNavigationsToAppBoundDomains": false,
+    "allowsLinkPreview": false,
+    "scrollEnabled": false
   },
   "plugins": {
     "SplashScreen": {
@@ -22,12 +24,6 @@
   },
   "server": {
     "iosScheme": "capacitor",
-    "allowNavigation": [
-      "nodpilot.com",
-      "www.nodpilot.com",
-      "*.clerk.accounts.dev",
-      "*.clerk.com",
-      "accounts.google.com"
-    ]
+    "allowNavigation": []
   }
 }

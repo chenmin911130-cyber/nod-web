@@ -1,0 +1,265 @@
+import AVFoundation
+import Foundation
+import WatchConnectivity
+
+/// Phone-side WatchConnectivity. Watch mic PCM is forwarded to JS; start/stop
+/// are queued until the workspace is ready so consent / start_listen stay intact.
+public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelegate {
+    public static let shared = WatchBridge()
+
+    weak var plugin: NodWatchPlugin?
+    private(set) var jsReady = false
+    private var pending: [String] = []
+    private var pendingPcm: [String] = []
+    private var lastListening = false
+    private var lastHint = "Ready"
+    private var lastOriginal = ""
+    private var lastTranslation = ""
+    private var lastHistory: [[String: String]] = []
+    private var speechPlayer: AVAudioPlayer?
+    private var speechFinish: ((Error?) -> Void)?
+
+    override private init() {
+        super.init()
+    }
+
+    public func activate() {
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+        if session.delegate == nil {
+            session.delegate = self
+        }
+        if session.activationState != .activated {
+            session.activate()
+        }
+        pushStatus(
+            listening: lastListening,
+            hint: lastHint,
+            original: lastOriginal,
+            translation: lastTranslation,
+            history: lastHistory
+        )
+    }
+
+    func markJsReady() {
+        jsReady = true
+        let queued = pending
+        pending.removeAll()
+        for action in queued {
+            emit(action)
+        }
+        let pcm = pendingPcm
+        pendingPcm.removeAll()
+        for chunk in pcm {
+            plugin?.notifyListeners("pcm", data: ["data": chunk])
+        }
+        pushStatus(
+            listening: lastListening,
+            hint: lastHint,
+            original: lastOriginal,
+            translation: lastTranslation,
+            history: lastHistory
+        )
+    }
+
+    public func pushStatus(
+        listening: Bool,
+        hint: String,
+        original: String = "",
+        translation: String = "",
+        history: [[String: String]] = []
+    ) {
+        lastListening = listening
+        lastHint = hint
+        lastOriginal = original
+        lastTranslation = translation
+        lastHistory = history
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+        let payload: [String: Any] = [
+            "listening": listening,
+            "hint": hint,
+            "original": original,
+            "translation": translation,
+            "history": history,
+        ]
+        guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
+        do {
+            try session.updateApplicationContext(payload)
+        } catch {
+            /* watch may be locked / unreachable */
+        }
+        if session.isReachable {
+            session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
+        }
+    }
+
+    private func handle(_ message: [String: Any]) {
+        if let pcm = message["pcm"] as? String, !pcm.isEmpty {
+            emitPcm(pcm)
+        }
+        let raw = (message["action"] as? String ?? "").lowercased()
+        let allowed = ["stop", "start", "record", "pause", "resume", "speak", "tts_live", "tts_tap", "tts_female", "tts_male"]
+        let action = allowed.contains(raw) ? raw : ""
+        guard !action.isEmpty else { return }
+        if jsReady {
+            emit(action)
+        } else {
+            pending.append(action)
+        }
+    }
+
+    func playSpeech(_ data: Data, finished: ((Error?) -> Void)? = nil) {
+        if WCSession.isSupported() {
+            let session = WCSession.default
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("nod-speech.mp3")
+            do {
+                try data.write(to: url, options: .atomic)
+                if session.activationState == .activated {
+                    session.transferFile(url, metadata: ["kind": "speech"])
+                }
+            } catch {
+                /* watch may be locked */
+            }
+            if session.isReachable, data.count <= 80_000 {
+                session.sendMessage(["speech": data.base64EncodedString()], replyHandler: nil, errorHandler: nil)
+            }
+        }
+        DispatchQueue.main.async {
+            self.playLocal(data, finished: finished)
+        }
+    }
+
+    private func playLocal(_ data: Data, finished: ((Error?) -> Void)?) {
+        speechFinish?(nil)
+        speechFinish = finished
+        do {
+            try routeSpeechOutput()
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("nod-play.mp3")
+            try data.write(to: url, options: .atomic)
+            let player = try AVAudioPlayer(contentsOf: url, fileTypeHint: AVFileType.mp3.rawValue)
+            player.delegate = self
+            player.volume = 1
+            player.prepareToPlay()
+            guard player.duration > 0.05 else {
+                throw NSError(domain: "NodWatch", code: 3, userInfo: [NSLocalizedDescriptionKey: "Empty speech audio"])
+            }
+            speechPlayer = player
+            guard player.play() else {
+                throw NSError(domain: "NodWatch", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not start playback"])
+            }
+        } catch {
+            restoreListenSession()
+            speechFinish?(error)
+            speechFinish = nil
+        }
+    }
+
+    /// Media playback ignores the silent switch and uses the loudspeaker.
+    /// playAndRecord + mixWithOthers was sending TTS to the earpiece.
+    private func routeSpeechOutput() throws {
+        let session = AVAudioSession.sharedInstance()
+        let wired = session.currentRoute.outputs.contains { $0.portType == .headphones }
+        try session.setCategory(.playback, mode: .default)
+        try session.setActive(true)
+        if !wired {
+            try? session.overrideOutputAudioPort(.speaker)
+        }
+    }
+
+    private func restoreListenSession() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(
+            .playAndRecord,
+            mode: .default,
+            options: [.defaultToSpeaker]
+        )
+        try? session.setActive(true)
+        if let builtin = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+            try? session.setPreferredInput(builtin)
+        }
+        try? session.overrideOutputAudioPort(.speaker)
+    }
+
+    public func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        if speechPlayer === player {
+            restoreListenSession()
+            speechFinish?(nil)
+            speechFinish = nil
+            speechPlayer = nil
+        }
+    }
+
+    private func emit(_ action: String) {
+        plugin?.notifyListeners("command", data: ["action": action])
+    }
+
+    private func emitPcm(_ data: String) {
+        if jsReady {
+            plugin?.notifyListeners("pcm", data: ["data": data])
+            return
+        }
+        pendingPcm.append(data)
+        if pendingPcm.count > 80 {
+            pendingPcm.removeFirst(pendingPcm.count - 80)
+        }
+    }
+
+    private func emitPcmData(_ data: Data) {
+        let chunk = 3200
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + chunk, data.count)
+            emitPcm(data.subdata(in: offset ..< end).base64EncodedString())
+            offset = end
+        }
+    }
+
+    public func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
+        if activationState == .activated {
+            pushStatus(
+                listening: lastListening,
+                hint: lastHint,
+                original: lastOriginal,
+                translation: lastTranslation,
+                history: lastHistory
+            )
+        }
+    }
+
+    public func sessionDidBecomeInactive(_ session: WCSession) {}
+
+    public func sessionDidDeactivate(_ session: WCSession) {
+        session.activate()
+    }
+
+    public func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        handle(message)
+    }
+
+    public func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
+        handle(message)
+        replyHandler(["ok": true, "listening": lastListening, "hint": lastHint])
+    }
+
+    public func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        handle(userInfo)
+    }
+
+    public func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
+        handle(applicationContext)
+    }
+
+    public func session(_ session: WCSession, didReceive file: WCSessionFile) {
+        guard let data = try? Data(contentsOf: file.fileURL), !data.isEmpty else { return }
+        if jsReady {
+            if pending.last != "start" {
+                emit("start")
+            }
+            emitPcmData(data)
+        } else {
+            pending.append("start")
+            emitPcmData(data)
+        }
+    }
+}

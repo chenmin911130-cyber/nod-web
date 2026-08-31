@@ -7,7 +7,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        WatchBridge.shared.activate()
+        DispatchQueue.main.async { self.makeWebViewFeelNative() }
         return true
     }
 
@@ -26,7 +26,17 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
-        // Restart any tasks that were paused (or not yet started) while the application was inactive. If the application was previously in the background, optionally refresh the user interface.
+        makeWebViewFeelNative()
+    }
+
+    private func makeWebViewFeelNative() {
+        guard let webView = (window?.rootViewController as? CAPBridgeViewController)?.webView else { return }
+        webView.allowsLinkPreview = false
+        webView.isOpaque = true
+        webView.backgroundColor = UIColor(red: 5 / 255, green: 7 / 255, blue: 10 / 255, alpha: 1)
+        webView.scrollView.bounces = false
+        webView.scrollView.alwaysBounceVertical = false
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
     }
 
     func applicationWillTerminate(_ application: UIApplication) {

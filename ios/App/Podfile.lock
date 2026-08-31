@@ -1,0 +1,58 @@
+PODS:
+  - Capacitor (7.6.8):
+    - CapacitorCordova
+  - CapacitorApp (7.1.2):
+    - Capacitor
+  - CapacitorBrowser (7.0.5):
+    - Capacitor
+  - CapacitorCordova (7.6.8)
+  - CapacitorStatusBar (7.0.6):
+    - Capacitor
+  - NodAuth (0.1.0):
+    - Capacitor
+  - NodMic (0.1.0):
+    - Capacitor
+  - NodWatch (0.1.0):
+    - Capacitor
+
+DEPENDENCIES:
+  - "Capacitor (from `../../node_modules/@capacitor/ios`)"
+  - "CapacitorApp (from `../../node_modules/@capacitor/app`)"
+  - "CapacitorBrowser (from `../../node_modules/@capacitor/browser`)"
+  - "CapacitorCordova (from `../../node_modules/@capacitor/ios`)"
+  - "CapacitorStatusBar (from `../../node_modules/@capacitor/status-bar`)"
+  - NodAuth (from `../../plugins/nod-auth`)
+  - NodMic (from `../../plugins/nod-mic`)
+  - NodWatch (from `../../plugins/nod-watch`)
+
+EXTERNAL SOURCES:
+  Capacitor:
+    :path: "../../node_modules/@capacitor/ios"
+  CapacitorApp:
+    :path: "../../node_modules/@capacitor/app"
+  CapacitorBrowser:
+    :path: "../../node_modules/@capacitor/browser"
+  CapacitorCordova:
+    :path: "../../node_modules/@capacitor/ios"
+  CapacitorStatusBar:
+    :path: "../../node_modules/@capacitor/status-bar"
+  NodAuth:
+    :path: "../../plugins/nod-auth"
+  NodMic:
+    :path: "../../plugins/nod-mic"
+  NodWatch:
+    :path: "../../plugins/nod-watch"
+
+SPEC CHECKSUMS:
+  Capacitor: ff6bf01336ac353098378828aff465095a89e459
+  CapacitorApp: f01a913211780e0718dae9750442c3e23f96e106
+  CapacitorBrowser: 6d09f59655e89aede71654ef08b98de55cf032b6
+  CapacitorCordova: e61ee8c40101b8cd011d0224261606a290c082cf
+  CapacitorStatusBar: 416e9e53fd6397e668d4a181cd2131617d949bd6
+  NodAuth: 2afc322b8c884e841ff98063e839d998fade88b5
+  NodMic: fcf143e18f3f5cac0d7a94913b9dfc51fab9b144
+  NodWatch: 00eff31956e82309f3f894edf7e2019d2f66a673
+
+PODFILE CHECKSUM: a453796da992c1f067b1b76e7411d1f76ec99b5c
+
+COCOAPODS: 1.17.0

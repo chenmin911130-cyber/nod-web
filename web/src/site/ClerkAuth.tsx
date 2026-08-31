@@ -7,7 +7,7 @@ import {
   useSignIn,
 } from '@clerk/clerk-react'
 import { getToken, setToken } from '../auth'
-import { apiUrl, maybeReturnToNativeApp, nativeGo } from '../native'
+import { apiUrl, maybeReturnToNativeApp, nativeGo, wantsNativeReturn } from '../native'
 import { track } from './track'
 import './Site.css'
 
@@ -151,7 +151,7 @@ export function GoogleButton({ next = '/app' }: { next?: string }) {
         return
       }
       track('cta_google')
-      const complete = `/login?next=${encodeURIComponent(next)}`
+      const complete = `/login?next=${encodeURIComponent(next)}${wantsNativeReturn() ? '&native_return=1' : ''}`
       if (typeof signIn.authenticateWithRedirect === 'function') {
         await signIn.authenticateWithRedirect({
           strategy: 'oauth_google',

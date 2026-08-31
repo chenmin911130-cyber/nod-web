@@ -12,7 +12,9 @@
     "@capacitor/core": "^7.4.3",
     "@capacitor/ios": "^7.4.3",
     "@capacitor/status-bar": "^7.0.3",
-    "nod-mic": "file:plugins/nod-mic"
+    "nod-auth": "file:plugins/nod-auth",
+    "nod-mic": "file:plugins/nod-mic",
+    "nod-watch": "file:plugins/nod-watch"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.4.3",

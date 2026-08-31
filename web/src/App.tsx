@@ -15,9 +15,11 @@ import StatusToast from './components/StatusToast'
 import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
 import { api as authApi, fetchMe } from './auth'
-import { readTtsMode, readTtsVoice, speakTranslation, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
 import { isNativeApp, nativeGo } from './native'
 import { installWatchRemote, pushWatchStatus } from './watch'
+import { buildWatchFace } from './watchStatus'
+import { nextLiveUtterances, readTtsMode, readTtsVoice, speakTranslation, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
+import { shouldGenerateAutoReport } from './recordReport'
 import {
   clearWatchReport,
   markWatchReport,
@@ -151,7 +153,6 @@ const initial: AppState = {
   translateTo: storedPair?.to ?? 'zh',
   notesLang: readStoredNotesLang() ?? storedPair?.to ?? 'zh',
   heardLang: null,
-  bilingual: true,
   translateAskId: '',
   translateBindId: '',
   summaryAskId: '',
@@ -186,7 +187,6 @@ type Action =
   | { type: 'translate_from'; lang: Lang }
   | { type: 'translate_to'; lang: PairLang }
   | { type: 'notes_lang'; lang: Lang }
-  | { type: 'bilingual'; on: boolean }
   | { type: 'mark_action' }
   | { type: 'meeting_clock'; startedAt: number | null; elapsedMs: number }
   | { type: 'meeting_ended' }
@@ -701,8 +701,6 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, translateTo: action.lang, notesLang: action.lang }
     case 'notes_lang':
       return { ...state, notesLang: action.lang }
-    case 'bilingual':
-      return { ...state, bilingual: action.on }
     case 'mark_action': {
       if (state.meetingLines.length === 0) return state
       const meetingLines = state.meetingLines.slice()
@@ -898,6 +896,9 @@ export default function App() {
   const listenWanted = useRef(false)
   const [savePrompt, setSavePrompt] = useState(false)
   const watchAutoNotes = useRef(false)
+  const autoReport = useRef(false)
+  const recordHeard = useRef(false)
+  const sessionPaused = useRef(false)
   const watchRestoreTried = useRef(false)
   const [watchReportOpen, setWatchReportOpen] = useState(false)
   const [watchReportReveal, setWatchReportReveal] = useState(0)
@@ -907,10 +908,15 @@ export default function App() {
   }
   const startListen = () => {
     listenWanted.current = true
+    sessionPaused.current = false
     setSavePrompt(false)
-    if (!watchAutoNotes.current) {
+    if (!watchAutoNotes.current && !autoReport.current) {
       clearWatchReport()
       setWatchReportOpen(false)
+    }
+    const s = stateRef.current
+    if (s.workspaceMode === 'translate' || s.translateOn) {
+      unlockSpeech()
     }
     window.api.send({ type: 'start_listen' })
   }
@@ -931,8 +937,9 @@ export default function App() {
   const [consent, setConsent] = useState<boolean | null>(demoScene ? true : null)
   const [ttsMode, setTtsMode] = useState<TtsMode>(readTtsMode)
   const [ttsVoice, setTtsVoice] = useState<TtsVoice>(readTtsVoice)
-  const [ttsReady, setTtsReady] = useState(false)
   const spokenTranslate = useRef<Set<string>>(new Set())
+  const ttsVoiceRef = useRef(ttsVoice)
+  ttsVoiceRef.current = ttsVoice
   const consentRef = useRef<boolean | null>(demoScene ? true : null)
   const [consentOpen, setConsentOpen] = useState(false)
   const pendingMic = useRef<(() => void) | null>(null)
@@ -1028,27 +1035,118 @@ export default function App() {
     if (!isNativeApp()) return
     return installWatchRemote({
       onStart: () => {
+        if (sessionPaused.current) {
+          guardMic(startListen)
+          return
+        }
         watchAutoNotes.current = true
+        recordHeard.current = false
         watchRestoreTried.current = false
         clearWatchReport()
         setWatchReportOpen(false)
         guardMic(startListen)
       },
-      onStop: stopListen,
+      onRecord: () => {
+        if (sessionPaused.current) {
+          guardMic(startListen)
+          return
+        }
+        watchAutoNotes.current = true
+        autoReport.current = true
+        recordHeard.current = false
+        watchRestoreTried.current = false
+        clearWatchReport()
+        setWatchReportOpen(false)
+        const s = stateRef.current
+        if (s.run === 'listen' || s.run === 'record') {
+          sessionPaused.current = false
+          stopListen()
+          return
+        }
+        if (s.workspaceMode === 'meeting' && (s.meetingEnded || s.meetingStartedAt == null)) {
+          dispatch({ type: 'listen_new' })
+        }
+        guardMic(startListen)
+      },
+      onPause: () => {
+        sessionPaused.current = true
+        const s = stateRef.current
+        if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
+          dispatch({ type: 'meeting_clock', startedAt: s.meetingStartedAt, elapsedMs: Date.now() - s.meetingStartedAt })
+        }
+        stopListen()
+      },
+      onResume: () => {
+        const s = stateRef.current
+        if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
+          dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
+        }
+        guardMic(startListen)
+      },
+      onStop: () => {
+        sessionPaused.current = false
+        stopListen()
+        if (stateRef.current.workspaceMode === 'meeting') {
+          dispatch({ type: 'meeting_ended' })
+        }
+      },
+      onSpeak: () => {
+        const s = stateRef.current
+        const fromPairs = [...s.translatePairs].reverse().find((p) => (p.translation || '').trim())
+        const fromLines = [...s.meetingLines].reverse().find((ln) => (ln.translation || '').trim())
+        const text = (fromPairs?.translation || fromLines?.translation || '').trim()
+        if (!text) return
+        unlockSpeech()
+        void speakTranslation(text, ttsVoiceRef.current).catch((err) => {
+          dispatch({
+            type: 'engine',
+            ev: { type: 'status', text: err instanceof Error ? err.message : 'Could not speak translation' },
+          })
+        })
+      },
+      onTtsLive: () => {
+        setTtsMode('live')
+        writeTtsMode('live')
+        unlockSpeech()
+      },
+      onTtsTap: () => {
+        setTtsMode('tap')
+        writeTtsMode('tap')
+        stopSpeech()
+      },
+      onTtsVoice: (voice) => {
+        setTtsVoice(voice)
+        writeTtsVoice(voice)
+      },
     })
   }, [])
 
   useEffect(() => {
     if (!isNativeApp()) return
-    const listening = state.run === 'listen' || state.run === 'record'
-    let hint = 'Ready'
-    if (consentOpen) hint = 'Confirm on iPhone'
-    else if (listening) hint = state.partial.trim() || 'Watch mic'
-    else if (state.notesAskId) hint = 'Writing report on iPhone'
-    else if (state.notesRaw.trim()) hint = 'Open iPhone to read the report'
-    const timer = window.setTimeout(() => pushWatchStatus(listening, hint), 180)
+    const face = buildWatchFace({
+      run: state.run,
+      consentOpen,
+      notesAskId: state.notesAskId,
+      notesRaw: state.notesRaw,
+      partial: state.partial,
+      workspaceMode: state.workspaceMode,
+      translateOn: state.translateOn,
+      translatePairs: state.translatePairs,
+      meetingLines: state.meetingLines,
+    })
+    const timer = window.setTimeout(() => pushWatchStatus(face), 180)
     return () => window.clearTimeout(timer)
-  }, [consentOpen, state.notesAskId, state.notesRaw, state.partial, state.run])
+  }, [
+    consentOpen,
+    state.meetingLines,
+    state.notesAskId,
+    state.notesRaw,
+    state.partial,
+    state.run,
+    state.translateOn,
+    state.translatePairs,
+    state.workspaceMode,
+  ])
 
   const acceptConsent = () => {
     void authApi('/api/me/consent', { method: 'POST', body: JSON.stringify({ consent: true }) }).then(() => {
@@ -1212,7 +1310,6 @@ export default function App() {
     })
     api.getConfig().then((cfg) => {
       dispatch({ type: 'config', cfg })
-      setTtsReady(Boolean(cfg.has_tts))
     })
     return () => {
       offEvent()
@@ -1285,6 +1382,9 @@ export default function App() {
   }, [copyLatest])
 
   const doClear = useCallback(() => {
+    sessionPaused.current = false
+    spokenTranslate.current.clear()
+    stopSpeech()
     askedTranslate.current.clear()
     window.api.send({ type: 'cancel_generate' })
     releaseTranslateGate()
@@ -1551,26 +1651,51 @@ export default function App() {
   }, [])
 
   const handleRecord = useCallback(() => {
-    guardMic(() => {
-      const s = stateRef.current
-      if (s.run === 'listen') return
-      if (s.workspaceMode === 'meeting' && s.run !== 'record') {
-        if (s.meetingEnded || s.meetingStartedAt == null) {
-          dispatch({ type: 'listen_new' })
-        } else {
-          dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
-        }
-      }
-      window.api.send({ type: 'manual' })
-    })
+    const s = stateRef.current
+    if (s.workspaceMode === 'translate') {
+      guardMic(() => window.api.send({ type: 'manual' }))
+      return
+    }
+    if (s.workspaceMode !== 'meeting') return
+    if (sessionPaused.current) {
+      sessionPaused.current = false
+      autoReport.current = true
+      recordHeard.current = true
+      stopListen()
+      dispatch({ type: 'meeting_ended' })
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'Recording stopped · writing report' } })
+      return
+    }
+    if (s.run === 'listen' || s.run === 'record') {
+      sessionPaused.current = false
+      autoReport.current = true
+      recordHeard.current = true
+      stopListen()
+      dispatch({ type: 'meeting_ended' })
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'Recording stopped · writing report' } })
+      return
+    }
+    autoReport.current = true
+    recordHeard.current = false
+    if (s.meetingEnded || s.meetingStartedAt == null) {
+      dispatch({ type: 'listen_new' })
+    } else {
+      dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
+    }
+    guardMic(startListen)
+    dispatch({ type: 'engine', ev: { type: 'status', text: 'Recording · report after stop' } })
   }, [])
   handleRecordRef.current = handleRecord
 
   const handlePause = useCallback(() => {
     const s = stateRef.current
     if (s.run === 'listen' || s.run === 'record') {
+      sessionPaused.current = true
+      if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
+        dispatch({ type: 'meeting_clock', startedAt: s.meetingStartedAt, elapsedMs: Date.now() - s.meetingStartedAt })
+      }
       stopListen()
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'Meeting paused' } })
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'Paused · resume when ready' } })
     }
   }, [])
 
@@ -1698,6 +1823,36 @@ export default function App() {
   }, [askTranslate])
   pumpTranslateRef.current = pumpTranslate
 
+  useEffect(() => {
+    const liveOn = ttsMode === 'live' && (
+      state.workspaceMode === 'translate'
+      || (state.workspaceMode === 'meeting' && state.translateOn)
+    )
+    if (!liveOn) {
+      if (state.workspaceMode === 'interview') stopSpeech()
+      return
+    }
+    const next = nextLiveUtterances({
+      live: true,
+      workspaceMode: state.workspaceMode,
+      translateOn: state.translateOn,
+      bindId: state.translateBindId,
+      spoken: spokenTranslate.current,
+      pairs: state.translatePairs,
+      lines: state.meetingLines,
+    })
+    for (const item of next) {
+      spokenTranslate.current.add(item.id)
+      void speakTranslation(item.text, ttsVoice).catch((err) => {
+        spokenTranslate.current.delete(item.id)
+        dispatch({
+          type: 'engine',
+          ev: { type: 'status', text: err instanceof Error ? err.message : 'Could not speak translation' },
+        })
+      })
+    }
+  }, [state.translatePairs, state.meetingLines, state.translateBindId, state.workspaceMode, state.translateOn, ttsMode, ttsVoice])
+
   // Stable identity so memoised transcript rows are not invalidated on every
   // parent render — with thousands of lines that dominates the frame budget.
   const handleRenameSpeaker = useCallback((id: string, name: string) => {
@@ -1734,33 +1889,7 @@ export default function App() {
     }
     if (state.workspaceMode !== 'translate') return
     pumpTranslate()
-  }, [state.translatePairs, state.meetingLines, state.translateOn, state.bilingual, state.workspaceMode, pumpTranslate])
-
-  useEffect(() => {
-    if (ttsMode !== 'live' || state.workspaceMode !== 'translate') {
-      if (state.workspaceMode !== 'translate') stopSpeech()
-      return
-    }
-    for (const pair of state.translatePairs) {
-      if (
-        pair.passthrough
-        || pair.failed
-        || pair.id === state.translateBindId
-        || spokenTranslate.current.has(pair.id)
-      ) continue
-      const text = (pair.translation || '').trim()
-      if (!text) continue
-      spokenTranslate.current.add(pair.id)
-      void speakTranslation(text, ttsVoice).catch((err) => {
-        spokenTranslate.current.delete(pair.id)
-        dispatch({
-          type: 'engine',
-          ev: { type: 'status', text: err instanceof Error ? err.message : 'Could not speak translation' },
-        })
-      })
-      break
-    }
-  }, [state.translatePairs, state.translateBindId, state.workspaceMode, ttsMode, ttsVoice])
+  }, [state.translatePairs, state.meetingLines, state.translateOn, state.workspaceMode, pumpTranslate])
 
   const handleGenerateSummary = useCallback((note?: string, files?: AttachPayload[]) => {
     const s = stateRef.current
@@ -1799,17 +1928,28 @@ export default function App() {
   generateNotesRef.current = generateNotes
 
   useEffect(() => {
-    if (!isNativeApp() || !watchAutoNotes.current) return
-    if (state.run === 'listen' || state.run === 'record' || state.run === 'think') return
-    if (state.workspaceMode === 'translate') {
-      watchAutoNotes.current = false
-      return
+    const fromWatch = isNativeApp() && watchAutoNotes.current
+    const flagged = fromWatch || autoReport.current
+    if (flagged && (state.run === 'listen' || state.run === 'record' || state.run === 'think')) {
+      recordHeard.current = true
     }
-    // Interview Ask still uses busy; wait so we do not cancel an answer.
-    if (state.busy) return
+    const next = shouldGenerateAutoReport({
+      flagged,
+      heardListen: recordHeard.current,
+      run: state.run,
+      workspaceMode: state.workspaceMode,
+      busy: state.busy,
+      lineCount: state.meetingLines.length,
+      paused: sessionPaused.current,
+    })
+    if (next === 'wait') return
     watchAutoNotes.current = false
-    if (!state.meetingLines.length) return
+    autoReport.current = false
+    recordHeard.current = false
+    if (next === 'skip') return
     generateNotesRef.current()
+    showWatchReport()
+    if (!fromWatch) return
     const snap = snapshotFromWorkspace({
       mode: state.workspaceMode,
       scene: state.listenScene,
@@ -1819,7 +1959,6 @@ export default function App() {
     if (!snap) return
     markWatchReport()
     writeWatchReportSnapshot(snap)
-    showWatchReport()
   }, [state.busy, state.meetingLines.length, state.run, state.workspaceMode])
 
   useEffect(() => {
@@ -2314,8 +2453,8 @@ export default function App() {
             onTtsMode={(mode) => {
               setTtsMode(mode)
               writeTtsMode(mode)
+              stopSpeech()
               if (mode === 'live') unlockSpeech()
-              else stopSpeech()
             }}
             onTtsVoice={(voice) => {
               setTtsVoice(voice)
@@ -2352,6 +2491,9 @@ export default function App() {
         ) : (
           <ListenPane
             scene={state.workspaceMode === 'interview' ? 'interview' : state.listenScene}
+            speechLang={state.lang}
+            heardLang={state.heardLang}
+            onSpeechLang={handleLang}
             translateOn={state.translateOn}
             translateTo={state.translateTo}
             notesLang={state.notesLang}
@@ -2380,9 +2522,6 @@ export default function App() {
                 onCompose={setComposeOpen}
               />
             }
-            speechLang={state.lang}
-            heardLang={state.heardLang}
-            onSpeechLang={handleLang}
             onScene={(scene) => {
               dispatch({ type: 'listen_scene', scene })
               if (scene === 'interview') handleMode('interview', 'interview')

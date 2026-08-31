@@ -74,11 +74,36 @@ export function tokenFromAppUrl(url: string): string {
   }
 }
 
+const NATIVE_RETURN_KEY = 'nod_native_return'
+
+export function rememberNativeReturn(): void {
+  try {
+    if (new URLSearchParams(location.search).get('native_return') === '1') {
+      sessionStorage.setItem(NATIVE_RETURN_KEY, '1')
+    }
+  } catch {
+    /* private mode */
+  }
+}
+
+export function wantsNativeReturn(): boolean {
+  rememberNativeReturn()
+  try {
+    if (new URLSearchParams(location.search).get('native_return') === '1') return true
+    return sessionStorage.getItem(NATIVE_RETURN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 export function maybeReturnToNativeApp(token: string): boolean {
-  if (!token) return false
-  const flag = new URLSearchParams(location.search).get('native_return')
-  if (flag !== '1') return false
-  location.href = `${NATIVE_AUTH_SCHEME}://auth?token=${encodeURIComponent(token)}`
+  if (!token || !wantsNativeReturn()) return false
+  try {
+    sessionStorage.removeItem(NATIVE_RETURN_KEY)
+  } catch {
+    /* ignore */
+  }
+  location.replace(`${NATIVE_AUTH_SCHEME}://auth?token=${encodeURIComponent(token)}`)
   return true
 }
 
@@ -101,6 +126,12 @@ async function listenForAuthReturn(): Promise<void> {
     if (!token) return
     const { setToken } = await import('./auth')
     setToken(token)
+    try {
+      const { Browser } = await import('@capacitor/browser')
+      await Browser.close()
+    } catch {
+      /* browser sheet may already be gone */
+    }
     nativeGo('/app', true)
   }
   App.addListener('appUrlOpen', ({ url }) => apply(url))

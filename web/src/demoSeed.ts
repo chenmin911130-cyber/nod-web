@@ -97,7 +97,6 @@ export function applyDemoSeed(state: AppState): AppState {
     status: 'Listening',
     run: 'listen' as const,
     view: 'workspace' as const,
-    bilingual: true,
     lang: 'en' as const,
     translateTo: 'zh' as const,
     notesLang: 'zh' as const,

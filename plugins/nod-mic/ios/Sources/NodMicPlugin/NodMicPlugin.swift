@@ -57,12 +57,19 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func beginCapture() throws {
         let session = AVAudioSession.sharedInstance()
+        // Hear the room (Mac speakers, people nearby). Do not use voiceChat /
+        // HFP — those switch to the headphone mic and cancel "echo" so YouTube
+        // playing from a laptop never reaches STT.
         try session.setCategory(
             .playAndRecord,
-            mode: .voiceChat,
-            options: [.allowBluetooth, .defaultToSpeaker, .mixWithOthers]
+            mode: .default,
+            options: [.defaultToSpeaker]
         )
         try session.setActive(true, options: [])
+        if let builtin = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+            try? session.setPreferredInput(builtin)
+        }
+        try? session.overrideOutputAudioPort(.speaker)
 
         engine.reset()
         let input = engine.inputNode
