@@ -34,7 +34,7 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
   const questions: Array<{ id: string; q: string }> = []
   const notes: string[] = []
   const summaries: string[] = []
-  const originals: Array<{ id: string; text: string }> = []
+  const originals: Array<{ id: string; text: string; ts: string }> = []
   const translations: string[] = []
 
   items.forEach((item, i) => {
@@ -43,7 +43,7 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
     const id = item.qid || `${session.id}-${i}`
     if (item.kind === 'transcript') {
       lines.push({ id, ts: formatItemTs(item, lines.length), text, at: Date.parse(item.at || '') || Date.now() })
-      originals.push({ id, text })
+      originals.push({ id, text, ts: formatItemTs(item, originals.length) })
     } else if (item.kind === 'question') {
       questions.push({ id, q: text })
     } else if (item.kind === 'answer' || item.kind === 'listen_ask') {
@@ -65,7 +65,7 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
 
   const pairs: TranslatePair[] = originals.map((row, i) => ({
     id: row.id,
-    ts: formatItemTs(items[i], i),
+    ts: row.ts,
     original: row.text,
     translation: translations[i] || '',
   }))

@@ -26,7 +26,7 @@
 	<string>com.nodpilot.app</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Nod records from the Apple Watch microphone so you can capture a meeting or lecture from your wrist. Audio is sent to your iPhone to transcribe.</string>
-	<key>UIBackgroundModes</key>
+	<key>WKBackgroundModes</key>
 	<array>
 		<string>audio</string>
 	</array>

@@ -1,7 +1,7 @@
 import { registerPlugin } from '@capacitor/core'
 import { isNativeApp } from './native'
 
-type WatchCommand = { action?: string }
+type WatchCommand = { action?: string; mode?: string }
 type WatchPcm = { data?: string }
 
 type WatchHistItem = { id: string; title: string; text: string }
@@ -32,6 +32,52 @@ export function watchAction(raw: unknown): 'start' | 'stop' | 'record' | 'pause'
   return raw === 'start' || raw === 'stop' || raw === 'record' || raw === 'pause' || raw === 'resume' || raw === 'speak' || raw === 'tts_live' || raw === 'tts_tap' || raw === 'tts_female' || raw === 'tts_male' ? raw : ''
 }
 
+export type WatchListenMode = 'meeting' | 'lecture' | 'interview' | 'translate'
+
+/** Watch picker values. Unknown leftovers must not change the phone workspace. */
+export function watchListenMode(raw: unknown): WatchListenMode | '' {
+  const value = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+  return value === 'meeting' || value === 'lecture' || value === 'interview' || value === 'translate' ? value : ''
+}
+
+export function watchWorkspaceForMode(mode: WatchListenMode): {
+  workspace: 'interview' | 'meeting' | 'translate'
+  scene?: 'meeting' | 'lecture' | 'interview'
+} {
+  if (mode === 'translate') return { workspace: 'translate' }
+  if (mode === 'interview') return { workspace: 'interview', scene: 'interview' }
+  if (mode === 'lecture') return { workspace: 'meeting', scene: 'lecture' }
+  return { workspace: 'meeting', scene: 'meeting' }
+}
+
+/**
+ * Mode chips travel with Listen/Record only.
+ * Pause / Resume / Done / leftover file must not switch Meeting / Interview / Translate.
+ */
+export function watchListenControlShouldApplyMode(input: {
+  action: string
+  sessionPaused: boolean
+  run: string
+}): boolean {
+  if (input.action !== 'start' && input.action !== 'record') return false
+  if (input.sessionPaused) return false
+  if (input.action === 'record' && (input.run === 'listen' || input.run === 'record')) return false
+  return true
+}
+
+/** Apply Watch mode only when it differs from the phone. Empty/unknown = keep phone mode. */
+export function watchShouldApplyMode(
+  raw: unknown,
+  current: { workspaceMode: string; listenScene: string },
+): { workspace: 'interview' | 'meeting' | 'translate'; scene?: 'meeting' | 'lecture' | 'interview' } | null {
+  const mode = watchListenMode(raw)
+  if (!mode) return null
+  const next = watchWorkspaceForMode(mode)
+  if (next.workspace !== current.workspaceMode) return next
+  if (next.scene && next.scene !== current.listenScene) return next
+  return null
+}
+
 export function isWatchMicPreferred(): boolean {
   return preferWatchMic
 }
@@ -54,6 +100,26 @@ export function watchPcmShouldClaimMic(): boolean {
 /** A leftover Watch file transfer is PCM only. It must not start_listen. */
 export function watchFileShouldStartListen(): boolean {
   return false
+}
+
+/** Opening the Watch app delivers leftover speech files/context. Those must not play. */
+export function watchSpeechShouldPlay(source: 'live' | 'file' | 'context' | 'queued'): boolean {
+  return source === 'live'
+}
+
+/** Screen-off recording: only buffer PCM that did not go out live. */
+export function watchPcmShouldBuffer(reachable: boolean): boolean {
+  return !reachable
+}
+
+/** A drop while Listen is running must allow the unsent tail to transferFile. */
+export function watchLiveStreamShouldReset(listening: boolean, reachable: boolean): boolean {
+  return listening && !reachable
+}
+
+/** Done must send leftover PCM even if some chunks already went live. */
+export function watchFlushShouldSend(pendingBytes: number): boolean {
+  return pendingBytes > 0
 }
 
 const LISTEN_CMDS = new Set(['start', 'stop', 'record', 'pause', 'resume'])
@@ -97,9 +163,9 @@ function deliverPcm(data: string): void {
 }
 
 export function installWatchRemote(handlers: {
-  onStart: () => void
+  onStart: (mode?: string) => void
   onStop: () => void
-  onRecord: () => void
+  onRecord: (mode?: string) => void
   onPause: () => void
   onResume: () => void
   onSpeak: () => void
@@ -115,13 +181,14 @@ export function installWatchRemote(handlers: {
     const command = await NodWatch.addListener('command', (ev) => {
       if (gone) return
       const action = watchAction(ev.action)
+      const mode = watchListenMode(ev.mode)
       if (action === 'start') {
         setPreferWatchMic(true)
-        handlers.onStart()
+        handlers.onStart(mode || undefined)
       }
       if (action === 'record') {
         setPreferWatchMic(true)
-        handlers.onRecord()
+        handlers.onRecord(mode || undefined)
       }
       if (action === 'pause') {
         handlers.onPause()

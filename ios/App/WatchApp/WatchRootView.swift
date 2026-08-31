@@ -13,7 +13,10 @@ struct WatchRootView: View {
                 alwaysOnFrozen(title: "Paused")
             } else {
                 TabView(selection: $page) {
-                    livePage.tag(0)
+                    NavigationStack {
+                        livePage
+                    }
+                    .tag(0)
                     historyPage.tag(1)
                 }
             }
@@ -69,6 +72,9 @@ struct WatchRootView: View {
                     Text(session.listening ? "Listening" : session.paused ? "Paused" : "Ready")
                         .font(.caption2.weight(.semibold))
                 }
+                if !session.listening && !session.paused {
+                    modePicker
+                }
                 if session.listening || session.paused {
                     HStack(spacing: 8) {
                         Image("PetShiba")
@@ -109,6 +115,11 @@ struct WatchRootView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if session.listening || session.paused {
+                    Text(WatchPhoneSession.modeLabel(session.mode))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Color(red: 0, green: 0.82, blue: 1))
+                }
                 if session.listening {
                     Button("Pause") {
                         session.pause()
@@ -140,6 +151,20 @@ struct WatchRootView: View {
             }
             .padding(.horizontal, 4)
         }
+    }
+
+    private var modePicker: some View {
+        Picker("Mode", selection: Binding(
+            get: { session.mode },
+            set: { session.setMode($0) }
+        )) {
+            Text("Meeting").tag("meeting")
+            Text("Lecture").tag("lecture")
+            Text("Interview").tag("interview")
+            Text("Translate").tag("translate")
+        }
+        .pickerStyle(.navigationLink)
+        .tint(Color(red: 0, green: 0.82, blue: 1))
     }
 
     private var historyPage: some View {

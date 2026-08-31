@@ -123,13 +123,16 @@ def _issuer_allowed(issuer: str) -> bool:
     if not issuer:
         return False
     expected = _frontend_api()
-    host = urlparse(issuer).hostname or ""
-    if expected and (host == expected or issuer.rstrip("/") == f"https://{expected}"):
-        return True
-    if expected:
-        log.warning("clerk iss mismatch iss=%s expected=%s", host, expected)
+    if not expected:
+        # No publishable key means we cannot name the legitimate issuer.
+        # Fail closed: accepting "clerk" or ".accounts.dev" on a substring
+        # would let a self-signed token from an attacker's JWKS through.
         return False
-    return "clerk" in issuer.lower() or host.endswith(".accounts.dev")
+    host = urlparse(issuer).hostname or ""
+    if host == expected or issuer.rstrip("/") == f"https://{expected}":
+        return True
+    log.warning("clerk iss mismatch iss=%s expected=%s", host, expected)
+    return False
 
 
 @lru_cache(maxsize=8)

@@ -9,7 +9,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
 
     weak var plugin: NodWatchPlugin?
     private(set) var jsReady = false
-    private var pending: [(action: String, at: Double?, live: Bool)] = []
+    private var pending: [(action: String, at: Double?, live: Bool, mode: String)] = []
     private var pendingPcm: [String] = []
     private var lastListening = false
     private var lastHint = "Ready"
@@ -48,7 +48,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let now = Date().timeIntervalSince1970
         for item in queued {
             if Self.shouldRunWatchCommand(item.action, at: item.at, live: item.live, now: now) {
-                emit(item.action)
+                emit(item.action, mode: item.mode)
             }
         }
         let pcm = pendingPcm
@@ -97,6 +97,11 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
     }
 
+    static func watchListenMode(_ raw: String) -> String {
+        let value = raw.lowercased()
+        return ["meeting", "lecture", "interview", "translate"].contains(value) ? value : ""
+    }
+
     /// Live sendMessage is a Watch tap. Queued leftovers need a fresh `at`.
     static func shouldRunWatchCommand(_ action: String, at: Double?, live: Bool, now: Double) -> Bool {
         let listenCtl = action == "start" || action == "stop" || action == "record" || action == "pause" || action == "resume"
@@ -114,13 +119,14 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let allowed = ["stop", "start", "record", "pause", "resume", "speak", "tts_live", "tts_tap", "tts_female", "tts_male"]
         let action = allowed.contains(raw) ? raw : ""
         guard !action.isEmpty else { return }
+        let mode = Self.watchListenMode(message["mode"] as? String ?? "")
         let at = message["at"] as? Double
         let now = Date().timeIntervalSince1970
         guard Self.shouldRunWatchCommand(action, at: at, live: live, now: now) else { return }
         if jsReady {
-            emit(action)
+            emit(action, mode: mode)
         } else {
-            pending.append((action, at, live))
+            pending.append((action, at, live, mode))
         }
     }
 
@@ -137,15 +143,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     func playSpeech(_ data: Data, finished: ((Error?) -> Void)? = nil) {
         if WCSession.isSupported() {
             let session = WCSession.default
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent("nod-speech.mp3")
-            do {
-                try data.write(to: url, options: .atomic)
-                if session.activationState == .activated {
-                    session.transferFile(url, metadata: ["kind": "speech"])
-                }
-            } catch {
-                /* watch may be locked */
-            }
+            // Live only. transferFile leftovers play the next time the Watch app opens.
             if session.isReachable, data.count <= 80_000 {
                 session.sendMessage(["speech": data.base64EncodedString()], replyHandler: nil, errorHandler: nil)
             }
@@ -215,8 +213,12 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
     }
 
-    private func emit(_ action: String) {
-        plugin?.notifyListeners("command", data: ["action": action])
+    private func emit(_ action: String, mode: String = "") {
+        var data: [String: Any] = ["action": action]
+        if !mode.isEmpty {
+            data["mode"] = mode
+        }
+        plugin?.notifyListeners("command", data: data)
     }
 
     private func emitPcm(_ data: String) {

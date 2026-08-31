@@ -2,8 +2,9 @@ import AVFoundation
 import Combine
 import Foundation
 import WatchConnectivity
+import WatchKit
 
-final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
+final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WKExtendedRuntimeSessionDelegate {
     static let shared = WatchPhoneSession()
 
     @Published var listening = false
@@ -17,6 +18,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
     @Published var reachable = false
     @Published var speechLive = false
     @Published var speechVoice = "female"
+    @Published var mode = WatchPhoneSession.storedMode()
 
     private var speechPlayer: AVAudioPlayer?
 
@@ -28,7 +30,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
 
     private var pendingPcm = Data()
     private var liveStreamed = false
+    private let pcmLock = NSLock()
     private let maxPending = 8 * 1024 * 1024
+    private var runtime: WKExtendedRuntimeSession?
 
     override private init() {
         super.init()
@@ -58,6 +62,31 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
         )
     }
 
+    private static let modeKey = "nod.watch.listenMode"
+
+    private static func storedMode() -> String {
+        let raw = UserDefaults.standard.string(forKey: modeKey) ?? "meeting"
+        return ["meeting", "lecture", "interview", "translate"].contains(raw) ? raw : "meeting"
+    }
+
+    static func modeLabel(_ id: String) -> String {
+        switch id {
+        case "lecture": return "Lecture"
+        case "interview": return "Interview"
+        case "translate": return "Translate"
+        default: return "Meeting"
+        }
+    }
+
+    func setMode(_ next: String) {
+        guard ["meeting", "lecture", "interview", "translate"].contains(next) else { return }
+        mode = next
+        UserDefaults.standard.set(next, forKey: Self.modeKey)
+        if !listening, !paused {
+            hint = "\(Self.modeLabel(next)) · tap Listen"
+        }
+    }
+
     func toggle() {
         if paused {
             resume()
@@ -78,8 +107,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
         if WatchRecorder.shared.isRunning {
             return
         }
-        pendingPcm.removeAll(keepingCapacity: true)
-        liveStreamed = false
+        resetPcmBuffer()
         elapsedMs = 0
         send(action: "record")
         beginMic(hint: "Recording · Pause anytime, Done for report")
@@ -91,6 +119,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
             elapsedMs = Date().timeIntervalSince(startedAt)
         }
         WatchRecorder.shared.stop()
+        stopRuntime()
         listening = false
         paused = true
         WatchGlanceStore.setPaused(elapsed: elapsedMs)
@@ -143,6 +172,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
     func finish() {
         paused = false
         WatchRecorder.shared.stop()
+        stopRuntime()
         listening = false
         startedAt = nil
         elapsedMs = 0
@@ -150,13 +180,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
         hint = "Ready"
         send(action: "stop")
         flushUnsent()
-        pendingPcm.removeAll()
-        liveStreamed = false
+        resetPcmBuffer()
     }
 
     private func startRecording() {
-        pendingPcm.removeAll(keepingCapacity: true)
-        liveStreamed = false
+        resetPcmBuffer()
         elapsedMs = 0
         send(action: "start")
         beginMic(hint: reachable ? "Watch mic" : "Recording on Watch")
@@ -167,6 +195,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let error {
+                    self.stopRuntime()
                     self.listening = false
                     self.paused = false
                     self.startedAt = nil
@@ -182,38 +211,123 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
                 }
                 WatchGlanceStore.setStartedAt(self.startedAt)
                 self.hint = hint
+                self.startRuntime()
             }
         }
     }
 
-    private func forwardPcm(_ data: Data) {
+    static func pcmShouldBuffer(reachable: Bool) -> Bool {
+        !reachable
+    }
+
+    static func liveStreamShouldReset(listening: Bool, reachable: Bool) -> Bool {
+        listening && !reachable
+    }
+
+    static func flushShouldSend(pendingBytes: Int) -> Bool {
+        pendingBytes > 0
+    }
+
+    private func resetPcmBuffer() {
+        pcmLock.lock()
+        pendingPcm.removeAll(keepingCapacity: true)
+        liveStreamed = false
+        pcmLock.unlock()
+    }
+
+    private func bufferUnsent(_ data: Data) {
+        pcmLock.lock()
+        liveStreamed = false
         if pendingPcm.count < maxPending {
             pendingPcm.append(data)
         }
+        pcmLock.unlock()
+    }
+
+    private func takeUnsentPcm() -> Data {
+        pcmLock.lock()
+        defer { pcmLock.unlock() }
+        guard Self.flushShouldSend(pendingBytes: pendingPcm.count) else { return Data() }
+        let data = pendingPcm
+        pendingPcm.removeAll()
+        liveStreamed = false
+        return data
+    }
+
+    private func forwardPcm(_ data: Data) {
+        guard !data.isEmpty else { return }
         let session = WCSession.default
-        guard session.activationState == .activated, session.isReachable else { return }
+        let reachable = session.activationState == .activated && session.isReachable
+        if Self.pcmShouldBuffer(reachable: reachable) {
+            bufferUnsent(data)
+            return
+        }
+        pcmLock.lock()
         liveStreamed = true
-        session.sendMessage(["pcm": data.base64EncodedString()], replyHandler: nil, errorHandler: nil)
+        pcmLock.unlock()
+        session.sendMessage(["pcm": data.base64EncodedString()], replyHandler: nil, errorHandler: { [weak self] _ in
+            self?.bufferUnsent(data)
+        })
     }
 
     private func flushUnsent() {
-        guard !liveStreamed, !pendingPcm.isEmpty else { return }
+        let data = takeUnsentPcm()
+        guard !data.isEmpty else { return }
         let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nod-watch.pcm")
         do {
-            try pendingPcm.write(to: url, options: .atomic)
+            try data.write(to: url, options: .atomic)
             WCSession.default.transferFile(url, metadata: ["kind": "pcm16", "sr": "16000"])
         } catch {
-            WCSession.default.transferUserInfo(["pcm": pendingPcm.base64EncodedString()])
+            WCSession.default.transferUserInfo(["pcm": data.base64EncodedString()])
+        }
+    }
+
+    private func startRuntime() {
+        runtime?.invalidate()
+        let session = WKExtendedRuntimeSession()
+        session.delegate = self
+        session.start()
+        runtime = session
+    }
+
+    private func stopRuntime() {
+        runtime?.invalidate()
+        runtime = nil
+    }
+
+    func extendedRuntimeSessionDidStart(_ extendedRuntimeSession: WKExtendedRuntimeSession) {}
+
+    func extendedRuntimeSessionWillExpire(_ extendedRuntimeSession: WKExtendedRuntimeSession) {
+        DispatchQueue.main.async {
+            guard self.listening else { return }
+            self.startRuntime()
+        }
+    }
+
+    func extendedRuntimeSession(
+        _ extendedRuntimeSession: WKExtendedRuntimeSession,
+        didInvalidateWith reason: WKExtendedRuntimeSessionInvalidationReason,
+        error: Error?
+    ) {
+        DispatchQueue.main.async {
+            if self.runtime === extendedRuntimeSession {
+                self.runtime = nil
+            }
+            guard self.listening, reason == .expired, self.runtime == nil else { return }
+            self.startRuntime()
         }
     }
 
     func send(action: String) {
-        let payload: [String: Any] = ["action": action, "at": Date().timeIntervalSince1970]
+        var payload: [String: Any] = ["action": action, "at": Date().timeIntervalSince1970]
+        if action == "start" || action == "record" {
+            payload["mode"] = mode
+        }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         if session.isReachable {
             session.sendMessage(payload, replyHandler: { [weak self] reply in
-                DispatchQueue.main.async { self?.apply(reply) }
+                DispatchQueue.main.async { self?.apply(reply, live: false) }
             }, errorHandler: { _ in
                 session.transferUserInfo(payload)
             })
@@ -231,7 +345,12 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
         }
     }
 
-    private func apply(_ payload: [String: Any]) {
+    /// Leftover file / application context must not play when the Watch app opens.
+    static func speechShouldPlay(live: Bool) -> Bool {
+        live
+    }
+
+    private func apply(_ payload: [String: Any], live: Bool) {
         if let hint = payload["hint"] as? String, !hint.isEmpty, !paused {
             self.hint = hint
         }
@@ -241,7 +360,10 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
         if let translation = payload["translation"] as? String {
             self.translation = translation
         }
-        if let speech = payload["speech"] as? String, let data = Data(base64Encoded: speech), !data.isEmpty {
+        if Self.speechShouldPlay(live: live),
+           let speech = payload["speech"] as? String,
+           let data = Data(base64Encoded: speech),
+           !data.isEmpty {
             playSpeech(data)
         }
         if let rows = payload["history"] as? [Any] {
@@ -268,6 +390,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
     func sessionReachabilityDidChange(_ session: WCSession) {
         DispatchQueue.main.async {
             self.reachable = session.isReachable
+            if Self.liveStreamShouldReset(listening: self.listening, reachable: session.isReachable) {
+                self.pcmLock.lock()
+                self.liveStreamed = false
+                self.pcmLock.unlock()
+            }
             if self.listening {
                 self.hint = session.isReachable ? "Watch mic" : "Recording on Watch"
             } else if self.paused {
@@ -277,21 +404,20 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate {
     }
 
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
-        DispatchQueue.main.async { self.apply(message) }
+        DispatchQueue.main.async { self.apply(message, live: true) }
     }
 
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
-        DispatchQueue.main.async { self.apply(applicationContext) }
+        DispatchQueue.main.async { self.apply(applicationContext, live: false) }
+    }
+
+    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        DispatchQueue.main.async { self.apply(userInfo, live: false) }
     }
 
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
-        guard let data = try? Data(contentsOf: file.fileURL), !data.isEmpty else { return }
-        let kind = (file.metadata?["kind"] as? String) ?? ""
-        DispatchQueue.main.async {
-            if kind == "speech" {
-                self.playSpeech(data)
-            }
-        }
+        // Leftover speech files are delivered on Watch launch. Never auto-play.
+        guard (file.metadata?["kind"] as? String) == "speech" else { return }
     }
 
     #if os(iOS)

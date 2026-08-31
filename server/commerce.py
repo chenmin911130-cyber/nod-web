@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse, Response as RawResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from server.db import AuditLog, Feedback, Order, ResetToken, User, db_session, utcnow
 from server.mailer import send_reset_email
@@ -168,7 +169,13 @@ def register(
             recording_consent_at=utcnow() if body.consent else None,
         )
         db.add(user)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError:
+            # Two concurrent signups can both pass the duplicate check above,
+            # then race to insert the same email. Turn the loser into 409
+            # instead of a 500.
+            raise HTTPException(409, "That email is already registered") from None
         db.expunge(user)
     token = _set_session(response, request, user)
     log.info("register user=%s", user.id)

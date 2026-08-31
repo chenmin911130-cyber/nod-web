@@ -28,6 +28,9 @@ description: >-
 | `_cancel` / `_gen_seq` | LLM 生成 | 停听不得取消正在写的答案 |
 | `start_listen` / `stop_listen` | Meeting / Interview / Translate | 旧进程或漏掉的 command 会表现为「不能听」 |
 | 手表残留 file / queued start | iPhone 听写 | 不得自动 `start_listen`，也不得 `preferWatchMic`；只有手表当场 Listen/Record 才能走手表麦 |
+| 手表残留 speech file / context | 打开 Watch | 不得自动播放上一句 TTS；不要再 `transferFile` 排队语音；只有当场 live sendMessage 才能播 |
+| 手表息屏录音 / pendingPcm / 断连 flush | Watch 麦 → 手机听写 | `WKBackgroundModes=audio` + 听写中起 `WKExtendedRuntimeSession`；`pendingPcm` 必须加锁；断连要把 `liveStreamed` 复位并只 flush 未发出的尾包；flush 的 PCM file 仍不得 `start_listen` |
+| 手表模式 Meeting / Lecture / Interview / Translate | 手机 workspace + `start_listen` | 只在当场 Listen/Record 且未 Pause 时切模式；Pause / Resume / Done / 残留 file 不得改 workspace；空/未知 mode 保持手机当前模式；Translate 不得覆盖 `listenScene`；切模式不得单独 `start_listen`，必须仍走现有 Listen 路径 |
 | 手机麦 dummy / 无 PCM | Meeting / Interview / Translate | 手机 Start 必须重开 NodMic；听写中 4 秒无 PCM 必须报错，不能静默 Listening |
 | `inQa` / rail | Interview 侧栏 | 只控制显隐，不得 `stop_listen` 或 `cancel_generate` |
 | `done` / `error` | 前端收尾 | 任何提前 `return` 或 `_cancel` 必须发 `done` 或 `error` |
@@ -62,6 +65,12 @@ description: >-
 - 手机 Start Listening → 必须出 PCM 或明确报 Microphone is silent，不能只亮 Listening
 - 今天没碰手表时，打开 App 不得自己开始听写
 - 手表 Listen/Record 仍能用手表麦；手机再点 Start 必须抢回手机麦
+- 手表选 Interview / Translate / Lecture 再 Listen：手机切到对应页再 `start_listen`，不能停在旧 Meeting 页
+- 手表 Pause / Resume / Done：手机模式不变，不能把问答 busy 清掉或误切 Translate
+- 残留 queued `start` + mode 仍受 30s 时间戳限制，不得自己切模式并听写
+- 打开手表 Nod 不得自动播放上一句语音；手机 Play / Stop 仍只控制手机端 TTS
+- 改手表界面后必须把 WatchApp 直接装到手表（只装 iPhone 常会留下旧 Live / Play，看不到模式选择）
+- 手表息屏后 Listen 必须还能录；断连后 Done 要把未发出的 PCM 传给手机，不能因为曾经 liveStreamed 就丢尾包
 
 **空 / 失败**
 

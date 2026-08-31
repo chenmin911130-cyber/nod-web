@@ -16,7 +16,7 @@ import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
 import { api as authApi, fetchMe } from './auth'
 import { isNativeApp, nativeGo } from './native'
-import { installWatchRemote, pushWatchStatus, takePhoneMic } from './watch'
+import { installWatchRemote, pushWatchStatus, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode } from './watch'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
 import { shouldGenerateAutoReport } from './recordReport'
@@ -900,6 +900,7 @@ export default function App() {
   const recordHeard = useRef(false)
   const sessionPaused = useRef(false)
   const watchRestoreTried = useRef(false)
+  const handleModeRef = useRef<(mode: WorkspaceMode, scene?: ListenScene) => void>(() => undefined)
   const [watchReportOpen, setWatchReportOpen] = useState(false)
   const [watchReportReveal, setWatchReportReveal] = useState(0)
   const showWatchReport = () => {
@@ -1037,37 +1038,58 @@ export default function App() {
 
   useEffect(() => {
     if (!isNativeApp()) return
+    const applyWatchMode = (raw?: string) => {
+      const s = stateRef.current
+      const next = watchShouldApplyMode(raw, s)
+      if (!next) return
+      handleModeRef.current(next.workspace, next.scene)
+      stateRef.current = {
+        ...stateRef.current,
+        workspaceMode: next.workspace,
+        listenScene: next.scene ?? (next.workspace === 'interview' ? 'interview' : stateRef.current.listenScene),
+      }
+    }
     return installWatchRemote({
-      onStart: () => {
-        if (sessionPaused.current) {
+      onStart: (mode) => {
+        const s = stateRef.current
+        if (!watchListenControlShouldApplyMode({ action: 'start', sessionPaused: sessionPaused.current, run: s.run })) {
           guardMic(() => startListen({ fromWatch: true }))
           return
         }
+        applyWatchMode(mode)
         watchAutoNotes.current = true
         recordHeard.current = false
         watchRestoreTried.current = false
         clearWatchReport()
         setWatchReportOpen(false)
+        const workspace = watchShouldApplyMode(mode, s)?.workspace ?? s.workspaceMode
+        if (workspace === 'meeting' && (s.meetingEnded || s.meetingStartedAt == null)) {
+          dispatch({ type: 'listen_new' })
+        }
         guardMic(() => startListen({ fromWatch: true }))
       },
-      onRecord: () => {
-        if (sessionPaused.current) {
-          guardMic(() => startListen({ fromWatch: true }))
+      onRecord: (mode) => {
+        const s = stateRef.current
+        if (!watchListenControlShouldApplyMode({ action: 'record', sessionPaused: sessionPaused.current, run: s.run })) {
+          if (sessionPaused.current) {
+            guardMic(() => startListen({ fromWatch: true }))
+            return
+          }
+          if (s.run === 'listen' || s.run === 'record') {
+            sessionPaused.current = false
+            stopListen()
+          }
           return
         }
+        applyWatchMode(mode)
         watchAutoNotes.current = true
         autoReport.current = true
         recordHeard.current = false
         watchRestoreTried.current = false
         clearWatchReport()
         setWatchReportOpen(false)
-        const s = stateRef.current
-        if (s.run === 'listen' || s.run === 'record') {
-          sessionPaused.current = false
-          stopListen()
-          return
-        }
-        if (s.workspaceMode === 'meeting' && (s.meetingEnded || s.meetingStartedAt == null)) {
+        const workspace = watchShouldApplyMode(mode, s)?.workspace ?? s.workspaceMode
+        if (workspace === 'meeting' && (s.meetingEnded || s.meetingStartedAt == null)) {
           dispatch({ type: 'listen_new' })
         }
         guardMic(() => startListen({ fromWatch: true }))
@@ -1613,10 +1635,13 @@ export default function App() {
             ? 'Mode · Translate'
             : mode === 'interview'
               ? 'Mode · Q&A'
-              : 'Mode · AI Listening Assistant',
+              : nextScene === 'lecture'
+                ? 'Mode · Lecture'
+                : 'Mode · AI Listening Assistant',
       },
     })
   }, [])
+  handleModeRef.current = handleMode
 
   const handlePrimary = useCallback(() => {
     const s = stateRef.current
