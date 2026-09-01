@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit && npm test",
     "test": "for f in src/*.test.ts src/landing/*.test.ts; do echo \"› $f\"; tsx \"$f\" || exit 1; done",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@capacitor/app": "^7.1.0",
@@ -23,6 +25,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",

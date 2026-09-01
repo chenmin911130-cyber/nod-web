@@ -1,0 +1,87 @@
+name: CI
+
+# Every push / PR: backend unit+serial tests, frontend tests, and Playwright
+# E2E (fast, all mocked — no real STT/LLM/Stripe calls, no real data/nod.db).
+# Matches the production stack (Dockerfile uses python:3.12 + node:20).
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend deps
+        run: pip install -r requirements.txt
+      - name: Run pytest
+        env:
+          DATA_DIR: /tmp/nod-ci-data
+          ASSEMBLYAI_API_KEY: test
+          DEEPSEEK_API_KEY: test
+          OPENROUTER_API_KEY: test
+          SENTRY_DSN: ""
+        run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install node modules
+        working-directory: web
+        run: npm ci
+      - name: Build (typecheck + vite build)
+        working-directory: web
+        run: npm run build
+      - name: Run frontend unit tests (tsx)
+        working-directory: web
+        run: npm test
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: [backend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install backend deps
+        run: pip install -r requirements.txt
+      - name: Install node modules
+        working-directory: web
+        run: npm ci
+      - name: Build frontend
+        working-directory: web
+        run: npm run build
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Run Playwright E2E
+        working-directory: web
+        env:
+          CI: "true"
+          # No .venv in CI: system python is installed via pip in a prior step.
+          PYTHON: python
+        run: npx playwright test
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: web/playwright-report/
+          retention-days: 7
