@@ -29,6 +29,8 @@ description: >-
 | `start_listen` / `stop_listen` | Meeting / Interview / Translate | 旧进程或漏掉的 command 会表现为「不能听」 |
 | 手表残留 file / queued start | iPhone 听写 | 不得自动 `start_listen`，也不得 `preferWatchMic`；只有手表当场 Listen/Record 才能走手表麦 |
 | 手表残留 speech file / context | 打开 Watch | 不得自动播放上一句 TTS；不要再 `transferFile` 排队语音；只有当场 live sendMessage 才能播 |
+| Meeting 听写 TTS | iPhone 录音 | 语音播放只在 Translate：默认 Tap；点 Auto 必须先确认。Meeting / Interview 不得自动播。手表残留 tts_live 不得打开 Auto |
+| Meeting / Lecture 存档 | History | Meeting 侧栏 Save 紧挨 History（不要等 ended 才出现；不要在 Meeting 顶栏放 Save 或 Show notes）。点 Save 或 Stop/Pause 后弹出保存。笔记用 Live/Notes、Ask 或 Summarize 打开。Save 不得 `start_listen` 或清 busy。导出到 Files 用系统文件夹选择（iCloud / Drive），不得改听写状态。PDF 品牌是 Nodpilot，不是 Nod。History 只保留 30 天：打开列表时删掉 `started_at` 超过 30 天的会话和录音，不得改听写或 busy |
 | 手表息屏录音 / pendingPcm / 断连 flush | Watch 麦 → 手机听写 | `WKBackgroundModes=audio` + 听写中起 `WKExtendedRuntimeSession`；`pendingPcm` 必须加锁；断连要把 `liveStreamed` 复位并只 flush 未发出的尾包；flush 的 PCM file 仍不得 `start_listen` |
 | 手表模式 Meeting / Lecture / Interview / Translate | 手机 workspace + `start_listen` | 只在当场 Listen/Record 且未 Pause 时切模式；Pause / Resume / Done / 残留 file 不得改 workspace；空/未知 mode 保持手机当前模式；Translate 不得覆盖 `listenScene`；切模式不得单独 `start_listen`，必须仍走现有 Listen 路径 |
 | 手机麦 dummy / 无 PCM | Meeting / Interview / Translate | 手机 Start 必须重开 NodMic；听写中 4 秒无 PCM 必须报错，不能静默 Listening |
@@ -43,7 +45,7 @@ description: >-
 
 **Interview**
 
-- 空状态能看到 Start Listening
+- 空状态主听写圆钮标 Start；听写中标 Stop，旁边有 Pause；暂停后再点 Start 恢复。不要改成 Resume Listening
 - 打字提问 → 答案出现（不能停在 Waiting / Asking）
 - 再问第二条 → 两条都有对应答案
 - 听写中提问 → 停听 → 答案仍在生成或已经写完
@@ -51,8 +53,8 @@ description: >-
 
 **Meeting**
 
-- Start Listening → 状态变成 Stop / In meeting
-- Stop → 再 Start 或 Resume，没有 `Unknown command: start_listen`
+- Start → 状态变成 Stop / In meeting，并出现 Pause。点 Start 不得出现暂停黄圈（黄圈只在点过 Pause 之后）
+- Stop 或 Pause 后再 Start，没有 `Unknown command: start_listen`
 - 听写中 Ask / Summarize 仍能出结果
 
 **Translate**

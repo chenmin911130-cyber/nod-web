@@ -13,6 +13,7 @@ class HistoryKeepTests(unittest.TestCase):
         sess._manual = False
         sess.user_id = "user-1"
         sess.usage_session_id = "sess-1"
+        sess._workspace = "meeting"
         sess.pipeline = mock.Mock()
         sess.pipeline._cancel = threading.Event()
         sess.pipeline.usage_session_id = "sess-1"
@@ -47,3 +48,47 @@ class HistoryKeepTests(unittest.TestCase):
         discard.assert_called_once_with("user-1", "sess-1")
         self.assertIsNone(sess.usage_session_id)
         self.assertFalse(sess.pipeline._cancel.is_set())
+
+    def test_keep_history_then_resume_listen_reuses_same_session(self):
+        sess = self._session()
+        sess._consent_ok = True
+        sess._workspace = "meeting"
+        sess.cfg = {"stt": {"listen_scene": "meeting"}}
+        with (
+            mock.patch("server.meter.keep_usage_session"),
+            mock.patch("server.meter.is_session_kept", return_value=True),
+            mock.patch("server.meter.usage_snapshot", return_value={"ok": True}),
+            mock.patch("server.meter.open_usage_session", return_value=("sess-2", {"ok": True})) as opened,
+        ):
+            sess.keep_history()
+            ok = sess._ensure_usage()
+        self.assertTrue(ok)
+        self.assertEqual(sess.usage_session_id, "sess-1")
+        self.assertEqual(sess.pipeline.usage_session_id, "sess-1")
+        opened.assert_not_called()
+
+    def test_interview_stop_listen_does_not_offer_save(self):
+        sess = self._session()
+        sess._workspace = "interview"
+        sess.stop_listen()
+        types = [c.args[0]["type"] for c in sess.emit.call_args_list]
+        self.assertNotIn("save_prompt", types)
+
+    def test_translate_stop_listen_does_not_offer_save(self):
+        sess = self._session()
+        sess._workspace = "translate"
+        sess.stop_listen()
+        types = [c.args[0]["type"] for c in sess.emit.call_args_list]
+        self.assertNotIn("save_prompt", types)
+
+    def test_meeting_stop_listen_does_not_offer_save_after_keep(self):
+        sess = self._session()
+        with (
+            mock.patch("server.meter.keep_usage_session"),
+            mock.patch("server.meter.is_session_kept", return_value=True),
+        ):
+            sess.keep_history()
+            sess.emit.reset_mock()
+            sess.stop_listen()
+        types = [c.args[0]["type"] for c in sess.emit.call_args_list]
+        self.assertNotIn("save_prompt", types)

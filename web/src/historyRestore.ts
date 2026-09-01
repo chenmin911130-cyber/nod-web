@@ -25,6 +25,53 @@ export function modeOf(session: Pick<HistorySession, 'mode' | 'scene'>): Workspa
   return 'meeting'
 }
 
+/** History search is case-insensitive over title, scene, transcript, and notes. */
+export function historySessionMatches(
+  session: Pick<HistorySession, 'title' | 'mode' | 'scene' | 'copy_text' | 'started_at'> & {
+    items?: Array<{ text?: string }>
+  },
+  query: string,
+): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  const hay = [
+    session.title || '',
+    modeOf(session),
+    sceneOf(session),
+    session.copy_text || '',
+    session.started_at || '',
+    ...(session.items || []).map((item) => item.text || ''),
+  ]
+    .join('\n')
+    .toLowerCase()
+  return hay.includes(q)
+}
+
+/** Meeting / Lecture can save after Stop or Pause. Live listen and empty sessions do not. */
+export function sessionShouldOfferSave(input: {
+  workspaceMode: string
+  ended: boolean
+  kept: boolean
+  hasContent: boolean
+  listening?: boolean
+}): boolean {
+  if (input.workspaceMode !== 'meeting' || input.kept || !input.hasContent || input.listening) return false
+  return input.ended || !input.listening
+}
+
+/** Engine save_prompt only opens the Meeting / Lecture dialog, and never after Keep. */
+export function sessionShouldOpenSavePrompt(input: {
+  workspaceMode: string
+  kept: boolean
+}): boolean {
+  return input.workspaceMode === 'meeting' && !input.kept
+}
+
+/** Save commits the draft to History. Content is always kept; recording is optional. */
+export function sessionSaveKeep(opts: { audio?: boolean } = {}): { content: true; audio: boolean } {
+  return { content: true, audio: opts.audio !== false }
+}
+
 export function restoreFromSession(session: HistorySession): RestorePayload {
   const scene = sceneOf(session)
   const mode = modeOf(session)

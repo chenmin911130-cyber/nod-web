@@ -1,3 +1,4 @@
+import { pdfDownloadName } from './pdfBrand'
 import type { PdfBlock, PdfTheme } from './pdf'
 import { modeOf, sceneOf } from './historyRestore'
 
@@ -14,11 +15,11 @@ type PdfSession = {
 
 function pdfName(session: PdfSession): string {
   const listed = (session.files || []).find((file) => file.kind === 'pdf')?.name
-  if (listed) return listed
+  if (listed) return pdfDownloadName(listed)
   const scene = sceneOf(session)
   const label = scene.charAt(0).toUpperCase() + scene.slice(1)
   const stamp = (session.started_at || '').slice(0, 10) || 'session'
-  return `${label}-${stamp}.pdf`
+  return pdfDownloadName(`${label}-${stamp}`)
 }
 
 function themeOf(session: PdfSession): PdfTheme {
@@ -34,8 +35,7 @@ function formatTs(at: string): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-export async function downloadHistoryPdf(session: PdfSession): Promise<string> {
-  const { downloadPdf } = await import('./pdf')
+async function historyPdfArgs(session: PdfSession) {
   const scene = sceneOf(session)
   const mode = modeOf(session)
   const title = session.title || `${scene} session`
@@ -76,10 +76,26 @@ export async function downloadHistoryPdf(session: PdfSession): Promise<string> {
   }
 
   const when = session.started_at ? new Date(session.started_at).toLocaleString() : ''
-  return downloadPdf(title, blocks, {
-    theme: themeOf(session),
-    subtitle: `${scene} · ${mode}`,
-    meta: [when, session.stt_seconds ? `${Math.round(session.stt_seconds / 60)} min` : ''].filter(Boolean),
-    filename: pdfName(session),
-  })
+  return {
+    title,
+    blocks,
+    options: {
+      theme: themeOf(session),
+      subtitle: `${scene} · ${mode}`,
+      meta: [when, session.stt_seconds ? `${Math.round(session.stt_seconds / 60)} min` : ''].filter(Boolean),
+      filename: pdfName(session),
+    },
+  }
+}
+
+export async function renderHistoryPdf(session: PdfSession): Promise<{ bytes: Uint8Array; name: string }> {
+  const { renderPdfFile } = await import('./pdf')
+  const args = await historyPdfArgs(session)
+  return renderPdfFile(args.title, args.blocks, args.options)
+}
+
+export async function downloadHistoryPdf(session: PdfSession): Promise<string> {
+  const { downloadPdf } = await import('./pdf')
+  const args = await historyPdfArgs(session)
+  return downloadPdf(args.title, args.blocks, args.options)
 }

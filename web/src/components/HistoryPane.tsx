@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../auth'
-import { downloadHistoryPdf } from '../historyPdf'
-import { copyText, modeOf, sceneOf } from '../historyRestore'
+import { saveSessionToFiles } from '../sessionExport'
+import { copyText, historySessionMatches, modeOf, sceneOf } from '../historyRestore'
 
 export type HistoryItem = { kind: string; text: string; at?: string | null; qid?: string }
 export type HistoryFile = { kind: string; name: string; href: string }
@@ -37,9 +37,13 @@ export default function HistoryPane({
   const [copied, setCopied] = useState('')
   const [busyId, setBusyId] = useState('')
   const [pdfId, setPdfId] = useState('')
+  const [query, setQuery] = useState('')
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      setQuery('')
+      return
+    }
     setLoading(true)
     setErr('')
     void api<{ sessions: HistorySession[] }>('/api/account/history')
@@ -56,13 +60,13 @@ export default function HistoryPane({
     window.setTimeout(() => setCopied(''), 1600)
   }
 
-  const exportPdf = async (session: HistorySession) => {
+  const exportFiles = async (session: HistorySession) => {
     setPdfId(session.id)
     setErr('')
     try {
-      await downloadHistoryPdf(session)
+      await saveSessionToFiles(session)
     } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Could not export PDF')
+      setErr(ex instanceof Error ? ex.message : 'Could not save to Files')
     } finally {
       setPdfId('')
     }
@@ -90,7 +94,7 @@ export default function HistoryPane({
           <div>
             <div className="hist-kicker">History</div>
             <h2>Your sessions</h2>
-            <p className="hist-meta">Click a session to open it in the workspace. Copy or delete without opening.</p>
+            <p className="hist-meta">Click a session to open it in the workspace. Sessions stay for 30 days. Copy, Save to Files, or delete without opening.</p>
           </div>
           <button type="button" className="hist-close" onClick={onClose}>
             Close
@@ -99,11 +103,25 @@ export default function HistoryPane({
         {loading && <p className="hist-empty">Loading sessions…</p>}
         {err && <p className="hist-err">{err}</p>}
         {!loading && !err && sessions.length === 0 && (
-          <p className="hist-empty">No sessions yet. Save a session after listening.</p>
+          <p className="hist-empty">No sessions yet. Save a Meeting or Lecture after it ends. History keeps each session for 30 days.</p>
+        )}
+        {sessions.length > 0 && (
+          <label className="hist-search">
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search meetings, lectures, notes…"
+              aria-label="Search history"
+            />
+          </label>
+        )}
+        {!loading && !err && sessions.length > 0 && sessions.filter((s) => historySessionMatches(s, query)).length === 0 && (
+          <p className="hist-empty">No sessions match that search.</p>
         )}
         <div className="hist-body hist-body-pick">
           <ul className="hist-list">
-            {sessions.map((s) => (
+            {sessions.filter((s) => historySessionMatches(s, query)).map((s) => (
               <li key={s.id} className="hist-row">
                 <button
                   type="button"
@@ -124,9 +142,9 @@ export default function HistoryPane({
                   <button
                     type="button"
                     disabled={pdfId === s.id}
-                    onClick={() => void exportPdf(s)}
+                    onClick={() => void exportFiles(s)}
                   >
-                    {pdfId === s.id ? 'Saving…' : ((s.files || []).find((file) => file.kind === 'pdf')?.name || 'PDF')}
+                    {pdfId === s.id ? 'Saving…' : 'Save to Files'}
                   </button>
                   <button
                     type="button"
@@ -138,13 +156,7 @@ export default function HistoryPane({
                   </button>
                 </div>
                 {(s.files || []).some((file) => file.kind === 'audio') && (
-                  <p className="hist-files">
-                    {(s.files || []).filter((file) => file.kind === 'audio').map((file) => (
-                      <a key={file.href} href={file.href} download={file.name}>
-                        {file.name}
-                      </a>
-                    ))}
-                  </p>
+                  <p className="hist-files">Recording included when you Save to Files.</p>
                 )}
               </li>
             ))}

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -10,6 +10,7 @@ from server.security import new_id
 from server.settings import (
     DAILY_STT_SECONDS,
     GLOBAL_DAILY_BUDGET_USD,
+    HISTORY_RETENTION_DAYS,
     LLM_USD_PER_1K_IN,
     LLM_USD_PER_1K_OUT,
     PLANS,
@@ -217,8 +218,6 @@ def keep_usage_session(
         if not row or row.user_id != user_id:
             return
         row.kept = True
-        if row.ended_at is None:
-            row.ended_at = utcnow()
         if not keep_audio:
             delete_prefix(f"users/{user_id}/sessions/{session_id}/audio/")
             row.audio_key = ""
@@ -252,6 +251,25 @@ def delete_history_session(user_id: str, session_id: str) -> bool:
             return False
     discard_usage_session(user_id, session_id)
     return True
+
+
+def history_retention_cutoff(now: datetime | None = None) -> datetime:
+    return (now or utcnow()) - timedelta(days=HISTORY_RETENTION_DAYS)
+
+
+def purge_expired_history(user_id: str) -> None:
+    if not user_id:
+        return
+    cutoff = history_retention_cutoff()
+    with db_session() as db:
+        expired = db.execute(
+            select(UsageSession.id).where(
+                UsageSession.user_id == user_id,
+                UsageSession.started_at < cutoff,
+            )
+        ).scalars().all()
+    for session_id in expired:
+        discard_usage_session(user_id, session_id)
 
 
 def _ensure_row(db, build, exists) -> None:
@@ -373,6 +391,7 @@ def save_history(user_id: str, session_id: str | None, kind: str, text: str, qid
 
 
 def list_history(user_id: str, limit: int = 40) -> list[dict]:
+    purge_expired_history(user_id)
     with db_session() as db:
         sessions = db.execute(
             select(UsageSession)

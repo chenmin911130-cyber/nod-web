@@ -64,6 +64,16 @@ html.nod-native .side-rail {
   padding-right: max(8px, env(safe-area-inset-right));
 }
 
+html.nod-native .rail-primary-ring {
+  width: 58px;
+  height: 58px;
+}
+
+html.nod-native .rail-primary-ring svg {
+  width: 26px;
+  height: 26px;
+}
+
 html.nod-native .platforms,
 html.nod-native .desktop-status {
   display: none !important;
@@ -2108,6 +2118,13 @@ html.nod-web .ov-root {
   animation: rail-pulse 1.6s ease-in-out infinite;
 }
 
+.rail-primary.paused .rail-primary-ring {
+  border-color: rgba(251, 191, 36, 0.9);
+  color: #fde68a;
+  background: radial-gradient(circle at 50% 40%, rgba(251, 191, 36, 0.24), rgba(6, 12, 24, 0.2));
+  box-shadow: 0 0 18px rgba(251, 191, 36, 0.35);
+}
+
 .rail-primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -3990,7 +4007,7 @@ a.tb-menu-action {
     min-height: 64px;
     padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
     border-radius: 16px 16px 0 0;
-    overflow-x: hidden;
+    overflow-x: auto;
     overflow-y: hidden;
   }
 
@@ -4014,25 +4031,27 @@ a.tb-menu-action {
 
   .rail-primary {
     width: auto;
-    flex-direction: row;
-    gap: 8px;
+    flex-direction: column;
+    gap: 4px;
     flex: 0 0 auto;
   }
 
   .rail-primary-ring {
-    width: 48px;
-    height: 48px;
+    width: 58px;
+    height: 58px;
   }
 
   .rail-primary-ring svg {
-    width: 22px;
-    height: 22px;
+    width: 26px;
+    height: 26px;
   }
 
   .rail-primary-label {
-    font-size: 10px;
-    max-width: 64px;
-    line-height: 1.15;
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    max-width: none;
+    line-height: 1;
   }
 
   .rail-icon-btn {
@@ -4186,15 +4205,14 @@ a.tb-menu-action {
     padding-right: max(8px, env(safe-area-inset-right));
   }
 
-  .rail-primary-label,
   .rail-icon-btn span:last-child,
   .rail-sec-label {
     display: none;
   }
 
   .rail-primary-ring {
-    width: 40px;
-    height: 40px;
+    width: 48px;
+    height: 48px;
   }
 }
 
@@ -4253,6 +4271,7 @@ a.tb-menu-action {
 }
 
 .confirm-keep,
+.confirm-go,
 .confirm-clear {
   flex: 1;
   height: 36px;
@@ -4269,6 +4288,16 @@ a.tb-menu-action {
 
 .confirm-keep:hover {
   background: rgba(34, 211, 238, 0.08);
+}
+
+.confirm-go {
+  border: 1px solid rgba(91, 218, 244, 0.45);
+  background: rgba(91, 218, 244, 0.16);
+  color: #b8f4ff;
+}
+
+.confirm-go:hover {
+  background: rgba(91, 218, 244, 0.24);
 }
 
 .confirm-clear {
@@ -4328,6 +4357,7 @@ a.tb-menu-action {
 .listen-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   min-height: 48px;
   padding: 8px 10px;
@@ -5215,6 +5245,7 @@ a.tb-menu-action {
     gap: 6px;
     min-height: 44px;
     padding: 6px 8px;
+    flex-wrap: wrap;
   }
 
   .listen-controls .listen-icon-btn.listen-side-left,
@@ -5313,6 +5344,26 @@ a.tb-menu-action {
 .hist-detail h3 {
   margin: 6px 0 0;
   font: 650 20px/1.2 'Space Grotesk', sans-serif;
+}
+
+.hist-search {
+  display: block;
+  padding: 0 20px 12px;
+}
+
+.hist-search input {
+  width: 100%;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid #31506d;
+  background: #0e1d31;
+  color: #e8f2fb;
+  padding: 0 12px;
+  font: 500 13px/1 inherit;
+}
+
+.hist-search input::placeholder {
+  color: #7f92b2;
 }
 
 .hist-close,
@@ -5484,7 +5535,7 @@ a.tb-menu-action {
 .save-prompt {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 100;
   display: grid;
   place-items: center;
   background: rgba(4, 8, 14, 0.55);
@@ -5508,6 +5559,26 @@ a.tb-menu-action {
   margin: 0 0 18px;
   color: #91a6bf;
   font-size: 14px;
+}
+
+.save-prompt-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 16px;
+  color: #d7e6f5;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.save-prompt-opt b {
+  display: block;
+  margin-bottom: 2px;
+  color: #e8f2fb;
+}
+
+.save-prompt-opt span {
+  color: #91a6bf;
 }
 
 .save-prompt-actions {
