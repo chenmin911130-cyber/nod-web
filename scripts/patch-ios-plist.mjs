@@ -11,14 +11,14 @@ let xml = readFileSync(plistPath, 'utf8')
 const replacements = [
   [
     /<key>NSMicrophoneUsageDescription<\/key>\s*<string>[^<]*<\/string>/,
-    '<key>NSMicrophoneUsageDescription</key>\n\t<string>Nod uses the microphone to transcribe meetings, lectures, and interviews. Recording continues while the screen is locked if you already started listening.</string>',
+    '<key>NSMicrophoneUsageDescription</key>\n\t<string>Nodpilot uses the microphone to transcribe meetings, lectures, and interviews. Recording continues while the screen is locked if you already started listening.</string>',
   ],
 ]
 
 if (!xml.includes('NSMicrophoneUsageDescription')) {
   xml = xml.replace(
     '</dict>\n</plist>',
-    '\t<key>NSMicrophoneUsageDescription</key>\n\t<string>Nod uses the microphone to transcribe meetings, lectures, and interviews. Recording continues while the screen is locked if you already started listening.</string>\n</dict>\n</plist>',
+    '\t<key>NSMicrophoneUsageDescription</key>\n\t<string>Nodpilot uses the microphone to transcribe meetings, lectures, and interviews. Recording continues while the screen is locked if you already started listening.</string>\n</dict>\n</plist>',
   )
 } else {
   xml = xml.replace(replacements[0][0], replacements[0][1])
