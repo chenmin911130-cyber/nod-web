@@ -62,3 +62,15 @@ class KeepUsageSessionNullKeyTests(unittest.TestCase):
             self.assertTrue(row.kept)
             self.assertEqual(row.notes_key, "")
             self.assertTrue(row.audio_key)
+
+    def test_keep_leaves_session_open_for_later_transcript(self) -> None:
+        from server.meter import keep_usage_session, list_history, save_history
+
+        with mock.patch("server.meter.db_session", self.isolated), mock.patch("server.r2.delete_prefix"):
+            save_history("u1", "s1", "transcript", "hello")
+            keep_usage_session("u1", "s1")
+            save_history("u1", "s1", "transcript", "world")
+            sessions = list_history("u1")
+        self.assertEqual(len(sessions), 1)
+        self.assertIsNone(sessions[0]["ended_at"])
+        self.assertEqual([item["text"] for item in sessions[0]["items"]], ["hello", "world"])

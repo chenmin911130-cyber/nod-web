@@ -224,14 +224,14 @@ export function mastHtml(doc: ListenPdfDoc, slim: boolean): string {
   if (doc.theme === 'lecture') {
     const meta = [doc.date, doc.duration, doc.speakers.join(' + ')].filter(Boolean).join(' · ')
     if (slim) {
-      return `<header class="mast slim"><div class="top"><span>NOD · STUDY NOTES</span><span class="course">${escapeHtml(doc.date)}</span></div><h1>${escapeHtml(doc.title)}</h1></header>`
+      return `<header class="mast slim"><div class="top"><span>Nodpilot · STUDY NOTES</span><span class="course">${escapeHtml(doc.date)}</span></div><h1>${escapeHtml(doc.title)}</h1></header>`
     }
-    return `<header class="mast"><div class="top"><span>NOD · STUDY NOTES</span><span class="course">${escapeHtml(doc.exported)}</span></div><h1>${escapeHtml(doc.title)}</h1><div class="meta">${escapeHtml(meta)}</div><div class="rule"></div></header>`
+    return `<header class="mast"><div class="top"><span>Nodpilot · STUDY NOTES</span><span class="course">${escapeHtml(doc.exported)}</span></div><h1>${escapeHtml(doc.title)}</h1><div class="meta">${escapeHtml(meta)}</div><div class="rule"></div></header>`
   }
   if (slim) {
-    return `<header class="mast slim"><div><div class="brand">NOD</div><h1>${escapeHtml(doc.title)}</h1></div><div class="when"><strong>${escapeHtml(doc.date)}</strong></div></header>`
+    return `<header class="mast slim"><div><div class="brand">Nodpilot</div><h1>${escapeHtml(doc.title)}</h1></div><div class="when"><strong>${escapeHtml(doc.date)}</strong></div></header>`
   }
-  return `<header class="mast"><div class="rail"></div><div><div class="brand">NOD</div><div class="kind">MEETING NOTES</div><h1>${escapeHtml(doc.title)}</h1></div><div class="when"><strong>${escapeHtml(doc.date)}</strong>${doc.duration ? `${escapeHtml(doc.duration)}<br />` : ''}${escapeHtml(speakers)}</div></header>`
+  return `<header class="mast"><div class="rail"></div><div><div class="brand">Nodpilot</div><div class="kind">MEETING NOTES</div><h1>${escapeHtml(doc.title)}</h1></div><div class="when"><strong>${escapeHtml(doc.date)}</strong>${doc.duration ? `${escapeHtml(doc.duration)}<br />` : ''}${escapeHtml(speakers)}</div></header>`
 }
 
 export function chipsHtml(doc: ListenPdfDoc): string {
@@ -246,7 +246,7 @@ export function chipsHtml(doc: ListenPdfDoc): string {
 export function footerHtml(doc: ListenPdfDoc, page: number, total: number): string {
   const mid = doc.theme === 'lecture' ? 'CONCEPTS · REVISION · HOMEWORK' : 'DECISIONS · ACTIONS · FOLLOW-UPS'
   const kind = doc.theme === 'lecture' ? 'LECTURE' : 'MEETING'
-  return `<footer class="foot"><span>NOD · ${kind}</span><span>${mid}</span><span>${page} / ${total}</span></footer>`
+  return `<footer class="foot"><span>Nodpilot · ${kind}</span><span>${mid}</span><span>${page} / ${total}</span></footer>`
 }
 
 export function sectionChunks(doc: ListenPdfDoc): string[] {

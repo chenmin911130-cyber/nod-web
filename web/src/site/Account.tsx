@@ -175,7 +175,7 @@ export default function AccountPage() {
         <div className="site-card" style={{ marginTop: 18 }}>
           <div className="eyebrow">HISTORY</div>
           <h1>Your sessions</h1>
-          <p>Each listen session is saved here. Open one to read the transcript, answers, and any audio files.</p>
+          <p>Each listen session is saved here for 30 days. Open one to read the transcript, answers, and any audio files.</p>
           <div className="history-list">
             {sessions.length === 0 && <p>No sessions yet. Open the workspace to start one.</p>}
             {sessions.map((s) => {

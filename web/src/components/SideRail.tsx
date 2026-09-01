@@ -13,6 +13,9 @@ interface Props {
   onClose?: () => void
   onOpenHistory?: () => void
   onNewSession?: () => void
+  onSaveSession?: () => void
+  canSaveSession?: boolean
+  sessionSaved?: boolean
 }
 
 function MicIcon() {
@@ -34,6 +37,14 @@ function WaveIcon() {
       <line x1="13" y1="4" x2="13" y2="20" />
       <line x1="17" y1="7" x2="17" y2="17" />
       <line x1="21" y1="10" x2="21" y2="14" />
+    </svg>
+  )
+}
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M9 6.8v10.4L18 12z" />
     </svg>
   )
 }
@@ -62,6 +73,16 @@ function PdfIcon() {
       <path d="M6 3.5h6l3 3V16.5H6z" />
       <path d="M12 3.5V7h3" />
       <path d="M8 12h4M8 14.5h2.5" />
+    </svg>
+  )
+}
+
+function SaveIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 3.5h8.2L15.5 6v10.5H5z" />
+      <path d="M7 3.5V7h6V3.5" />
+      <path d="M7 16.5v-4.2h6v4.2" />
     </svg>
   )
 }
@@ -101,14 +122,8 @@ function HistoryIcon() {
   )
 }
 
-function primaryLabel(mode: WorkspaceMode, listening: boolean, paused = false): string {
-  if (mode === 'meeting') {
-    if (listening) return 'Stop Listening'
-    if (paused) return 'Resume Listening'
-    return 'Start Listening'
-  }
-  if (mode === 'translate') return listening ? 'Stop Listen' : 'Start Listen'
-  return listening ? 'Stop Listening' : 'Start Listening'
+function primaryLabel(listening: boolean): string {
+  return listening ? 'Stop' : 'Start'
 }
 
 export default function SideRail(props: Props) {
@@ -137,22 +152,25 @@ export default function SideRail(props: Props) {
         </button>
       )}
       <button
-        className={`rail-primary${primaryOn ? ' active' : ''}`}
+        className={`rail-primary${primaryOn ? ' active' : ''}${meetingPaused && !listening ? ' paused' : ''}`}
         onClick={props.onPrimary}
         disabled={primaryDisabled}
+        aria-label={primaryLabel(primaryOn)}
         title={
           mode === 'interview'
             ? (primaryOn ? 'Stop Auto Listen (F3)' : 'Start Auto Listen (F3)')
             : mode === 'translate'
               ? (listening ? 'Stop listening to system audio (F3)' : 'Listen to system audio (F3)')
-              : primaryLabel(mode, listening, meetingPaused)
+              : meetingPaused && !listening
+                ? 'Start'
+                : primaryLabel(listening)
         }
       >
         <span className="rail-primary-ring">
-          {mode === 'meeting' ? <WaveIcon /> : <MicIcon />}
+          {meetingPaused && !listening ? <PlayIcon /> : mode === 'meeting' ? <WaveIcon /> : <MicIcon />}
           {live && <MiniWave />}
         </span>
-        <span className="rail-primary-label">{primaryLabel(mode, primaryOn, meetingPaused)}</span>
+        <span className="rail-primary-label">{primaryLabel(primaryOn)}</span>
       </button>
 
       {mode === 'interview' && (
@@ -212,6 +230,17 @@ export default function SideRail(props: Props) {
         </>
       )}
 
+      {mode === 'meeting' && props.onSaveSession ? (
+        <button
+          type="button"
+          className={`rail-icon-btn${props.sessionSaved ? ' saved' : ''}`}
+          onClick={props.onSaveSession}
+          title={props.sessionSaved ? 'Open this session in History' : 'Save this session to History'}
+        >
+          <SaveIcon />
+          <span>Save</span>
+        </button>
+      ) : null}
       <button
         type="button"
         className="rail-icon-btn"

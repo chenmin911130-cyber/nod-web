@@ -1,3 +1,4 @@
+import { PDF_BRAND, pdfBrandMark, pdfDefaultTitle, pdfDownloadName } from './pdfBrand'
 import {
   chipsHtml,
   footerHtml,
@@ -109,7 +110,7 @@ const THEMES: Record<PdfTheme, Theme> = {
   },
 }
 
-export async function downloadPdf(title: string, blocks: PdfBlock[], options: PdfOptions = {}): Promise<string> {
+export async function renderPdfFile(title: string, blocks: PdfBlock[], options: PdfOptions = {}): Promise<{ bytes: Uint8Array; name: string }> {
   let pages: Array<{ jpeg: Uint8Array; w: number; h: number }> = []
   if (options.doc && (options.doc.theme === 'meeting' || options.doc.theme === 'lecture')) {
     try {
@@ -122,16 +123,19 @@ export async function downloadPdf(title: string, blocks: PdfBlock[], options: Pd
   if (pages.length === 0) throw new Error('Nothing to export')
   const bytes = buildPdf(title, pages)
   const raw = (options.filename || '').replace(/[\\/:*?"<>|]+/g, ' ').trim()
-  const name = raw
-    ? (raw.toLowerCase().endsWith('.pdf') ? raw : `${raw}.pdf`)
-    : `${safeName(title)}.pdf`
+  const name = pdfDownloadName(raw || `${pdfDefaultTitle(title)} ${new Date().toISOString().slice(0, 10)}`)
+  return { bytes, name }
+}
+
+export async function downloadPdf(title: string, blocks: PdfBlock[], options: PdfOptions = {}): Promise<string> {
+  const { bytes, name } = await renderPdfFile(title, blocks, options)
   const { isNativeApp } = await import('./native')
   if (isNativeApp()) {
-    const { shareNativeFile } = await import('./watch')
-    await shareNativeFile(bytes, name)
+    const { saveNativeFiles } = await import('./watch')
+    await saveNativeFiles([{ bytes, name }])
     return name
   }
-  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+  const url = URL.createObjectURL(new Blob([bytes.slice().buffer], { type: 'application/pdf' }))
   const a = document.createElement('a')
   a.href = url
   a.download = name
@@ -141,12 +145,6 @@ export async function downloadPdf(title: string, blocks: PdfBlock[], options: Pd
   a.remove()
   window.setTimeout(() => URL.revokeObjectURL(url), 4_000)
   return name
-}
-
-function safeName(title: string): string {
-  const stamp = new Date().toISOString().slice(0, 10)
-  const base = (title || 'Nod').replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'Nod'
-  return `${base} ${stamp}`
 }
 
 const SHEET_W = 794
@@ -342,7 +340,7 @@ function drawHeader(
 
     ctx.font = `700 ${10 * SCALE}px ${theme.font}`
     ctx.fillStyle = theme.badge
-    ctx.fillText('NOD', pad + 18 * SCALE, pad + 16 * SCALE)
+    ctx.fillText(PDF_BRAND, pad + 18 * SCALE, pad + 16 * SCALE)
 
     ctx.font = `700 ${9 * SCALE}px ${theme.font}`
     ctx.fillStyle = theme.headerMuted
@@ -372,7 +370,7 @@ function drawHeader(
 
   ctx.font = `700 ${9 * SCALE}px ${theme.font}`
   ctx.fillStyle = theme.badge
-  ctx.fillText('NOD', pad, 28 * SCALE)
+  ctx.fillText(PDF_BRAND, pad, 28 * SCALE)
   ctx.font = `600 ${11 * SCALE}px ${theme.font}`
   ctx.fillStyle = theme.headerText
   ctx.fillText(title, pad + 36 * SCALE, 28 * SCALE)
@@ -385,7 +383,7 @@ function drawFooter(ctx: CanvasRenderingContext2D, theme: Theme, title: string, 
   const y = CANVAS_H - 22 * SCALE
   ctx.font = `500 ${8 * SCALE}px ${theme.font}`
   ctx.fillStyle = theme.muted
-  ctx.fillText(`NOD  ·  ${title}`, 36 * SCALE, y)
+  ctx.fillText(pdfBrandMark(title), 36 * SCALE, y)
   const mark = String(page)
   ctx.fillText(mark, CANVAS_W - 36 * SCALE - ctx.measureText(mark).width, y)
 }
@@ -701,7 +699,7 @@ function buildPdf(title: string, pages: Array<{ jpeg: Uint8Array; w: number; h: 
     obj(contentObj, `<< /Length ${content.length} >>\nstream\n${content}\nendstream`)
   })
   const infoObj = 3 + pageCount * 3
-  obj(infoObj, `<< /Title (${pdfEscape(title)}) /Producer (Nod) >>`)
+  obj(infoObj, `<< /Title (${pdfEscape(pdfDefaultTitle(title))}) /Producer (${PDF_BRAND}) >>`)
   const xrefAt = size
   push(`xref\n0 ${infoObj + 1}\n`)
   push('0000000000 65535 f \n')

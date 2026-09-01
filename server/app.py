@@ -1923,11 +1923,8 @@ class Session:
             return True
         if not self._ensure_consent():
             return False
-        from server.meter import is_session_kept, open_usage_session, usage_snapshot
+        from server.meter import open_usage_session, usage_snapshot
 
-        if self.usage_session_id and is_session_kept(self.usage_session_id):
-            self.usage_session_id = None
-            self.pipeline.usage_session_id = None
         if self.usage_session_id:
             snap = usage_snapshot(self.user_id)
             self.emit({"type": "quota", **snap})
@@ -2373,6 +2370,12 @@ class Session:
 
     def _offer_save_history(self) -> None:
         if not getattr(self, "user_id", None) or not getattr(self, "usage_session_id", None):
+            return
+        if getattr(self, "_workspace", "") != "meeting":
+            return
+        from server.meter import is_session_kept
+
+        if is_session_kept(self.usage_session_id):
             return
         self.emit({
             "type": "save_prompt",

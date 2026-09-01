@@ -5,7 +5,8 @@ import { TRANSLATE_LANGS } from './types'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
-import { restoreFromSession } from './historyRestore'
+import { restoreFromSession, sessionShouldOfferSave, sessionShouldOpenSavePrompt } from './historyRestore'
+import { meetingRailIsPaused } from './meetingPause'
 import SavePrompt from './components/SavePrompt'
 import SideRail from './components/SideRail'
 import AnswerPane from './components/AnswerPane'
@@ -18,7 +19,7 @@ import { api as authApi, fetchMe } from './auth'
 import { isNativeApp, nativeGo } from './native'
 import { installWatchRemote, pushWatchStatus, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode } from './watch'
 import { buildWatchFace } from './watchStatus'
-import { isSpeaking, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
+import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
 import { shouldGenerateAutoReport } from './recordReport'
 import {
   clearWatchReport,
@@ -895,6 +896,14 @@ export default function App() {
   stateRef.current = state
   const listenWanted = useRef(false)
   const [savePrompt, setSavePrompt] = useState(false)
+  const [historyKept, setHistoryKept] = useState(false)
+  const historyKeptRef = useRef(false)
+  const markHistoryKept = (kept: boolean) => {
+    historyKeptRef.current = kept
+    setHistoryKept(kept)
+  }
+  const pendingNewAfterSave = useRef(false)
+  const offerSaveAfterMeetingStopRef = useRef<() => void>(() => undefined)
   const watchAutoNotes = useRef(false)
   const autoReport = useRef(false)
   const recordHeard = useRef(false)
@@ -917,6 +926,7 @@ export default function App() {
       setWatchReportOpen(false)
     }
     const s = stateRef.current
+    if (s.workspaceMode === 'meeting') stopSpeech()
     if (s.workspaceMode === 'translate' || s.translateOn) {
       unlockSpeech()
     }
@@ -1065,6 +1075,7 @@ export default function App() {
         const workspace = watchShouldApplyMode(mode, s)?.workspace ?? s.workspaceMode
         if (workspace === 'meeting' && (s.meetingEnded || s.meetingStartedAt == null)) {
           dispatch({ type: 'listen_new' })
+          markHistoryKept(false)
         }
         guardMic(() => startListen({ fromWatch: true }))
       },
@@ -1091,6 +1102,7 @@ export default function App() {
         const workspace = watchShouldApplyMode(mode, s)?.workspace ?? s.workspaceMode
         if (workspace === 'meeting' && (s.meetingEnded || s.meetingStartedAt == null)) {
           dispatch({ type: 'listen_new' })
+          markHistoryKept(false)
         }
         guardMic(() => startListen({ fromWatch: true }))
       },
@@ -1114,6 +1126,7 @@ export default function App() {
         stopListen()
         if (stateRef.current.workspaceMode === 'meeting') {
           dispatch({ type: 'meeting_ended' })
+          queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
         }
       },
       onSpeak: () => {
@@ -1131,9 +1144,7 @@ export default function App() {
         })
       },
       onTtsLive: () => {
-        setTtsMode('live')
-        writeTtsMode('live')
-        unlockSpeech()
+        // Watch no longer offers Auto. Leftover tts_live must not start speaker playback.
       },
       onTtsTap: () => {
         setTtsMode('tap')
@@ -1237,7 +1248,11 @@ export default function App() {
         // Watch stop-and-save: keep History without a dialog the wrist cannot tap.
         if (watchAutoNotes.current) {
           api.send({ type: 'keep_history' })
-        } else {
+          markHistoryKept(true)
+        } else if (sessionShouldOpenSavePrompt({
+          workspaceMode: stateRef.current.workspaceMode,
+          kept: historyKeptRef.current,
+        })) {
           setSavePrompt(true)
         }
       }
@@ -1418,7 +1433,22 @@ export default function App() {
     window.api.send({ type: 'clear' })
     dispatch({ type: 'clear' })
     setClearOpen(false)
+    markHistoryKept(false)
+    pendingNewAfterSave.current = false
   }, [])
+
+  const meetingHasSaveableContent = (s: AppState) =>
+    s.meetingLines.length > 0
+    || Boolean(s.partial.trim())
+    || Boolean(s.notesRaw.trim())
+    || s.catchNotes.some((note) => note.text.trim())
+
+  const offerSaveAfterMeetingStop = () => {
+    const s = stateRef.current
+    if (s.workspaceMode !== 'meeting' || historyKeptRef.current) return
+    setSavePrompt(true)
+  }
+  offerSaveAfterMeetingStopRef.current = offerSaveAfterMeetingStop
 
   const handleNewSession = useCallback(() => {
     const s = stateRef.current
@@ -1429,9 +1459,20 @@ export default function App() {
       })
       return
     }
+    if (sessionShouldOfferSave({
+      workspaceMode: s.workspaceMode,
+      ended: s.meetingEnded,
+      kept: historyKept,
+      hasContent: meetingHasSaveableContent(s),
+      listening: false,
+    })) {
+      pendingNewAfterSave.current = true
+      setSavePrompt(true)
+      return
+    }
     doClear()
     dispatch({ type: 'engine', ev: { type: 'status', text: 'New session' } })
-  }, [doClear])
+  }, [doClear, historyKept])
 
   const handleClear = useCallback(() => {
     const s = stateRef.current
@@ -1656,10 +1697,12 @@ export default function App() {
         stopListen()
         dispatch({ type: 'meeting_ended' })
         dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped' } })
+        queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
         return
       }
       if (s.meetingEnded || s.meetingStartedAt == null) {
         dispatch({ type: 'listen_new' })
+        markHistoryKept(false)
       } else {
         dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
       }
@@ -1693,6 +1736,7 @@ export default function App() {
       stopListen()
       dispatch({ type: 'meeting_ended' })
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Recording stopped · writing report' } })
+      queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
       return
     }
     if (s.run === 'listen' || s.run === 'record') {
@@ -1702,12 +1746,14 @@ export default function App() {
       stopListen()
       dispatch({ type: 'meeting_ended' })
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Recording stopped · writing report' } })
+      queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
       return
     }
     autoReport.current = true
     recordHeard.current = false
     if (s.meetingEnded || s.meetingStartedAt == null) {
       dispatch({ type: 'listen_new' })
+      markHistoryKept(false)
     } else {
       dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
     }
@@ -1725,6 +1771,9 @@ export default function App() {
       }
       stopListen()
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Paused · resume when ready' } })
+      if (s.workspaceMode === 'meeting') {
+        queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
+      }
     }
   }, [])
 
@@ -1853,17 +1902,15 @@ export default function App() {
   pumpTranslateRef.current = pumpTranslate
 
   useEffect(() => {
-    const liveOn = ttsMode === 'live' && (
-      state.workspaceMode === 'translate'
-      || (state.workspaceMode === 'meeting' && state.translateOn)
-    )
+    const liveOn = ttsMode === 'live' && listenSessionShouldAutoSpeak(state.workspaceMode, state.run)
     if (!liveOn) {
-      if (state.workspaceMode === 'interview') stopSpeech()
+      if (state.workspaceMode !== 'translate') stopSpeech()
       return
     }
     const next = nextLiveUtterances({
       live: true,
       workspaceMode: state.workspaceMode,
+      run: state.run,
       translateOn: state.translateOn,
       bindId: state.translateBindId,
       spoken: spokenTranslate.current,
@@ -1880,7 +1927,7 @@ export default function App() {
         })
       })
     }
-  }, [state.translatePairs, state.meetingLines, state.translateBindId, state.workspaceMode, state.translateOn, ttsMode, ttsVoice])
+  }, [state.translatePairs, state.meetingLines, state.translateBindId, state.workspaceMode, state.translateOn, state.run, ttsMode, ttsVoice])
 
   // Stable identity so memoised transcript rows are not invalidated on every
   // parent render — with thousands of lines that dominates the frame budget.
@@ -2387,14 +2434,30 @@ export default function App() {
       onMark={handleMark}
       onExport={() => { void handleExportPdf() }}
       onClose={study && inQa ? hideRail : undefined}
-      meetingPaused={
-        state.workspaceMode === 'meeting'
-        && !listening
-        && state.meetingStartedAt != null
-        && !state.meetingEnded
-      }
+      meetingPaused={meetingRailIsPaused({
+        workspaceMode: state.workspaceMode,
+        listening,
+        userPaused: sessionPaused.current,
+        started: state.meetingStartedAt != null,
+        ended: state.meetingEnded,
+      })}
       onOpenHistory={() => setHistoryOpen(true)}
       onNewSession={handleNewSession}
+      onSaveSession={() => {
+        if (historyKept) {
+          setHistoryOpen(true)
+          return
+        }
+        setSavePrompt(true)
+      }}
+      canSaveSession={sessionShouldOfferSave({
+        workspaceMode: state.workspaceMode,
+        ended: state.meetingEnded,
+        kept: historyKept,
+        hasContent: meetingHasSaveableContent(state),
+        listening,
+      })}
+      sessionSaved={state.workspaceMode === 'meeting' && historyKept && meetingHasSaveableContent(state)}
     />
   )
 
@@ -2431,11 +2494,22 @@ export default function App() {
         open={savePrompt}
         onKeep={(opts) => {
           setSavePrompt(false)
+          markHistoryKept(true)
           window.api.send({ type: 'keep_history', content: opts.content, audio: opts.audio })
+          if (pendingNewAfterSave.current) {
+            pendingNewAfterSave.current = false
+            doClear()
+            dispatch({ type: 'engine', ev: { type: 'status', text: 'Saved · new session' } })
+          }
         }}
         onDiscard={() => {
           setSavePrompt(false)
           window.api.send({ type: 'discard_history' })
+          if (pendingNewAfterSave.current) {
+            pendingNewAfterSave.current = false
+            doClear()
+            dispatch({ type: 'engine', ev: { type: 'status', text: 'New session' } })
+          }
         }}
       />
       <div className={`workspace${study ? ' study' : ''}${study && railOn ? ' rail-on' : ''}`}>
@@ -2483,7 +2557,7 @@ export default function App() {
             onTtsMode={(mode) => {
               setTtsMode(mode)
               writeTtsMode(mode)
-              stopSpeech()
+              if (mode === 'tap') stopSpeech()
               if (mode === 'live') unlockSpeech()
             }}
             onTtsVoice={(voice) => {
