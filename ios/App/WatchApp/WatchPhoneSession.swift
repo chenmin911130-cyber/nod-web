@@ -72,7 +72,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     static func modeLabel(_ id: String) -> String {
         switch id {
         case "lecture": return "Lecture"
-        case "interview": return "Interview"
+        case "interview": return "Live Q&A"
         case "translate": return "Translate"
         default: return "Meeting"
         }

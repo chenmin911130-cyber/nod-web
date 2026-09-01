@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 
-from server.history_fmt import normalize_scene, session_copy_text, session_download_name
+from server.history_fmt import normalize_scene, scene_label, session_copy_text, session_download_name
 
 
 class HistoryFormatTests(unittest.TestCase):
@@ -12,7 +12,7 @@ class HistoryFormatTests(unittest.TestCase):
             session_download_name("meeting", "lecture", started, part_name="part-002.wav"),
             "Lecture-2026-08-28-part2.wav",
         )
-        self.assertEqual(session_download_name("interview", "", started), "Interview-2026-08-28.wav")
+        self.assertEqual(session_download_name("interview", "", started), "Live-QA-2026-08-28.wav")
         self.assertEqual(
             session_download_name("meeting", "meeting", started, kind="notes"),
             "Meeting-2026-08-28.pdf",
@@ -42,3 +42,4 @@ class HistoryFormatTests(unittest.TestCase):
         self.assertEqual(normalize_scene("interview", "meeting"), "interview")
         self.assertEqual(normalize_scene("meeting", "lecture"), "lecture")
         self.assertEqual(normalize_scene("meeting", ""), "meeting")
+        self.assertEqual(scene_label("interview"), "Live Q&A")

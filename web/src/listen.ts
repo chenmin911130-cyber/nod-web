@@ -68,7 +68,7 @@ export type NotesDoc = {
 export const LISTEN_SCENES: Array<{ id: ListenScene; label: string }> = [
   { id: 'meeting', label: 'Meeting' },
   { id: 'lecture', label: 'Lecture' },
-  { id: 'interview', label: 'Interview' },
+  { id: 'interview', label: 'Live Q&A' },
 ]
 
 const SCENE_SECTIONS: Record<ListenScene, NotesSectionId[]> = {

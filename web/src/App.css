@@ -58,6 +58,10 @@ html.nod-native .titlebar {
   padding-right: max(12px, env(safe-area-inset-right));
 }
 
+html.nod-native .brand-white {
+  display: none;
+}
+
 html.nod-native .side-rail {
   padding-bottom: max(12px, env(safe-area-inset-bottom));
   padding-left: max(8px, env(safe-area-inset-left));
@@ -3874,10 +3878,6 @@ a.tb-menu-action {
   html.nod-native .titlebar {
     padding: max(54px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) 8px
       max(10px, env(safe-area-inset-left));
-  }
-
-  html.nod-native .brand-white {
-    display: none;
   }
 
   .brand-white {

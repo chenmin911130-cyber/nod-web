@@ -215,20 +215,18 @@ export function TitleIcons(props: TitleIconsProps) {
               <span>Opacity</span>
               <OpacityBar value={opacity} onChange={props.onOpacity} />
             </div>
-            {mode === 'interview' && (
+            {!isWeb && mode === 'interview' && (
               <>
-                {!isWeb && (
-                  <button
-                    type="button"
-                    className="tb-menu-action"
-                    onClick={() => {
-                      props.onStealth(!stealth)
-                      setMenuOpen(false)
-                    }}
-                  >
-                    {stealth ? 'Stealth on' : 'Stealth — hide from capture'}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="tb-menu-action"
+                  onClick={() => {
+                    props.onStealth(!stealth)
+                    setMenuOpen(false)
+                  }}
+                >
+                  {stealth ? 'Stealth on' : 'Stealth — hide from capture'}
+                </button>
                 <button
                   type="button"
                   className="tb-menu-action"
@@ -278,9 +276,8 @@ export default function TitleBar(props: Props) {
           <span className="brand-white">{PRODUCT_NAME}</span>
         </a>
       ) : (
-        <div className="brand no-drag">
+        <div className="brand no-drag" aria-label={PRODUCT_NAME}>
           <NodLogo />
-          <span className="brand-white">{PRODUCT_NAME}</span>
         </div>
       )}
 

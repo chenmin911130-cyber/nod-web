@@ -72,7 +72,7 @@ export default function AnswerPane({ currentQ, partial, turns, busy, listening, 
   return (
     <div className="main translate-main interview-qa">
       <div className="kicker">
-        Interview
+        Live Q&A
         <span className="kicker-hint"> · F2 Record · F3 Listen · F4 Clear</span>
       </div>
       <div className="tr-sheet">

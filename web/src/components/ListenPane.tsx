@@ -321,7 +321,7 @@ function SceneSelect({ scene, onScene }: { scene: ListenScene; onScene: (scene: 
                   ? 'Decisions and action items'
                   : item.id === 'lecture'
                     ? 'Revision notes and homework'
-                    : 'Live Q&A, same as before'}
+                    : 'Hear a question, draft an answer'}
               </span>
             </button>
           ))}

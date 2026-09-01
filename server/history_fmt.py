@@ -18,7 +18,7 @@ def normalize_scene(mode: str | None, scene: str | None) -> str:
 
 def scene_label(scene: str) -> str:
     return {
-        "interview": "Interview",
+        "interview": "Live Q&A",
         "lecture": "Lecture",
         "translate": "Translate",
         "meeting": "Meeting",
@@ -47,7 +47,11 @@ def session_download_name(
     kind: str = "audio",
     part_name: str | None = None,
 ) -> str:
-    label = scene_label(normalize_scene(mode, scene))
+    label = re.sub(
+        r"[^A-Za-z0-9]+",
+        "-",
+        scene_label(normalize_scene(mode, scene)).replace("&", ""),
+    ).strip("-")
     stamp = session_stamp(started_at)
     if kind in ("notes", "pdf"):
         return f"{label}-{stamp}.pdf"

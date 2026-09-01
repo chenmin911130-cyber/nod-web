@@ -1339,11 +1339,11 @@ export default function App() {
         else guardMic(startListen)
       }
       else if (k === 'f4') requestClearRef.current()
-      else if (k === 'f8' && mode === 'interview') {
+      else if (!isWeb && k === 'f8' && mode === 'interview') {
         const v = stateRef.current.view
         dispatch({ type: 'view', view: v === 'workspace' ? 'fullscreen' : 'workspace' })
       }
-      else if (k === 'f9' && mode === 'interview') {
+      else if (!isWeb && k === 'f9' && mode === 'interview') {
         const next = !stateRef.current.stealth
         api.setStealth(next)
         dispatch({ type: 'stealth', on: next })
@@ -1676,7 +1676,7 @@ export default function App() {
           mode === 'translate'
             ? 'Mode · Translate'
             : mode === 'interview'
-              ? 'Mode · Q&A'
+              ? 'Mode · Live Q&A'
               : nextScene === 'lecture'
                 ? 'Mode · Lecture'
                 : 'Mode · AI Listening Assistant',
@@ -2382,7 +2382,7 @@ export default function App() {
     return <KeySetup hasLlm={state.keys.hasLlm} hasStt={state.keys.hasStt} />
   }
 
-  if (state.view !== 'workspace' && state.workspaceMode === 'interview') {
+  if (!isWeb && state.view !== 'workspace' && state.workspaceMode === 'interview') {
     const fullscreen = state.view === 'fullscreen'
     return (
       <div className={`app overlay-app${fullscreen ? ' fullscreen' : ''}`}>
