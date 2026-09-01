@@ -4,6 +4,7 @@ import { nativeGo } from '../native'
 import { downloadHistoryPdf } from '../historyPdf'
 import { copyText } from '../historyRestore'
 import './Site.css'
+import { PRODUCT_NAME } from '../brand'
 import NodMark from './NodMark'
 
 type SessionRow = {
@@ -50,7 +51,7 @@ export default function AccountPage() {
   }
 
   useEffect(() => {
-    document.title = 'Account · Nod'
+    document.title = `Account · ${PRODUCT_NAME}`
     void (async () => {
       const user = await fetchMe()
       if (!user) {
@@ -101,7 +102,7 @@ export default function AccountPage() {
         <div className="shell header-inner">
           <a className="brand" href="/">
             <NodMark />
-            Nod
+            {PRODUCT_NAME}
           </a>
           <div className="header-actions">
             <a className="button button-cyan header-cta" href="/app">

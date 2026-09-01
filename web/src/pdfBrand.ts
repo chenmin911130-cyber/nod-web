@@ -1,4 +1,6 @@
-export const PDF_BRAND = 'Nodpilot'
+import { PRODUCT_NAME } from './brand'
+
+export const PDF_BRAND = PRODUCT_NAME
 
 export function pdfBrandMark(kind?: string): string {
   const label = (kind || '').trim()

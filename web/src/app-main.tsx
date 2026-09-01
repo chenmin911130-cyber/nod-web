@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client'
+import { PRODUCT_NAME } from './brand'
 import { ensureLocalGuest, fetchMe, getToken, isLocalHost } from './auth'
 import { installNativeShell, isNativeApp, maybeReturnToNativeApp, nativeGo, rememberNativeReturn } from './native'
 
@@ -7,7 +8,7 @@ const rootEl = document.getElementById('root')
 async function mountWorkspace() {
   if (!rootEl) return
   document.documentElement.classList.add('nod-web')
-  document.title = 'Nod'
+  document.title = PRODUCT_NAME
   const [{ default: App }, { installWebApi }] = await Promise.all([import('./App'), import('./bridge')])
   await import('./App.css')
   installWebApi()
@@ -25,7 +26,7 @@ async function boot() {
   else if (!me && !isNativeApp()) me = await ensureLocalGuest()
   if (!me && isNativeApp()) {
     document.documentElement.classList.add('nod-web')
-    document.title = 'Nod'
+    document.title = PRODUCT_NAME
     await import('./App.css')
     const { default: NativeSignIn } = await import('./components/NativeSignIn')
     const root = createRoot(rootEl)

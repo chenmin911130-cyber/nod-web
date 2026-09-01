@@ -83,14 +83,14 @@ def send_mail(to: str, subject: str, html: str, text: str) -> bool:
 def send_reset_email(to: str, token: str) -> bool:
     link = f"{PUBLIC_URL.rstrip('/')}/reset?token={token}"
     text = (
-        f"Reset your Nod password:\n{link}\n\n"
+        f"Reset your Nodpilot password:\n{link}\n\n"
         "This link expires in 2 hours. If you did not ask for it, ignore this email."
     )
     html = (
-        f"<p>Reset your Nod password:</p><p><a href='{link}'>{link}</a></p>"
+        f"<p>Reset your Nodpilot password:</p><p><a href='{link}'>{link}</a></p>"
         "<p>This link expires in 2 hours.</p>"
     )
-    sent = send_mail(to, "Reset your Nod password", html, text)
+    sent = send_mail(to, "Reset your Nodpilot password", html, text)
     if not sent:
         log.info("password reset email was not sent for %s", to)
     return sent
@@ -98,14 +98,14 @@ def send_reset_email(to: str, token: str) -> bool:
 
 def send_otp_email(to: str, code: str) -> bool:
     text = (
-        f"Your Nod sign-in code is {code}.\n\n"
+        f"Your Nodpilot sign-in code is {code}.\n\n"
         "It expires in 10 minutes. If you did not ask for it, ignore this email."
     )
     html = (
-        f"<p>Your Nod sign-in code is <strong>{html_escape.escape(code)}</strong>.</p>"
+        f"<p>Your Nodpilot sign-in code is <strong>{html_escape.escape(code)}</strong>.</p>"
         "<p>It expires in 10 minutes. If you did not ask for it, ignore this email.</p>"
     )
-    sent = send_mail(to, "Your Nod sign-in code", html, text)
+    sent = send_mail(to, "Your Nodpilot sign-in code", html, text)
     if not sent:
         log.info("sign-in code email was not sent for %s", to)
     return sent
@@ -117,7 +117,7 @@ def send_feedback_copy(to_admin: str, from_email: str, message: str) -> None:
     safe_message = html_escape.escape(message or "")
     send_mail(
         to_admin,
-        f"Nod feedback from {from_email or 'anonymous'}",
+        f"Nodpilot feedback from {from_email or 'anonymous'}",
         f"<p>{safe_email}</p><pre>{safe_message}</pre>",
         f"{from_email}\n\n{message}",
     )

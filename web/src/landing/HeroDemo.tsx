@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { PRODUCT_NAME } from '../brand'
 import type { Copy } from './copy'
 
 export type DemoMode = 'meeting' | 'translate' | 'interview'
@@ -250,7 +251,7 @@ function DemoWorkspace({ t, mode }: { t: Copy; mode: DemoMode }) {
             <path d="M58 38 Q66 29 81 34 V60" stroke="#f5f8ff" strokeWidth="9" strokeLinecap="round" />
             <circle cx="81" cy="70" r="4.5" fill="#22d3ee" />
           </svg>
-          Nod
+          {PRODUCT_NAME}
         </span>
         <span className="demo-mode-pill">{title}</span>
         <span className="demo-lang">EN</span>

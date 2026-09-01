@@ -35,7 +35,7 @@ export default function KeySetup({ hasLlm, hasStt }: Props) {
   return (
     <div className="keysetup">
       <div className="keysetup-card">
-        <div className="keysetup-title">Nod · 需要 API Keys</div>
+        <div className="keysetup-title">Nodpilot · 需要 API Keys</div>
         <p className="keysetup-desc">
           首次使用需填写两个 key。网页版优先读服务器环境变量；若没有，则保存在当前服务进程内存中，
           不会写进浏览器，也不会发给作者。

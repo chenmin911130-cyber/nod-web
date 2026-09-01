@@ -2863,7 +2863,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Nod Web", lifespan=lifespan)
+app = FastAPI(title="Nodpilot", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins(PUBLIC_URL),

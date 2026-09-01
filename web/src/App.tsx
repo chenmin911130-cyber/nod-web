@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import type { AttachPayload } from './attach'
 import type { AppConfig, AppState, AudioSource, EngineEvent, Lang, MeetingLine, PairLang, TranslatePair, ViewMode, WorkspaceMode } from './types'
 import { TRANSLATE_LANGS } from './types'
+import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
@@ -2177,14 +2178,14 @@ export default function App() {
       ts?: string
       speaker?: string
     }> = []
-    let title = 'Nod'
+    let title = PRODUCT_NAME
     let theme: 'plain' | 'meeting' | 'lecture' = 'plain'
     let meta: string[] = []
     let doc: ListenPdfDoc | undefined
 
     if (s.workspaceMode === 'translate') {
-      title = 'Nod captions'
-      blocks.push({ kind: 'h1', text: 'Nod captions' })
+      title = `${PRODUCT_NAME} captions`
+      blocks.push({ kind: 'h1', text: `${PRODUCT_NAME} captions` })
       blocks.push({ kind: 'meta', text: `Auto → ${langTag(s.translateTo)} · ${when}` })
       if (s.translatePairs.length === 0) {
         blocks.push({ kind: 'p', text: 'No captions yet.' })
@@ -2195,8 +2196,8 @@ export default function App() {
         }
       }
     } else if (s.workspaceMode === 'interview') {
-      title = 'Nod answers'
-      blocks.push({ kind: 'h1', text: 'Nod answers' })
+      title = `${PRODUCT_NAME} answers`
+      blocks.push({ kind: 'h1', text: `${PRODUCT_NAME} answers` })
       blocks.push({ kind: 'meta', text: `Exported ${when}` })
       if (s.turns.length === 0) {
         blocks.push({ kind: 'p', text: 'No answers yet.' })
@@ -2672,7 +2673,7 @@ export default function App() {
           <div className="consent-card">
             <h2>Before you start recording</h2>
             <p>
-              The first time you enable the microphone, Nod sends audio to AssemblyAI and text to a language model.
+              The first time you enable the microphone, Nodpilot sends audio to AssemblyAI and text to a language model.
               Tell others in the room if they must know. You can
               delete stored history from Account. Read the <a href="/privacy">privacy policy</a> and{' '}
               <a href="/consent">consent note</a>.

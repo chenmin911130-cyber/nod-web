@@ -180,7 +180,7 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
         center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
             guard granted else { return }
             let content = UNMutableNotificationContent()
-            content.title = "Nod"
+            content.title = "Nodpilot"
             content.body = "Listening — tap to return to the app"
             content.sound = nil
             let request = UNNotificationRequest(

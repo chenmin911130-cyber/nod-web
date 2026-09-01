@@ -1,6 +1,6 @@
 {
   "appId": "com.nodpilot.app",
-  "appName": "Nod",
+  "appName": "Nodpilot",
   "webDir": "web/dist",
   "backgroundColor": "#05070a",
   "ios": {

@@ -1,4 +1,5 @@
 import type { Api, AppConfig, EngineEvent, EngineMsg } from './types'
+import { PRODUCT_NAME } from './brand'
 import { getToken } from './auth'
 import { MicCapture } from './audio'
 import { apiUrl, isNativeApp, wsUrl } from './native'
@@ -134,7 +135,7 @@ export function installWebApi(): void {
       return
     }
     queueMsg(msg)
-    emit({ type: 'status', text: 'Connecting to Nod…' })
+    emit({ type: 'status', text: `Connecting to ${PRODUCT_NAME}…` })
   }
 
   const syncMic = async (run?: string) => {
@@ -186,7 +187,7 @@ export function installWebApi(): void {
   const scheduleReconnect = (authExpired: boolean) => {
     if (closing) return
     if (retries >= RECONNECT_MAX_TRIES) {
-      emit({ type: 'error', text: 'Lost connection to Nod. Reload the page to reconnect.' })
+      emit({ type: 'error', text: `Lost connection to ${PRODUCT_NAME}. Reload the page to reconnect.` })
       return
     }
     // Exponential backoff with jitter: a fixed retry meant every open tab
@@ -317,7 +318,7 @@ export function installWebApi(): void {
     },
     exportPdf: async ({ title, blocks, theme, subtitle, meta, doc }) => {
       const { downloadPdf } = await import('./pdf')
-      return downloadPdf(title || 'Nod', blocks || [{ kind: 'p', text: 'Empty export.' }], { theme, subtitle, meta, doc })
+      return downloadPdf(title || 'Nodpilot', blocks || [{ kind: 'p', text: 'Empty export.' }], { theme, subtitle, meta, doc })
     },
   }
 

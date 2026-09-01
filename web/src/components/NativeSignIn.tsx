@@ -9,7 +9,7 @@ function googleError(ex: unknown): string {
   const err = ex as { message?: string; code?: string }
   const message = err?.message || ''
   if (err?.code === 'UNIMPLEMENTED' || /not implemented|NodAuth/i.test(message)) {
-    return 'Google sign-in is not ready in this build. Close Nod and reopen it, or use email.'
+    return 'Google sign-in is not ready in this build. Close Nodpilot and reopen it, or use email.'
   }
   if (/canceled/i.test(message)) return 'Google sign-in was canceled'
   return message || 'Google sign-in failed'
@@ -108,7 +108,7 @@ export default function NativeSignIn({ onSignedIn }: { onSignedIn: () => void })
           <path d="M58 38 Q66 29 81 34 V60" stroke="#f4f8fc" strokeWidth="9" strokeLinecap="round" />
           <circle cx="81" cy="70" r="4.5" fill="#00d2ff" />
         </svg>
-        <h1>Nod</h1>
+        <h1>Nodpilot</h1>
         <p>
           {sent
             ? `We sent a code to ${email}.`

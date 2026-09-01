@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import '../landing/Landing.css'
 import './Admin.css'
+import { PRODUCT_NAME } from '../brand'
 import NodMark from './NodMark'
 
 type Tab = 'overview' | 'users' | 'sessions' | 'feedback' | 'settings'
@@ -138,7 +139,7 @@ export default function AdminPage() {
   }
 
   useEffect(() => {
-    document.title = 'Admin · Nod'
+    document.title = `Admin · ${PRODUCT_NAME}`
     void adminApi('/api/admin/overview')
       .then(() => {
         setAuthed(true)
@@ -212,9 +213,9 @@ export default function AdminPage() {
         <form className="admin-login" onSubmit={signIn}>
           <div className="brand">
             <NodMark size={28} />
-            Nod
+            {PRODUCT_NAME}
           </div>
-          <div className="eyebrow">NOD ADMIN</div>
+          <div className="eyebrow">NODPILOT ADMIN</div>
           <h1>Test console</h1>
           <p>Enter the admin token to see customer data.</p>
           <label>
@@ -235,7 +236,7 @@ export default function AdminPage() {
       <aside className="admin-side">
         <div className="brand">
           <NodMark />
-          Nod
+          {PRODUCT_NAME}
         </div>
         <div className="nav-label">OPERATIONS</div>
         {(['overview', 'users', 'sessions', 'feedback'] as const).map((id) => (

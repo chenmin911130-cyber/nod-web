@@ -520,7 +520,7 @@ def write_session_notes(user_id: str, session_id: str) -> None:
             .order_by(HistoryItem.created_at.asc())
             .limit(400)
         ).scalars().all()
-        title = session.title or "Nod session"
+        title = session.title or "Nodpilot session"
         mode = session.mode
         started = session.started_at.isoformat() if session.started_at else ""
     lines = [f"# {title}", "", f"Mode: {mode}", f"Started: {started}", ""]

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { AudioSource, Lang, PairLang, WorkspaceMode } from '../types'
 import { isWeb } from '../platform'
 import { logout } from '../auth'
+import { PRODUCT_NAME } from '../brand'
 import { isNativeApp, nativeGo } from '../native'
 import OpacityBar from './OpacityBar'
 import PetTimer from './PetTimer'
@@ -274,12 +275,12 @@ export default function TitleBar(props: Props) {
       {isWeb && !isNativeApp() ? (
         <a href="/" className="brand no-drag" title="Product page">
           <NodLogo />
-          <span className="brand-white">Nod</span>
+          <span className="brand-white">{PRODUCT_NAME}</span>
         </a>
       ) : (
         <div className="brand no-drag">
           <NodLogo />
-          <span className="brand-white">Nod</span>
+          <span className="brand-white">{PRODUCT_NAME}</span>
         </div>
       )}
 

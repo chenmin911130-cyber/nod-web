@@ -15,7 +15,7 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
         handler([
             CLKComplicationDescriptor(
                 identifier: Self.descriptorId,
-                displayName: "Nod Timer",
+                displayName: "Nodpilot Timer",
                 supportedFamilies: [
                     .circularSmall,
                     .modularSmall,
@@ -58,7 +58,7 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
         } else if let paused {
             text = CLKSimpleTextProvider(text: clock(paused))
         } else {
-            text = CLKSimpleTextProvider(text: "Nod")
+            text = CLKSimpleTextProvider(text: "Nodpilot")
         }
         let image = CLKImageProvider(onePieceImage: shiba())
         let colorImage = CLKFullColorImageProvider(fullColorImage: shiba())
