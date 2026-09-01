@@ -42,7 +42,6 @@ export default function AccountPage() {
   const [feedback, setFeedback] = useState('')
   const [openId, setOpenId] = useState<string | null>(null)
   const [copied, setCopied] = useState('')
-  const paid = new URLSearchParams(location.search).get('paid')
 
   const copySession = async (session: SessionRow, key = session.id) => {
     const ok = await copyText(session.copy_text || session.items.map((item) => item.text).join('\n'))
@@ -77,24 +76,6 @@ export default function AccountPage() {
   }
 
   const u = me.usage
-  const checkout = async () => {
-    setErr('')
-    try {
-      const out = await api<{ url: string }>('/api/billing/checkout', { method: 'POST' })
-      location.href = out.url
-    } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Checkout failed')
-    }
-  }
-
-  const portal = async () => {
-    try {
-      const out = await api<{ url: string }>('/api/billing/portal', { method: 'POST' })
-      location.href = out.url
-    } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Billing portal failed')
-    }
-  }
 
   const sendFeedback = async (e: FormEvent) => {
     e.preventDefault()
@@ -152,8 +133,7 @@ export default function AccountPage() {
           <div className="eyebrow">ACCOUNT</div>
           <h1>{me.name || me.email}</h1>
           <p>
-            Plan: <b>{me.plan_name}</b> · {me.subscription_status}
-            {paid === '1' ? ' · Payment received. Refresh if the plan has not updated yet.' : ''}
+            Free public testing · no subscription
             {me.quota_disabled || u.quota_disabled
               ? ' · Testing: transcription, generation, and daily caps are not enforced unless an admin sets a monthly time cap.'
               : ` · ${fmtHours(u.daily_stt_limit || 2 * 3600)} of live transcription each day. Listening pauses when the daily cap is reached.`}
@@ -179,29 +159,11 @@ export default function AccountPage() {
                 <i style={{ width: `${pct(u.llm_tokens, u.llm_limit)}%` }} />
               </div>
             </div>
-            <div className="quota-card">
-              <span>Estimated model cost today</span>
-              <b>${u.daily_cost_usd.toFixed(3)}</b>
-              <span>Daily cap ${u.daily_cost_limit} · sessions {u.sessions}/{u.session_limit}</span>
-              <div className="bar">
-                <i style={{ width: `${pct(u.daily_cost_usd, u.daily_cost_limit)}%` }} />
-              </div>
-            </div>
           </div>
           <div className="hero-actions">
-            {me.quota_disabled || u.quota_disabled || !me.stripe_enabled ? (
-              <a className="button button-primary" href="/app">
-                Open workspace
-              </a>
-            ) : me.plan === 'pro' ? (
-              <button className="button button-primary" type="button" onClick={() => void portal()}>
-                Manage billing
-              </button>
-            ) : (
-              <button className="button button-primary" type="button" onClick={() => void checkout()}>
-                Upgrade to Pro · USD $12 / month
-              </button>
-            )}
+            <a className="button button-primary" href="/app">
+              Open workspace
+            </a>
             <a className="button button-ghost" href="/privacy">
               Privacy
             </a>

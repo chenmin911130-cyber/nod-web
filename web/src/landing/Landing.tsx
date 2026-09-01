@@ -391,18 +391,6 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
                   <span>{t.planLimits}</span>
                   <b>{t.planLimitsV}</b>
                 </div>
-                <div>
-                  <span>{t.planCancel}</span>
-                  <b>{t.planCancelV}</b>
-                </div>
-                <div>
-                  <span>{t.planCard}</span>
-                  <b>{t.planCardV}</b>
-                </div>
-                <div>
-                  <span>{t.planOver}</span>
-                  <b>{t.planOverV}</b>
-                </div>
               </div>
               <a className="button button-cyan" href={primaryHref} onClick={onPriceCta}>
                 {signedIn ? t.enterWorkspace : t.planCta}

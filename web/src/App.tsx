@@ -2599,7 +2599,7 @@ export default function App() {
             <h2>Before you start recording</h2>
             <p>
               The first time you enable the microphone, Nod sends audio to AssemblyAI and text to a language model.
-              This applies on the free trial, not only paid plans. Tell others in the room if they must know. You can
+              Tell others in the room if they must know. You can
               delete stored history from Account. Read the <a href="/privacy">privacy policy</a> and{' '}
               <a href="/consent">consent note</a>.
             </p>

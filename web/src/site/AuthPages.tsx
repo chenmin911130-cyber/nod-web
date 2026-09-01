@@ -195,7 +195,7 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
             </form>
           )}
           <div className="site-links">
-            <a href="/signup">Start free — Google or email</a>
+            <a href="/signup">Create an account — Google or email</a>
           </div>
         </div>
       </div>
@@ -271,7 +271,7 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
           <div className="eyebrow">REGISTER</div>
           <Funnel current="account" />
           <h1>Create your Nodpilot account</h1>
-          <p>Google or an email code — both start the same free trial. No password. No card. 20 minutes of transcription included.</p>
+          <p>Google or an email code — both start the same free public test. No password. No card.</p>
           {(clerkEnabled || isNativeApp()) && (
             <>
               <Suspense fallback={null}>

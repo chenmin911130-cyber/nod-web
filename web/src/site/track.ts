@@ -89,9 +89,10 @@ export function applySeo(opts: {
     image: opts.image,
     offers: {
       '@type': 'Offer',
-      price: '12.00',
+      price: '0',
       priceCurrency: 'USD',
-      category: 'subscription',
+      category: 'free',
+      description: 'Free public testing',
     },
   })
 }

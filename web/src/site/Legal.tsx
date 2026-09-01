@@ -14,7 +14,7 @@ function Shell({ title, children }: { title: string; children: ReactNode }) {
           </a>
           <div className="header-actions">
             <a className="button button-cyan header-cta" href="/signup">
-              Start free
+              Get started
             </a>
           </div>
         </div>
@@ -36,19 +36,19 @@ export function PrivacyPage() {
   }, [])
   return (
     <Shell title="Privacy Policy">
-      <p>Last updated: 31 August 2026. Nod Web (“Nod”, “we”) is an early product operated for commercial trial.</p>
+      <p>Last updated: 1 September 2026. Nod Web (“Nod”, “we”) is an early product in free public testing.</p>
       <h2>What we collect</h2>
       <ul>
-        <li>Account data: email, name, one-time sign-in codes, optional Google account id, plan, and billing identifiers from Stripe if you pay.</li>
-        <li>Usage data: session times, workspace mode, estimated transcription seconds, token counts, and cost estimates.</li>
+        <li>Account data: email, name, one-time sign-in codes, and optional Google account id.</li>
+        <li>Usage data: session times, workspace mode, estimated transcription seconds, and token counts.</li>
         <li>Content you generate in the product: questions, transcripts, answers, summaries, and captions, stored so you can review history.</li>
         <li>Feedback you send through the product.</li>
       </ul>
       <h2>Audio</h2>
       <p>
         When you enable the microphone, audio is streamed to AssemblyAI for transcription. We do not keep the raw audio file
-        after the live session. Transcript text may be stored on your account until you delete it. Free trial users send the
-        same audio and text as paid users.
+        after the live session. Transcript text may be stored on your account until you delete it. Everyone using the product
+        sends the same audio and text.
       </p>
       <h2>Language models</h2>
       <p>
@@ -57,7 +57,7 @@ export function PrivacyPage() {
       </p>
       <h2>Consent</h2>
       <p>
-        Recording consent is collected the first time you start the microphone — not only before a paid plan. You can read this
+        Recording consent is collected the first time you start the microphone. You can read this
         page and the <a href="/consent">consent note</a> before enabling audio.
       </p>
       <h2>Cookies</h2>
@@ -79,11 +79,11 @@ export function PrivacyPage() {
 export function TermsPage() {
   return (
     <Shell title="Terms of Service">
-      <p>Last updated: 23 August 2026.</p>
+      <p>Last updated: 1 September 2026.</p>
       <h2>The service</h2>
       <p>
-        Nod provides a live voice workspace for interview rehearsal, meeting notes, and captions. It is sold as a trial and a paid
-        Pro plan. Features can change while the product is in early access.
+        Nod provides a live voice workspace for interview rehearsal, meeting notes, and captions. During this free public test,
+        access is not sold as a paid plan. Features can change while the product is in early access.
       </p>
       <h2>Your responsibilities</h2>
       <ul>
@@ -94,17 +94,14 @@ export function TermsPage() {
         </li>
         <li>Do not use Nod to break the law, harass people, or overload the service.</li>
       </ul>
-      <h2>Plans and payment</h2>
+      <h2>Access during testing</h2>
       <p>
-        The free trial includes 20 minutes of transcription and 100,000 generation tokens per month. No credit card is required to
-        start. Pro is USD $12 per month, with eight hours of transcription and 2,000,000 tokens. If Stripe is connected, paid
-        subscriptions renew monthly until you cancel from Account. Generation tokens are limited on every plan. If you hit a
-        transcription, token, or daily cost cap, listening and generation pause until you upgrade or the month resets. Nothing
-        extra is billed automatically.
+        Nod is currently free to use. There is no subscription checkout on the site and no paid plan for sale. We may still pause
+        listening or generation if usage is unusually high. If we later offer paid plans, we will say so before you pay.
       </p>
       <h2>Limits</h2>
       <p>
-        We may pause or stop a session when you hit a plan cap, a daily cost cap, or a global budget. The service is provided as-is
+        We may pause or stop a session when usage is unusually high or a global budget is reached. The service is provided as-is
         during early access, without a guaranteed uptime commitment.
       </p>
       <h2>Termination</h2>
@@ -127,7 +124,7 @@ export function ConsentPage() {
       </p>
       <h2>Before you start recording</h2>
       <ul>
-        <li>This confirmation appears the first time you enable the microphone — including on the free trial.</li>
+        <li>This confirmation appears the first time you enable the microphone.</li>
         <li>Tell participants you are using a transcription tool, if the law or the room requires it.</li>
         <li>Use AI Listening Assistant for rehearsal, spoken-answer practice, and post-session reflection — not as a hidden prompt in a live interview if that violates the employer’s rules.</li>
         <li>You can withdraw by signing out and deleting your account. That does not erase provider logs they already hold.</li>
