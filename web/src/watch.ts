@@ -254,12 +254,37 @@ export async function playWatchSpeech(bytes: Uint8Array): Promise<void> {
   await NodWatch.playSpeech({ data: btoa(chunks.join('')) })
 }
 
-export async function shareNativeFile(bytes: Uint8Array, name: string): Promise<void> {
-  if (!isNativeApp()) throw new Error('Share is only available in the iPhone app')
+function bytesToBase64(bytes: Uint8Array): string {
   const chunks: string[] = []
   const step = 8192
   for (let i = 0; i < bytes.length; i += step) {
     chunks.push(String.fromCharCode(...bytes.subarray(i, i + step)))
   }
-  await NodWatch.shareFile({ data: btoa(chunks.join('')), name })
+  return btoa(chunks.join(''))
+}
+
+export async function shareNativeFile(bytes: Uint8Array, name: string): Promise<void> {
+  if (!isNativeApp()) throw new Error('Share is only available in the iPhone app')
+  await NodWatch.shareFile({ data: bytesToBase64(bytes), name })
+}
+
+export async function saveNativeFiles(files: Array<{ bytes: Uint8Array; name: string }>): Promise<void> {
+  if (!files.length) return
+  if (!isNativeApp()) {
+    for (const file of files) {
+      const url = URL.createObjectURL(new Blob([file.bytes.slice().buffer]))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = file.name
+      a.rel = 'noopener'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 4_000)
+    }
+    return
+  }
+  for (const file of files) {
+    await shareNativeFile(file.bytes, file.name)
+  }
 }
