@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Nod</string>
+	<string>Nodpilot</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -25,7 +25,7 @@
 	<key>WKCompanionAppBundleIdentifier</key>
 	<string>com.nodpilot.app</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Nod records from the Apple Watch microphone so you can capture a meeting or lecture from your wrist. Audio is sent to your iPhone to transcribe.</string>
+	<string>Nodpilot records from the Apple Watch microphone so you can capture a meeting or lecture from your wrist. Audio is sent to your iPhone to transcribe.</string>
 	<key>WKBackgroundModes</key>
 	<array>
 		<string>audio</string>

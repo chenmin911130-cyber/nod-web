@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RunState, Turn } from '../types'
 import { AnswerContent, QuestionBlock } from './AnswerContent'
+import { PRODUCT_NAME } from '../brand'
 import { isWeb } from '../platform'
 
 interface Props {
@@ -252,7 +253,7 @@ export default function AutoOverlay(props: Props) {
             <path d="M58 38 Q66 29 81 34 V60" stroke="#f5f8ff" strokeWidth="9" strokeLinecap="round" />
             <circle cx="81" cy="70" r="4.5" fill="#00d2ff" />
           </svg>
-          <span className="ov-brand-name">Nod</span>
+          <span className="ov-brand-name">{PRODUCT_NAME}</span>
           <span className="ov-status-dot" />
           <span className="ov-mode-tag">AUTO LISTENING</span>
         </div>
@@ -310,7 +311,7 @@ export default function AutoOverlay(props: Props) {
         ) : (
           <div className="ov-q-content">
             <div className="ov-q-wait">Listening for the next question…</div>
-            <div className="ov-q-sub">Nod will detect the question and prepare an answer automatically.</div>
+            <div className="ov-q-sub">Nodpilot will detect the question and prepare an answer automatically.</div>
           </div>
         )}
       </div>

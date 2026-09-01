@@ -3,6 +3,7 @@ import { api, fetchMe, getToken, setToken } from '../auth'
 import { isNativeApp, maybeReturnToNativeApp, nativeGo } from '../native'
 import { track } from './track'
 import './Site.css'
+import { PRODUCT_NAME } from '../brand'
 import NodMark from './NodMark'
 
 const GoogleButton = lazy(() => import('./ClerkAuth').then((m) => ({ default: m.GoogleButton })))
@@ -33,7 +34,7 @@ function Header({ extra }: { extra?: ReactNode }) {
       <div className="shell header-inner">
         <a className="brand" href="/">
           <NodMark />
-          Nod
+          {PRODUCT_NAME}
         </a>
         <div className="header-actions">{extra}</div>
       </div>

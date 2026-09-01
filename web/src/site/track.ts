@@ -81,7 +81,7 @@ export function applySeo(opts: {
   jsonld.textContent = JSON.stringify({
     '@context': 'https://schema.org',
     '@type': 'SoftwareApplication',
-    name: 'Nod',
+    name: 'Nodpilot',
     applicationCategory: 'BusinessApplication',
     operatingSystem: 'Web',
     description: opts.description,

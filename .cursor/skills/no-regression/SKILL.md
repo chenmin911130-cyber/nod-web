@@ -70,7 +70,7 @@ description: >-
 - 手表选 Interview / Translate / Lecture 再 Listen：手机切到对应页再 `start_listen`，不能停在旧 Meeting 页
 - 手表 Pause / Resume / Done：手机模式不变，不能把问答 busy 清掉或误切 Translate
 - 残留 queued `start` + mode 仍受 30s 时间戳限制，不得自己切模式并听写
-- 打开手表 Nod 不得自动播放上一句语音；手机 Play / Stop 仍只控制手机端 TTS
+- 打开手表 Nodpilot 不得自动播放上一句语音；手机 Play / Stop 仍只控制手机端 TTS
 - 改手表界面后必须把 WatchApp 直接装到手表（只装 iPhone 常会留下旧 Live / Play，看不到模式选择）
 - 手表息屏后 Listen 必须还能录；断连后 Done 要把未发出的 PCM 传给手机，不能因为曾经 liveStreamed 就丢尾包
 

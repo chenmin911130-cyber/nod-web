@@ -3,6 +3,7 @@ import { fetchMe } from '../auth'
 import { isNativeApp } from '../native'
 import { applySeo, track } from '../site/track'
 import { COPY, type Locale } from './copy'
+import { PRODUCT_NAME } from '../brand'
 import NodMark from '../site/NodMark'
 import { DemoModal, FeatIcon, HeroBackdrop, HeroStage, WatchIcon, type DemoMode } from './HeroDemo'
 import './Landing.css'
@@ -76,7 +77,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
         <div className="shell header-inner">
           <a className="brand" href={home} onClick={closeNav}>
             <NodMark />
-            Nod
+            {PRODUCT_NAME}
           </a>
           <nav className="desktop-nav">
             <a href="#live" onClick={closeNav}>
@@ -457,7 +458,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
           <div>
             <a className="brand" href={home}>
               <NodMark />
-              Nod
+              {PRODUCT_NAME}
             </a>
             <p>
               {t.footerTag}

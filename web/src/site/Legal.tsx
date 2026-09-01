@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from 'react'
 import { track } from './track'
 import './Site.css'
+import { PRODUCT_NAME } from '../brand'
 import NodMark from './NodMark'
 
 function Shell({ title, children }: { title: string; children: ReactNode }) {
@@ -10,7 +11,7 @@ function Shell({ title, children }: { title: string; children: ReactNode }) {
         <div className="shell header-inner">
           <a className="brand" href="/">
             <NodMark />
-            Nod
+            {PRODUCT_NAME}
           </a>
           <div className="header-actions">
             <a className="button button-cyan header-cta" href="/signup">
@@ -36,7 +37,7 @@ export function PrivacyPage() {
   }, [])
   return (
     <Shell title="Privacy Policy">
-      <p>Last updated: 1 September 2026. Nod Web (“Nod”, “we”) is an early product in free public testing.</p>
+      <p>Last updated: 1 September 2026. Nodpilot (“Nodpilot”, “we”) is an early product in free public testing.</p>
       <h2>What we collect</h2>
       <ul>
         <li>Account data: email, name, one-time sign-in codes, and optional Google account id.</li>
@@ -82,7 +83,7 @@ export function TermsPage() {
       <p>Last updated: 1 September 2026.</p>
       <h2>The service</h2>
       <p>
-        Nod provides a live voice workspace for interview rehearsal, meeting notes, and captions. During this free public test,
+        Nodpilot provides a live voice workspace for interview rehearsal, meeting notes, and captions. During this free public test,
         access is not sold as a paid plan. Features can change while the product is in early access.
       </p>
       <h2>Your responsibilities</h2>
@@ -92,11 +93,11 @@ export function TermsPage() {
           AI Listening Assistant is for rehearsal, spoken-answer practice, and post-session reflection. You are responsible for accuracy and for
           following interviewer and platform rules.
         </li>
-        <li>Do not use Nod to break the law, harass people, or overload the service.</li>
+        <li>Do not use Nodpilot to break the law, harass people, or overload the service.</li>
       </ul>
       <h2>Access during testing</h2>
       <p>
-        Nod is currently free to use. There is no subscription checkout on the site and no paid plan for sale. We may still pause
+        Nodpilot is currently free to use. There is no subscription checkout on the site and no paid plan for sale. We may still pause
         listening or generation if usage is unusually high. If we later offer paid plans, we will say so before you pay.
       </p>
       <h2>Limits</h2>
@@ -118,7 +119,7 @@ export function ConsentPage() {
   return (
     <Shell title="Recording consent">
       <p>
-        Nod listens through your browser microphone on the web. Windows desktop (system audio from Zoom or Teams, pin, and stealth)
+        Nodpilot listens through your browser microphone on the web. Windows desktop (system audio from Zoom or Teams, pin, and stealth)
         is coming soon for public download. Speech is sent to AssemblyAI. Text may be sent to a language model. Other people in the
         call may not know you are transcribing unless you tell them.
       </p>
