@@ -1,6 +1,7 @@
 {
   "name": "nod",
   "private": true,
+  "license": "UNLICENSED",
   "scripts": {
     "cap:sync": "npm run build --prefix web && node scripts/prepare-ios-web.mjs && npx cap sync ios && node scripts/patch-ios-plist.mjs",
     "cap:open": "npx cap open ios",
