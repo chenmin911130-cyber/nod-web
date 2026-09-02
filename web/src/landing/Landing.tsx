@@ -5,7 +5,8 @@ import { applySeo, track } from '../site/track'
 import { COPY, type Locale } from './copy'
 import { PRODUCT_NAME } from '../brand'
 import NodMark from '../site/NodMark'
-import { DemoModal, FeatIcon, HeroBackdrop, HeroStage, WatchIcon, type DemoMode } from './HeroDemo'
+import { DemoModal, WatchIcon, type DemoMode } from './HeroDemo'
+import { HERO_POSTERS, heroPosterById, nextHeroPoster, type HeroPosterId } from './heroPosters'
 import './Landing.css'
 
 type AskId = '1' | '2' | '3' | '4'
@@ -18,6 +19,9 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
   const [signedIn, setSignedIn] = useState(false)
   const [demoOpen, setDemoOpen] = useState(false)
   const [demoMode, setDemoMode] = useState<DemoMode>('meeting')
+  const [poster, setPoster] = useState<HeroPosterId>('meeting')
+  const posterHover = useRef(false)
+  const posterManualAt = useRef(0)
   const priced = useRef(false)
   const t = COPY[locale]
   const primaryHref = signedIn ? '/app' : '/signup'
@@ -59,6 +63,14 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
     return () => observer.disconnect()
   }, [locale, t.description, t.htmlLang, t.ogTitle, t.title])
 
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (posterHover.current || demoOpen || Date.now() - posterManualAt.current < 12000) return
+      setPoster((current) => nextHeroPoster(current))
+    }, 7000)
+    return () => window.clearInterval(id)
+  }, [demoOpen])
+
   const closeNav = () => setNavOpen(false)
   const onHeroCta = () => track('cta_hero_start', { place: 'hero', signed_in: signedIn })
   const onHeaderCta = () => track('cta_hero_start', { place: 'header' })
@@ -70,6 +82,16 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
   }, [])
   const closeDemo = useCallback(() => setDemoOpen(false), [])
   const heroCta = signedIn ? t.enterWorkspace : t.heroCta
+  const posterLabel = {
+    meeting: t.sitMeeting,
+    lecture: t.sitLecture,
+    translate: t.demoTranslate,
+  } as const
+  const posterAlt = {
+    meeting: t.heroPosterMeeting,
+    lecture: t.heroPosterLecture,
+    translate: t.heroPosterTranslate,
+  } as const
 
   return (
     <div className="nod-landing">
@@ -120,57 +142,55 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
       </header>
 
       <main id="top">
-        <section className="hero hero-cover">
-          <HeroBackdrop />
-          <div className="shell hero-grid reveal visible">
-            <div className="hero-copy-col">
-              <div className="hero-badge">{t.heroProduct}</div>
-              <h1>
-                {t.heroH1a}
-                <br />
-                {t.heroH1b}
-                <br />
-                {t.heroH1c}
-              </h1>
-              <p className="hero-copy">{t.heroCopy}</p>
-              <div className="hero-actions">
-                <a className="button button-cyan" href={primaryHref} onClick={onHeroCta}>
-                  {heroCta}
-                  <span aria-hidden="true">→</span>
-                </a>
-                <button type="button" className="button button-ghost" onClick={() => openDemo(demoMode)}>
-                  <WatchIcon />
-                  {t.watchDemo}
+        <section className="hero hero-posters">
+          <h1 className="sr-only">{`${t.heroH1a} ${t.heroH1b} ${t.heroH1c}`}</h1>
+          <div
+            className="hero-poster-stage"
+            onMouseEnter={() => {
+              posterHover.current = true
+            }}
+            onMouseLeave={() => {
+              posterHover.current = false
+            }}
+          >
+            {HERO_POSTERS.map((item) => (
+              <img
+                key={item.id}
+                src={item.src}
+                alt={poster === item.id ? posterAlt[item.id] : ''}
+                className={poster === item.id ? 'on' : ''}
+              />
+            ))}
+          </div>
+          <div className="shell hero-poster-bar">
+            <div className="hero-poster-nav" role="tablist" aria-label={t.sitH}>
+              {HERO_POSTERS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={poster === item.id}
+                  className={poster === item.id ? 'on' : ''}
+                  onClick={() => {
+                    posterManualAt.current = Date.now()
+                    setPoster(item.id)
+                    setDemoMode(item.demo)
+                  }}
+                >
+                  {posterLabel[item.id]}
                 </button>
-              </div>
-              <div className="hero-feats">
-                <span>
-                  <i>
-                    <FeatIcon name="mic" />
-                  </i>
-                  {t.feat1}
-                </span>
-                <span>
-                  <i>
-                    <FeatIcon name="lang" />
-                  </i>
-                  {t.feat2}
-                </span>
-                <span>
-                  <i>
-                    <FeatIcon name="spark" />
-                  </i>
-                  {t.feat3}
-                </span>
-                <span>
-                  <i>
-                    <FeatIcon name="lock" />
-                  </i>
-                  {t.feat4}
-                </span>
-              </div>
+              ))}
             </div>
-            <HeroStage t={t} onOpen={openDemo} />
+            <div className="hero-actions">
+              <a className="button button-cyan" href={primaryHref} onClick={onHeroCta}>
+                {heroCta}
+                <span aria-hidden="true">→</span>
+              </a>
+              <button type="button" className="button button-ghost" onClick={() => openDemo(heroPosterById(poster).demo)}>
+                <WatchIcon />
+                {t.watchDemo}
+              </button>
+            </div>
           </div>
         </section>
 
