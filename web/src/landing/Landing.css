@@ -207,6 +207,89 @@ html.nod-site {
   background: #05070a;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.hero.hero-posters {
+  min-height: auto;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: calc(70px + env(safe-area-inset-top) + 24px) 0 40px;
+}
+
+.hero-poster-stage {
+  position: relative;
+  width: min(calc(100% - 32px), 1180px);
+  margin: 0 auto;
+  aspect-ratio: 3 / 2;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #05070a;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+
+.hero-poster-stage img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.45s ease;
+}
+
+.hero-poster-stage img.on {
+  opacity: 1;
+}
+
+.hero-poster-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.2rem;
+  padding: 1.4rem 0 0;
+}
+
+.hero-poster-nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.hero-poster-nav button {
+  min-height: 36px;
+  padding: 0.4rem 0.95rem;
+  border: 1px solid rgba(91, 218, 244, 0.28);
+  border-radius: 999px;
+  background: rgba(10, 28, 44, 0.7);
+  color: #c5d5e4;
+  font: 600 0.78rem/1 'IBM Plex Sans', sans-serif;
+  cursor: pointer;
+}
+
+.hero-poster-nav button.on,
+.hero-poster-nav button[aria-selected='true'] {
+  border-color: rgba(91, 218, 244, 0.7);
+  background: rgba(0, 180, 255, 0.16);
+  color: #f5fbff;
+}
+
+.hero-poster-bar .hero-actions {
+  justify-content: center;
+}
+
 .hero-back {
   position: absolute;
   inset: 0;
@@ -2320,6 +2403,11 @@ html.nod-site {
 }
 
 @media (max-width: 900px) {
+  .hero.hero-posters {
+    min-height: auto;
+    padding: calc(70px + env(safe-area-inset-top) + 16px) 0 28px;
+  }
+
   .desktop-nav {
     display: none;
   }
