@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type TouchEvent } from 'react'
 import { registerPlugin } from '@capacitor/core'
 import { api, setToken } from '../auth'
 import { tokenFromAppUrl } from '../native'
+import { SIGN_COVERS, nextSignCover, prevSignCover, signCoverById, type SignCoverId } from '../signCovers'
 
 const NodAuth = registerPlugin<{ google: (opts: { url: string }) => Promise<{ url?: string; token?: string }> }>('NodAuth')
 
@@ -27,6 +28,37 @@ export default function NativeSignIn({ onSignedIn }: { onSignedIn: () => void })
   const [sent, setSent] = useState(false)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [cover, setCover] = useState<SignCoverId>('listen')
+  const swipeX = useRef<number | null>(null)
+  const coverManualAt = useRef(0)
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (Date.now() - coverManualAt.current < 8000) return
+      setCover((id) => nextSignCover(id))
+    }, 5200)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  const pickCover = (id: SignCoverId) => {
+    coverManualAt.current = Date.now()
+    setCover(id)
+  }
+
+  const onCoverStart = (e: TouchEvent) => {
+    swipeX.current = e.changedTouches[0]?.clientX ?? null
+  }
+
+  const onCoverEnd = (e: TouchEvent) => {
+    const start = swipeX.current
+    swipeX.current = null
+    if (start == null) return
+    const dx = (e.changedTouches[0]?.clientX ?? start) - start
+    if (Math.abs(dx) < 40) return
+    pickCover(dx < 0 ? nextSignCover(cover) : prevSignCover(cover))
+  }
+
+  const activeCover = signCoverById(cover)
 
   const startGoogle = async () => {
     setBusy(true)
@@ -96,19 +128,35 @@ export default function NativeSignIn({ onSignedIn }: { onSignedIn: () => void })
 
   return (
     <div className="native-sign">
-      <div className="native-sign-card">
-        <svg className="native-sign-mark" viewBox="0 0 100 100" fill="none" aria-hidden="true">
-          <path
-            d="M26 88 V32 A13 13 0 0 1 52 32 L78 58"
-            stroke="#f4f8fc"
-            strokeWidth="9"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+      <div className="native-sign-covers" onTouchStart={onCoverStart} onTouchEnd={onCoverEnd}>
+        {SIGN_COVERS.map((item) => (
+          <img
+            key={item.id}
+            src={item.src}
+            alt={item.id === cover ? item.alt : ''}
+            className={item.id === cover ? 'on' : ''}
           />
-          <path d="M58 38 Q66 29 81 34 V60" stroke="#f4f8fc" strokeWidth="9" strokeLinecap="round" />
-          <circle cx="81" cy="70" r="4.5" fill="#00d2ff" />
-        </svg>
-        <h1>Nodpilot</h1>
+        ))}
+        <div className="native-sign-cover-copy">
+          <p className="native-sign-kicker">Nodpilot</p>
+          <h1>{activeCover.title}</h1>
+          <p>{activeCover.line}</p>
+          <div className="native-sign-dots" role="tablist" aria-label="Login covers">
+            {SIGN_COVERS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-label={item.title}
+                aria-selected={item.id === cover}
+                className={item.id === cover ? 'on' : ''}
+                onClick={() => pickCover(item.id)}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="native-sign-card">
         <p>
           {sent
             ? `We sent a code to ${email}.`

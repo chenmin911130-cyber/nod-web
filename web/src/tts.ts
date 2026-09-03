@@ -1,12 +1,12 @@
 import { apiUrl, isNativeApp } from './native'
 import { getToken } from './auth'
-import { playWatchSpeech, stopWatchSpeech } from './watch'
+import { playWatchSpeech } from './watch'
 
 export type TtsVoice = 'male' | 'female'
 export type TtsMode = 'tap' | 'live'
 
 const VOICE_KEY = 'nod_tts_voice'
-const MODE_KEY = 'nod_tts_mode'
+const MODE_KEY = 'nod_tts_mode_v2'
 const ON_KEY = 'nod_tts_on'
 
 let current: HTMLAudioElement | null = null
@@ -35,6 +35,16 @@ export function onSpeakingChange(cb: (on: boolean) => void): () => void {
 /** A second Play while audio is running must stop, not queue another clip. */
 export function speechTapShouldStop(playing: boolean): boolean {
   return playing
+}
+
+export type SpeechDest = 'phone' | 'watch'
+
+export function speechShouldPlayOnWatch(dest: SpeechDest): boolean {
+  return dest === 'watch'
+}
+
+export function speechShouldPlayOnPhone(dest: SpeechDest): boolean {
+  return dest === 'phone'
 }
 
 export function readTtsVoice(): TtsVoice {
@@ -67,9 +77,20 @@ export function readTtsMode(): TtsMode {
   }
 }
 
+/** Auto speech is Translate-only. Meeting / Interview must stay silent. */
+export function listenSessionShouldAutoSpeak(workspaceMode: string, _run?: string): boolean {
+  return workspaceMode === 'translate'
+}
+
+/** Clicking Auto from Tap must ask first. Already-on Auto does not re-prompt. */
+export function ttsAutoShouldConfirm(current: TtsMode, next: TtsMode): boolean {
+  return current !== 'live' && next === 'live'
+}
+
 export function nextLiveUtterances(input: {
   live: boolean
   workspaceMode: string
+  run?: string
   translateOn: boolean
   bindId: string
   spoken: Iterable<string>
@@ -77,6 +98,7 @@ export function nextLiveUtterances(input: {
   lines: Array<{ id: string; translation?: string }>
 }): Array<{ id: string; text: string }> {
   if (!input.live) return []
+  if (!listenSessionShouldAutoSpeak(input.workspaceMode, input.run || 'idle')) return []
   const spoken = new Set(input.spoken)
   const out: Array<{ id: string; text: string }> = []
   if (input.workspaceMode === 'translate') {
@@ -130,7 +152,6 @@ export function stopSpeech(): void {
   playAbort = null
   jobs.length = 0
   haltAudio()
-  void stopWatchSpeech()
   setSpeaking(false)
 }
 
@@ -145,7 +166,7 @@ export function unlockSpeech(): void {
   void probe.play().catch(() => undefined)
 }
 
-async function playOnce(text: string, voice: TtsVoice): Promise<void> {
+async function playOnce(text: string, voice: TtsVoice, dest: SpeechDest): Promise<void> {
   const clean = text.trim()
   if (!clean) return
   const gen = playGen
@@ -184,18 +205,25 @@ async function playOnce(text: string, voice: TtsVoice): Promise<void> {
   if (!bytes.byteLength) throw new Error('Speech returned empty audio')
   if (gen !== playGen) return
   if (isNativeApp()) {
-    try {
+    if (speechShouldPlayOnWatch(dest)) {
       await Promise.race([
-        playWatchSpeech(bytes),
+        playWatchSpeech(bytes, 'watch'),
         new Promise<void>((_, reject) => {
           window.setTimeout(() => reject(new Error('Speech timed out')), 45_000)
         }),
       ])
       return
-    } catch (err) {
-      if (err instanceof Error && err.message === 'Speech timed out') throw err
-      /* WKWebView fallback after a failed native player */
     }
+    if (speechShouldPlayOnPhone(dest)) {
+      await Promise.race([
+        playWatchSpeech(bytes, 'phone'),
+        new Promise<void>((_, reject) => {
+          window.setTimeout(() => reject(new Error('Speech timed out')), 45_000)
+        }),
+      ])
+      return
+    }
+    return
   }
   haltAudio()
   objectUrl = URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' }))
@@ -226,7 +254,7 @@ async function playOnce(text: string, voice: TtsVoice): Promise<void> {
   })
 }
 
-type SpeechJob = { text: string; voice: TtsVoice; ok: () => void; fail: (err: unknown) => void }
+type SpeechJob = { text: string; voice: TtsVoice; dest: SpeechDest; ok: () => void; fail: (err: unknown) => void }
 
 const jobs: SpeechJob[] = []
 let draining = false
@@ -234,13 +262,13 @@ let draining = false
 async function drain(): Promise<void> {
   if (draining) return
   draining = true
-  setSpeaking(true)
   try {
     while (jobs.length) {
       const job = jobs.shift()
       if (!job) break
+      if (speechShouldPlayOnPhone(job.dest)) setSpeaking(true)
       try {
-        await playOnce(job.text, job.voice)
+        await playOnce(job.text, job.voice, job.dest)
         job.ok()
       } catch (err) {
         job.fail(err)
@@ -253,11 +281,12 @@ async function drain(): Promise<void> {
   }
 }
 
-export function speakTranslation(text: string, voice: TtsVoice): Promise<void> {
+export function speakTranslation(text: string, voice: TtsVoice, dest: SpeechDest = 'phone'): Promise<void> {
   return new Promise((resolve, reject) => {
     jobs.push({
       text,
       voice,
+      dest,
       ok: resolve,
       fail: reject,
     })

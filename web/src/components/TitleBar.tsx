@@ -23,6 +23,8 @@ export interface TitleIconsProps {
   onStealth: (on: boolean) => void
   onFullScreen: () => void
   onMenuOpen?: () => void
+  onOpenHistory?: () => void
+  onMore?: () => void
 }
 
 interface Props {
@@ -46,6 +48,8 @@ interface Props {
   onMicMuted: (muted: boolean) => void
   onStealth: (on: boolean) => void
   onFullScreen: () => void
+  onOpenHistory?: () => void
+  onMore?: () => void
 }
 
 const MODES: Array<{ id: WorkspaceMode; label: string }> = [
@@ -60,6 +64,26 @@ function NodLogo() {
       <path d="M58 38 Q66 29 81 34 V60" stroke="#f5f8ff" strokeWidth="9" strokeLinecap="round" />
       <circle cx="81" cy="70" r="4.5" fill="#22d3ee" />
     </svg>
+  )
+}
+
+function BrandWordmark() {
+  return (
+    <span className="brand-word" aria-label={PRODUCT_NAME}>
+      <span className="brand-nod">Nod</span>
+      <span className="brand-cyan">
+        p
+        <span className="brand-i">
+          <span className="brand-i-stem">ı</span>
+          <svg className="brand-i-icon" width="12" height="14" viewBox="0 0 100 100" fill="none" aria-hidden="true">
+            <path d="M26 88 V32 A13 13 0 0 1 52 32 L78 58" stroke="#00d2ff" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M58 38 Q66 29 81 34 V60" stroke="#00d2ff" strokeWidth="9" strokeLinecap="round" />
+            <circle cx="81" cy="70" r="4.5" fill="#00d2ff" />
+          </svg>
+        </span>
+        lot
+      </span>
+    </span>
   )
 }
 
@@ -215,20 +239,18 @@ export function TitleIcons(props: TitleIconsProps) {
               <span>Opacity</span>
               <OpacityBar value={opacity} onChange={props.onOpacity} />
             </div>
-            {mode === 'interview' && (
+            {!isWeb && mode === 'interview' && (
               <>
-                {!isWeb && (
-                  <button
-                    type="button"
-                    className="tb-menu-action"
-                    onClick={() => {
-                      props.onStealth(!stealth)
-                      setMenuOpen(false)
-                    }}
-                  >
-                    {stealth ? 'Stealth on' : 'Stealth — hide from capture'}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="tb-menu-action"
+                  onClick={() => {
+                    props.onStealth(!stealth)
+                    setMenuOpen(false)
+                  }}
+                >
+                  {stealth ? 'Stealth on' : 'Stealth — hide from capture'}
+                </button>
                 <button
                   type="button"
                   className="tb-menu-action"
@@ -238,6 +260,30 @@ export function TitleIcons(props: TitleIconsProps) {
                   }}
                 >
                   Compact view
+                </button>
+              </>
+            )}
+            {isNativeApp() && (
+              <>
+                <button
+                  type="button"
+                  className="tb-menu-action"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    props.onOpenHistory?.()
+                  }}
+                >
+                  History
+                </button>
+                <button
+                  type="button"
+                  className="tb-menu-action"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    props.onMore?.()
+                  }}
+                >
+                  More
                 </button>
               </>
             )}
@@ -278,9 +324,9 @@ export default function TitleBar(props: Props) {
           <span className="brand-white">{PRODUCT_NAME}</span>
         </a>
       ) : (
-        <div className="brand no-drag">
+        <div className="brand no-drag" aria-label={PRODUCT_NAME}>
           <NodLogo />
-          <span className="brand-white">{PRODUCT_NAME}</span>
+          {isNativeApp() ? <BrandWordmark /> : null}
         </div>
       )}
 
@@ -303,8 +349,8 @@ export default function TitleBar(props: Props) {
       </div>
 
       <div className="titlebar-right no-drag">
-        <PetTimer listening={Boolean(props.listening)} />
-        {mode !== 'translate' && (
+        {!isNativeApp() && <PetTimer listening={Boolean(props.listening)} />}
+        {(mode !== 'translate' || isNativeApp()) && (
           <TitleIcons
             mode={mode}
             source={source}
@@ -320,6 +366,8 @@ export default function TitleBar(props: Props) {
             onMicMuted={props.onMicMuted}
             onStealth={props.onStealth}
             onFullScreen={props.onFullScreen}
+            onOpenHistory={props.onOpenHistory}
+            onMore={props.onMore}
           />
         )}
 

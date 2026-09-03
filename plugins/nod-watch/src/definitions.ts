@@ -7,9 +7,16 @@ export interface NodWatchPlugin {
     hint?: string
     original?: string
     translation?: string
+    previous?: string
     history?: WatchHistItem[]
+    mode?: string
+    langPair?: string
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
-  playSpeech(opts: { data: string }): Promise<void>
+  saveToFiles(opts: {
+    files: Array<{ data: string; name: string }>
+    remotes?: Array<{ url: string; name: string; token?: string }>
+  }): Promise<void>
+  playSpeech(opts: { data: string; dest?: 'phone' | 'watch' }): Promise<void>
   stopSpeech(): Promise<void>
 }

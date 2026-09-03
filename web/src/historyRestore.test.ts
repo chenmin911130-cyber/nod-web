@@ -1,4 +1,4 @@
-import { historySessionMatches, restoreFromSession, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt } from './historyRestore'
+import { groupHistoryByDay, historyRowWhen, historySessionMatches, restoreFromSession, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt } from './historyRestore'
 import type { HistorySession } from './components/HistoryPane'
 
 function at(h: number, m: number, s = 0): string {
@@ -53,8 +53,11 @@ if (historySessionMatches(lecture, 'interview debrief')) throw new Error('unrela
 if (!sessionShouldOfferSave({ workspaceMode: 'meeting', ended: true, kept: false, hasContent: true })) {
   throw new Error('ended Meeting / Lecture with content must offer Save')
 }
-if (!sessionShouldOfferSave({ workspaceMode: 'meeting', ended: false, kept: false, hasContent: true, listening: false })) {
-  throw new Error('paused Meeting with content must offer Save')
+if (sessionShouldOfferSave({ workspaceMode: 'meeting', ended: false, kept: false, hasContent: true, listening: false, paused: true })) {
+  throw new Error('paused Meeting must not offer Save')
+}
+if (!sessionShouldOfferSave({ workspaceMode: 'meeting', ended: true, kept: false, hasContent: true, listening: false })) {
+  throw new Error('Stop with content must offer Save')
 }
 if (sessionShouldOfferSave({ workspaceMode: 'meeting', ended: true, kept: true, hasContent: true })) {
   throw new Error('already saved session must not offer Save again')
@@ -87,3 +90,16 @@ eq(JSON.stringify(keepAll), '{"content":true,"audio":true}', 'Save keeps content
 if ('filesToDevice' in keepAll) throw new Error('Save must not include Files export')
 const keepQuiet = sessionSaveKeep({ audio: false })
 eq(JSON.stringify(keepQuiet), '{"content":true,"audio":false}', 'Save can drop recording but still keep content')
+
+const now = new Date(2026, 8, 3, 14, 0).getTime()
+const today = { id: 't', title: 'Q3 planning', started_at: new Date(2026, 8, 3, 9, 41).toISOString(), stt_seconds: 48 * 60 }
+const yesterday = { id: 'y', title: 'Budget review', started_at: new Date(2026, 8, 2, 15, 16).toISOString(), stt_seconds: 22 * 60 }
+const older = { id: 'o', title: 'Roadmap update', started_at: new Date(2024, 8, 18, 10, 0).toISOString(), stt_seconds: 22 * 60 }
+eq(historyRowWhen(today.started_at, today.stt_seconds, now), 'Today, 9:41 AM • 48m', 'today row keeps day + clock + duration')
+eq(historyRowWhen(yesterday.started_at, yesterday.stt_seconds, now), 'Yesterday, 3:16 PM • 22m', 'yesterday row keeps day + clock + duration')
+eq(historyRowWhen(older.started_at, older.stt_seconds, now), 'Sep 18, 2024 • 22m', 'older row is the calendar day')
+
+const groups = groupHistoryByDay([today, yesterday, older], now)
+eq(groups.map((g) => g.label).join('|'), 'Today|Yesterday|Sep 18, 2024', 'History is a day list, not a dump on the home screen')
+eq(groups[0].sessions[0].title, 'Q3 planning', 'today bucket keeps the morning session')
+eq(groups[1].sessions[0].title, 'Budget review', 'yesterday bucket stays off the home screen')

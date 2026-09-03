@@ -119,7 +119,7 @@ export function ConsentPage() {
   return (
     <Shell title="Recording consent">
       <p>
-        Nodpilot listens through your browser microphone on the web. Windows desktop (system audio from Zoom or Teams, pin, and stealth)
+        Nodpilot listens through your browser microphone on the web. Windows desktop (system audio from Zoom or Teams)
         is coming soon for public download. Speech is sent to AssemblyAI. Text may be sent to a language model. Other people in the
         call may not know you are transcribing unless you tell them.
       </p>

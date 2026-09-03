@@ -15,7 +15,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastHint = "Ready"
     private var lastOriginal = ""
     private var lastTranslation = ""
+    private var lastPrevious = ""
     private var lastHistory: [[String: String]] = []
+    private var lastMode = ""
+    private var lastLangPair = ""
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
 
@@ -37,6 +40,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             hint: lastHint,
             original: lastOriginal,
             translation: lastTranslation,
+            previous: lastPrevious,
             history: lastHistory
         )
     }
@@ -61,6 +65,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             hint: lastHint,
             original: lastOriginal,
             translation: lastTranslation,
+            previous: lastPrevious,
             history: lastHistory
         )
     }
@@ -70,22 +75,39 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         hint: String,
         original: String = "",
         translation: String = "",
-        history: [[String: String]] = []
+        previous: String = "",
+        history: [[String: String]] = [],
+        mode: String = "",
+        langPair: String = ""
     ) {
         lastListening = listening
         lastHint = hint
         lastOriginal = original
         lastTranslation = translation
+        lastPrevious = previous
         lastHistory = history
+        if !mode.isEmpty {
+            lastMode = mode
+        }
+        if !langPair.isEmpty {
+            lastLangPair = langPair
+        }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "listening": listening,
             "hint": hint,
             "original": original,
             "translation": translation,
+            "previous": previous,
             "history": history,
         ]
+        if !lastMode.isEmpty {
+            payload["mode"] = lastMode
+        }
+        if !lastLangPair.isEmpty {
+            payload["langPair"] = lastLangPair
+        }
         guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
         do {
             try session.updateApplicationContext(payload)
@@ -116,7 +138,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             emitPcm(pcm)
         }
         let raw = (message["action"] as? String ?? "").lowercased()
-        let allowed = ["stop", "start", "record", "pause", "resume", "speak", "tts_live", "tts_tap", "tts_female", "tts_male"]
+        let allowed = ["stop", "start", "record", "pause", "resume", "speak", "save", "discard", "tts_live", "tts_tap", "tts_female", "tts_male"]
         let action = allowed.contains(raw) ? raw : ""
         guard !action.isEmpty else { return }
         let mode = Self.watchListenMode(message["mode"] as? String ?? "")
@@ -140,16 +162,40 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
     }
 
-    func playSpeech(_ data: Data, finished: ((Error?) -> Void)? = nil) {
-        if WCSession.isSupported() {
-            let session = WCSession.default
-            // Live only. transferFile leftovers play the next time the Watch app opens.
-            if session.isReachable, data.count <= 80_000 {
-                session.sendMessage(["speech": data.base64EncodedString()], replyHandler: nil, errorHandler: nil)
-            }
+    func playSpeech(_ data: Data, dest: String = "phone", finished: ((Error?) -> Void)? = nil) {
+        if dest == "watch" {
+            sendSpeechToWatch(data)
+            DispatchQueue.main.async { finished?(nil) }
+            return
         }
         DispatchQueue.main.async {
             self.playLocal(data, finished: finished)
+        }
+    }
+
+    private func sendSpeechToWatch(_ data: Data) {
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+        if session.isReachable, data.count <= 50_000 {
+            session.sendMessage(["speechData": data], replyHandler: nil, errorHandler: { _ in
+                Self.transferSpeech(data, session: session)
+            })
+            return
+        }
+        Self.transferSpeech(data, session: session)
+    }
+
+    private static func transferSpeech(_ data: Data, session: WCSession) {
+        guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("nod-watch-speech.mp3")
+        do {
+            try data.write(to: url, options: .atomic)
+            session.transferFile(url, metadata: [
+                "kind": "speech",
+                "at": String(Date().timeIntervalSince1970),
+            ])
+        } catch {
+            /* Watch play is best-effort; phone still speaks locally. */
         }
     }
 
@@ -249,6 +295,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
                 hint: lastHint,
                 original: lastOriginal,
                 translation: lastTranslation,
+                previous: lastPrevious,
                 history: lastHistory
             )
         }
@@ -266,7 +313,14 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
 
     public func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
         handle(message, live: true)
-        replyHandler(["ok": true, "listening": lastListening, "hint": lastHint])
+        var reply: [String: Any] = ["ok": true, "listening": lastListening, "hint": lastHint]
+        if !lastMode.isEmpty {
+            reply["mode"] = lastMode
+        }
+        if !lastLangPair.isEmpty {
+            reply["langPair"] = lastLangPair
+        }
+        replyHandler(reply)
     }
 
     public func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {

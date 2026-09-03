@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from server.db import AuditLog, Feedback, Order, ResetToken, User, db_session, utcnow
 from server.mailer import send_otp_email, send_reset_email
 from server.otp import OTP_OK, consume_otp, issue_otp
-from server.meter import delete_history_session, delete_user_data, list_history, plan_of, session_file_url, usage_snapshot
+from server.meter import delete_history_session, delete_user_data, list_history, plan_of, session_file_key, session_file_url, usage_snapshot
 from server.security import (
     cookie_kwargs,
     current_user,
@@ -463,10 +463,27 @@ def download_session_file(
     kind: str,
     part: str | None = None,
     filename: str = "",
+    proxy: bool = False,
     user: User = Depends(workspace_user),
 ):
     if kind not in ("audio", "notes"):
         raise HTTPException(404, "Unknown file")
+    if proxy:
+        from server.r2 import get_bytes
+
+        key = session_file_key(user.id, session_id, kind, part)
+        if not key:
+            raise HTTPException(404, "File not found")
+        body = get_bytes(key)
+        if not body:
+            raise HTTPException(404, "File not found")
+        safe = (filename or "recording.wav").replace('"', "").replace("\n", " ")
+        media = "audio/wav" if kind == "audio" else "application/pdf"
+        return RawResponse(
+            content=body,
+            media_type=media,
+            headers={"Content-Disposition": f'attachment; filename="{safe}"'},
+        )
     url = session_file_url(user.id, session_id, kind, part, filename)
     if not url:
         raise HTTPException(404, "File not found")

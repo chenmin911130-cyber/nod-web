@@ -4,7 +4,7 @@ import Foundation
 import WatchConnectivity
 import WatchKit
 
-final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WKExtendedRuntimeSessionDelegate {
+final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WKExtendedRuntimeSessionDelegate, AVAudioPlayerDelegate {
     static let shared = WatchPhoneSession()
 
     @Published var listening = false
@@ -14,13 +14,18 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var hint = "Watch mic — tap Listen"
     @Published var original = ""
     @Published var translation = ""
+    @Published var previous = ""
     @Published var history: [WatchHistItem] = []
     @Published var reachable = false
     @Published var speechLive = false
     @Published var speechVoice = "female"
-    @Published var mode = WatchPhoneSession.storedMode()
+    @Published var offeringSave = false
+    @Published var savedAck = false
+    @Published var langPair = "Auto → CH"
+    @Published var mode = "meeting"
 
     private var speechPlayer: AVAudioPlayer?
+    private var savedAckWork: DispatchWorkItem?
 
     struct WatchHistItem: Identifiable, Equatable {
         let id: String
@@ -54,7 +59,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             { _, observer, _, _, _ in
                 guard let observer else { return }
                 let session = Unmanaged<WatchPhoneSession>.fromOpaque(observer).takeUnretainedValue()
-                DispatchQueue.main.async { session.startRecording() }
+                DispatchQueue.main.async { session.startSession() }
             },
             name,
             nil,
@@ -64,15 +69,15 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
 
     private static let modeKey = "nod.watch.listenMode"
 
+    /// Phone workspace is the source of truth. Leftover Watch chips must not win.
     private static func storedMode() -> String {
-        let raw = UserDefaults.standard.string(forKey: modeKey) ?? "meeting"
-        return ["meeting", "lecture", "interview", "translate"].contains(raw) ? raw : "meeting"
+        "meeting"
     }
 
     static func modeLabel(_ id: String) -> String {
         switch id {
         case "lecture": return "Lecture"
-        case "interview": return "Interview"
+        case "interview": return "Live Q&A"
         case "translate": return "Translate"
         default: return "Meeting"
         }
@@ -87,16 +92,53 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         }
     }
 
+    static func usesWatchMic(_ mode: String) -> Bool {
+        mode == "interview" || mode == "translate"
+    }
+
+    /// Crown is Start/Stop. Side is Pause/Resume. Do not call toggle() from the crown.
+    static func hardwareAction(
+        key: String,
+        listening: Bool,
+        paused: Bool,
+        offeringSave: Bool,
+        saved: Bool
+    ) -> String {
+        if offeringSave || saved { return "" }
+        if key == "crown" {
+            return (listening || paused) ? "stop" : "start"
+        }
+        if paused { return "resume" }
+        if listening { return "pause" }
+        return ""
+    }
+
+    func applyHardware(_ key: String) {
+        switch Self.hardwareAction(
+            key: key,
+            listening: listening,
+            paused: paused,
+            offeringSave: offeringSave,
+            saved: savedAck
+        ) {
+        case "start": startSession()
+        case "stop": finish()
+        case "pause": pause()
+        case "resume": resume()
+        default: break
+        }
+    }
+
     func toggle() {
         if paused {
             resume()
             return
         }
-        if WatchRecorder.shared.isRunning {
+        if listening || WatchRecorder.shared.isRunning {
             pause()
             return
         }
-        startRecording()
+        startSession()
     }
 
     func record() {
@@ -108,13 +150,16 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             return
         }
         resetPcmBuffer()
+        original = ""
+        translation = ""
+        previous = ""
         elapsedMs = 0
         send(action: "record")
         beginMic(hint: "Recording · Pause anytime, Done for report")
     }
 
     func pause() {
-        guard WatchRecorder.shared.isRunning || listening else { return }
+        guard listening || WatchRecorder.shared.isRunning else { return }
         if let startedAt {
             elapsedMs = Date().timeIntervalSince(startedAt)
         }
@@ -123,7 +168,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         listening = false
         paused = true
         WatchGlanceStore.setPaused(elapsed: elapsedMs)
-        hint = "Paused"
+        hint = WatchCopy.paused
         send(action: "pause")
     }
 
@@ -132,7 +177,13 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         paused = false
         startedAt = Date().addingTimeInterval(-elapsedMs)
         send(action: "resume")
-        beginMic(hint: reachable ? "Watch mic" : "Recording on Watch", resetClock: false)
+        if Self.usesWatchMic(mode) {
+            beginMic(hint: reachable ? "Watch mic" : "Recording on Watch", resetClock: false)
+        } else {
+            listening = true
+            WatchGlanceStore.setStartedAt(startedAt)
+            hint = "Phone mic"
+        }
     }
 
     func speakCurrent() {
@@ -150,6 +201,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     func playSpeech(_ data: Data) {
+        let resumeMic = listening && Self.usesWatchMic(mode) && WatchRecorder.shared.isRunning
+        if resumeMic {
+            WatchRecorder.shared.stop()
+            stopRuntime()
+        }
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default)
@@ -157,19 +213,30 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("nod-play.mp3")
             try data.write(to: url, options: .atomic)
             let player = try AVAudioPlayer(contentsOf: url, fileTypeHint: AVFileType.mp3.rawValue)
+            player.delegate = self
             player.volume = 1
             player.prepareToPlay()
             speechPlayer = player
             guard player.play() else {
                 hint = "Could not play speech"
+                resumeMicAfterSpeech()
                 return
             }
         } catch {
             hint = "Could not play speech"
+            resumeMicAfterSpeech()
         }
     }
 
+    private func resumeMicAfterSpeech() {
+        speechPlayer = nil
+        guard listening, !paused, Self.usesWatchMic(mode), !WatchRecorder.shared.isRunning else { return }
+        beginMic(hint: reachable ? "Watch mic" : "Recording on Watch", resetClock: false)
+    }
+
     func finish() {
+        let hadContent = !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !translation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         paused = false
         WatchRecorder.shared.stop()
         stopRuntime()
@@ -177,17 +244,61 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         startedAt = nil
         elapsedMs = 0
         WatchGlanceStore.clear()
-        hint = "Ready"
+        offeringSave = hadContent
+        savedAck = false
+        hint = hadContent ? WatchCopy.saveAsk : WatchCopy.ready
         send(action: "stop")
         flushUnsent()
         resetPcmBuffer()
     }
 
-    private func startRecording() {
+    func confirmSave() {
+        offeringSave = false
+        savedAck = true
+        hint = WatchCopy.saved
+        send(action: "save")
+        scheduleReady()
+    }
+
+    func declineSave() {
+        offeringSave = false
+        savedAck = false
+        hint = WatchCopy.ready
+        send(action: "discard")
+    }
+
+    func startSession() {
+        guard !listening, !paused else { return }
+        savedAckWork?.cancel()
         resetPcmBuffer()
+        original = ""
+        translation = ""
+        previous = ""
         elapsedMs = 0
+        offeringSave = false
+        savedAck = false
         send(action: "start")
-        beginMic(hint: reachable ? "Watch mic" : "Recording on Watch")
+        if Self.usesWatchMic(mode) {
+            beginMic(hint: reachable ? "Watch mic" : "Recording on Watch")
+        } else {
+            listening = true
+            paused = false
+            startedAt = Date()
+            elapsedMs = 0
+            WatchGlanceStore.setStartedAt(startedAt)
+            hint = "Phone mic"
+        }
+    }
+
+    private func scheduleReady() {
+        savedAckWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.savedAck else { return }
+            self.savedAck = false
+            self.hint = WatchCopy.ready
+        }
+        savedAckWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
     }
 
     private func beginMic(hint: String, resetClock: Bool = true) {
@@ -319,10 +430,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     func send(action: String) {
-        var payload: [String: Any] = ["action": action, "at": Date().timeIntervalSince1970]
-        if action == "start" || action == "record" {
-            payload["mode"] = mode
-        }
+        let payload: [String: Any] = ["action": action, "at": Date().timeIntervalSince1970]
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         if session.isReachable {
@@ -338,7 +446,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             if self.listening {
                 self.hint = "Recording on Watch"
             } else if self.paused {
-                self.hint = "Paused"
+                self.hint = WatchCopy.paused
             } else {
                 self.hint = "Waking iPhone…"
             }
@@ -350,8 +458,19 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         live
     }
 
+    static func speechFileShouldPlay(at: TimeInterval?, now: TimeInterval) -> Bool {
+        guard let at else { return false }
+        return now - at <= 30
+    }
+
     private func apply(_ payload: [String: Any], live: Bool) {
-        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused {
+        if let next = payload["mode"] as? String, ["meeting", "lecture", "interview", "translate"].contains(next) {
+            setMode(next)
+        }
+        if let pair = payload["langPair"] as? String, !pair.isEmpty {
+            langPair = pair
+        }
+        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck {
             self.hint = hint
         }
         if let original = payload["original"] as? String {
@@ -360,11 +479,17 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let translation = payload["translation"] as? String {
             self.translation = translation
         }
-        if Self.speechShouldPlay(live: live),
-           let speech = payload["speech"] as? String,
-           let data = Data(base64Encoded: speech),
-           !data.isEmpty {
-            playSpeech(data)
+        if let previous = payload["previous"] as? String {
+            self.previous = previous
+        }
+        if Self.speechShouldPlay(live: live) {
+            if let data = payload["speechData"] as? Data, !data.isEmpty {
+                playSpeech(data)
+            } else if let speech = payload["speech"] as? String,
+                      let data = Data(base64Encoded: speech),
+                      !data.isEmpty {
+                playSpeech(data)
+            }
         }
         if let rows = payload["history"] as? [Any] {
             self.history = rows.compactMap { row in
@@ -382,7 +507,10 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         DispatchQueue.main.async {
             self.reachable = session.isReachable
             if activationState != .activated {
-                self.hint = "Open Nod on iPhone once"
+                self.hint = "Open Nodpilot on iPhone once"
+            }
+            if !session.receivedApplicationContext.isEmpty {
+                self.apply(session.receivedApplicationContext, live: false)
             }
         }
     }
@@ -396,11 +524,21 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 self.pcmLock.unlock()
             }
             if self.listening {
-                self.hint = session.isReachable ? "Watch mic" : "Recording on Watch"
+                if self.original.isEmpty, self.translation.isEmpty {
+                    self.hint = session.isReachable ? "Watch mic" : "Recording on Watch"
+                }
             } else if self.paused {
-                self.hint = "Paused"
+                self.hint = WatchCopy.paused
             }
         }
+    }
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        DispatchQueue.main.async { self.resumeMicAfterSpeech() }
+    }
+
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        DispatchQueue.main.async { self.resumeMicAfterSpeech() }
     }
 
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
@@ -416,8 +554,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
-        // Leftover speech files are delivered on Watch launch. Never auto-play.
         guard (file.metadata?["kind"] as? String) == "speech" else { return }
+        let at = (file.metadata?["at"] as? String).flatMap(TimeInterval.init)
+        guard Self.speechFileShouldPlay(at: at, now: Date().timeIntervalSince1970) else { return }
+        guard let data = try? Data(contentsOf: file.fileURL), !data.isEmpty else { return }
+        DispatchQueue.main.async { self.playSpeech(data) }
     }
 
     #if os(iOS)

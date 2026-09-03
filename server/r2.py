@@ -98,6 +98,17 @@ def list_keys(prefix: str) -> list[str]:
     return keys
 
 
+def get_bytes(key: str) -> bytes:
+    if not enabled() or not key:
+        return b""
+    try:
+        obj = _client().get_object(Bucket=R2_BUCKET, Key=key)
+        return obj["Body"].read()
+    except Exception:
+        log.exception("r2 get failed key=%s", key)
+        return b""
+
+
 def delete_key(key: str) -> None:
     if not enabled() or not key:
         return

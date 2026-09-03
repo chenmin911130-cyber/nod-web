@@ -18,7 +18,7 @@ def normalize_scene(mode: str | None, scene: str | None) -> str:
 
 def scene_label(scene: str) -> str:
     return {
-        "interview": "Interview",
+        "interview": "Live Q&A",
         "lecture": "Lecture",
         "translate": "Translate",
         "meeting": "Meeting",
@@ -47,14 +47,18 @@ def session_download_name(
     kind: str = "audio",
     part_name: str | None = None,
 ) -> str:
-    label = scene_label(normalize_scene(mode, scene))
+    label = re.sub(
+        r"[^A-Za-z0-9]+",
+        "-",
+        scene_label(normalize_scene(mode, scene)).replace("&", ""),
+    ).strip("-")
     stamp = session_stamp(started_at)
     if kind in ("notes", "pdf"):
-        return f"{label}-{stamp}.pdf"
+        return f"Nodpilot-{label}-{stamp}.pdf"
     idx = part_index(part_name)
     if idx:
-        return f"{label}-{stamp}-part{idx}.wav"
-    return f"{label}-{stamp}.wav"
+        return f"Nodpilot-{label}-{stamp}-part{idx}.wav"
+    return f"Nodpilot-{label}-{stamp}.wav"
 
 
 def session_copy_text(title: str, mode: str | None, scene: str | None, items: list[dict]) -> str:

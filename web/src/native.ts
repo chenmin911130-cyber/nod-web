@@ -144,7 +144,15 @@ export function installNativeShell(): void {
   document.documentElement.classList.add('nod-native')
   document.addEventListener('click', onNativeLinkClick)
   void listenForAuthReturn()
+  void import('./keyboardInset').then(({ installKeyboardInset }) => {
+    installKeyboardInset()
+  })
   void import('@capacitor/status-bar').then(({ StatusBar, Style }) => {
     void StatusBar.setStyle({ style: Style.Dark })
+  }).catch(() => undefined)
+  void import('@capacitor/keyboard').then(async ({ Keyboard, KeyboardResize }) => {
+    await Keyboard.setAccessoryBarVisible({ isVisible: false })
+    await Keyboard.setScroll({ isDisabled: true })
+    await Keyboard.setResizeMode({ mode: KeyboardResize.Native })
   }).catch(() => undefined)
 }

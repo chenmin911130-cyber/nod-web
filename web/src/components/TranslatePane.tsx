@@ -5,7 +5,9 @@ import type { AttachPayload, LocalAttach } from '../attach'
 import { toPayload } from '../attach'
 import PromptAttach from './PromptAttach'
 import EmptyState from './EmptyState'
-import type { TtsMode, TtsVoice } from '../tts'
+import { ttsAutoShouldConfirm, type TtsMode, type TtsVoice } from '../tts'
+import { isNativeApp } from '../native'
+import { IPHONE_COPY, translateFromChip, translateSourceTag, translateToChip } from '../iphoneCopy'
 
 interface Props {
   pairs: TranslatePair[]
@@ -28,6 +30,7 @@ interface Props {
   speaking?: boolean
   onStopSpeech?: () => void
   voiceChrome?: ReactNode
+  actions?: ReactNode
 }
 
 function langTag(code: PairLang): string {
@@ -48,6 +51,115 @@ function Sparkle() {
     <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
       <path d="M10 1.2l1.05 5.1L16.3 7.4 11.05 8.7 10 13.8 8.95 8.7 3.7 7.4l5.25-1.1L10 1.2z" />
       <path d="M15.6 11.6l.5 2.05 2.05.5-2.05.5-.5 2.05-.5-2.05-2.05-.5 2.05-.5.5-2.05z" />
+    </svg>
+  )
+}
+
+function EarIcon() {
+  return (
+    <svg className="iphone-tr-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M8.2 2.4c-2 0-3.6 1.6-3.6 4.2v1.8c0 1.2.5 2 .9 2.6.3.4.5.9.3 1.4-.2.6-.8 1-1.5 1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M8.2 2.4c1.7 0 3.2 1.3 3.2 3.4v2.2c0 1.5-.6 2.4-1.2 3-.5.5-.8 1.1-.6 1.7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function ArrowIcon() {
+  return (
+    <svg className="iphone-tr-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M3 8h9.2M8.8 4.4 13 8l-4.2 3.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function NativeTranslateCard({
+  ts,
+  source,
+  sourceTag,
+  target,
+  targetPending = false,
+  targetFailed = false,
+  spoken,
+  speaking,
+  onCopyOriginal,
+  onCopyTranslation,
+  onSpeak,
+  onStop,
+  onRetry,
+}: {
+  ts: string
+  source: string
+  sourceTag: string
+  target: string
+  targetPending?: boolean
+  targetFailed?: boolean
+  spoken?: string
+  speaking?: boolean
+  onCopyOriginal?: () => void
+  onCopyTranslation?: () => void
+  onSpeak?: () => void
+  onStop?: () => void
+  onRetry?: () => void
+}) {
+  const sourceBody = (
+    <span className="tr-text">
+      {source}
+      {sourceTag ? <span className="tr-lang-chip">{sourceTag}</span> : null}
+    </span>
+  )
+  return (
+    <div className={`tr-pair iphone-tr-card${ts === 'live' ? ' live' : ''}`}>
+      <span className="meet-ts">{ts}</span>
+      <div className="iphone-tr-source">
+        {onCopyOriginal ? (
+          <button type="button" className="tr-copy-hit" onClick={onCopyOriginal} title="Copy original">
+            {sourceBody}
+          </button>
+        ) : (
+          sourceBody
+        )}
+      </div>
+      {spoken ? (
+        <button
+          type="button"
+          className={`tr-speak${speaking ? ' stop' : ''}`}
+          onClick={() => (speaking ? onStop?.() : onSpeak?.())}
+          title={speaking ? 'Stop' : 'Play'}
+          aria-label={speaking ? 'Stop speech' : 'Play translation'}
+        >
+          {speaking ? <LineStopIcon /> : <LinePlayIcon />}
+        </button>
+      ) : (
+        <span className="iphone-tr-play-slot" aria-hidden="true" />
+      )}
+      <div className={`iphone-tr-target${targetPending ? ' pending' : ''}${targetFailed ? ' failed' : ''}`}>
+        {onCopyTranslation ? (
+          <button
+            type="button"
+            className="tr-copy-hit"
+            onClick={onCopyTranslation}
+            title={targetPending ? undefined : 'Copy translation'}
+            disabled={targetPending}
+          >
+            <span className="tr-text">{target}</span>
+          </button>
+        ) : (
+          <span className="tr-text">{target}</span>
+        )}
+        {targetFailed && onRetry ? (
+          <button type="button" className="tr-retry" onClick={onRetry}>
+            Retry
+          </button>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function SendIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path d="M3.2 9.1 14.6 3.4 8.4 14.6l-.8-5.1L3.2 9.1z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
     </svg>
   )
 }
@@ -145,10 +257,21 @@ export default function TranslatePane({
   speaking = false,
   onStopSpeech,
   voiceChrome,
+  actions,
 }: Props) {
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<LocalAttach[]>([])
+  const [autoAsk, setAutoAsk] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  const requestTtsMode = (mode: TtsMode) => {
+    if (ttsAutoShouldConfirm(ttsMode, mode)) {
+      setAutoAsk(true)
+      return
+    }
+    setAutoAsk(false)
+    onTtsMode(mode)
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'auto' })
@@ -164,13 +287,13 @@ export default function TranslatePane({
 
   const empty = pairs.length === 0 && !partial
   const queued = pairs.filter((p) => !p.translation && !p.failed && p.id !== bindId).length
+  const native = isNativeApp()
 
-  return (
-    <div className="main translate-main">
-      <div className="tr-sheet">
+  const toolbar = (
         <div className="tr-toolbar">
           <div className="tr-head-row">
-          <label className="tr-col-head tr-to-head tr-from-head">
+          <label className={`tr-col-head tr-to-head tr-from-head${native ? ' iphone-tr-chip' : ''}`}>
+            {native ? <EarIcon /> : null}
             <select
               className="tr-to-select"
               value={from}
@@ -182,9 +305,9 @@ export default function TranslatePane({
               }
               aria-label="From"
             >
-              <option value="auto">Auto · detect</option>
+              <option value="auto">{native ? IPHONE_COPY.hearAnything : 'Auto · detect'}</option>
               {TRANSLATE_LANGS.map((l) => (
-                <option key={l.id} value={l.id}>{l.tag} · {l.name}</option>
+                <option key={l.id} value={l.id}>{native ? translateFromChip(l.id) : `${l.tag} · ${l.name}`}</option>
               ))}
             </select>
           </label>
@@ -197,7 +320,8 @@ export default function TranslatePane({
           >
             <SwapIcon />
           </button>
-          <label className="tr-col-head tr-to-head">
+          <label className={`tr-col-head tr-to-head${native ? ' iphone-tr-chip to' : ''}`}>
+            {native ? <ArrowIcon /> : null}
             <select
               className="tr-to-select"
               value={to}
@@ -206,7 +330,7 @@ export default function TranslatePane({
               aria-label="To"
             >
               {TRANSLATE_LANGS.map((l) => (
-                <option key={l.id} value={l.id}>{l.tag} · {l.name}</option>
+                <option key={l.id} value={l.id}>{native ? translateToChip(l.id) : `${l.tag} · ${l.name}`}</option>
               ))}
             </select>
           </label>
@@ -215,7 +339,7 @@ export default function TranslatePane({
             <button
               type="button"
               className={`tr-voice-btn labeled${ttsMode === 'tap' ? ' on' : ''}`}
-              onClick={() => onTtsMode('tap')}
+              onClick={() => requestTtsMode('tap')}
               title="Tap a line to play"
               aria-label="Tap to play"
             >
@@ -225,7 +349,7 @@ export default function TranslatePane({
             <button
               type="button"
               className={`tr-voice-btn labeled${ttsMode === 'live' ? ' on' : ''}`}
-              onClick={() => onTtsMode('live')}
+              onClick={() => requestTtsMode('live')}
               title="Play each new line automatically"
               aria-label="Auto play"
             >
@@ -272,12 +396,23 @@ export default function TranslatePane({
             {queued > 0 ? <span className="tr-queued">{queued} queued</span> : null}
           </div>
         </div>
+  )
+
+  return (
+    <div className="main translate-main">
+      {native ? (
+        <div className="iphone-stack">
+          {actions}
+          {toolbar}
+        </div>
+      ) : toolbar}
+      <div className="tr-sheet">
         <div className="tr-body">
           {empty ? (
             <EmptyState
               compact
-              title="Start Listen or type a line."
-              sub="Spoken captions show up here."
+              title={native ? IPHONE_COPY.emptyTranslate : 'Start Listen or type a line.'}
+              sub={native ? '' : 'Spoken captions show up here.'}
             />
           ) : (
             <>
@@ -290,6 +425,27 @@ export default function TranslatePane({
                   else if (active) status = 'Translating…'
                   else status = 'Waiting…'
                 }
+                const spoken = (p.translation && !p.failed ? p.translation : p.original).trim()
+                if (native) {
+                  return (
+                    <NativeTranslateCard
+                      key={p.id}
+                      ts={p.ts}
+                      source={p.original}
+                      sourceTag={translateSourceTag({ from: p.from, locked: from, heard: heardFrom })}
+                      target={status}
+                      targetPending={!p.translation}
+                      targetFailed={!!p.failed}
+                      spoken={spoken}
+                      speaking={speaking}
+                      onCopyOriginal={() => onCopyField(p, 'original')}
+                      onCopyTranslation={p.translation ? () => onCopyField(p, 'translation') : undefined}
+                      onSpeak={() => onSpeak(spoken)}
+                      onStop={onStopSpeech}
+                      onRetry={p.failed ? () => onRetry(p.id) : undefined}
+                    />
+                  )
+                }
                 return (
                   <div key={p.id} className="tr-pair">
                     <div className="tr-cell origin">
@@ -301,7 +457,6 @@ export default function TranslatePane({
                         title="Copy original"
                       >
                         <span className="tr-text">{p.original}</span>
-                        {p.from ? <span className="tr-lang-chip">{langTag(p.from)}</span> : null}
                       </button>
                       {p.original.trim() ? (
                         <button
@@ -349,7 +504,15 @@ export default function TranslatePane({
                   </div>
                 )
               })}
-              {partial && (
+              {partial && native ? (
+                <NativeTranslateCard
+                  ts="live"
+                  source={partial}
+                  sourceTag={translateSourceTag({ locked: from, heard: heardFrom })}
+                  target="Listening…"
+                  targetPending
+                />
+              ) : partial ? (
                 <div className="tr-pair live">
                   <div className="tr-cell origin">
                     <span className="meet-ts">live</span>
@@ -359,28 +522,79 @@ export default function TranslatePane({
                     <span>Listening…</span>
                   </div>
                 </div>
-              )}
+              ) : null}
             </>
           )}
           <div ref={bottomRef} />
         </div>
       </div>
 
-      <PromptAttach files={files} onChange={setFiles}>
-        <input
-          className="prompt-input"
-          placeholder="Type to translate..."
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') submit()
-          }}
-        />
-        <button className="gen-btn" onClick={submit} disabled={!input.trim() && files.length === 0}>
-          <Sparkle />
-          Translate
-        </button>
-      </PromptAttach>
+      {native ? (
+        <div className="iphone-tr-prompt">
+          <input
+            className="prompt-input"
+            placeholder={IPHONE_COPY.typeToTranslate}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submit()
+            }}
+          />
+          <button
+            type="button"
+            className="iphone-tr-send"
+            onClick={submit}
+            disabled={!input.trim() && files.length === 0}
+            aria-label={IPHONE_COPY.typeToTranslate}
+          >
+            <SendIcon />
+          </button>
+        </div>
+      ) : (
+        <PromptAttach files={files} onChange={setFiles}>
+          <input
+            className="prompt-input"
+            placeholder="Type to translate..."
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submit()
+            }}
+          />
+          <button className="gen-btn" onClick={submit} disabled={!input.trim() && files.length === 0}>
+            <Sparkle />
+            Translate
+          </button>
+        </PromptAttach>
+      )}
+      {autoAsk ? (
+        <div className="consent-mask" onClick={() => setAutoAsk(false)}>
+          <div
+            className="consent-card confirm-card"
+            role="dialog"
+            aria-labelledby="tts-auto-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="tts-auto-title">Turn on Auto play?</h2>
+            <p>Each new translation will play out loud. You can switch back to Tap anytime.</p>
+            <div className="confirm-actions">
+              <button className="confirm-keep" type="button" onClick={() => setAutoAsk(false)} autoFocus>
+                Keep Tap
+              </button>
+              <button
+                className="confirm-go"
+                type="button"
+                onClick={() => {
+                  setAutoAsk(false)
+                  onTtsMode('live')
+                }}
+              >
+                Turn on Auto
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

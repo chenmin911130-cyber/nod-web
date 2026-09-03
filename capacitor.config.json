@@ -20,6 +20,10 @@
     "StatusBar": {
       "style": "DARK",
       "backgroundColor": "#05070a"
+    },
+    "Keyboard": {
+      "resize": "native",
+      "style": "DARK"
     }
   },
   "server": {

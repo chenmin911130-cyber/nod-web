@@ -14,6 +14,7 @@
 		D0D100000000000000000033 /* ClockKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000034 /* ClockKit.framework */; };
 		D0D100000000000000000014 /* NodWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000002 /* NodWatchApp.swift */; };
 		D0D100000000000000000015 /* WatchRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000003 /* WatchRootView.swift */; };
+		D0D100000000000000000040 /* WatchCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000041 /* WatchCopy.swift */; };
 		D0D100000000000000000016 /* WatchPhoneSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000004 /* WatchPhoneSession.swift */; };
 		D0D100000000000000000017 /* WatchRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000005 /* WatchRecorder.swift */; };
 		D0D100000000000000000031 /* WatchGlanceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000029 /* WatchGlanceStore.swift */; };
@@ -37,6 +38,7 @@
 		D0D100000000000000000001 /* WatchApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WatchApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D0D100000000000000000002 /* NodWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodWatchApp.swift; sourceTree = "<group>"; };
 		D0D100000000000000000003 /* WatchRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRootView.swift; sourceTree = "<group>"; };
+		D0D100000000000000000041 /* WatchCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchCopy.swift; sourceTree = "<group>"; };
 		D0D100000000000000000004 /* WatchPhoneSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchPhoneSession.swift; sourceTree = "<group>"; };
 		D0D100000000000000000005 /* WatchRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRecorder.swift; sourceTree = "<group>"; };
 		D0D100000000000000000029 /* WatchGlanceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchGlanceStore.swift; sourceTree = "<group>"; };
@@ -133,6 +135,7 @@
 			children = (
 				D0D100000000000000000002 /* NodWatchApp.swift */,
 				D0D100000000000000000003 /* WatchRootView.swift */,
+				D0D100000000000000000041 /* WatchCopy.swift */,
 				D0D100000000000000000004 /* WatchPhoneSession.swift */,
 				D0D100000000000000000005 /* WatchRecorder.swift */,
 				D0D100000000000000000029 /* WatchGlanceStore.swift */,
@@ -334,6 +337,7 @@
 			files = (
 				D0D100000000000000000014 /* NodWatchApp.swift in Sources */,
 				D0D100000000000000000015 /* WatchRootView.swift in Sources */,
+				D0D100000000000000000040 /* WatchCopy.swift in Sources */,
 				D0D100000000000000000016 /* WatchPhoneSession.swift in Sources */,
 				D0D100000000000000000017 /* WatchRecorder.swift in Sources */,
 				D0D100000000000000000031 /* WatchGlanceStore.swift in Sources */,
@@ -477,7 +481,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = 5DG3M898Z2;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
@@ -499,7 +503,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = 5DG3M898Z2;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
@@ -519,7 +523,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = 5DG3M898Z2;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WatchApp/Info.plist;
@@ -544,7 +548,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = 5DG3M898Z2;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WatchApp/Info.plist;

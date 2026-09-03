@@ -456,9 +456,6 @@ def _session_files(
                 continue
             name = session_download_name(mode, scene, started_at, part_name=part)
             files.append({"kind": "audio", "name": name, "href": f"/api/account/files/{session_id}/audio?part={quote(part)}&filename={quote(name)}"})
-        if not files and key:
-            name = session_download_name(mode, scene, started_at)
-            files.append({"kind": "audio", "name": name, "href": f"/api/account/files/{session_id}/audio?filename={quote(name)}"})
     elif key:
         name = session_download_name(mode, scene, started_at)
         files.append({"kind": "audio", "name": name, "href": f"/api/account/files/{session_id}/audio?filename={quote(name)}"})
@@ -478,31 +475,43 @@ def set_session_file(session_id: str, *, audio_key: str | None = None, notes_key
             row.notes_key = notes_key
 
 
-def session_file_url(user_id: str, session_id: str, kind: str, part: str | None = None, filename: str = "") -> str:
-    from server.history_fmt import session_download_name
-    from server.r2 import list_keys, presign
+def session_file_key(user_id: str, session_id: str, kind: str, part: str | None = None) -> str:
+    from server.r2 import list_keys
 
     with db_session() as db:
         row = db.get(UsageSession, session_id)
         if not row or row.user_id != user_id:
             return ""
         key = row.audio_key if kind == "audio" else row.notes_key if kind == "notes" else ""
-        mode = row.mode
-        scene = getattr(row, "scene", "") or ""
-        started = row.started_at
     if not key:
         return ""
     if kind == "audio" and key.endswith("/"):
         keys = list_keys(key)
         if part:
             safe = part.replace("\\", "/").split("/")[-1]
-            key = next((item for item in keys if item.rsplit("/", 1)[-1] == safe), "")
-        else:
-            key = keys[0] if keys else ""
-            part = key.rsplit("/", 1)[-1] if key else part
+            return next((item for item in keys if item.rsplit("/", 1)[-1] == safe), "")
+        return keys[0] if keys else ""
+    return key
+
+
+def session_file_url(user_id: str, session_id: str, kind: str, part: str | None = None, filename: str = "") -> str:
+    from server.history_fmt import session_download_name
+    from server.r2 import presign
+
+    with db_session() as db:
+        row = db.get(UsageSession, session_id)
+        if not row or row.user_id != user_id:
+            return ""
+        mode = row.mode
+        scene = getattr(row, "scene", "") or ""
+        started = row.started_at
+    key = session_file_key(user_id, session_id, kind, part)
+    if not key:
+        return ""
     if not filename:
-        filename = session_download_name(mode, scene, started, kind=kind, part_name=part)
-    return presign(key, filename=filename) if key else ""
+        part_name = part or (key.rsplit("/", 1)[-1] if kind == "audio" else None)
+        filename = session_download_name(mode, scene, started, kind=kind, part_name=part_name)
+    return presign(key, filename=filename)
 
 
 def write_session_notes(user_id: str, session_id: str) -> None:

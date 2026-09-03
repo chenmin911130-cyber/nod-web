@@ -1,4 +1,4 @@
-import { defaultTtsMode, nextLiveUtterances, shouldKickDrain, speechTapShouldStop } from './tts'
+import { defaultTtsMode, listenSessionShouldAutoSpeak, nextLiveUtterances, shouldKickDrain, speechShouldPlayOnPhone, speechShouldPlayOnWatch, speechTapShouldStop, ttsAutoShouldConfirm } from './tts'
 
 function eq<T>(got: T, want: T) {
   if (JSON.stringify(got) !== JSON.stringify(want)) {
@@ -36,9 +36,21 @@ eq(nextLiveUtterances({
   lines: [],
 }), [{ id: '3', text: 'new line' }])
 
+eq(listenSessionShouldAutoSpeak('meeting', 'listen'), false)
+eq(listenSessionShouldAutoSpeak('meeting', 'record'), false)
+eq(listenSessionShouldAutoSpeak('meeting', 'idle'), false)
+eq(listenSessionShouldAutoSpeak('interview', 'listen'), false)
+eq(listenSessionShouldAutoSpeak('translate', 'listen'), true)
+
+eq(ttsAutoShouldConfirm('tap', 'live'), true)
+eq(ttsAutoShouldConfirm('live', 'live'), false)
+eq(ttsAutoShouldConfirm('live', 'tap'), false)
+eq(ttsAutoShouldConfirm('tap', 'tap'), false)
+
 eq(nextLiveUtterances({
   live: true,
   workspaceMode: 'meeting',
+  run: 'listen',
   translateOn: true,
   bindId: '',
   spoken: [],
@@ -47,7 +59,21 @@ eq(nextLiveUtterances({
     { id: 'a', translation: '你好' },
     { id: 'b', translation: '' },
   ],
-}), [{ id: 'meet:a', text: '你好' }])
+}), [])
+
+eq(nextLiveUtterances({
+  live: true,
+  workspaceMode: 'meeting',
+  run: 'idle',
+  translateOn: true,
+  bindId: '',
+  spoken: [],
+  pairs: [],
+  lines: [
+    { id: 'a', translation: '你好' },
+    { id: 'b', translation: '' },
+  ],
+}), [])
 
 eq(nextLiveUtterances({
   live: true,
@@ -65,3 +91,8 @@ eq(shouldKickDrain(false, 1), true)
 
 eq(speechTapShouldStop(false), false)
 eq(speechTapShouldStop(true), true)
+
+eq(speechShouldPlayOnWatch('watch'), true)
+eq(speechShouldPlayOnPhone('watch'), false)
+eq(speechShouldPlayOnWatch('phone'), false)
+eq(speechShouldPlayOnPhone('phone'), true)

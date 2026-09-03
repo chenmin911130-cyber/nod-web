@@ -3,7 +3,7 @@ import unittest
 
 def watch_action(raw: object) -> str:
     """Mirror of web/src/watch.ts watchAction — session and speech actions only."""
-    return raw if raw in {"start", "stop", "record", "pause", "resume", "speak", "tts_live", "tts_tap", "tts_female", "tts_male"} else ""
+    return raw if raw in {"start", "stop", "record", "pause", "resume", "speak", "save", "discard", "tts_live", "tts_tap", "tts_female", "tts_male"} else ""
 
 
 def watch_listen_mode(raw: object) -> str:
@@ -15,6 +15,13 @@ def watch_listen_mode(raw: object) -> str:
 def watch_speech_should_play(source: str) -> bool:
     """Mirror of web/src/watch.ts watchSpeechShouldPlay — leftover files must stay silent."""
     return source == "live"
+
+
+def watch_speech_file_should_play(at: float | None, now: float) -> bool:
+    """A speech file is a live Play tap only when the timestamp is fresh."""
+    if at is None:
+        return False
+    return now - at <= 8
 
 
 def watch_pcm_should_buffer(reachable: bool) -> bool:
@@ -48,6 +55,8 @@ class WatchCommandTests(unittest.TestCase):
         self.assertEqual(watch_action("pause"), "pause")
         self.assertEqual(watch_action("resume"), "resume")
         self.assertEqual(watch_action("speak"), "speak")
+        self.assertEqual(watch_action("save"), "save")
+        self.assertEqual(watch_action("discard"), "discard")
         self.assertEqual(watch_action("tts_live"), "tts_live")
         self.assertEqual(watch_action("tts_tap"), "tts_tap")
         self.assertEqual(watch_action("start_listen"), "")
@@ -69,12 +78,17 @@ class WatchCommandTests(unittest.TestCase):
         self.assertFalse(watch_listen_control_should_apply_mode(action="start", session_paused=True, run="idle"))
         self.assertFalse(watch_listen_control_should_apply_mode(action="record", session_paused=False, run="listen"))
         self.assertFalse(watch_listen_control_should_apply_mode(action="", session_paused=False, run="idle"))
+        self.assertFalse(watch_listen_control_should_apply_mode(action="save", session_paused=False, run="idle"))
+        self.assertFalse(watch_listen_control_should_apply_mode(action="discard", session_paused=False, run="idle"))
 
     def test_opening_watch_does_not_autoplay_leftover_speech(self):
         self.assertFalse(watch_speech_should_play("file"))
         self.assertFalse(watch_speech_should_play("context"))
         self.assertFalse(watch_speech_should_play("queued"))
         self.assertTrue(watch_speech_should_play("live"))
+        self.assertFalse(watch_speech_file_should_play(None, 1000))
+        self.assertFalse(watch_speech_file_should_play(880, 1000))
+        self.assertTrue(watch_speech_file_should_play(995, 1000))
 
     def test_disconnect_flushes_unsent_pcm_without_start_listen(self):
         self.assertFalse(watch_pcm_should_buffer(True))

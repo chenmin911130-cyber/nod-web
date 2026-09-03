@@ -3,22 +3,22 @@ import SwiftUI
 struct WatchRootView: View {
     @EnvironmentObject private var session: WatchPhoneSession
     @Environment(\.isLuminanceReduced) private var dimmed
-    @State private var page = 0
+    @State private var listenPage = 0
+
+    private let ink = Color(red: 244 / 255, green: 248 / 255, blue: 252 / 255)
+    private let muted = Color(red: 142 / 255, green: 163 / 255, blue: 184 / 255)
+    private let cyan = Color(red: 0, green: 210 / 255, blue: 1)
+    private let panel = Color(red: 10 / 255, green: 16 / 255, blue: 24 / 255)
+    private let slate = Color(red: 168 / 255, green: 182 / 255, blue: 196 / 255)
+    private let ready = Color(red: 61 / 255, green: 220 / 255, blue: 132 / 255)
+    private let timer = Color(red: 245 / 255, green: 197 / 255, blue: 66 / 255)
 
     var body: some View {
         Group {
-            if dimmed, session.listening, let startedAt = session.startedAt {
-                alwaysOn(title: "I'm listening.", startedAt: startedAt)
-            } else if dimmed, session.paused {
-                alwaysOnFrozen(title: "Paused")
+            if dimmed {
+                alwaysOnPage
             } else {
-                TabView(selection: $page) {
-                    NavigationStack {
-                        livePage
-                    }
-                    .tag(0)
-                    historyPage.tag(1)
-                }
+                livePage
             }
         }
         .onAppear {
@@ -28,165 +28,292 @@ struct WatchRootView: View {
         }
     }
 
-    private func alwaysOn(title: String, startedAt: Date) -> some View {
-        VStack(spacing: 6) {
-            Image("PetShiba")
-                .resizable()
-                .scaledToFill()
-                .frame(width: 36, height: 36)
-                .clipShape(Circle())
-            Text(title)
-                .font(.caption2)
-            Text(startedAt, style: .timer)
-                .font(.title3.monospacedDigit().weight(.semibold))
-                .minimumScaleFactor(0.7)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func alwaysOnFrozen(title: String) -> some View {
-        VStack(spacing: 6) {
-            Image("PetShiba")
-                .resizable()
-                .scaledToFill()
-                .frame(width: 36, height: 36)
-                .clipShape(Circle())
-            Text(title)
-                .font(.caption2)
-            Text(clock(session.elapsedMs))
-                .font(.title3.monospacedDigit().weight(.semibold))
+    private var alwaysOnPage: some View {
+        let qa = session.mode == "interview"
+        let translate = session.mode == "translate"
+        return Group {
+            if session.offeringSave || session.savedAck || (!session.listening && !session.paused) {
+                Color.black
+            } else if session.paused {
+                VStack(spacing: 6) {
+                    Text(WatchCopy.paused)
+                        .font(.caption2)
+                        .foregroundStyle(muted)
+                    Text(clock(session.elapsedMs))
+                        .font(.title3.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(timer)
+                }
+            } else if qa {
+                VStack(spacing: 6) {
+                    dimCapsule("Live Q&A")
+                    if let startedAt = session.startedAt {
+                        Text(startedAt, style: .timer)
+                            .font(.title3.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(timer)
+                    }
+                }
+            } else if translate {
+                Text(session.translation)
+                    .font(.caption)
+                    .foregroundStyle(ink)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+            } else {
+                VStack(spacing: 8) {
+                    if let startedAt = session.startedAt {
+                        Text(startedAt, style: .timer)
+                            .font(.title3.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(timer)
+                    }
+                    Circle().fill(Color.red).frame(width: 7, height: 7)
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var livePage: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("NOD")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(Color(red: 0, green: 0.82, blue: 1))
-                        .tracking(1.4)
-                    Spacer()
-                    Text(session.listening ? "Listening" : session.paused ? "Paused" : "Ready")
-                        .font(.caption2.weight(.semibold))
+        Group {
+            if session.offeringSave {
+                savePrompt
+            } else if session.savedAck {
+                savedAck
+            } else if session.listening || session.paused {
+                TabView(selection: $listenPage) {
+                    sessionPage.tag(0)
+                    stopPage.tag(1)
                 }
-                if !session.listening && !session.paused {
-                    modePicker
+            } else {
+                readyStart
+            }
+        }
+        .padding(.horizontal, 6)
+        .onChange(of: session.listening) { listening in
+            if listening { listenPage = 0 }
+        }
+    }
+
+    private var sessionPage: some View {
+        Group {
+            if session.mode == "translate", session.listening {
+                translatePage
+            } else if session.mode == "interview", session.listening {
+                qaPage
+            } else if session.paused {
+                pausedControls
+            } else {
+                listeningControls
+            }
+        }
+    }
+
+    private var stopPage: some View {
+        VStack(spacing: 10) {
+            Text(WatchCopy.stopListening)
+                .font(.caption)
+                .foregroundStyle(muted)
+            Button(WatchCopy.stop) { session.finish() }
+                .tint(cyan)
+                .modifier(CrownStartStop())
+        }
+    }
+
+    private var readyStart: some View {
+        VStack(spacing: 8) {
+            capsule(WatchPhoneSession.modeLabel(session.mode))
+            Button {
+                session.startSession()
+            } label: {
+                VStack(spacing: 6) {
+                    Image(systemName: "waveform")
+                        .font(.title2.weight(.semibold))
+                    Text(WatchCopy.start)
+                        .font(.headline)
                 }
-                if session.listening || session.paused {
-                    HStack(spacing: 8) {
-                        Image("PetShiba")
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 28, height: 28)
-                            .clipShape(Circle())
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(session.paused ? "Paused" : "I'm listening.")
-                                .font(.caption2)
-                            if session.listening, let startedAt = session.startedAt {
-                                Text(startedAt, style: .timer)
-                                    .font(.caption.monospacedDigit().weight(.semibold))
-                            } else {
-                                Text(clock(session.elapsedMs))
-                                    .font(.caption.monospacedDigit().weight(.semibold))
-                            }
-                        }
-                    }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+            }
+            .tint(cyan)
+            .modifier(CrownStartStop())
+            HStack(spacing: 6) {
+                Circle().fill(ready).frame(width: 7, height: 7)
+                Text(WatchCopy.ready)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(ink)
+            }
+        }
+    }
+
+    private var listeningControls: some View {
+        VStack(spacing: 8) {
+            capsule(WatchPhoneSession.modeLabel(session.mode))
+            Text(WatchCopy.listening)
+                .font(.caption)
+                .foregroundStyle(timer)
+            if let startedAt = session.startedAt {
+                Text(startedAt, style: .timer)
+                    .font(.title3.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(timer)
+            }
+            recChip
+            Button(WatchCopy.pause) { session.pause() }
+                .tint(panel)
+            listeningWave
+        }
+    }
+
+    private var pausedControls: some View {
+        VStack(spacing: 8) {
+            capsule(WatchPhoneSession.modeLabel(session.mode))
+            Text(WatchCopy.paused)
+                .font(.caption)
+            Text(clock(session.elapsedMs))
+                .font(.title3.monospacedDigit().weight(.semibold))
+                .foregroundStyle(timer)
+            Button(WatchCopy.resume) { session.resume() }
+                .tint(cyan)
+        }
+    }
+
+    private var translatePage: some View {
+        VStack(spacing: 6) {
+            Text(session.langPair)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(cyan)
+            if !session.previous.isEmpty {
+                Text(session.previous)
+                    .font(.caption2)
+                    .foregroundStyle(muted)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if session.original.isEmpty, session.translation.isEmpty {
+                Text(WatchCopy.listening)
+                    .font(.headline)
+                    .foregroundStyle(ink)
+            } else {
+                if !session.original.isEmpty {
+                    Text(session.original)
+                        .font(.caption2)
+                        .foregroundStyle(muted)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if !session.translation.isEmpty {
-                    Text(session.translation)
-                        .font(.headline)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if !session.original.isEmpty {
-                        Text(session.original)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                } else if !session.original.isEmpty {
-                    Text(session.original)
-                        .font(.headline)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text(session.hint)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if session.listening || session.paused {
-                    Text(WatchPhoneSession.modeLabel(session.mode))
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(Color(red: 0, green: 0.82, blue: 1))
-                }
-                if session.listening {
-                    Button("Pause") {
-                        session.pause()
-                    }
-                    .tint(.orange)
-                    Button("Done") {
-                        session.finish()
-                    }
-                    .tint(.red)
-                } else if session.paused {
-                    Button("Resume") {
-                        session.resume()
-                    }
-                    .tint(Color(red: 0, green: 0.82, blue: 1))
-                    Button("Done") {
-                        session.finish()
-                    }
-                    .tint(.red)
-                } else {
-                    Button("Listen") {
-                        session.toggle()
-                    }
-                    .tint(Color(red: 0, green: 0.82, blue: 1))
-                    Button("Record") {
-                        session.record()
-                    }
-                    .tint(.orange)
+                    copyScroll(session.translation)
                 }
             }
-            .padding(.horizontal, 4)
+            Spacer(minLength: 0)
+            listeningWave
         }
     }
 
-    private var modePicker: some View {
-        Picker("Mode", selection: Binding(
-            get: { session.mode },
-            set: { session.setMode($0) }
-        )) {
-            Text("Meeting").tag("meeting")
-            Text("Lecture").tag("lecture")
-            Text("Interview").tag("interview")
-            Text("Translate").tag("translate")
-        }
-        .pickerStyle(.navigationLink)
-        .tint(Color(red: 0, green: 0.82, blue: 1))
-    }
-
-    private var historyPage: some View {
-        List {
-            if session.history.isEmpty {
-                Text("History appears here after the iPhone translates or transcribes.")
+    private var qaPage: some View {
+        VStack(spacing: 6) {
+            capsule("Live Q&A")
+            if !session.previous.isEmpty {
+                Text(session.previous)
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(muted)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if session.original.isEmpty, session.translation.isEmpty {
+                Text(WatchCopy.hearQuestion)
+                    .font(.headline)
+                    .foregroundStyle(ink)
             } else {
-                ForEach(session.history) { item in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.title)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                        Text(item.text)
-                            .font(.footnote)
-                            .lineLimit(4)
-                    }
+                if !session.original.isEmpty {
+                    Text(session.original)
+                        .font(.caption2)
+                        .foregroundStyle(muted)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if session.translation.isEmpty {
+                    Text(WatchCopy.drafting)
+                        .font(.headline)
+                        .foregroundStyle(ink)
+                } else {
+                    copyScroll(session.translation)
                 }
             }
+            Spacer(minLength: 0)
+            listeningWave
         }
+    }
+
+    private var savePrompt: some View {
+        VStack(spacing: 8) {
+            Button(WatchCopy.dontSave) { session.declineSave() }
+                .buttonStyle(.borderedProminent)
+                .tint(slate)
+                .foregroundStyle(Color.black)
+            Button(WatchCopy.save) { session.confirmSave() }
+                .buttonStyle(.borderedProminent)
+                .tint(cyan)
+        }
+    }
+
+    private var savedAck: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.title)
+                .foregroundStyle(cyan)
+            Text(WatchCopy.saved)
+                .font(.headline)
+        }
+    }
+
+    private var recChip: some View {
+        HStack(spacing: 4) {
+            Circle().fill(Color.red).frame(width: 6, height: 6)
+            Text("REC")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(cyan)
+        }
+    }
+
+    private var listeningWave: some View {
+        Image(systemName: "waveform")
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(cyan)
+            .modifier(ListeningPulse())
+            .accessibilityLabel(WatchCopy.listening)
+    }
+
+    private func copyScroll(_ text: String) -> some View {
+        ScrollView {
+            Text(text)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .id(text)
+        .focusable()
+    }
+
+    private func capsule(_ title: String) -> some View {
+        Text(title)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(cyan)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .overlay(
+                Capsule().stroke(cyan.opacity(0.7), lineWidth: 1)
+            )
+    }
+
+    private func dimCapsule(_ title: String) -> some View {
+        Text(title)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(muted)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .overlay(
+                Capsule().stroke(muted.opacity(0.6), lineWidth: 1)
+            )
     }
 
     private func clock(_ seconds: TimeInterval) -> String {
@@ -195,5 +322,25 @@ struct WatchRootView: View {
         let m = (sec % 3600) / 60
         let s = sec % 60
         return "\(String(format: "%02d", h)):\(String(format: "%02d", m)):\(String(format: "%02d", s))"
+    }
+}
+
+private struct ListeningPulse: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(watchOS 10.0, *) {
+            content.symbolEffect(.variableColor.iterative, isActive: true)
+        } else {
+            content
+        }
+    }
+}
+
+private struct CrownStartStop: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(watchOS 11.0, *) {
+            content.handGestureShortcut(.primaryAction)
+        } else {
+            content
+        }
     }
 }

@@ -15,7 +15,7 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
         handler([
             CLKComplicationDescriptor(
                 identifier: Self.descriptorId,
-                displayName: "Nodpilot Timer",
+                displayName: "Nodpilot",
                 supportedFamilies: [
                     .circularSmall,
                     .modularSmall,
@@ -60,8 +60,8 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
         } else {
             text = CLKSimpleTextProvider(text: "Nodpilot")
         }
-        let image = CLKImageProvider(onePieceImage: shiba())
-        let colorImage = CLKFullColorImageProvider(fullColorImage: shiba())
+        let image = CLKImageProvider(onePieceImage: markImage())
+        let colorImage = CLKFullColorImageProvider(fullColorImage: markImage())
 
         switch family {
         case .circularSmall:
@@ -78,7 +78,7 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
             return CLKComplicationTemplateGraphicCornerCircularImage(imageProvider: colorImage)
         case .graphicRectangular:
             let header = CLKComplicationTemplateGraphicRectangularStandardBody(
-                headerTextProvider: CLKSimpleTextProvider(text: paused != nil ? "Paused" : "I'm listening."),
+                headerTextProvider: CLKSimpleTextProvider(text: paused != nil ? WatchCopy.paused : WatchCopy.listening),
                 body1TextProvider: text
             )
             header.headerImageProvider = colorImage
@@ -99,10 +99,8 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
         return "\(String(format: "%02d", m)):\(String(format: "%02d", s))"
     }
 
-    private func shiba() -> UIImage {
-        if let photo = UIImage(named: "PetShiba") {
-            return photo
-        }
-        return UIImage()
+    private func markImage() -> UIImage {
+        let config = UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
+        return UIImage(systemName: "waveform", withConfiguration: config) ?? UIImage()
     }
 }

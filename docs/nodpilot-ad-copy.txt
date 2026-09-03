@@ -1,0 +1,18 @@
+Nodpilot — AI Listening Assistant
+Product line: it listens in the background, transcribes in real time, translates across languages, and summarizes & remembers what matters.
+
+Key features:
+- Real-time transcription (meetings, lectures, conversations)
+- Multi-language bilingual translation — show the original, or a bilingual caption
+- AI Summary after a meeting: decisions, action items, follow-ups
+- Live Q&A / Ask Nodpilot — ask by voice, no typing, it answers instantly
+- Searchable memory of past transcripts & summaries
+- Free public beta, sign in with Google or email
+
+Target: busy professionals in meetings, students in lectures, anyone in cross-language conversations, people prepping interviews.
+
+Persona: a 28-35 year-old American, casual and genuine, like recommending to a friend — not corporate. Shot on a phone at a desk or living room. English voiceover.
+
+Script direction: 30-45s talking-head UGC ad. Open with a hook about frantically typing notes in a meeting, missing what someone just said, or a meeting in another language. Introduce Nodpilot like a friend sharing a fix. Weave the features naturally into the story (multilingual captions, AI summary, ask by voice). Use the uploaded UI screenshots as in-product demo shots. Close with: "It's free in beta — try Nodpilot."
+
+Make 3-5 variants with different hooks and avatars. 9:16 for Reels.

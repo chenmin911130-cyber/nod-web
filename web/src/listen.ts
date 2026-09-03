@@ -68,7 +68,7 @@ export type NotesDoc = {
 export const LISTEN_SCENES: Array<{ id: ListenScene; label: string }> = [
   { id: 'meeting', label: 'Meeting' },
   { id: 'lecture', label: 'Lecture' },
-  { id: 'interview', label: 'Interview' },
+  { id: 'interview', label: 'Live Q&A' },
 ]
 
 const SCENE_SECTIONS: Record<ListenScene, NotesSectionId[]> = {
@@ -333,6 +333,14 @@ export function parseBiLines(text: string): BiLine[] {
   return out.length ? out : text.trim() ? [{ src: text.trim() }] : []
 }
 
+/** Summary / notes body in the configured notes language only. */
+export function notesBodyText(text: string): string {
+  return parseBiLines(text)
+    .map((block) => (block.tr || block.src).trim())
+    .filter(Boolean)
+    .join('\n')
+}
+
 export function askContext(lines: MeetingLine[], ended: boolean, now = Date.now()): MeetingLine[] {
   if (ended || lines.length <= 80) return lines
   const cutoff = now - 20 * 60_000
@@ -393,8 +401,8 @@ export function notesPrompt(
         ? 'followUps = thank-you note / materials to send'
         : 'followUps = next check-ins'
   return (
-    `${nodTag('NOTES', outLang, bilingual, scene)}\n` +
-    outLangRule(outLang, 'json', bilingual) +
+    `${nodTag('NOTES', outLang, false, scene)}\n` +
+    outLangRule(outLang, 'json', false) +
     `Write structured notes for a ${scene}. Use only the transcript. Do not invent names, numbers, or commitments.\n` +
     'Return JSON only with keys: summary (string), takeaways, keyPoints, decisions, actionItems, importantDetails, followUps, revisionNotes.\n' +
     'Lists are string arrays. actionItems is [{text, owner}] — owner only if spoken.\n' +

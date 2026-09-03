@@ -25,7 +25,7 @@
 	<key>WKCompanionAppBundleIdentifier</key>
 	<string>com.nodpilot.app</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Nodpilot records from the Apple Watch microphone so you can capture a meeting or lecture from your wrist. Audio is sent to your iPhone to transcribe.</string>
+	<string>Nodpilot records from the Apple Watch microphone so you can listen from your wrist. Audio is sent to Nodpilot to transcribe.</string>
 	<key>WKBackgroundModes</key>
 	<array>
 		<string>audio</string>

@@ -3,16 +3,20 @@ import {
   setPreferWatchMic,
   takePhoneMic,
   watchFileShouldStartListen,
+  watchHardwareAction,
   watchListenControlShouldApplyMode,
   watchListenMode,
   watchPcmShouldClaimMic,
   watchQueuedCommandShouldRun,
   watchShouldApplyMode,
+  watchStartShouldPreferWatchMic,
   watchFlushShouldSend,
   watchLiveStreamShouldReset,
   watchPcmShouldBuffer,
   watchSpeechShouldPlay,
+  watchSpeechFileShouldPlay,
   watchWorkspaceForMode,
+  watchAction,
 } from './watch'
 
 if (watchPcmShouldClaimMic()) {
@@ -29,6 +33,16 @@ if (watchSpeechShouldPlay('file') || watchSpeechShouldPlay('context') || watchSp
 
 if (!watchSpeechShouldPlay('live')) {
   throw new Error('a live Watch speech push while the app is open may still play')
+}
+
+if (watchSpeechFileShouldPlay(undefined, 1_000) || watchSpeechFileShouldPlay(880, 1_000)) {
+  throw new Error('a leftover Watch speech file must not play when the Watch app opens')
+}
+if (!watchSpeechFileShouldPlay(995, 1_000)) {
+  throw new Error('a just-tapped Watch play file may still play on the wrist')
+}
+if (!watchSpeechFileShouldPlay(1_000 - 20, 1_000)) {
+  throw new Error('a Play tap may take more than 8s to transferFile and must still speak')
 }
 
 if (watchQueuedCommandShouldRun('start', undefined, Date.now() / 1000)) {
@@ -147,4 +161,42 @@ if (!watchFlushShouldSend(3200) || watchFlushShouldSend(0)) {
 
 if (watchFileShouldStartListen()) {
   throw new Error('a disconnect flush file must stay PCM-only and must not start_listen')
+}
+
+if (watchAction('save') !== 'save' || watchAction('discard') !== 'discard') {
+  throw new Error('Watch Save / Don\'t save must be session actions, not start_listen')
+}
+if (
+  watchListenControlShouldApplyMode({ action: 'save', sessionPaused: false, run: 'idle' })
+  || watchListenControlShouldApplyMode({ action: 'discard', sessionPaused: false, run: 'idle' })
+) {
+  throw new Error('Watch Save / Don\'t save must not switch Meeting / Interview / Translate')
+}
+
+if (watchStartShouldPreferWatchMic('meeting') || watchStartShouldPreferWatchMic('lecture')) {
+  throw new Error('Meeting / Lecture Watch Start must keep the phone mic')
+}
+if (!watchStartShouldPreferWatchMic('interview') || !watchStartShouldPreferWatchMic('translate')) {
+  throw new Error('Live Q&A / Translate Watch Start may use the watch mic')
+}
+
+const idle = { listening: false, paused: false, offeringSave: false, saved: false }
+const live = { listening: true, paused: false, offeringSave: false, saved: false }
+const held = { listening: false, paused: true, offeringSave: false, saved: false }
+const saving = { listening: false, paused: false, offeringSave: true, saved: false }
+
+if (watchHardwareAction('crown', live) !== 'stop') {
+  throw new Error('Digital Crown while listening must Stop, not Pause')
+}
+if (watchHardwareAction('crown', idle) !== 'start') {
+  throw new Error('Digital Crown on Ready must Start')
+}
+if (watchHardwareAction('crown', held) !== 'stop') {
+  throw new Error('Digital Crown while paused must Stop, not Resume')
+}
+if (watchHardwareAction('side', live) !== 'pause' || watchHardwareAction('side', held) !== 'resume') {
+  throw new Error('Side button is Pause / Resume only')
+}
+if (watchHardwareAction('crown', saving) || watchHardwareAction('side', saving)) {
+  throw new Error('hardware keys must not fire on the Save prompt')
 }

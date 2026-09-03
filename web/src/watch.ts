@@ -13,10 +13,17 @@ type WatchPlugin = {
     hint?: string
     original?: string
     translation?: string
+    previous?: string
     history?: WatchHistItem[]
+    mode?: string
+    langPair?: string
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
-  playSpeech(opts: { data: string }): Promise<void>
+  saveToFiles(opts: {
+    files: Array<{ data: string; name: string }>
+    remotes?: Array<{ url: string; name: string; token?: string }>
+  }): Promise<void>
+  playSpeech(opts: { data: string; dest?: 'phone' | 'watch' }): Promise<void>
   stopSpeech(): Promise<void>
   addListener(event: 'command', cb: (ev: WatchCommand) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'pcm', cb: (ev: WatchPcm) => void): Promise<{ remove: () => Promise<void> }>
@@ -28,8 +35,8 @@ let preferWatchMic = false
 let pcmSink: ((buf: ArrayBuffer) => void) | null = null
 const preRoll: ArrayBuffer[] = []
 
-export function watchAction(raw: unknown): 'start' | 'stop' | 'record' | 'pause' | 'resume' | 'speak' | 'tts_live' | 'tts_tap' | 'tts_female' | 'tts_male' | '' {
-  return raw === 'start' || raw === 'stop' || raw === 'record' || raw === 'pause' || raw === 'resume' || raw === 'speak' || raw === 'tts_live' || raw === 'tts_tap' || raw === 'tts_female' || raw === 'tts_male' ? raw : ''
+export function watchAction(raw: unknown): 'start' | 'stop' | 'record' | 'pause' | 'resume' | 'speak' | 'tts_live' | 'tts_tap' | 'tts_female' | 'tts_male' | 'save' | 'discard' | '' {
+  return raw === 'start' || raw === 'stop' || raw === 'record' || raw === 'pause' || raw === 'resume' || raw === 'speak' || raw === 'tts_live' || raw === 'tts_tap' || raw === 'tts_female' || raw === 'tts_male' || raw === 'save' || raw === 'discard' ? raw : ''
 }
 
 export type WatchListenMode = 'meeting' | 'lecture' | 'interview' | 'translate'
@@ -97,6 +104,28 @@ export function watchPcmShouldClaimMic(): boolean {
   return false
 }
 
+/** Meeting / Lecture stay on the phone mic. Live Q&A / Translate may use the watch. */
+export function watchStartShouldPreferWatchMic(mode: string): boolean {
+  return mode === 'interview' || mode === 'translate'
+}
+
+export type WatchHardwareKey = 'crown' | 'side'
+
+/** Crown is Start/Stop. Side is Pause/Resume. Never bind the crown to toggle(). */
+export function watchHardwareAction(
+  key: WatchHardwareKey,
+  state: { listening: boolean; paused: boolean; offeringSave: boolean; saved: boolean },
+): 'start' | 'stop' | 'pause' | 'resume' | '' {
+  if (state.offeringSave || state.saved) return ''
+  if (key === 'crown') {
+    if (state.listening || state.paused) return 'stop'
+    return 'start'
+  }
+  if (state.paused) return 'resume'
+  if (state.listening) return 'pause'
+  return ''
+}
+
 /** A leftover Watch file transfer is PCM only. It must not start_listen. */
 export function watchFileShouldStartListen(): boolean {
   return false
@@ -105,6 +134,12 @@ export function watchFileShouldStartListen(): boolean {
 /** Opening the Watch app delivers leftover speech files/context. Those must not play. */
 export function watchSpeechShouldPlay(source: 'live' | 'file' | 'context' | 'queued'): boolean {
   return source === 'live'
+}
+
+/** A speech file is a live Play tap only when it arrived with a fresh timestamp. */
+export function watchSpeechFileShouldPlay(at: number | undefined, now: number): boolean {
+  if (at == null || !Number.isFinite(at)) return false
+  return now - at <= 30
 }
 
 /** Screen-off recording: only buffer PCM that did not go out live. */
@@ -169,6 +204,8 @@ export function installWatchRemote(handlers: {
   onPause: () => void
   onResume: () => void
   onSpeak: () => void
+  onSave: () => void
+  onDiscard: () => void
   onTtsLive: () => void
   onTtsTap: () => void
   onTtsVoice: (voice: 'male' | 'female') => void
@@ -183,18 +220,15 @@ export function installWatchRemote(handlers: {
       const action = watchAction(ev.action)
       const mode = watchListenMode(ev.mode)
       if (action === 'start') {
-        setPreferWatchMic(true)
         handlers.onStart(mode || undefined)
       }
       if (action === 'record') {
-        setPreferWatchMic(true)
         handlers.onRecord(mode || undefined)
       }
       if (action === 'pause') {
         handlers.onPause()
       }
       if (action === 'resume') {
-        setPreferWatchMic(true)
         handlers.onResume()
       }
       if (action === 'stop') {
@@ -202,6 +236,8 @@ export function installWatchRemote(handlers: {
         setPreferWatchMic(false)
       }
       if (action === 'speak') handlers.onSpeak()
+      if (action === 'save') handlers.onSave()
+      if (action === 'discard') handlers.onDiscard()
       if (action === 'tts_live') handlers.onTtsLive()
       if (action === 'tts_tap') handlers.onTtsTap()
       if (action === 'tts_female') handlers.onTtsVoice('female')
@@ -227,15 +263,21 @@ export function pushWatchStatus(face: {
   hint?: string
   original?: string
   translation?: string
+  previous?: string
   history?: WatchHistItem[]
+  mode?: string
+  langPair?: string
 }): void {
   if (!isNativeApp()) return
   void NodWatch.setStatus({
     listening: face.listening,
     hint: (face.hint || '').slice(0, 140),
-    original: (face.original || '').slice(0, 400),
-    translation: (face.translation || '').slice(0, 400),
+    original: (face.original || '').slice(0, 800),
+    translation: (face.translation || '').slice(0, 800),
+    previous: (face.previous || '').slice(0, 72),
     history: (face.history || []).slice(0, 8),
+    mode: face.mode,
+    langPair: face.langPair,
   }).catch(() => undefined)
 }
 
@@ -244,22 +286,53 @@ export async function stopWatchSpeech(): Promise<void> {
   await NodWatch.stopSpeech().catch(() => undefined)
 }
 
-export async function playWatchSpeech(bytes: Uint8Array): Promise<void> {
+export async function playWatchSpeech(bytes: Uint8Array, dest: 'phone' | 'watch' = 'watch'): Promise<void> {
   if (!isNativeApp() || !bytes.byteLength) return
   const chunks: string[] = []
   const step = 8192
   for (let i = 0; i < bytes.length; i += step) {
     chunks.push(String.fromCharCode(...bytes.subarray(i, i + step)))
   }
-  await NodWatch.playSpeech({ data: btoa(chunks.join('')) })
+  await NodWatch.playSpeech({ data: btoa(chunks.join('')), dest })
 }
 
-export async function shareNativeFile(bytes: Uint8Array, name: string): Promise<void> {
-  if (!isNativeApp()) throw new Error('Share is only available in the iPhone app')
+function bytesToBase64(bytes: Uint8Array): string {
   const chunks: string[] = []
   const step = 8192
   for (let i = 0; i < bytes.length; i += step) {
     chunks.push(String.fromCharCode(...bytes.subarray(i, i + step)))
   }
-  await NodWatch.shareFile({ data: btoa(chunks.join('')), name })
+  return btoa(chunks.join(''))
+}
+
+export async function shareNativeFile(bytes: Uint8Array, name: string): Promise<void> {
+  await saveNativeFiles([{ bytes, name }])
+}
+
+export async function saveNativeFiles(
+  files: Array<{ bytes: Uint8Array; name: string }>,
+  remotes: Array<{ url: string; name: string; token?: string }> = [],
+): Promise<void> {
+  if (!files.length && !remotes.length) return
+  if (!isNativeApp()) {
+    for (const [index, file] of files.entries()) {
+      const url = URL.createObjectURL(new Blob([file.bytes.slice().buffer]))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = file.name
+      a.rel = 'noopener'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 4_000)
+      if (index < files.length - 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 350))
+      }
+    }
+    return
+  }
+  await NodWatch.saveToFiles({
+    files: files.map((file) => ({ data: bytesToBase64(file.bytes), name: file.name })),
+    remotes,
+  })
 }

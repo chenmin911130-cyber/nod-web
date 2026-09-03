@@ -7,9 +7,13 @@ import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
 import { restoreFromSession, sessionShouldOfferSave, sessionShouldOpenSavePrompt } from './historyRestore'
+import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
+import { watchLangPair, watchStatusMode } from './watchFace'
 import { meetingRailIsPaused } from './meetingPause'
 import SavePrompt from './components/SavePrompt'
+import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
+import { canSwitchWorkspace, sessionListening } from './iphoneCopy'
 import AnswerPane from './components/AnswerPane'
 import ListenPane from './components/ListenPane'
 import TranslatePane from './components/TranslatePane'
@@ -18,7 +22,7 @@ import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
 import { api as authApi, fetchMe } from './auth'
 import { isNativeApp, nativeGo } from './native'
-import { installWatchRemote, pushWatchStatus, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode } from './watch'
+import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchListenMode, watchShouldApplyMode, watchStartShouldPreferWatchMic } from './watch'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
 import { shouldGenerateAutoReport } from './recordReport'
@@ -152,14 +156,14 @@ const initial: AppState = {
   meetingEnded: false,
   translatePairs: [],
   translateFrom: storedPair?.from ?? 'auto',
-  translateTo: storedPair?.to ?? 'zh',
-  notesLang: readStoredNotesLang() ?? storedPair?.to ?? 'zh',
+  translateTo: storedPair?.to ?? 'en',
+  notesLang: readStoredNotesLang() ?? storedPair?.to ?? 'en',
   heardLang: null,
   translateAskId: '',
   translateBindId: '',
   summaryAskId: '',
   listenScene: 'meeting' as ListenScene,
-  translateOn: false,
+  translateOn: true,
   catchNotes: [],
   catchPendingTitle: '',
   catchAskId: '',
@@ -968,6 +972,7 @@ export default function App() {
     || (Boolean(state.currentQ) && state.currentQ !== PLACEHOLDER)
   )
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
   const restoreHistory = useCallback((session: HistorySession) => {
     const s = stateRef.current
     if (s.busy || s.run === 'listen' || s.run === 'record' || listenWanted.current) {
@@ -985,6 +990,7 @@ export default function App() {
       speakers_expected: speakersExpected(payload.scene),
     })
     dispatch({ type: 'restore_session', ...payload })
+    markHistoryKept(true)
     setRailDismissed(false)
     setHistoryOpen(false)
     dispatch({
@@ -1060,8 +1066,15 @@ export default function App() {
         listenScene: next.scene ?? (next.workspace === 'interview' ? 'interview' : stateRef.current.listenScene),
       }
     }
+    const applyWatchMic = (raw?: string) => {
+      const s = stateRef.current
+      const mode = watchListenMode(raw) || watchStatusMode(s.workspaceMode, s.listenScene)
+      if (watchStartShouldPreferWatchMic(mode)) setPreferWatchMic(true)
+      else takePhoneMic()
+    }
     return installWatchRemote({
       onStart: (mode) => {
+        applyWatchMic(mode)
         const s = stateRef.current
         if (!watchListenControlShouldApplyMode({ action: 'start', sessionPaused: sessionPaused.current, run: s.run })) {
           guardMic(() => startListen({ fromWatch: true }))
@@ -1081,6 +1094,7 @@ export default function App() {
         guardMic(() => startListen({ fromWatch: true }))
       },
       onRecord: (mode) => {
+        applyWatchMic(mode)
         const s = stateRef.current
         if (!watchListenControlShouldApplyMode({ action: 'record', sessionPaused: sessionPaused.current, run: s.run })) {
           if (sessionPaused.current) {
@@ -1116,6 +1130,7 @@ export default function App() {
         stopListen()
       },
       onResume: () => {
+        applyWatchMic()
         const s = stateRef.current
         if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
           dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
@@ -1127,8 +1142,18 @@ export default function App() {
         stopListen()
         if (stateRef.current.workspaceMode === 'meeting') {
           dispatch({ type: 'meeting_ended' })
-          queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
+          if (watchStopShouldOpenPhoneSave()) {
+            queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
+          }
         }
+      },
+      onSave: () => {
+        window.api.send(watchSaveCommand())
+        markHistoryKept(true)
+      },
+      onDiscard: () => {
+        window.api.send(watchDiscardCommand())
+        markHistoryKept(false)
       },
       onSpeak: () => {
         const s = stateRef.current
@@ -1136,8 +1161,7 @@ export default function App() {
         const fromLines = [...s.meetingLines].reverse().find((ln) => (ln.translation || '').trim())
         const text = (fromPairs?.translation || fromLines?.translation || '').trim()
         if (!text) return
-        unlockSpeech()
-        void speakTranslation(text, ttsVoiceRef.current).catch((err) => {
+        void speakTranslation(text, ttsVoiceRef.current, 'watch').catch((err) => {
           dispatch({
             type: 'engine',
             ev: { type: 'status', text: err instanceof Error ? err.message : 'Could not speak translation' },
@@ -1171,8 +1195,15 @@ export default function App() {
       translateOn: state.translateOn,
       translatePairs: state.translatePairs,
       meetingLines: state.meetingLines,
+      turns: state.turns,
     })
-    const timer = window.setTimeout(() => pushWatchStatus(face), 180)
+    const timer = window.setTimeout(() => {
+      pushWatchStatus({
+        ...face,
+        mode: watchStatusMode(state.workspaceMode, state.listenScene),
+        langPair: watchLangPair(state.translateTo),
+      })
+    }, 180)
     return () => window.clearTimeout(timer)
   }, [
     consentOpen,
@@ -1183,7 +1214,10 @@ export default function App() {
     state.run,
     state.translateOn,
     state.translatePairs,
+    state.turns,
     state.workspaceMode,
+    state.listenScene,
+    state.translateTo,
   ])
 
   const acceptConsent = () => {
@@ -1246,10 +1280,12 @@ export default function App() {
         listenWanted.current = false
       }
       if (e.type === 'save_prompt') {
-        // Watch stop-and-save: keep History without a dialog the wrist cannot tap.
+        // Watch Stop asks on the wrist. Phone Meeting Save stays for phone Stop.
         if (watchAutoNotes.current) {
-          api.send({ type: 'keep_history' })
-          markHistoryKept(true)
+          if (watchStopShouldAutoKeepHistory()) {
+            api.send(watchSaveCommand())
+            markHistoryKept(true)
+          }
         } else if (sessionShouldOpenSavePrompt({
           workspaceMode: stateRef.current.workspaceMode,
           kept: historyKeptRef.current,
@@ -1334,16 +1370,20 @@ export default function App() {
       const mode = stateRef.current.workspaceMode
       if (k === 'f2') handleRecordRef.current()
       else if (k === 'f3') {
-        const running = stateRef.current.run === 'listen' || stateRef.current.run === 'record'
+        const running = sessionListening({
+          run: stateRef.current.run,
+          wanted: listenWanted.current,
+          paused: sessionPaused.current,
+        })
         if (running) stopListen()
         else guardMic(startListen)
       }
       else if (k === 'f4') requestClearRef.current()
-      else if (k === 'f8' && mode === 'interview') {
+      else if (!isWeb && k === 'f8' && mode === 'interview') {
         const v = stateRef.current.view
         dispatch({ type: 'view', view: v === 'workspace' ? 'fullscreen' : 'workspace' })
       }
-      else if (k === 'f9' && mode === 'interview') {
+      else if (!isWeb && k === 'f9' && mode === 'interview') {
         const next = !stateRef.current.stealth
         api.setStealth(next)
         dispatch({ type: 'stealth', on: next })
@@ -1412,7 +1452,11 @@ export default function App() {
         return
       }
       if (k === 'a') {
-        const running = stateRef.current.run === 'listen' || stateRef.current.run === 'record'
+        const running = sessionListening({
+          run: stateRef.current.run,
+          wanted: listenWanted.current,
+          paused: sessionPaused.current,
+        })
         if (running) stopListen()
         else guardMic(startListen)
       }
@@ -1650,6 +1694,14 @@ export default function App() {
   const handleMode = useCallback((mode: WorkspaceMode, scene?: ListenScene) => {
     const s = stateRef.current
     const nextScene = scene ?? (mode === 'interview' ? 'interview' : s.listenScene)
+    if (mode === s.workspaceMode && nextScene === s.listenScene) return
+    if (!canSwitchWorkspace({
+      listening: sessionListening({ run: s.run, wanted: listenWanted.current, paused: sessionPaused.current }),
+      paused: sessionPaused.current,
+    })) {
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'Stop listening first' } })
+      return
+    }
     if (s.stealth && mode !== 'interview') {
       window.api.setStealth(false)
       dispatch({ type: 'stealth', on: false })
@@ -1676,7 +1728,7 @@ export default function App() {
           mode === 'translate'
             ? 'Mode · Translate'
             : mode === 'interview'
-              ? 'Mode · Q&A'
+              ? 'Mode · Live Q&A'
               : nextScene === 'lecture'
                 ? 'Mode · Lecture'
                 : 'Mode · AI Listening Assistant',
@@ -1687,14 +1739,19 @@ export default function App() {
 
   const handlePrimary = useCallback(() => {
     const s = stateRef.current
+    const live = sessionListening({
+      run: s.run,
+      wanted: listenWanted.current,
+      paused: sessionPaused.current,
+    })
     if (s.workspaceMode === 'interview') {
       if (s.run === 'record') return
-      if (s.run === 'listen') stopListen()
+      if (live) stopListen()
       else guardMic(startListen)
       return
     }
     if (s.workspaceMode === 'meeting') {
-      if (s.run === 'listen' || s.run === 'record') {
+      if (live) {
         stopListen()
         dispatch({ type: 'meeting_ended' })
         dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped' } })
@@ -1711,7 +1768,7 @@ export default function App() {
       return
     }
     if (s.run === 'record') return
-    if (s.run === 'listen') {
+    if (live) {
       stopListen()
       return
     }
@@ -1722,6 +1779,20 @@ export default function App() {
       startListen()
     })
   }, [])
+
+  const handleStop = useCallback(() => {
+    const s = stateRef.current
+    sessionPaused.current = false
+    if (sessionListening({ run: s.run, wanted: listenWanted.current, paused: false })) {
+      handlePrimary()
+      return
+    }
+    if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
+      dispatch({ type: 'meeting_ended' })
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped' } })
+      queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
+    }
+  }, [handlePrimary])
 
   const handleRecord = useCallback(() => {
     const s = stateRef.current
@@ -1740,7 +1811,7 @@ export default function App() {
       queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
       return
     }
-    if (s.run === 'listen' || s.run === 'record') {
+    if (sessionListening({ run: s.run, wanted: listenWanted.current, paused: false })) {
       sessionPaused.current = false
       autoReport.current = true
       recordHeard.current = true
@@ -1765,16 +1836,13 @@ export default function App() {
 
   const handlePause = useCallback(() => {
     const s = stateRef.current
-    if (s.run === 'listen' || s.run === 'record') {
+    if (sessionListening({ run: s.run, wanted: listenWanted.current, paused: sessionPaused.current })) {
       sessionPaused.current = true
       if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
         dispatch({ type: 'meeting_clock', startedAt: s.meetingStartedAt, elapsedMs: Date.now() - s.meetingStartedAt })
       }
       stopListen()
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Paused · resume when ready' } })
-      if (s.workspaceMode === 'meeting') {
-        queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
-      }
     }
   }, [])
 
@@ -1880,7 +1948,7 @@ export default function App() {
   const pumpTranslate = useCallback(() => {
     const s = stateRef.current
     if (inflightTranslate.current) return
-    if (s.workspaceMode === 'meeting' && s.translateOn) {
+    if (s.workspaceMode === 'meeting' && s.translateOn && s.notesLang !== 'auto') {
       // 最新的未翻译行优先（实时字幕语义：先出当前句子，停顿期间回填旧行）
       for (let i = s.meetingLines.length - 1; i >= 0; i--) {
         const line = s.meetingLines[i]
@@ -2382,7 +2450,7 @@ export default function App() {
     return <KeySetup hasLlm={state.keys.hasLlm} hasStt={state.keys.hasStt} />
   }
 
-  if (state.view !== 'workspace' && state.workspaceMode === 'interview') {
+  if (!isWeb && state.view !== 'workspace' && state.workspaceMode === 'interview') {
     const fullscreen = state.view === 'fullscreen'
     return (
       <div className={`app overlay-app${fullscreen ? ' fullscreen' : ''}`}>
@@ -2417,7 +2485,11 @@ export default function App() {
     )
   }
 
-  const listening = state.run === 'listen' || state.run === 'record'
+  const listening = sessionListening({
+    run: state.run,
+    wanted: listenWanted.current,
+    paused: sessionPaused.current,
+  })
   const study = studyMode
   const hideRail = () => {
     setRailDismissed(true)
@@ -2457,13 +2529,53 @@ export default function App() {
         kept: historyKept,
         hasContent: meetingHasSaveableContent(state),
         listening,
+        paused: sessionPaused.current,
       })}
       sessionSaved={state.workspaceMode === 'meeting' && historyKept && meetingHasSaveableContent(state)}
     />
   )
 
+  const nativePhone = isNativeApp()
+  const iphonePaused = sessionPaused.current && !listening
+  const canSaveSession = sessionShouldOfferSave({
+    workspaceMode: state.workspaceMode,
+    ended: state.meetingEnded,
+    kept: historyKept,
+    hasContent: meetingHasSaveableContent(state),
+    listening,
+    paused: sessionPaused.current,
+  })
+  const phoneActions = nativePhone ? (
+    <IphoneActions
+      listening={listening}
+      paused={iphonePaused}
+      muted={state.micMuted}
+      elapsedMs={state.meetingElapsedMs}
+      canSave={canSaveSession}
+      hasContent={meetingHasSaveableContent(state) || state.translatePairs.length > 0}
+      variant={state.workspaceMode === 'translate' ? 'translate' : state.workspaceMode === 'interview' ? 'interview' : 'listen'}
+      onStart={handlePrimary}
+      onPause={handlePause}
+      onResume={handlePrimary}
+      onStop={handleStop}
+      onMore={() => setMoreOpen(true)}
+      moreOpen={moreOpen}
+      onCloseMore={() => setMoreOpen(false)}
+      onExportPdf={() => { void handleExportPdf() }}
+      onSave={() => {
+        if (historyKept) {
+          setHistoryOpen(true)
+          return
+        }
+        setSavePrompt(true)
+      }}
+      onHistory={() => setHistoryOpen(true)}
+      onNew={handleNewSession}
+    />
+  ) : null
+
   return (
-    <div className="app">
+    <div className={`app${nativePhone ? ' iphone-v2' : ''}${nativePhone && historyOpen ? ' hist-open' : ''}${nativePhone && state.workspaceMode === 'translate' ? ' translate-mode' : ''}`}>
       <TitleBar
         mode={state.workspaceMode}
         lang={state.lang}
@@ -2483,6 +2595,8 @@ export default function App() {
         onMicMuted={handleMicMuted}
         onStealth={handleStealth}
         onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
+        onOpenHistory={() => setHistoryOpen(true)}
+        onMore={() => setMoreOpen(true)}
         listening={listening}
         elapsedMs={
           state.workspaceMode === 'meeting' && state.meetingStartedAt != null
@@ -2529,6 +2643,7 @@ export default function App() {
             <span className="rail-hint-label">Controls</span>
           </button>
         )}
+        {!nativePhone && (
         <div
           className="rail-slot"
           onMouseEnter={() => {
@@ -2539,6 +2654,7 @@ export default function App() {
         >
           {sideRail}
         </div>
+        )}
         {state.workspaceMode === 'translate' ? (
           <TranslatePane
             pairs={state.translatePairs}
@@ -2583,6 +2699,7 @@ export default function App() {
                 onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
               />
             )}
+            actions={phoneActions}
             speaking={speaking}
             onStopSpeech={stopSpeech}
             onSpeak={(text) => {
@@ -2648,6 +2765,9 @@ export default function App() {
             onTranslateTo={handleTranslateTo}
             onSummary={handleSummary}
             onAsk={handleListenAsk}
+            elapsedMs={state.meetingElapsedMs}
+            onExportPdf={() => { void handleExportPdf() }}
+            actions={phoneActions}
           />
         )}
       </div>

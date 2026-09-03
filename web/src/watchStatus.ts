@@ -5,11 +5,41 @@ export type WatchFace = {
   hint: string
   original: string
   translation: string
+  previous: string
   history: WatchHistItem[]
 }
 
 type Pair = { id: string; original: string; translation: string }
 type Line = { id: string; text: string; translation?: string }
+type Turn = { id: string; q: string; a: string }
+
+export function watchVisibleOriginal(original: string, translation: string): string {
+  const src = original.replace(/\s+/g, ' ').trim()
+  const dst = watchVisibleTranslation(translation)
+  if (!src || !dst) return src
+  if (src.toLowerCase() === dst.toLowerCase()) return ''
+  return src
+}
+
+export function watchVisibleTranslation(text: string): string {
+  const raw = text.replace(/[ \t]+/g, ' ').trim()
+  if (!raw) return ''
+  const lines = raw.split(/\n+/).map((line) => line.trim()).filter(Boolean)
+  if (lines.length === 2 && lines[0].toLowerCase() === lines[1].toLowerCase()) return lines[0]
+  return raw
+}
+
+/** One muted line: the finished sentence before the current one. */
+export function watchPreviousCaption(pairs: Pair[]): string {
+  const done = pairs.filter((p) => (p.translation || p.original).trim())
+  if (done.length < 2) return ''
+  const prev = done[done.length - 2]
+  const current = done[done.length - 1]
+  const line = watchVisibleTranslation(prev.translation) || prev.original.replace(/\s+/g, ' ').trim()
+  const now = watchVisibleTranslation(current.translation) || current.original.replace(/\s+/g, ' ').trim()
+  if (!line || line.toLowerCase() === now.toLowerCase()) return ''
+  return line
+}
 
 export function clipWatch(text: string, max: number): string {
   const t = text.replace(/\s+/g, ' ').trim()
@@ -27,9 +57,11 @@ export function buildWatchFace(input: {
   translateOn: boolean
   translatePairs: Pair[]
   meetingLines: Line[]
+  turns?: Turn[]
 }): WatchFace {
   const listening = input.run === 'listen' || input.run === 'record'
   const lastPair = [...input.translatePairs].reverse().find((p) => p.original.trim())
+  const lastTurn = [...(input.turns || [])].reverse().find((t) => t.q.trim() || t.a.trim())
   const lastLine = [...input.meetingLines].reverse().find((ln) => ln.text.trim())
 
   let original = ''
@@ -37,11 +69,20 @@ export function buildWatchFace(input: {
   if (input.workspaceMode === 'translate' && lastPair) {
     original = lastPair.original
     translation = lastPair.translation
-  } else if (lastLine) {
+  } else if (input.workspaceMode === 'interview' && lastTurn) {
+    original = lastTurn.q
+    translation = lastTurn.a
+  } else if (input.workspaceMode !== 'interview' && lastLine) {
     original = lastLine.text
     translation = input.translateOn ? lastLine.translation || '' : ''
   }
-  if (listening && input.partial.trim()) original = input.partial.trim()
+  if (listening && input.partial.trim()) {
+    if (input.workspaceMode !== 'interview' || !translation.trim()) {
+      original = input.partial.trim()
+    }
+  }
+  translation = watchVisibleTranslation(translation)
+  original = watchVisibleOriginal(original, translation)
 
   let hint = 'Ready'
   if (input.consentOpen) hint = 'Confirm on iPhone'
@@ -73,11 +114,19 @@ export function buildWatchFace(input: {
     }
   }
 
+  const previousPairs = input.workspaceMode === 'interview'
+    ? (input.turns || []).map((t) => ({ id: t.id, original: t.q, translation: t.a }))
+    : input.workspaceMode === 'translate'
+      ? input.translatePairs
+      : []
+  const previous = clipWatch(watchPreviousCaption(previousPairs), 72)
+
   return {
     listening,
     hint: clipWatch(hint, 140),
-    original: clipWatch(original, 400),
-    translation: clipWatch(translation, 400),
+    original: clipWatch(original, 800),
+    translation: clipWatch(translation, 800),
+    previous,
     history,
   }
 }

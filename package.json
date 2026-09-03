@@ -11,6 +11,7 @@
     "@capacitor/browser": "^7.0.2",
     "@capacitor/core": "^7.4.3",
     "@capacitor/ios": "^7.4.3",
+    "@capacitor/keyboard": "^7.0.6",
     "@capacitor/status-bar": "^7.0.3",
     "nod-auth": "file:plugins/nod-auth",
     "nod-mic": "file:plugins/nod-mic",

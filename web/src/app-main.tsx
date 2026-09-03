@@ -19,6 +19,14 @@ async function boot() {
   if (!rootEl) return
   rememberNativeReturn()
   installNativeShell()
+  if (isLocalHost() && new URLSearchParams(location.search).get('preview') === 'signin') {
+    document.documentElement.classList.add('nod-web', 'nod-native')
+    document.title = PRODUCT_NAME
+    await import('./App.css')
+    const { default: NativeSignIn } = await import('./components/NativeSignIn')
+    createRoot(rootEl).render(<NativeSignIn onSignedIn={() => location.replace('/app')} />)
+    return
+  }
   const path = window.location.pathname + window.location.search
   let me = await fetchMe()
   if (!isNativeApp() && me && maybeReturnToNativeApp(getToken())) return

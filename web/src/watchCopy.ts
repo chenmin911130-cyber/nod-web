@@ -1,0 +1,152 @@
+export type WatchUiLang = 'zh' | 'en' | 'it' | 'es' | 'fr' | 'de' | 'pt' | 'ja'
+
+export type WatchUiCopy = {
+  listening: string
+  dontSave: string
+  save: string
+  paused: string
+  saved: string
+  stopListening: string
+  start: string
+  stop: string
+  ready: string
+  pause: string
+  resume: string
+  hearQuestion: string
+  drafting: string
+}
+
+const COPY: Record<WatchUiLang, WatchUiCopy> = {
+  zh: {
+    listening: '听着',
+    dontSave: '不保存',
+    save: '保存',
+    paused: '已暂停',
+    saved: '已同步到手机',
+    stopListening: '停止听写',
+    start: '开始',
+    stop: '停止',
+    ready: '就绪',
+    pause: '暂停',
+    resume: '继续',
+    hearQuestion: '听问题',
+    drafting: '起草中',
+  },
+  en: {
+    listening: "I'm listening.",
+    dontSave: "Don't save",
+    save: 'Save',
+    paused: 'Paused',
+    saved: 'Saved to iPhone',
+    stopListening: 'Stop listening',
+    start: 'Start',
+    stop: 'Stop',
+    ready: 'Ready',
+    pause: 'Pause',
+    resume: 'Resume',
+    hearQuestion: 'Listening',
+    drafting: 'Drafting',
+  },
+  it: {
+    listening: 'Ascolto',
+    dontSave: 'Non salvare',
+    save: 'Salva',
+    paused: 'In pausa',
+    saved: 'Salvato su iPhone',
+    stopListening: 'Ferma',
+    start: 'Avvia',
+    stop: 'Stop',
+    ready: 'Pronto',
+    pause: 'Pausa',
+    resume: 'Riprendi',
+    hearQuestion: 'Ascolto',
+    drafting: 'Sto scrivendo',
+  },
+  es: {
+    listening: 'Escuchando',
+    dontSave: 'No guardar',
+    save: 'Guardar',
+    paused: 'En pausa',
+    saved: 'Guardado en iPhone',
+    stopListening: 'Detener',
+    start: 'Iniciar',
+    stop: 'Stop',
+    ready: 'Listo',
+    pause: 'Pausa',
+    resume: 'Seguir',
+    hearQuestion: 'Escuchando',
+    drafting: 'Redactando',
+  },
+  fr: {
+    listening: "J'écoute",
+    dontSave: 'Ne pas enregistrer',
+    save: 'Enregistrer',
+    paused: 'En pause',
+    saved: 'Sauvé sur iPhone',
+    stopListening: 'Arrêter',
+    start: 'Démarrer',
+    stop: 'Stop',
+    ready: 'Prêt',
+    pause: 'Pause',
+    resume: 'Reprendre',
+    hearQuestion: "J'écoute",
+    drafting: 'Rédaction',
+  },
+  de: {
+    listening: 'Ich höre zu',
+    dontSave: 'Nicht speichern',
+    save: 'Speichern',
+    paused: 'Pausiert',
+    saved: 'Auf iPhone',
+    stopListening: 'Stopp',
+    start: 'Start',
+    stop: 'Stopp',
+    ready: 'Bereit',
+    pause: 'Pause',
+    resume: 'Weiter',
+    hearQuestion: 'Ich höre zu',
+    drafting: 'Schreibe…',
+  },
+  pt: {
+    listening: 'Ouvindo',
+    dontSave: 'Não salvar',
+    save: 'Salvar',
+    paused: 'Pausado',
+    saved: 'Salvo no iPhone',
+    stopListening: 'Parar',
+    start: 'Iniciar',
+    stop: 'Stop',
+    ready: 'Pronto',
+    pause: 'Pausar',
+    resume: 'Seguir',
+    hearQuestion: 'Ouvindo',
+    drafting: 'Escrevendo',
+  },
+  ja: {
+    listening: '聞いています',
+    dontSave: '保存しない',
+    save: '保存',
+    paused: '一時停止',
+    saved: 'iPhoneに保存',
+    stopListening: '停止',
+    start: '開始',
+    stop: '停止',
+    ready: '準備完了',
+    pause: '一時停止',
+    resume: '再開',
+    hearQuestion: '質問を聞く',
+    drafting: '作成中',
+  },
+}
+
+const LANGS = new Set<WatchUiLang>(Object.keys(COPY) as WatchUiLang[])
+
+export function watchUiLang(locale: string): WatchUiLang {
+  const tag = locale.trim().toLowerCase().replace(/_/g, '-')
+  const code = (tag.split('-')[0] || 'en') as WatchUiLang
+  return LANGS.has(code) ? code : 'en'
+}
+
+export function watchUiCopy(locale: string): WatchUiCopy {
+  return COPY[watchUiLang(locale)]
+}

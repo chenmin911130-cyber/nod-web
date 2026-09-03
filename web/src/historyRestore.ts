@@ -54,8 +54,9 @@ export function sessionShouldOfferSave(input: {
   kept: boolean
   hasContent: boolean
   listening?: boolean
+  paused?: boolean
 }): boolean {
-  if (input.workspaceMode !== 'meeting' || input.kept || !input.hasContent || input.listening) return false
+  if (input.workspaceMode !== 'meeting' || input.kept || !input.hasContent || input.listening || input.paused) return false
   return input.ended || !input.listening
 }
 
@@ -136,6 +137,62 @@ function formatItemTs(item: HistoryItem | undefined, index: number) {
     }
   }
   return `${String(index + 1).padStart(2, '0')}:00`
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+function localDayKey(ms: number): string {
+  const d = new Date(ms)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function clock12(ms: number): string {
+  const d = new Date(ms)
+  const ap = d.getHours() >= 12 ? 'PM' : 'AM'
+  const h = d.getHours() % 12 || 12
+  return `${h}:${String(d.getMinutes()).padStart(2, '0')} ${ap}`
+}
+
+export function historyDayLabel(startedAt: string | null, nowMs = Date.now()): string {
+  const t = startedAt ? Date.parse(startedAt) : NaN
+  if (!Number.isFinite(t)) return 'Earlier'
+  const day = localDayKey(t)
+  if (day === localDayKey(nowMs)) return 'Today'
+  const yest = new Date(nowMs)
+  yest.setDate(yest.getDate() - 1)
+  if (day === localDayKey(yest.getTime())) return 'Yesterday'
+  const d = new Date(t)
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`
+}
+
+export function historyRowWhen(startedAt: string | null, sttSeconds: number, nowMs = Date.now()): string {
+  const dur = `${Math.max(0, Math.round(sttSeconds / 60))}m`
+  const day = historyDayLabel(startedAt, nowMs)
+  const t = startedAt ? Date.parse(startedAt) : NaN
+  if (day === 'Today' || day === 'Yesterday') return `${day}, ${clock12(t)} • ${dur}`
+  if (day === 'Earlier') return dur
+  return `${day} • ${dur}`
+}
+
+export function groupHistoryByDay<T extends { started_at: string | null }>(
+  sessions: T[],
+  nowMs = Date.now(),
+): Array<{ label: string; sessions: T[] }> {
+  const groups = new Map<string, T[]>()
+  const order: string[] = []
+  for (const session of sessions) {
+    const label = historyDayLabel(session.started_at, nowMs)
+    if (!groups.has(label)) {
+      groups.set(label, [])
+      order.push(label)
+    }
+    groups.get(label)!.push(session)
+  }
+  return order.map((label) => ({ label, sessions: groups.get(label)! }))
+}
+
+export function sessionHasAudio(session: Pick<HistorySession, 'files'>): boolean {
+  return (session.files || []).some((file) => file.kind === 'audio')
 }
 
 export async function copyText(text: string): Promise<boolean> {
