@@ -51,6 +51,10 @@ ASSEMBLYAI_WS = "wss://streaming.assemblyai.com/v3/ws"
 ASSEMBLYAI_API = "https://api.assemblyai.com"
 ASSEMBLYAI_MODEL = "universal-3-5-pro"
 ASSEMBLYAI_FILE_MODELS = ["universal-3-5-pro", "universal-2"]
+# Official close: {"type": "Terminate"}. Dropping the socket does not stop
+# billing; unterminated sessions stay open and bill for up to 3 hours.
+ASSEMBLYAI_TERMINATE = {"type": "Terminate"}
+ASSEMBLYAI_TERMINATE_WAIT_SEC = 1.5
 STATUS_READY = "Ready · F2 record / F3 listen / F4 clear · browser mic + cloud STT"
 STATUS_RECORD = "Recording · accurate captions follow shortly"
 STATUS_LISTEN = "Listening for the next question…"
@@ -619,6 +623,27 @@ def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
     return ASSEMBLYAI_WS + "?" + urlencode(params)
 
 
+def _terminate_assemblyai_session(ws, done: threading.Event | None = None) -> None:
+    """Send the official Terminate message, then close the socket.
+
+    AssemblyAI bills streaming on WebSocket-open time. The Terminate JSON
+    frame is what stops billing. A TCP / WebSocket close alone leaves the
+    session open until the 3-hour auto-close, and you are billed for all of it.
+    """
+    try:
+        sock = getattr(ws, "sock", None)
+        if sock is not None and getattr(sock, "connected", False):
+            ws.send(json.dumps(ASSEMBLYAI_TERMINATE))
+            if done is not None and not done.is_set():
+                done.wait(timeout=ASSEMBLYAI_TERMINATE_WAIT_SEC)
+    except Exception:
+        pass
+    try:
+        ws.close()
+    except Exception:
+        pass
+
+
 def assemblyai_prerecorded_body(cfg: dict[str, Any], audio_url: str) -> dict[str, Any]:
     """File STT: same Pro model as live, but the async API sees the whole clip."""
     stt = cfg.get("stt") or {}
@@ -1038,7 +1063,7 @@ def assemblyai_transcribe_pcm(api_key: str, pcm: bytes, cfg: dict[str, Any], tim
                         return
                     ws.send(pcm[i:i + step], websocket.ABNF.OPCODE_BINARY)
                 if ws.sock and ws.sock.connected:
-                    ws.send(json.dumps({"type": "Terminate"}))
+                    ws.send(json.dumps(ASSEMBLYAI_TERMINATE))
             except Exception as e:
                 result["err"] = str(e)
                 done.set()
@@ -1084,10 +1109,7 @@ def assemblyai_transcribe_pcm(api_key: str, pcm: bytes, cfg: dict[str, Any], tim
     threading.Thread(target=lambda: ws.run_forever(ping_interval=20, ping_timeout=10), daemon=True).start()
     if not done.wait(timeout):
         result["err"] = result["err"] or "AssemblyAI timeout"
-    try:
-        ws.close()
-    except Exception:
-        pass
+    _terminate_assemblyai_session(ws, done)
     if result["err"] and not result["text"]:
         raise RuntimeError(result["err"])
     return result["text"], result.get("lang")
@@ -1591,6 +1613,7 @@ class CloudListener:
         self._muted = False
         self._was_ready = False
         self._drop_sent = False
+        self._terminated = threading.Event()
 
     def set_muted(self, muted: bool) -> None:
         self._muted = bool(muted)
@@ -1615,6 +1638,7 @@ class CloudListener:
         url = assemblyai_ws_url(self.cfg)
         self._stop.clear()
         self._ready.clear()
+        self._terminated.clear()
         self._fail = []
         self._was_ready = False
         self._drop_sent = False
@@ -1687,8 +1711,17 @@ class CloudListener:
                     threading.Thread(target=self.on_final, args=(cleaned, lang, speaker), daemon=True).start()
             elif speechy and self.on_partial:
                 self.on_partial(text, lang, speaker)
+        elif kind == "Termination":
+            self._terminated.set()
+            log = logging.getLogger("nod")
+            log.info(
+                "assemblyai session ended session_s=%s audio_s=%s",
+                data.get("session_duration_seconds"),
+                data.get("audio_duration_seconds"),
+            )
         elif kind == "Error":
             err = str(data.get("error") or message)
+            self._terminated.set()
             if self.on_error:
                 self.on_error(err)
             self._notify_drop(err)
@@ -1696,6 +1729,7 @@ class CloudListener:
     def _on_ws_error(self, _ws, error) -> None:
         self._fail.append(str(error))
         self._ready.set()
+        self._terminated.set()
         if self._stop.is_set():
             return
         if not self._was_ready and self.on_error:
@@ -1704,6 +1738,7 @@ class CloudListener:
         self._notify_drop(str(error))
 
     def _on_close(self, _ws, status, msg) -> None:
+        self._terminated.set()
         if self._stop.is_set():
             return
         extra = f"{status or ''} {msg or ''}".strip()
@@ -1716,12 +1751,9 @@ class CloudListener:
     def stop(self) -> None:
         self._stop.set()
         ws = self._ws
+        self._ws = None
         if ws:
-            try:
-                ws.close()
-            except Exception:
-                pass
-            self._ws = None
+            _terminate_assemblyai_session(ws, self._terminated)
 
 
 class Session:
@@ -1734,6 +1766,7 @@ class Session:
         self.usage_session_id: str | None = None
         self._pcm_unmetered = 0
         self._listener: CloudListener | None = None
+        self._listen_mu = threading.RLock()
         self._manual_buf = bytearray()
         self._manual = False
         self._manual_started = 0.0
@@ -2118,17 +2151,25 @@ class Session:
         cfg["stt"] = stt
         return cfg
 
+    def _listen_lock(self) -> threading.RLock:
+        mu = getattr(self, "_listen_mu", None)
+        if mu is None:
+            mu = threading.RLock()
+            self._listen_mu = mu
+        return mu
+
     def _restart_listener(self) -> None:
-        if not self._listen_wanted:
-            return
-        lst = self._listener
-        self._listener = None
-        if lst:
-            try:
-                lst.stop()
-            except Exception:
-                pass
-        self._start_listening(resume=True)
+        with self._listen_lock():
+            if not self._listen_wanted:
+                return
+            lst = self._listener
+            self._listener = None
+            if lst:
+                try:
+                    lst.stop()
+                except Exception:
+                    pass
+            self._start_listening(resume=True)
 
     def _on_stt_drop(self, reason: str) -> None:
         if not self._listen_wanted:
@@ -2437,9 +2478,28 @@ class Session:
             else:
                 self._listen_wanted = False
             return
+        if not self._listen_wanted:
+            try:
+                listener.stop()
+            except Exception:
+                pass
+            return
         if self._mic_muted:
             listener.set_muted(True)
-        self._listener = listener
+        with self._listen_lock():
+            if not self._listen_wanted:
+                try:
+                    listener.stop()
+                except Exception:
+                    pass
+                return
+            old = self._listener
+            self._listener = listener
+        if old and old is not listener:
+            try:
+                old.stop()
+            except Exception:
+                pass
         now = time.time()
         if not resume or not self._listen_started_at:
             self._listen_started_at = now
@@ -2475,8 +2535,9 @@ class Session:
 
     def _stop_listening(self) -> None:
         self._pending = None
-        lst = self._listener
-        self._listener = None
+        with self._listen_lock():
+            lst = self._listener
+            self._listener = None
         if lst:
             try:
                 lst.stop()
