@@ -4,7 +4,7 @@ if (!shouldReleaseListen({ type: 'listen_taken', text: LISTEN_TAKEN_TEXT })) {
   throw new Error('listen_taken must release the local listen latch')
 }
 
-if (!shouldReleaseListen({ type: 'quota_exceeded', reason: 'stt' })) {
+if (!shouldReleaseListen({ type: 'quota_exceeded' })) {
   throw new Error('quota_exceeded must still release the listen latch')
 }
 
@@ -20,6 +20,6 @@ if (shouldReleaseListen({ type: 'status', text: LISTEN_TAKEN_TEXT })) {
   throw new Error('status text alone must not release listen')
 }
 
-if (shouldReleaseListen({ type: 'state', state: 'idle' })) {
+if (shouldReleaseListen({ type: 'state' })) {
   throw new Error('idle captions must not clear listenWanted or reconnect cannot resume')
 }
