@@ -64,6 +64,7 @@ STATUS_GENERATE = "Generating answer…"
 STATUS_ANSWER_READY = "Answer ready"
 STATUS_WAIT_MORE = "I caught part of a question. Keep listening…"
 STATUS_EMPTY = "No speech detected, please try again"
+LISTEN_TAKEN_MSG = "Another device started listening. Tap Start Listening to take it back."
 MANUAL_MAX_SEC = float(LISTEN_MAX_SECONDS)
 MANUAL_MIN_SEC = 0.4
 MANUAL_CHUNK_SEC = 10.0
@@ -626,7 +627,7 @@ def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
 # At most one live AssemblyAI stream per user+workspace. Start Listening and
 # Nod-WS reconnect run on the thread pool, so three start_listen frames in the
 # same second used to open three sockets and keep only the last reference.
-_LIVE_STT: dict[str, CloudListener] = {}
+_LIVE_STT: dict[str, tuple[CloudListener, Session]] = {}
 _LIVE_STT_MU = threading.Lock()
 
 
@@ -637,16 +638,21 @@ def _stt_owner_slot(user_id: str | None, workspace: str | None, session_key: int
     return f"session:{session_key}"
 
 
-def _adopt_live_stt(slot: str, listener: CloudListener) -> CloudListener | None:
+def _adopt_live_stt(
+    slot: str, listener: CloudListener, owner: Session
+) -> tuple[CloudListener, Session] | None:
     with _LIVE_STT_MU:
         prev = _LIVE_STT.get(slot)
-        _LIVE_STT[slot] = listener
-        return prev if prev is not listener else None
+        _LIVE_STT[slot] = (listener, owner)
+        if prev and prev[0] is not listener:
+            return prev
+        return None
 
 
 def _drop_live_stt(slot: str, listener: CloudListener) -> None:
     with _LIVE_STT_MU:
-        if _LIVE_STT.get(slot) is listener:
+        cur = _LIVE_STT.get(slot)
+        if cur and cur[0] is listener:
             _LIVE_STT.pop(slot, None)
 
 
@@ -2279,6 +2285,35 @@ class Session:
             self._stop_listener(lst)
             self._start_listening(resume=True)
 
+    def _on_listen_taken(self) -> None:
+        """Another Session stole this user+workspace stream. Leave Listening.
+
+        stop() already set _stop, so _notify_drop will not fire. Clear the
+        latch and tell the UI. Do not cancel an in-flight answer.
+        """
+        self._listen_wanted = False
+        self._pending = None
+        self._cancel_stt_restart_timer()
+        with self._listen_lock():
+            lst = self._listener
+            self._listener = None
+        if lst:
+            _drop_live_stt(self._stt_slot(), lst)
+            try:
+                lst.stop()
+            except Exception:
+                pass
+        if getattr(self, "_workspace", "") == "interview":
+            self._cancel_interview_wait_timer()
+            self._flush_interview_wait()
+        else:
+            self._flush_meeting_hold()
+        self.emit({"type": "listen_taken", "text": LISTEN_TAKEN_MSG})
+        self.emit({"type": "state", "state": "idle"})
+        self.emit({"type": "status", "text": LISTEN_TAKEN_MSG})
+        self._flush_cloud_archive(final=False)
+        self._offer_save_history()
+
     def _on_stt_drop(self, reason: str) -> None:
         if not self._listen_wanted:
             return
@@ -2589,12 +2624,18 @@ class Session:
             on_drop=self._on_stt_drop,
         )
         slot = self._stt_slot()
-        prev = _adopt_live_stt(slot, listener)
+        prev = _adopt_live_stt(slot, listener, self)
         if prev:
+            prev_lst, prev_sess = prev
             try:
-                prev.stop()
+                prev_lst.stop()
             except Exception:
                 pass
+            if prev_sess is not self:
+                try:
+                    prev_sess._on_listen_taken()
+                except Exception:
+                    logging.getLogger("nod").exception("listen_taken notify failed")
         try:
             listener.start()
         except Exception as e:

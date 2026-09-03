@@ -221,3 +221,37 @@ class SessionListenLifecycleTests(unittest.TestCase):
         first.stop.assert_called()
         second.start.assert_called()
         self.assertIs(b._listener, second)
+
+    def test_second_session_notifies_the_first_and_stops_its_ui(self):
+        """Phone + web both Start: the first device must leave Listening."""
+        first = mock.Mock()
+        second = mock.Mock()
+        queue = [first, second]
+        a = self._session("user-1")
+        b = self._session("user-1")
+        a.pipeline.abort_stream = mock.Mock()
+        with mock.patch("server.app.CloudListener", side_effect=lambda **k: queue.pop(0)):
+            a._start_listening()
+            b._start_listening()
+        kinds = [c.args[0].get("type") for c in a.emit.call_args_list]
+        self.assertIn("listen_taken", kinds)
+        taken = next(c.args[0] for c in a.emit.call_args_list if c.args[0].get("type") == "listen_taken")
+        self.assertIn("another device", taken.get("text", "").lower())
+        self.assertFalse(a._listen_wanted)
+        self.assertIsNone(a._listener)
+        a.pipeline.abort_stream.assert_not_called()
+        idle = [c.args[0] for c in a.emit.call_args_list if c.args[0].get("type") == "state"]
+        self.assertTrue(any(ev.get("state") == "idle" for ev in idle))
+        b_kinds = [c.args[0].get("type") for c in b.emit.call_args_list]
+        self.assertNotIn("listen_taken", b_kinds)
+
+    def test_restart_does_not_look_like_another_device(self):
+        sess = self._session()
+        old = mock.Mock()
+        new = mock.Mock()
+        sess._listener = old
+        with mock.patch("server.app.CloudListener", return_value=new):
+            sess._restart_listener()
+        kinds = [c.args[0].get("type") for c in sess.emit.call_args_list]
+        self.assertNotIn("listen_taken", kinds)
+        self.assertTrue(sess._listen_wanted)

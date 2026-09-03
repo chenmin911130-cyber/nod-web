@@ -17,9 +17,11 @@ const EVENT_TYPES = new Set([
   'chunk',
   'done',
   'error',
+  'listen_taken',
   'auth_required',
   'quota',
   'quota_exceeded',
+  'save_prompt',
 ])
 
 function asText(v: unknown): string {
@@ -43,6 +45,8 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
       return { type: 'status', text: asText(o.text) }
     case 'error':
       return { type: 'error', text: asText(o.text) }
+    case 'listen_taken':
+      return { type: 'listen_taken', text: asText(o.text) }
     case 'partial':
       return { ...o, type: 'partial', text: asText(o.text) } as EngineEvent
     case 'question':

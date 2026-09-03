@@ -9,6 +9,7 @@ import HistoryPane, { type HistorySession } from './components/HistoryPane'
 import { restoreFromSession, sessionShouldOfferSave, sessionShouldOpenSavePrompt } from './historyRestore'
 import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
+import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
 import { meetingRailIsPaused } from './meetingPause'
 import SavePrompt from './components/SavePrompt'
 import IphoneActions from './components/IphoneActions'
@@ -331,6 +332,17 @@ function reducer(state: AppState, action: Action): AppState {
           if (run === 'think') busy = true
           else if (run === 'idle' && !generating && !interviewAsking) busy = false
           return { ...state, run, autoOn, view, busy, meetingStartedAt }
+        }
+        case 'listen_taken': {
+          // Stolen STT must leave Listening. Do not clear Interview / Ask busy.
+          const text = ev.text || LISTEN_TAKEN_TEXT
+          return {
+            ...state,
+            status: text,
+            run: 'idle',
+            autoOn: false,
+            view: 'workspace',
+          }
         }
         case 'status':
           return { ...state, status: ev.text }
@@ -1276,7 +1288,7 @@ export default function App() {
           queueMicrotask(() => api.send({ type: 'start_listen' }))
         }
       }
-      if (e.type === 'quota_exceeded' || (e.type === 'error' && e.text.includes('Transcription connection lost'))) {
+      if (shouldReleaseListen(e)) {
         listenWanted.current = false
       }
       if (e.type === 'save_prompt') {
