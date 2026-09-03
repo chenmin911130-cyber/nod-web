@@ -6,7 +6,7 @@ import { toPayload } from '../attach'
 import PromptAttach from './PromptAttach'
 import EmptyState from './EmptyState'
 import { ttsAutoShouldConfirm, type TtsMode, type TtsVoice } from '../tts'
-import { isNativeApp } from '../native'
+import { usePhoneChrome } from '../phoneChrome'
 import { IPHONE_COPY, translateFromChip, translateSourceTag, translateToChip } from '../iphoneCopy'
 
 interface Props {
@@ -259,6 +259,7 @@ export default function TranslatePane({
   voiceChrome,
   actions,
 }: Props) {
+  const native = usePhoneChrome()
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<LocalAttach[]>([])
   const [autoAsk, setAutoAsk] = useState(false)
@@ -287,7 +288,6 @@ export default function TranslatePane({
 
   const empty = pairs.length === 0 && !partial
   const queued = pairs.filter((p) => !p.translation && !p.failed && p.id !== bindId).length
-  const native = isNativeApp()
 
   const toolbar = (
         <div className="tr-toolbar">

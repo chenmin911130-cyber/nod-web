@@ -47,7 +47,7 @@ export function historySessionMatches(
   return hay.includes(q)
 }
 
-/** Meeting / Lecture can save after Stop or Pause. Live listen and empty sessions do not. */
+/** Meeting / Lecture can save after Stop. Pause, live listen, and empty sessions do not. */
 export function sessionShouldOfferSave(input: {
   workspaceMode: string
   ended: boolean
@@ -60,12 +60,13 @@ export function sessionShouldOfferSave(input: {
   return input.ended || !input.listening
 }
 
-/** Engine save_prompt only opens the Meeting / Lecture dialog, and never after Keep. */
+/** Engine save_prompt only opens the Meeting / Lecture dialog, never after Keep or Pause. */
 export function sessionShouldOpenSavePrompt(input: {
   workspaceMode: string
   kept: boolean
+  paused?: boolean
 }): boolean {
-  return input.workspaceMode === 'meeting' && !input.kept
+  return input.workspaceMode === 'meeting' && !input.kept && !input.paused
 }
 
 /** Save commits the draft to History. Content is always kept; recording is optional. */

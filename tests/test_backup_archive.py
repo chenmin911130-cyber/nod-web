@@ -82,7 +82,7 @@ class ArchiveUploadTests(unittest.TestCase):
         from server import r2
 
         with (
-            mock.patch.object(r2, "enabled", return_value=True),
+            mock.patch.object(r2, "cloud_enabled", return_value=True),
             mock.patch.object(r2, "_client") as client,
         ):
             client.return_value.put_object.side_effect = RuntimeError("network")

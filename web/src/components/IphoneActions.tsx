@@ -136,11 +136,11 @@ export default function IphoneActions({
       <div className={`iphone-actions${ready ? ' ready' : ''}${listening ? ' live' : ''}${paused ? ' paused' : ''}${variant === 'translate' ? ' translate' : ''}`}>
         {ready ? (
           <div className="iphone-start-row">
-            <MoreButton className="iphone-more-sq" onClick={onMore} />
             <button type="button" className="iphone-btn primary iphone-start" onClick={onStart}>
               <MicIcon />
               {variant === 'translate' ? IPHONE_COPY.start : IPHONE_COPY.startListening}
             </button>
+            <MoreButton className="iphone-more-sq" onClick={onMore} />
           </div>
         ) : listening ? (
           <div className="iphone-status-row">

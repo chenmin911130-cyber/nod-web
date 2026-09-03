@@ -23,6 +23,7 @@ import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
 import { api as authApi, fetchMe } from './auth'
 import { isNativeApp, nativeGo } from './native'
+import { usePhoneChrome } from './phoneChrome'
 import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchListenMode, watchShouldApplyMode, watchStartShouldPreferWatchMic } from './watch'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
@@ -907,6 +908,7 @@ function engineSource(listenMic: boolean, systemMuted: boolean): AudioSource {
 }
 
 export default function App() {
+  const phone = usePhoneChrome()
   const [state, dispatch] = useReducer(reducer, initial, applyDemoSeed)
   const demoScene = readDemoScene()
   const stateRef = useRef(state)
@@ -1301,6 +1303,7 @@ export default function App() {
         } else if (sessionShouldOpenSavePrompt({
           workspaceMode: stateRef.current.workspaceMode,
           kept: historyKeptRef.current,
+          paused: sessionPaused.current,
         })) {
           setSavePrompt(true)
         }
@@ -2547,7 +2550,6 @@ export default function App() {
     />
   )
 
-  const nativePhone = isNativeApp()
   const iphonePaused = sessionPaused.current && !listening
   const canSaveSession = sessionShouldOfferSave({
     workspaceMode: state.workspaceMode,
@@ -2557,7 +2559,7 @@ export default function App() {
     listening,
     paused: sessionPaused.current,
   })
-  const phoneActions = nativePhone ? (
+  const phoneActions = phone ? (
     <IphoneActions
       listening={listening}
       paused={iphonePaused}
@@ -2587,7 +2589,7 @@ export default function App() {
   ) : null
 
   return (
-    <div className={`app${nativePhone ? ' iphone-v2' : ''}${nativePhone && historyOpen ? ' hist-open' : ''}${nativePhone && state.workspaceMode === 'translate' ? ' translate-mode' : ''}`}>
+    <div className={`app${phone ? ' iphone-v2' : ''}${historyOpen ? ' hist-open' : ''}${phone && state.workspaceMode === 'translate' ? ' translate-mode' : ''}`}>
       <TitleBar
         mode={state.workspaceMode}
         lang={state.lang}
@@ -2655,7 +2657,7 @@ export default function App() {
             <span className="rail-hint-label">Controls</span>
           </button>
         )}
-        {!nativePhone && (
+        {!phone && (
         <div
           className="rail-slot"
           onMouseEnter={() => {

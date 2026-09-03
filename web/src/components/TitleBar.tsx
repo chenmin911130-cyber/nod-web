@@ -4,6 +4,7 @@ import { isWeb } from '../platform'
 import { logout } from '../auth'
 import { PRODUCT_NAME } from '../brand'
 import { isNativeApp, nativeGo } from '../native'
+import { usePhoneChrome } from '../phoneChrome'
 import OpacityBar from './OpacityBar'
 import PetTimer from './PetTimer'
 
@@ -150,6 +151,7 @@ function SettingsIcon() {
 
 export function TitleIcons(props: TitleIconsProps) {
   const { mode, source, opacity, pinned, systemMuted, micMuted, stealth } = props
+  const phone = usePhoneChrome()
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -263,7 +265,7 @@ export function TitleIcons(props: TitleIconsProps) {
                 </button>
               </>
             )}
-            {isNativeApp() && (
+            {phone && (
               <>
                 <button
                   type="button"
@@ -315,18 +317,19 @@ export function TitleIcons(props: TitleIconsProps) {
 
 export default function TitleBar(props: Props) {
   const { mode, source, opacity, pinned, systemMuted, micMuted, stealth } = props
+  const phone = usePhoneChrome()
 
   return (
     <div className="titlebar">
       {isWeb && !isNativeApp() ? (
         <a href="/" className="brand no-drag" title="Product page">
           <NodLogo />
-          <span className="brand-white">{PRODUCT_NAME}</span>
+          {phone ? <BrandWordmark /> : <span className="brand-white">{PRODUCT_NAME}</span>}
         </a>
       ) : (
         <div className="brand no-drag" aria-label={PRODUCT_NAME}>
           <NodLogo />
-          {isNativeApp() ? <BrandWordmark /> : null}
+          {phone ? <BrandWordmark /> : null}
         </div>
       )}
 
@@ -349,8 +352,8 @@ export default function TitleBar(props: Props) {
       </div>
 
       <div className="titlebar-right no-drag">
-        {!isNativeApp() && <PetTimer listening={Boolean(props.listening)} />}
-        {(mode !== 'translate' || isNativeApp()) && (
+        {!phone && <PetTimer listening={Boolean(props.listening)} />}
+        {(mode !== 'translate' || phone) && (
           <TitleIcons
             mode={mode}
             source={source}

@@ -75,6 +75,9 @@ if (sessionShouldOfferSave({ workspaceMode: 'meeting', ended: true, kept: false,
 if (!sessionShouldOpenSavePrompt({ workspaceMode: 'meeting', kept: false })) {
   throw new Error('Meeting save_prompt must open Save')
 }
+if (sessionShouldOpenSavePrompt({ workspaceMode: 'meeting', kept: false, paused: true })) {
+  throw new Error('Pause must not open Save / Don\'t save')
+}
 if (sessionShouldOpenSavePrompt({ workspaceMode: 'interview', kept: false })) {
   throw new Error('Interview save_prompt must not open Save')
 }

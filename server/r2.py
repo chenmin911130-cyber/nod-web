@@ -5,7 +5,9 @@ import struct
 from functools import lru_cache
 from typing import Any
 
-from server.settings import MAX_AUDIO_HOURS, R2_ACCESS_KEY_ID, R2_ACCOUNT_ID, R2_BUCKET, R2_SECRET_ACCESS_KEY
+from pathlib import Path
+
+from server.settings import DATA_DIR, MAX_AUDIO_HOURS, R2_ACCESS_KEY_ID, R2_ACCOUNT_ID, R2_BUCKET, R2_SECRET_ACCESS_KEY
 
 log = logging.getLogger("nod.r2")
 
@@ -16,8 +18,24 @@ PART_BYTES = SAMPLE_RATE * 2 * PART_SECONDS
 MAX_AUDIO_BYTES = SAMPLE_RATE * 2 * MAX_AUDIO_SECONDS
 
 
-def enabled() -> bool:
+def cloud_enabled() -> bool:
     return bool(R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_BUCKET)
+
+
+def enabled() -> bool:
+    """R2 when configured; otherwise a local folder so web History can still keep audio."""
+    return cloud_enabled() or True
+
+
+def _local_root() -> Path:
+    return Path(DATA_DIR) / "audio-store"
+
+
+def _local_path(key: str) -> Path:
+    rel = Path(key)
+    if not key or rel.is_absolute() or ".." in rel.parts:
+        raise ValueError("invalid audio key")
+    return _local_root() / rel
 
 
 def pcm_to_wav(pcm: bytes, sample_rate: int = SAMPLE_RATE) -> bytes:
@@ -57,18 +75,27 @@ def _client() -> Any:
 
 
 def put_bytes(key: str, body: bytes, content_type: str) -> bool:
-    if not enabled() or not key or not body:
+    if not key or not body:
         return False
+    if cloud_enabled():
+        try:
+            _client().put_object(Bucket=R2_BUCKET, Key=key, Body=body, ContentType=content_type)
+            return True
+        except Exception:
+            log.exception("r2 put failed key=%s", key)
+            return False
     try:
-        _client().put_object(Bucket=R2_BUCKET, Key=key, Body=body, ContentType=content_type)
+        path = _local_path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
         return True
     except Exception:
-        log.exception("r2 put failed key=%s", key)
+        log.exception("local audio put failed key=%s", key)
         return False
 
 
 def presign(key: str, expires: int = 3600, filename: str = "") -> str:
-    if not enabled() or not key:
+    if not cloud_enabled() or not key:
         return ""
     params: dict[str, str] = {"Bucket": R2_BUCKET, "Key": key}
     if filename:
@@ -82,54 +109,86 @@ def presign(key: str, expires: int = 3600, filename: str = "") -> str:
 
 
 def list_keys(prefix: str) -> list[str]:
-    if not enabled() or not prefix:
+    if not prefix:
         return []
-    keys: list[str] = []
-    token = None
-    while True:
-        kwargs: dict[str, Any] = {"Bucket": R2_BUCKET, "Prefix": prefix}
-        if token:
-            kwargs["ContinuationToken"] = token
-        listing = _client().list_objects_v2(**kwargs)
-        keys.extend(obj["Key"] for obj in listing.get("Contents") or [])
-        if not listing.get("IsTruncated"):
-            break
-        token = listing.get("NextContinuationToken")
-    return keys
+    if cloud_enabled():
+        keys: list[str] = []
+        token = None
+        while True:
+            kwargs: dict[str, Any] = {"Bucket": R2_BUCKET, "Prefix": prefix}
+            if token:
+                kwargs["ContinuationToken"] = token
+            listing = _client().list_objects_v2(**kwargs)
+            keys.extend(obj["Key"] for obj in listing.get("Contents") or [])
+            if not listing.get("IsTruncated"):
+                break
+            token = listing.get("NextContinuationToken")
+        return keys
+    root = _local_root()
+    try:
+        base = _local_path(prefix)
+    except ValueError:
+        return []
+    if not base.exists():
+        return []
+    out: list[str] = []
+    for path in base.rglob("*"):
+        if path.is_file():
+            out.append(path.relative_to(root).as_posix())
+    return sorted(out)
 
 
 def get_bytes(key: str) -> bytes:
-    if not enabled() or not key:
+    if not key:
         return b""
+    if cloud_enabled():
+        try:
+            obj = _client().get_object(Bucket=R2_BUCKET, Key=key)
+            return obj["Body"].read()
+        except Exception:
+            log.exception("r2 get failed key=%s", key)
+            return b""
     try:
-        obj = _client().get_object(Bucket=R2_BUCKET, Key=key)
-        return obj["Body"].read()
+        path = _local_path(key)
+        return path.read_bytes() if path.is_file() else b""
     except Exception:
-        log.exception("r2 get failed key=%s", key)
+        log.exception("local audio get failed key=%s", key)
         return b""
 
 
 def delete_key(key: str) -> None:
-    if not enabled() or not key:
+    if not key:
+        return
+    if cloud_enabled():
+        try:
+            _client().delete_object(Bucket=R2_BUCKET, Key=key)
+        except Exception:
+            log.exception("r2 delete failed key=%s", key)
         return
     try:
-        _client().delete_object(Bucket=R2_BUCKET, Key=key)
+        path = _local_path(key)
+        if path.is_file():
+            path.unlink()
     except Exception:
-        log.exception("r2 delete failed key=%s", key)
+        log.exception("local audio delete failed key=%s", key)
 
 
 def delete_prefix(prefix: str) -> None:
-    if not enabled() or not prefix:
+    if not prefix:
         return
-    token = None
-    while True:
-        kwargs: dict[str, Any] = {"Bucket": R2_BUCKET, "Prefix": prefix}
-        if token:
-            kwargs["ContinuationToken"] = token
-        listing = _client().list_objects_v2(**kwargs)
-        keys = [obj["Key"] for obj in listing.get("Contents") or []]
-        for key in keys:
-            delete_key(key)
-        if not listing.get("IsTruncated"):
-            break
-        token = listing.get("NextContinuationToken")
+    if cloud_enabled():
+        token = None
+        while True:
+            kwargs: dict[str, Any] = {"Bucket": R2_BUCKET, "Prefix": prefix}
+            if token:
+                kwargs["ContinuationToken"] = token
+            listing = _client().list_objects_v2(**kwargs)
+            keys = [obj["Key"] for obj in listing.get("Contents") or []]
+            for key in keys:
+                delete_key(key)
+            if not listing.get("IsTruncated"):
+                break
+            token = listing.get("NextContinuationToken")
+        return
+    for key in list_keys(prefix):
+        delete_key(key)

@@ -3,7 +3,6 @@ import { api } from '../auth'
 import { saveSessionToFiles } from '../sessionExport'
 import {
   copyText,
-  groupHistoryByDay,
   historyRowWhen,
   historySessionMatches,
   sceneOf,
@@ -143,7 +142,6 @@ export default function HistoryPane({
   if (!open) return null
 
   const visible = sessions.filter((s) => historySessionMatches(s, query))
-  const groups = groupHistoryByDay(visible)
   const menuSession = sessions.find((s) => s.id === menuId) || null
 
   const copySession = async (session: HistorySession) => {
@@ -178,8 +176,7 @@ export default function HistoryPane({
     }
   }
 
-  if (native) {
-    return (
+  return (
       <div className="hist-root hist-page" role="dialog" aria-label={IPHONE_COPY.histTitle}>
         <aside className="hist-panel">
           <header className="hist-head">
@@ -263,7 +260,7 @@ export default function HistoryPane({
                   onClick={() => { setMenuId(''); void exportFiles(menuSession, { pdf: false, audio: true }) }}
                 >
                   <FolderIcon />
-                  {IPHONE_COPY.histAudio}
+                  {native ? IPHONE_COPY.histAudio : 'Download recording'}
                 </button>
                 <button
                   type="button"
@@ -282,90 +279,5 @@ export default function HistoryPane({
           </div>
         )}
       </div>
-    )
-  }
-
-  return (
-    <div className="hist-root hist-web" role="dialog" aria-label="History">
-      <button type="button" className="hist-backdrop" aria-label="Close history" onClick={onClose} />
-      <aside className="hist-panel">
-        <header className="hist-head">
-          <h2>History</h2>
-          <button type="button" className="hist-close" onClick={onClose}>
-            Close
-          </button>
-        </header>
-        <label className="hist-search">
-          <SearchIcon />
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search sessions"
-            aria-label="Search history"
-          />
-        </label>
-        {loading && <p className="hist-empty">Loading sessions…</p>}
-        {err && <p className="hist-err">{err}</p>}
-        {!loading && !err && sessions.length === 0 && (
-          <p className="hist-empty">No sessions yet. Save a meeting to see it here. Kept for 30 days.</p>
-        )}
-        {!loading && !err && sessions.length > 0 && visible.length === 0 && (
-          <p className="hist-empty">No sessions match that search.</p>
-        )}
-        <div className="hist-body hist-body-pick">
-          {groups.map((group) => (
-            <div key={group.label} className="hist-day">
-              <div className="hist-day-label">{group.label}</div>
-              <ul className="hist-list">
-                {group.sessions.map((s) => (
-                  <li key={s.id} className="hist-row">
-                    <button
-                      type="button"
-                      className="hist-pick"
-                      disabled={busyId === s.id}
-                      onClick={() => onRestore?.(s)}
-                    >
-                      <DocIcon />
-                      <span className="hist-pick-copy">
-                        <b>{s.title || 'Session'}</b>
-                        <small>{historyRowWhen(s.started_at, s.stt_seconds)}</small>
-                      </span>
-                    </button>
-                    <div className="hist-row-actions">
-                      <button type="button" onClick={() => void copySession(s)}>
-                        {copied === s.id ? 'Copied' : 'Copy'}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={pdfId === s.id}
-                        onClick={() => void exportFiles(s, { pdf: true, audio: false })}
-                      >
-                        {pdfId === s.id ? 'Saving…' : 'PDF'}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={pdfId === s.id || !sessionHasAudio(s)}
-                        onClick={() => void exportFiles(s, { pdf: false, audio: true })}
-                      >
-                        {pdfId === s.id ? 'Saving…' : 'Recording'}
-                      </button>
-                      <button
-                        type="button"
-                        className="hist-del"
-                        disabled={busyId === s.id}
-                        onClick={() => void deleteSession(s)}
-                      >
-                        {busyId === s.id ? 'Deleting…' : 'Delete'}
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      </aside>
-    </div>
   )
 }

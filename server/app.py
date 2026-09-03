@@ -2579,6 +2579,7 @@ class Session:
         if not keep_content and not keep_audio:
             self.discard_history()
             return
+        self._flush_cloud_archive(final=False)
         from server.meter import keep_usage_session
 
         keep_usage_session(self.user_id, sid, keep_content=keep_content, keep_audio=keep_audio)

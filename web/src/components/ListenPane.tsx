@@ -12,8 +12,8 @@ import {
   type ListenScene,
   type NotesSectionId,
 } from '../listen'
-import { isNativeApp } from '../native'
 import { IPHONE_COPY, listenChipParts, nativeListenChipOrder, notesChipParts, showLineTranslation } from '../iphoneCopy'
+import { usePhoneChrome } from '../phoneChrome'
 import { iphoneSummaryHeading, liveHeardLines, liveNotesLine, liveStageMode, summaryPlainText } from '../liveView'
 
 interface Props {
@@ -203,6 +203,7 @@ function LangSelect({
   const [open, setOpen] = useState(false)
   const boxRef = useDismiss(open, () => setOpen(false))
   const current = NOTES_LANGS.find((l) => l.id === value)
+  const phone = usePhoneChrome()
 
   return (
     <div className={`listen-lang-box${open ? ' open' : ''}`} ref={boxRef}>
@@ -222,15 +223,15 @@ function LangSelect({
         onPointerDown={(e) => e.stopPropagation()}
         onClick={() => setOpen((v) => !v)}
       >
-        {isNativeApp() ? <ChipNotes /> : null}
-        {isNativeApp() ? (
+        {phone ? <ChipNotes /> : null}
+        {phone ? (
           <span className="iphone-chip-copy">
             <b>{notesChipParts(value).title}</b>
           </span>
         ) : (
           <span className="listen-lang-tag">{current?.tag ?? 'EN'}</span>
         )}
-        {isNativeApp() ? null : <Chevron />}
+        {phone ? null : <Chevron />}
       </button>
       {open && (
         <div className="listen-lang-menu" role="listbox">
@@ -279,6 +280,7 @@ function SpeechLangSelect({
   const current = SPEECH_LANGS.find((l) => l.id === value) ?? SPEECH_LANGS[0]
   const heardTag = heard ? TRANSLATE_LANGS.find((l) => l.id === heard)?.tag : ''
   const label = value === 'auto' && heardTag ? `Auto · ${heardTag}` : current.tag
+  const phone = usePhoneChrome()
 
   return (
     <div className={`listen-speech${open ? ' open' : ''}`} ref={boxRef}>
@@ -298,15 +300,15 @@ function SpeechLangSelect({
         onPointerDown={(e) => e.stopPropagation()}
         onClick={() => setOpen((v) => !v)}
       >
-        {isNativeApp() ? <ChipGlobe /> : null}
-        {isNativeApp() ? (
+        {phone ? <ChipGlobe /> : null}
+        {phone ? (
           <span className="iphone-chip-copy">
             <b>{listenChipParts(value).title}</b>
           </span>
         ) : (
           <span className="listen-lang-tag">{label}</span>
         )}
-        {isNativeApp() ? null : <Chevron />}
+        {phone ? null : <Chevron />}
       </button>
       {open && (
         <div className="listen-lang-menu" role="listbox" aria-label="Speech recognition language">
@@ -350,6 +352,7 @@ function SpeechLangSelect({
 function SceneSelect({ scene, onScene }: { scene: ListenScene; onScene: (scene: ListenScene) => void }) {
   const [open, setOpen] = useState(false)
   const boxRef = useDismiss(open, () => setOpen(false))
+  const phone = usePhoneChrome()
 
   return (
     <div className={`listen-scene${open ? ' open' : ''}`} ref={boxRef}>
@@ -361,9 +364,9 @@ function SceneSelect({ scene, onScene }: { scene: ListenScene; onScene: (scene: 
         onPointerDown={(e) => e.stopPropagation()}
         onClick={() => setOpen((v) => !v)}
       >
-        {isNativeApp() ? <ChipPeople /> : null}
+        {phone ? <ChipPeople /> : null}
         {sceneLabel(scene)}
-        {isNativeApp() ? null : <Chevron />}
+        {phone ? null : <Chevron />}
       </button>
       {open && (
         <div className="listen-scene-menu" role="listbox">
@@ -697,6 +700,7 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
 })
 
 export default function ListenPane(props: Props) {
+  const phone = usePhoneChrome()
   const [input, setInput] = useState('')
   const [notesOpen, setNotesOpen] = useState(Boolean(props.notesDefaultOpen))
   const [mobilePane, setMobilePane] = useState<'live' | 'transcript' | 'notes'>(props.notesDefaultOpen ? 'notes' : 'live')
@@ -761,8 +765,6 @@ export default function ListenPane(props: Props) {
     writeNotesW(props.scene, notesWRef.current)
   }
 
-  const native = isNativeApp()
-
   const openNotes = () => {
     setNotesOpen(true)
     setMobilePane('notes')
@@ -777,7 +779,7 @@ export default function ListenPane(props: Props) {
   const submit = () => {
     const text = input.trim()
     if (!text || props.busy) return
-    if (!native) openNotes()
+    if (!phone) openNotes()
     props.onAsk(text)
     setInput('')
   }
@@ -793,12 +795,12 @@ export default function ListenPane(props: Props) {
     partial: props.partial,
     translateOn: props.translateOn,
   })
-  const showStage = native && mobilePane === 'live'
+  const showStage = phone && mobilePane === 'live'
   const stackedPane = showStage ? 'stage' : !notesOpen || mobilePane === 'transcript' || mobilePane === 'live' ? 'live' : 'notes'
 
   const controls = (
       <div className="listen-controls">
-        {!props.qa && !isNativeApp() && (
+        {!props.qa && !phone && (
           <button
             type="button"
             className={`listen-icon-btn listen-side-left listen-bi-btn${props.translateOn ? ' on' : ''}`}
@@ -811,7 +813,7 @@ export default function ListenPane(props: Props) {
             <TranslateIcon />
           </button>
         )}
-        {isNativeApp() ? (
+        {phone ? (
           <>
             {nativeListenChipOrder().map((chip) => {
               if (chip === 'scene') {
@@ -864,17 +866,17 @@ export default function ListenPane(props: Props) {
   )
 
   const tabs = !props.qa ? (
-        <div className="listen-mobile-tabs" role="tablist" aria-label={native ? 'Live, transcript, or summary' : 'Live or notes'}>
+        <div className="listen-mobile-tabs" role="tablist" aria-label={phone ? 'Live, transcript, or summary' : 'Live or notes'}>
           <button
             type="button"
             role="tab"
-            aria-selected={native ? mobilePane === 'live' : stackedPane === 'live'}
-            className={(native ? mobilePane === 'live' : stackedPane === 'live') ? 'on' : ''}
+            aria-selected={phone ? mobilePane === 'live' : stackedPane === 'live'}
+            className={(phone ? mobilePane === 'live' : stackedPane === 'live') ? 'on' : ''}
             onClick={() => setMobilePane('live')}
           >
-            {native ? IPHONE_COPY.liveTab : 'Live'}
+            {phone ? IPHONE_COPY.liveTab : 'Live'}
           </button>
-          {native ? (
+          {phone ? (
             <button
               type="button"
               role="tab"
@@ -891,18 +893,18 @@ export default function ListenPane(props: Props) {
           <button
             type="button"
             role="tab"
-            aria-selected={native ? mobilePane === 'notes' : stackedPane === 'notes'}
-            className={(native ? mobilePane === 'notes' : stackedPane === 'notes') ? 'on' : ''}
+            aria-selected={phone ? mobilePane === 'notes' : stackedPane === 'notes'}
+            className={(phone ? mobilePane === 'notes' : stackedPane === 'notes') ? 'on' : ''}
             onClick={openNotes}
           >
-            {native ? IPHONE_COPY.summaryTab : 'Notes'}
+            {phone ? IPHONE_COPY.summaryTab : 'Notes'}
           </button>
         </div>
   ) : null
 
   return (
     <div className={`listen-main scene-${props.scene}${props.translateOn ? ' tr-on' : ' tr-off'}${props.ended ? ' ended' : ''}${props.qa ? ' qa' : ''}`}>
-      {native ? (
+      {phone ? (
         <div className="iphone-stack">
           {props.actions}
           {controls}
@@ -967,7 +969,7 @@ export default function ListenPane(props: Props) {
           >
             <section className="listen-pane">
               <div className="listen-kicker">
-                {isNativeApp() ? 'TRANSCRIPT' : lecture ? 'Classroom' : 'Transcript'}
+                {phone ? 'TRANSCRIPT' : lecture ? 'Classroom' : 'Transcript'}
                 {props.lines.length > 0 && !notesOpen && (
                   <button
                     type="button"
@@ -981,8 +983,8 @@ export default function ListenPane(props: Props) {
               </div>
               <div className="listen-scroll" ref={leftRef}>
                 {props.lines.length === 0 && !props.partial ? (
-                  <div className={`listen-empty${native ? ' iphone-tr-empty' : ''}`}>
-                    {native
+                  <div className={`listen-empty${phone ? ' iphone-tr-empty' : ''}`}>
+                    {phone
                       ? IPHONE_COPY.emptyLive
                       : lecture
                         ? 'Start listening. This side is the lecture stream. Notes stay closed until you ask or tap Summarize.'
@@ -1003,7 +1005,7 @@ export default function ListenPane(props: Props) {
                       onOpen={() => setOpenedLine(line.id)}
                       busy={props.busy}
                       onRename={props.onRenameSpeaker}
-                      actions={native}
+                      actions={phone}
                     />
                   ))
                 )}
@@ -1073,7 +1075,7 @@ export default function ListenPane(props: Props) {
               <div className="listen-scroll" ref={rightRef}>
                 {props.catchNotes.length === 0 && !sections.length && !props.busy && (
                   <div className="listen-empty">
-                    {isNativeApp()
+                    {phone
                       ? IPHONE_COPY.emptyNotes
                       : <>Ask in the box below — the answer lands here. Or tap <b>Summarize</b> for a recap.</>}
                   </div>
@@ -1095,7 +1097,7 @@ export default function ListenPane(props: Props) {
                   <LectureStudy sections={sections} bilingual={false} />
                 )}
                 {!lecture && sections.length > 0 && (
-                  native ? (
+                  phone ? (
                     <IphoneSummary
                       scene={props.scene}
                       sections={sections}
@@ -1105,7 +1107,7 @@ export default function ListenPane(props: Props) {
                     <MeetingNotes sections={sections} bilingual={false} />
                   )
                 )}
-                {native && (sections.length > 0 || props.catchNotes.some((note) => note.text.trim())) ? (
+                {phone && (sections.length > 0 || props.catchNotes.some((note) => note.text.trim())) ? (
                   <div className="iphone-summary-actions">
                     <button type="button" onClick={() => props.onExportPdf?.()}>{IPHONE_COPY.histPdf}</button>
                     <button
@@ -1125,7 +1127,7 @@ export default function ListenPane(props: Props) {
                       {IPHONE_COPY.shareSummary}
                     </button>
                   </div>
-                ) : native && props.lines.length > 0 ? (
+                ) : phone && props.lines.length > 0 ? (
                   <button type="button" className="iphone-summarize" disabled={props.busy} onClick={runSummary}>
                     {IPHONE_COPY.summarizeNow}
                   </button>
@@ -1136,7 +1138,7 @@ export default function ListenPane(props: Props) {
           )}
 
           <div className="listen-prompt">
-            {isNativeApp() ? (
+            {phone ? (
               <span className="iphone-ask-spark" aria-hidden="true">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                   <path d="M8 1.2l.85 4.1L13 6.2 8.85 7.3 8 11.4 7.15 7.3 3 6.2l4.15-.9L8 1.2z" />
@@ -1145,7 +1147,7 @@ export default function ListenPane(props: Props) {
             ) : null}
             <input
               value={input}
-              placeholder={isNativeApp() ? (props.listening ? IPHONE_COPY.askLive : IPHONE_COPY.askReady) : 'Ask anything — the answer shows in Notes'}
+              placeholder={phone ? (props.listening ? IPHONE_COPY.askLive : IPHONE_COPY.askReady) : 'Ask anything — the answer shows in Notes'}
               onChange={(e) => {
                 setInput(e.target.value)
               }}
@@ -1154,7 +1156,7 @@ export default function ListenPane(props: Props) {
               }}
             />
             <button type="button" className="listen-go" disabled={props.busy || !input.trim()} onClick={submit}>
-              {isNativeApp() ? (
+              {phone ? (
                 <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
                   <path d="M9 13.4V4.8M5.4 8.2 9 4.6l3.6 3.6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>

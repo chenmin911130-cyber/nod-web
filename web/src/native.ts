@@ -141,7 +141,7 @@ async function listenForAuthReturn(): Promise<void> {
 
 export function installNativeShell(): void {
   if (!isNativeApp()) return
-  document.documentElement.classList.add('nod-native')
+  document.documentElement.classList.add('nod-native', 'nod-phone')
   document.addEventListener('click', onNativeLinkClick)
   void listenForAuthReturn()
   void import('./keyboardInset').then(({ installKeyboardInset }) => {

@@ -18,7 +18,17 @@ class HistoryKeepTests(unittest.TestCase):
         sess.pipeline._cancel = threading.Event()
         sess.pipeline.usage_session_id = "sess-1"
         sess.emit = mock.Mock()
+        sess._flush_cloud_archive = mock.Mock()
         return sess
+
+    def test_keep_history_uploads_audio_before_keep(self):
+        sess = self._session()
+        order: list[str] = []
+        sess._flush_cloud_archive.side_effect = lambda final=False: order.append("flush")
+        with mock.patch("server.meter.keep_usage_session", side_effect=lambda *a, **k: order.append("keep")):
+            sess.keep_history()
+        self.assertEqual(order, ["flush", "keep"])
+        sess._flush_cloud_archive.assert_called_once_with(final=False)
 
     def test_stop_listen_asks_to_save_without_cancelling(self):
         sess = self._session()
