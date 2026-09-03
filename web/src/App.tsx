@@ -15,6 +15,7 @@ import SavePrompt from './components/SavePrompt'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
 import { canSwitchWorkspace, sessionListening } from './iphoneCopy'
+import { looksLikeTarget, translateAskIdAfterDone, translateDoneBelongsToAsk, translateShouldPassthrough } from './translateGate'
 import AnswerPane from './components/AnswerPane'
 import ListenPane from './components/ListenPane'
 import TranslatePane from './components/TranslatePane'
@@ -548,7 +549,7 @@ function reducer(state: AppState, action: Action): AppState {
             turns,
             busy: waitingAsk,
             status: waitingAsk ? state.status : 'Ready',
-            translateAskId: '',
+            translateAskId: translateAskIdAfterDone(state.translateAskId, ev.id),
             summaryAskId: '',
             catchAskId: waitingAsk ? state.catchAskId : '',
             notesAskId: '',
@@ -833,27 +834,6 @@ function normOriginal(text: string): string {
 
 function hasSpeechContent(text: string): boolean {
   return /[A-Za-z0-9\u00C0-\u024F\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]/u.test(normOriginal(text))
-}
-
-const NOT_ENGLISH_MARKS = /[¿¡ñßœæàâçèéêëîïôùûÿáéíóúüäöüßãõàèìòù]/iu
-const NOT_ENGLISH_WORDS =
-  /\b(?:hola|gracias|buenos|bonjour|bonsoir|merci|salut|pourquoi|êtes|ça|wie geht|nicht|danke|bitte|guten|você|não|olá|obrigado|perché|ciao|grazie|più|cómo|estás|usted|quién|dónde|también|comment ça|comment ca|como estas|qué tal|que tal)\b/iu
-
-function looksLikeTarget(text: string, to: PairLang): boolean {
-  const chars = Array.from(normOriginal(text)).filter((c) => !/\s/u.test(c))
-  if (chars.length < 2) return false
-  const han = chars.filter((c) => /\p{Script=Han}/u.test(c)).length
-  const kana = chars.filter((c) => /[\u3040-\u30FF]/.test(c)).length
-  const hangul = chars.filter((c) => /\p{Script=Hangul}/u.test(c)).length
-  const latin = chars.filter((c) => /[A-Za-zÀ-ÿ]/.test(c)).length
-  const n = chars.length
-  if (to === 'zh') return han / n >= 0.5 && kana === 0 && hangul === 0
-  if (to === 'ja') return kana / n >= 0.12 || ((han + kana) / n >= 0.5 && kana > 0)
-  if (to === 'en') {
-    const raw = normOriginal(text)
-    return latin / n >= 0.7 && han + kana + hangul === 0 && !NOT_ENGLISH_MARKS.test(raw) && !NOT_ENGLISH_WORDS.test(raw)
-  }
-  return false
 }
 
 // Script-level check only (no word markers): catches the model answering in a
@@ -1214,6 +1194,7 @@ export default function App() {
     const timer = window.setTimeout(() => {
       pushWatchStatus({
         ...face,
+        paused: sessionPaused.current,
         mode: watchStatusMode(state.workspaceMode, state.listenScene),
         langPair: watchLangPair(state.translateTo),
       })
@@ -1308,6 +1289,7 @@ export default function App() {
           setSavePrompt(true)
         }
       }
+      const translateAskBefore = stateRef.current.translateAskId
       dispatch({ type: 'engine', ev: e })
       if (e.type === 'question' && stateRef.current.workspaceMode === 'meeting' && stateRef.current.translateOn) {
         const text = e.text ?? ''
@@ -1350,6 +1332,10 @@ export default function App() {
       // Only LLM `done` releases the translate gate. STT `error` events must not
       // drop an in-flight translation — that is what made "ask again" hang.
       if (e.type !== 'done') return
+      if (!translateDoneBelongsToAsk(translateAskBefore, e.id)) {
+        if (!inflightTranslate.current) queueMicrotask(() => pumpTranslateRef.current())
+        return
+      }
       const id = inflightTranslate.current
       clearTranslateTimer()
       inflightTranslate.current = null
@@ -1909,7 +1895,7 @@ export default function App() {
     const s = stateRef.current
     const id = pairId || `cap-${Date.now()}`
     const pair = pairId ? s.translatePairs.find((p) => p.id === pairId) : undefined
-    const sameLang = pair?.from ? pair.from === s.translateTo : looksLikeTarget(text, s.translateTo)
+    const sameLang = translateShouldPassthrough(text, s.translateTo, pair?.from)
     if (sameLang) {
       askedTranslate.current.add(id)
       dispatch({ type: 'fill_translate', id, translation: text, passthrough: true })
