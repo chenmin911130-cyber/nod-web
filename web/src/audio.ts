@@ -14,25 +14,51 @@ function floatToPcm16(input: Float32Array): ArrayBuffer {
   return out.buffer
 }
 
-function downsample(input: Float32Array, fromSr: number): ArrayBuffer {
-  if (!fromSr || Math.abs(fromSr - TARGET_SR) < 1) return floatToPcm16(input)
-  const ratio = fromSr / TARGET_SR
-  const outLen = Math.floor(input.length / ratio)
-  if (outLen <= 0) return new ArrayBuffer(0)
-  // 一阶低通（-3dB @ ~7kHz），防止降采样把 8kHz+ 高频折叠（混叠）进语音频段
-  const dt = 1 / fromSr
-  const alpha = dt / (1 / (2 * Math.PI * 7000) + dt)
-  const filtered = new Float32Array(input.length)
-  let y = 0
-  for (let i = 0; i < input.length; i++) {
-    y += alpha * (input[i] - y)
-    filtered[i] = y
+/** Web ScriptProcessor delivers 4096-sample blocks. State must survive each block. */
+export class PcmDownsampler {
+  private y = 0
+  private leftover = new Float32Array(0)
+  private phase = 0
+
+  reset(): void {
+    this.y = 0
+    this.leftover = new Float32Array(0)
+    this.phase = 0
   }
-  const sampled = new Float32Array(outLen)
-  for (let i = 0; i < outLen; i++) {
-    sampled[i] = filtered[Math.min(input.length - 1, Math.floor(i * ratio))]
+
+  push(input: Float32Array, fromSr: number): ArrayBuffer {
+    if (!fromSr || Math.abs(fromSr - TARGET_SR) < 1) {
+      this.reset()
+      return floatToPcm16(input)
+    }
+    const ratio = fromSr / TARGET_SR
+    const dt = 1 / fromSr
+    const alpha = dt / (1 / (2 * Math.PI * 7000) + dt)
+    const incoming = new Float32Array(input.length)
+    let y = this.y
+    for (let i = 0; i < input.length; i++) {
+      y += alpha * (input[i] - y)
+      incoming[i] = y
+    }
+    this.y = y
+
+    const src = new Float32Array(this.leftover.length + incoming.length)
+    src.set(this.leftover)
+    src.set(incoming, this.leftover.length)
+
+    const out: number[] = []
+    let pos = this.phase
+    while (pos + 1 < src.length) {
+      const i0 = Math.floor(pos)
+      const frac = pos - i0
+      out.push(src[i0] * (1 - frac) + src[i0 + 1] * frac)
+      pos += ratio
+    }
+    const keep = Math.min(src.length, Math.floor(pos))
+    this.phase = pos - keep
+    this.leftover = src.slice(keep)
+    return floatToPcm16(Float32Array.from(out))
   }
-  return floatToPcm16(sampled)
 }
 
 function base64ToPcm(data: string): ArrayBuffer {
@@ -66,6 +92,7 @@ export class MicCapture {
   // instead of leaving a live MediaStream with no reference to it.
   private stopSeq = 0
   private silenceTimer = 0
+  private resampler = new PcmDownsampler()
   onPcm: (buf: ArrayBuffer) => void = () => undefined
   onFallbackFailed: () => void = () => undefined
 
@@ -165,7 +192,7 @@ export class MicCapture {
     proc.onaudioprocess = (ev) => {
       if (!this.running) return
       const input = ev.inputBuffer.getChannelData(0)
-      const pcm = downsample(input, ctx.sampleRate)
+      const pcm = this.resampler.push(input, ctx.sampleRate)
       if (pcm.byteLength) this.onPcm(pcm)
     }
     source.connect(proc)
@@ -211,6 +238,7 @@ export class MicCapture {
 
   private release(): void {
     this.clearSilenceTimer()
+    this.resampler.reset()
     this.running = false
     const handle = this.nativeHandle
     this.nativeHandle = null
