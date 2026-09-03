@@ -15,7 +15,7 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
         handler([
             CLKComplicationDescriptor(
                 identifier: Self.descriptorId,
-                displayName: "Nodpilot",
+                displayName: "Nodpilot Timer",
                 supportedFamilies: [
                     .circularSmall,
                     .modularSmall,

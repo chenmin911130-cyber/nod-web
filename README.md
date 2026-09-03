@@ -2,6 +2,8 @@
 
 网页版 Nod：浏览器麦克风采音，**AssemblyAI 云端流式转写**，DeepSeek / OpenRouter 流式回答。面试 / 会议 / 翻译三个工作区都保留。
 
+Copyright © 2026 Min Chen. All rights reserved. NODPILOT™ is a trademark of Min Chen. See [LICENSE](LICENSE).
+
 完整用户文档见 **[产品说明书](docs/产品说明书.md)**（功能、快捷键、工作区、部署与常见问题）。
 
 桌面版的置顶、隐身、系统扬声器抓取在浏览器里做不到，已去掉。其余快捷键、附件、导出打印都在。

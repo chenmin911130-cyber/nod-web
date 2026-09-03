@@ -59,7 +59,7 @@ html.nod-native .titlebar {
 }
 
 html.nod-native .brand-white {
-  display: inline;
+  display: none;
 }
 
 html.nod-native .side-rail {
