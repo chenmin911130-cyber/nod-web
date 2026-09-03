@@ -10,7 +10,12 @@ import threading
 import unittest
 from unittest import mock
 
-from server.app import CloudListener, Session, _terminate_assemblyai_session
+from server.app import (
+    CloudListener,
+    Session,
+    _reset_live_stt,
+    _terminate_assemblyai_session,
+)
 
 
 def _connected_ws():
@@ -86,10 +91,17 @@ class CloudListenerStopTests(unittest.TestCase):
 
 
 class SessionListenLifecycleTests(unittest.TestCase):
-    def _session(self) -> Session:
+    def setUp(self) -> None:
+        _reset_live_stt()
+
+    def tearDown(self) -> None:
+        _reset_live_stt()
+
+    def _session(self, user_id: str | None = "user-1") -> Session:
         sess = Session.__new__(Session)
         sess.emit = mock.Mock()
         sess.cfg = {"stt": {}}
+        sess.user_id = user_id
         sess._workspace = "interview"
         sess._mic_muted = False
         sess._listen_wanted = True
@@ -98,6 +110,8 @@ class SessionListenLifecycleTests(unittest.TestCase):
         sess._idle_check_at = 0.0
         sess._listener = None
         sess._listen_mu = threading.RLock()
+        sess._listen_starting = False
+        sess._stt_restart_timer = None
         sess._pending = None
         sess._pending_wait = (None, 0.0, None)
         sess._pending_speaker = None
@@ -159,3 +173,51 @@ class SessionListenLifecycleTests(unittest.TestCase):
             sess._restart_listener()
         self.assertEqual(order, ["old-stop", "new-start"])
         self.assertIs(sess._listener, new)
+
+    def test_three_concurrent_starts_open_one_socket(self):
+        """CSV 2026-09-03 11:11:26Z: three created sessions in one second.
+
+        start_listen runs on the WS thread pool. The old guard checked
+        `_listener` before the handshake assigned it, so three frames opened
+        three AssemblyAI sockets and only the last reference was kept.
+        """
+        sess = self._session()
+        started: list[mock.Mock] = []
+        handshake = threading.Event()
+        release = threading.Event()
+
+        def fake_listener(**kwargs):
+            lst = mock.Mock()
+
+            def start():
+                started.append(lst)
+                handshake.set()
+                release.wait(1.0)
+
+            lst.start.side_effect = start
+            return lst
+
+        with mock.patch("server.app.CloudListener", side_effect=fake_listener):
+            threads = [threading.Thread(target=sess._start_listening) for _ in range(3)]
+            for t in threads:
+                t.start()
+            self.assertTrue(handshake.wait(1.0))
+            release.set()
+            for t in threads:
+                t.join(1.0)
+        self.assertEqual(len(started), 1)
+        self.assertIs(sess._listener, started[0])
+        started[0].stop.assert_not_called()
+
+    def test_second_session_same_user_terminates_the_first(self):
+        first = mock.Mock()
+        second = mock.Mock()
+        queue = [first, second]
+        a = self._session("user-1")
+        b = self._session("user-1")
+        with mock.patch("server.app.CloudListener", side_effect=lambda **k: queue.pop(0)):
+            a._start_listening()
+            b._start_listening()
+        first.stop.assert_called()
+        second.start.assert_called()
+        self.assertIs(b._listener, second)
