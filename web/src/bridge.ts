@@ -72,6 +72,11 @@ const LAST_WINS_MSGS = new Set([
   'set_mic_muted',
   'set_translate_from',
   'set_translate_to',
+  // Reconnect can flush a queued start_listen and then ready sends another.
+  // One in-flight start is enough; the server also serializes, but do not
+  // stack three AssemblyAI sockets from one click.
+  'start_listen',
+  'stop_listen',
 ])
 const PENDING_MAX = 32
 const PENDING_STALE_MS = 10_000
@@ -332,6 +337,13 @@ export function installWebApi(): void {
     closing = true
     window.clearTimeout(reconnectTimer)
     window.clearInterval(pingTimer)
+    try {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'stop_listen' }))
+      }
+    } catch {
+      /* tab is going away; session.close() still Terminates */
+    }
     mic.stop()
     ws?.close()
   })

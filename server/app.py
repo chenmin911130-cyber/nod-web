@@ -51,6 +51,10 @@ ASSEMBLYAI_WS = "wss://streaming.assemblyai.com/v3/ws"
 ASSEMBLYAI_API = "https://api.assemblyai.com"
 ASSEMBLYAI_MODEL = "universal-3-5-pro"
 ASSEMBLYAI_FILE_MODELS = ["universal-3-5-pro", "universal-2"]
+# Official close: {"type": "Terminate"}. Dropping the socket does not stop
+# billing; unterminated sessions stay open and bill for up to 3 hours.
+ASSEMBLYAI_TERMINATE = {"type": "Terminate"}
+ASSEMBLYAI_TERMINATE_WAIT_SEC = 1.5
 STATUS_READY = "Ready · F2 record / F3 listen / F4 clear · browser mic + cloud STT"
 STATUS_RECORD = "Recording · accurate captions follow shortly"
 STATUS_LISTEN = "Listening for the next question…"
@@ -619,6 +623,59 @@ def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
     return ASSEMBLYAI_WS + "?" + urlencode(params)
 
 
+# At most one live AssemblyAI stream per user+workspace. Start Listening and
+# Nod-WS reconnect run on the thread pool, so three start_listen frames in the
+# same second used to open three sockets and keep only the last reference.
+_LIVE_STT: dict[str, CloudListener] = {}
+_LIVE_STT_MU = threading.Lock()
+
+
+def _stt_owner_slot(user_id: str | None, workspace: str | None, session_key: int) -> str:
+    ws = (workspace or "interview").strip() or "interview"
+    if user_id:
+        return f"{user_id}:{ws}"
+    return f"session:{session_key}"
+
+
+def _adopt_live_stt(slot: str, listener: CloudListener) -> CloudListener | None:
+    with _LIVE_STT_MU:
+        prev = _LIVE_STT.get(slot)
+        _LIVE_STT[slot] = listener
+        return prev if prev is not listener else None
+
+
+def _drop_live_stt(slot: str, listener: CloudListener) -> None:
+    with _LIVE_STT_MU:
+        if _LIVE_STT.get(slot) is listener:
+            _LIVE_STT.pop(slot, None)
+
+
+def _reset_live_stt() -> None:
+    with _LIVE_STT_MU:
+        _LIVE_STT.clear()
+
+
+def _terminate_assemblyai_session(ws, done: threading.Event | None = None) -> None:
+    """Send the official Terminate message, then close the socket.
+
+    AssemblyAI bills streaming on WebSocket-open time. The Terminate JSON
+    frame is what stops billing. A TCP / WebSocket close alone leaves the
+    session open until the 3-hour auto-close, and you are billed for all of it.
+    """
+    try:
+        sock = getattr(ws, "sock", None)
+        if sock is not None and getattr(sock, "connected", False):
+            ws.send(json.dumps(ASSEMBLYAI_TERMINATE))
+            if done is not None and not done.is_set():
+                done.wait(timeout=ASSEMBLYAI_TERMINATE_WAIT_SEC)
+    except Exception:
+        pass
+    try:
+        ws.close()
+    except Exception:
+        pass
+
+
 def assemblyai_prerecorded_body(cfg: dict[str, Any], audio_url: str) -> dict[str, Any]:
     """File STT: same Pro model as live, but the async API sees the whole clip."""
     stt = cfg.get("stt") or {}
@@ -1038,7 +1095,7 @@ def assemblyai_transcribe_pcm(api_key: str, pcm: bytes, cfg: dict[str, Any], tim
                         return
                     ws.send(pcm[i:i + step], websocket.ABNF.OPCODE_BINARY)
                 if ws.sock and ws.sock.connected:
-                    ws.send(json.dumps({"type": "Terminate"}))
+                    ws.send(json.dumps(ASSEMBLYAI_TERMINATE))
             except Exception as e:
                 result["err"] = str(e)
                 done.set()
@@ -1084,10 +1141,7 @@ def assemblyai_transcribe_pcm(api_key: str, pcm: bytes, cfg: dict[str, Any], tim
     threading.Thread(target=lambda: ws.run_forever(ping_interval=20, ping_timeout=10), daemon=True).start()
     if not done.wait(timeout):
         result["err"] = result["err"] or "AssemblyAI timeout"
-    try:
-        ws.close()
-    except Exception:
-        pass
+    _terminate_assemblyai_session(ws, done)
     if result["err"] and not result["text"]:
         raise RuntimeError(result["err"])
     return result["text"], result.get("lang")
@@ -1591,6 +1645,7 @@ class CloudListener:
         self._muted = False
         self._was_ready = False
         self._drop_sent = False
+        self._terminated = threading.Event()
 
     def set_muted(self, muted: bool) -> None:
         self._muted = bool(muted)
@@ -1615,6 +1670,7 @@ class CloudListener:
         url = assemblyai_ws_url(self.cfg)
         self._stop.clear()
         self._ready.clear()
+        self._terminated.clear()
         self._fail = []
         self._was_ready = False
         self._drop_sent = False
@@ -1687,8 +1743,17 @@ class CloudListener:
                     threading.Thread(target=self.on_final, args=(cleaned, lang, speaker), daemon=True).start()
             elif speechy and self.on_partial:
                 self.on_partial(text, lang, speaker)
+        elif kind == "Termination":
+            self._terminated.set()
+            log = logging.getLogger("nod")
+            log.info(
+                "assemblyai session ended session_s=%s audio_s=%s",
+                data.get("session_duration_seconds"),
+                data.get("audio_duration_seconds"),
+            )
         elif kind == "Error":
             err = str(data.get("error") or message)
+            self._terminated.set()
             if self.on_error:
                 self.on_error(err)
             self._notify_drop(err)
@@ -1696,6 +1761,7 @@ class CloudListener:
     def _on_ws_error(self, _ws, error) -> None:
         self._fail.append(str(error))
         self._ready.set()
+        self._terminated.set()
         if self._stop.is_set():
             return
         if not self._was_ready and self.on_error:
@@ -1704,6 +1770,7 @@ class CloudListener:
         self._notify_drop(str(error))
 
     def _on_close(self, _ws, status, msg) -> None:
+        self._terminated.set()
         if self._stop.is_set():
             return
         extra = f"{status or ''} {msg or ''}".strip()
@@ -1716,12 +1783,9 @@ class CloudListener:
     def stop(self) -> None:
         self._stop.set()
         ws = self._ws
+        self._ws = None
         if ws:
-            try:
-                ws.close()
-            except Exception:
-                pass
-            self._ws = None
+            _terminate_assemblyai_session(ws, self._terminated)
 
 
 class Session:
@@ -1734,6 +1798,9 @@ class Session:
         self.usage_session_id: str | None = None
         self._pcm_unmetered = 0
         self._listener: CloudListener | None = None
+        self._listen_mu = threading.RLock()
+        self._listen_starting = False
+        self._stt_restart_timer: threading.Timer | None = None
         self._manual_buf = bytearray()
         self._manual = False
         self._manual_started = 0.0
@@ -2118,17 +2185,55 @@ class Session:
         cfg["stt"] = stt
         return cfg
 
-    def _restart_listener(self) -> None:
-        if not self._listen_wanted:
-            return
-        lst = self._listener
-        self._listener = None
-        if lst:
+    def _listen_lock(self) -> threading.RLock:
+        mu = getattr(self, "_listen_mu", None)
+        if mu is None:
+            mu = threading.RLock()
+            self._listen_mu = mu
+        return mu
+
+    def _stt_slot(self) -> str:
+        return _stt_owner_slot(getattr(self, "user_id", None), getattr(self, "_workspace", None), id(self))
+
+    def _claim_listen_start(self, resume: bool = False) -> bool:
+        with self._listen_lock():
+            if getattr(self, "_listen_starting", False):
+                return False
+            if self._listener is not None and not resume:
+                return False
+            self._listen_starting = True
+            return True
+
+    def _release_listen_start(self) -> None:
+        with self._listen_lock():
+            self._listen_starting = False
+
+    def _cancel_stt_restart_timer(self) -> None:
+        timer = getattr(self, "_stt_restart_timer", None)
+        self._stt_restart_timer = None
+        if timer:
             try:
-                lst.stop()
+                timer.cancel()
             except Exception:
                 pass
-        self._start_listening(resume=True)
+
+    def _stop_listener(self, lst: CloudListener | None) -> None:
+        if not lst:
+            return
+        _drop_live_stt(self._stt_slot(), lst)
+        try:
+            lst.stop()
+        except Exception:
+            pass
+
+    def _restart_listener(self) -> None:
+        with self._listen_lock():
+            if not self._listen_wanted:
+                return
+            lst = self._listener
+            self._listener = None
+            self._stop_listener(lst)
+            self._start_listening(resume=True)
 
     def _on_stt_drop(self, reason: str) -> None:
         if not self._listen_wanted:
@@ -2145,9 +2250,11 @@ class Session:
             self._offer_save_history()
             return
         self.emit({"type": "status", "text": "Transcription dropped — reconnecting"})
+        self._cancel_stt_restart_timer()
         delay = min(3.0, 0.4 * self._stt_drops)
         timer = threading.Timer(delay, self._restart_if_listening)
         timer.daemon = True
+        self._stt_restart_timer = timer
         timer.start()
 
     def _restart_if_listening(self) -> None:
@@ -2349,8 +2456,9 @@ class Session:
             self.emit({"type": "status", "text": "Stop recording before enabling Auto"})
             return
         self._listen_wanted = True
-        if self._listener:
-            return
+        with self._listen_lock():
+            if self._listener or getattr(self, "_listen_starting", False):
+                return
         if not self._ensure_consent() or not self._ensure_usage():
             self._listen_wanted = False
             return
@@ -2416,6 +2524,14 @@ class Session:
             self.start_listen()
 
     def _start_listening(self, resume: bool = False) -> None:
+        if not self._claim_listen_start(resume):
+            return
+        try:
+            self._open_listener(resume)
+        finally:
+            self._release_listen_start()
+
+    def _open_listener(self, resume: bool = False) -> None:
         key = self.pipeline.assemblyai_key()
         if not key:
             self.emit({"type": "error", "text": "Missing AssemblyAI key — add it to start cloud listening"})
@@ -2428,18 +2544,36 @@ class Session:
             on_error=lambda e: self.emit({"type": "error", "text": f"Transcription failed:{e}"}),
             on_drop=self._on_stt_drop,
         )
+        slot = self._stt_slot()
+        prev = _adopt_live_stt(slot, listener)
+        if prev:
+            try:
+                prev.stop()
+            except Exception:
+                pass
         try:
             listener.start()
         except Exception as e:
+            _drop_live_stt(slot, listener)
             self.emit({"type": "error", "text": f"Transcription failed:could not start listening ({e})"})
             if resume and self._listen_wanted:
                 self._on_stt_drop(str(e))
             else:
                 self._listen_wanted = False
             return
+        if not self._listen_wanted:
+            self._stop_listener(listener)
+            return
         if self._mic_muted:
             listener.set_muted(True)
-        self._listener = listener
+        with self._listen_lock():
+            if not self._listen_wanted:
+                self._stop_listener(listener)
+                return
+            old = self._listener
+            self._listener = listener
+        if old and old is not listener:
+            self._stop_listener(old)
         now = time.time()
         if not resume or not self._listen_started_at:
             self._listen_started_at = now
@@ -2475,13 +2609,11 @@ class Session:
 
     def _stop_listening(self) -> None:
         self._pending = None
-        lst = self._listener
-        self._listener = None
-        if lst:
-            try:
-                lst.stop()
-            except Exception:
-                pass
+        self._cancel_stt_restart_timer()
+        with self._listen_lock():
+            lst = self._listener
+            self._listener = None
+        self._stop_listener(lst)
         if self._workspace == "interview":
             self._cancel_interview_wait_timer()
             self._flush_interview_wait()
