@@ -339,10 +339,11 @@ export function installWebApi(): void {
     window.clearInterval(pingTimer)
     try {
       if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'cancel_generate' }))
         ws.send(JSON.stringify({ type: 'stop_listen' }))
       }
     } catch {
-      /* tab is going away; session.close() still Terminates */
+      /* tab is going away; session.close() still Terminates and aborts LLM */
     }
     mic.stop()
     ws?.close()
