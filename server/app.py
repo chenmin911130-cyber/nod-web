@@ -842,6 +842,22 @@ def _is_transient_llm_error(err: BaseException) -> bool:
     return any(tok in text for tok in _TRANSIENT_LLM)
 
 
+def _close_llm_stream(stream) -> None:
+    """Stop reading so the provider can halt token generation."""
+    if stream is None:
+        return
+    try:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
+            return
+        resp = getattr(stream, "response", None)
+        if resp is not None:
+            resp.close()
+    except Exception:
+        pass
+
+
 def _friendly_gen_error(err: BaseException) -> str:
     if _is_transient_llm_error(err):
         return "Generation failed: network error. Please try again."
@@ -1159,9 +1175,27 @@ class Pipeline:
         self._last_answer = ""
         self._cancel = threading.Event()
         self._gen_seq = 0
+        self._stream = None
+        self._stream_mu = threading.Lock()
         self.user_id: str | None = None
         self.usage_session_id: str | None = None
         self._heard_lang: str | None = None
+
+    def _stream_lock(self) -> threading.Lock:
+        mu = getattr(self, "_stream_mu", None)
+        if mu is None:
+            mu = threading.Lock()
+            self._stream_mu = mu
+        return mu
+
+    def abort_stream(self) -> None:
+        """Stop an in-flight completion so leftover tokens are not billed."""
+        self._cancel.set()
+        self._gen_seq += 1
+        with self._stream_lock():
+            stream = getattr(self, "_stream", None)
+            self._stream = None
+        _close_llm_stream(stream)
 
     def _new_qid(self) -> str:
         return f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
@@ -1539,6 +1573,7 @@ class Pipeline:
             if seq != self._gen_seq or self._cancel.is_set():
                 self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
                 return
+            stream = None
             try:
                 kwargs: dict[str, Any] = dict(
                     model=self._model,
@@ -1551,6 +1586,8 @@ class Pipeline:
                 if self._provider == "deepseek":
                     kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
                 stream = self.client.chat.completions.create(**kwargs)
+                with self._stream_lock():
+                    self._stream = stream
                 reasoning = ""
                 for ch in stream:
                     if seq != self._gen_seq or self._cancel.is_set():
@@ -1573,14 +1610,22 @@ class Pipeline:
                 break
             except Exception as e:
                 last_err = e
-                if seq != self._gen_seq:
+                if seq != self._gen_seq or self._cancel.is_set():
                     self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
                     return
-                if attempt == 0 and not answer and _is_transient_llm_error(e):
+                # Retry only when create() never returned a stream. A timeout
+                # after the request left the client can still be running upstream;
+                # a second create() would double-bill tokens.
+                if attempt == 0 and stream is None and not answer and _is_transient_llm_error(e):
                     continue
                 self.emit({"type": "error", "text": _friendly_gen_error(e)})
                 self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
                 return
+            finally:
+                with self._stream_lock():
+                    if getattr(self, "_stream", None) is stream:
+                        self._stream = None
+                _close_llm_stream(stream)
         if last_err and not answer:
             self.emit({"type": "error", "text": _friendly_gen_error(last_err)})
             self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
@@ -1967,7 +2012,7 @@ class Session:
     def close(self) -> None:
         self._listen_wanted = False
         self._stop_listening()
-        self.pipeline._cancel.set()
+        self.pipeline.abort_stream()
         self._flush_cloud_archive(final=True)
         if self.usage_session_id:
             from server.meter import close_usage_session, discard_usage_session, is_session_kept
@@ -2138,8 +2183,7 @@ class Session:
 
     def cancel_generate(self) -> None:
         """Cancel the in-flight LLM stream without stopping STT."""
-        self.pipeline._gen_seq += 1
-        self.pipeline._cancel.set()
+        self.pipeline.abort_stream()
         self._pending_asks = []
         self._release_busy()
 
