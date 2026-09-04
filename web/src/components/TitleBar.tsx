@@ -25,6 +25,7 @@ export interface TitleIconsProps {
   onFullScreen: () => void
   onMenuOpen?: () => void
   onOpenHistory?: () => void
+  onOpenAccount?: () => void
   onMore?: () => void
 }
 
@@ -50,6 +51,7 @@ interface Props {
   onStealth: (on: boolean) => void
   onFullScreen: () => void
   onOpenHistory?: () => void
+  onOpenAccount?: () => void
   onMore?: () => void
 }
 
@@ -282,6 +284,16 @@ export function TitleIcons(props: TitleIconsProps) {
                   className="tb-menu-action"
                   onClick={() => {
                     setMenuOpen(false)
+                    props.onOpenAccount?.()
+                  }}
+                >
+                  Account
+                </button>
+                <button
+                  type="button"
+                  className="tb-menu-action"
+                  onClick={() => {
+                    setMenuOpen(false)
                     props.onMore?.()
                   }}
                 >
@@ -291,9 +303,16 @@ export function TitleIcons(props: TitleIconsProps) {
             )}
             {isWeb && (
               <>
-                <a className="tb-menu-action" href="/account">
+                <button
+                  type="button"
+                  className="tb-menu-action"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    nativeGo('/account')
+                  }}
+                >
                   Account
-                </a>
+                </button>
                 <button
                   type="button"
                   className="tb-menu-action"
@@ -370,6 +389,7 @@ export default function TitleBar(props: Props) {
             onStealth={props.onStealth}
             onFullScreen={props.onFullScreen}
             onOpenHistory={props.onOpenHistory}
+            onOpenAccount={props.onOpenAccount}
             onMore={props.onMore}
           />
         )}

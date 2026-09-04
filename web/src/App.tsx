@@ -6,6 +6,7 @@ import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
+import AccountPane from './components/AccountPane'
 import { restoreFromSession, sessionShouldOfferSave, sessionShouldOpenSavePrompt } from './historyRestore'
 import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
@@ -969,6 +970,7 @@ export default function App() {
     || (Boolean(state.currentQ) && state.currentQ !== PLACEHOLDER)
   )
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [accountOpen, setAccountOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
   const restoreHistory = useCallback((session: HistorySession) => {
     const s = stateRef.current
@@ -2594,6 +2596,7 @@ export default function App() {
         onStealth={handleStealth}
         onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
         onOpenHistory={() => setHistoryOpen(true)}
+        onOpenAccount={() => setAccountOpen(true)}
         onMore={() => setMoreOpen(true)}
         listening={listening}
         elapsedMs={
@@ -2603,6 +2606,7 @@ export default function App() {
         }
       />
       <HistoryPane open={historyOpen} onClose={() => setHistoryOpen(false)} onRestore={restoreHistory} />
+      <AccountPane open={accountOpen} onClose={() => setAccountOpen(false)} />
       <SavePrompt
         open={savePrompt}
         onKeep={(opts) => {
@@ -2695,6 +2699,7 @@ export default function App() {
                 onMicMuted={handleMicMuted}
                 onStealth={handleStealth}
                 onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
+                onOpenAccount={() => setAccountOpen(true)}
               />
             )}
             actions={phoneActions}

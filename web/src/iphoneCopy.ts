@@ -44,6 +44,7 @@ export const IPHONE_COPY = {
   histPdf: 'Export PDF',
   histAudio: 'Save audio to Files',
   histDelete: 'Delete',
+  accountTitle: 'Account',
   askPlaceholder: 'Ask anything about this meeting…',
   askSend: 'Ask',
   typeToTranslate: 'Type to translate',

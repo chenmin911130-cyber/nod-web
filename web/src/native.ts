@@ -11,6 +11,26 @@ export function isNativeApp(): boolean {
   }
 }
 
+/** Marketing version plus iOS build, e.g. `1.0 (12)`. */
+export function formatAppBuild(version: string, build: string): string {
+  const v = version.trim()
+  const b = build.trim()
+  if (!b) return v
+  if (!v || v === b) return b
+  return `${v} (${b})`
+}
+
+export async function readNativeAppBuild(): Promise<string> {
+  if (!isNativeApp()) return ''
+  try {
+    const { App } = await import('@capacitor/app')
+    const info = await App.getInfo()
+    return formatAppBuild(info.version || '', info.build || '')
+  } catch {
+    return ''
+  }
+}
+
 export function apiUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) return path
   const prefix = isNativeApp() ? NATIVE_API_ORIGIN : ''

@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, fetchMe, logout, type Me } from '../auth'
-import { nativeGo } from '../native'
+import { nativeGo, readNativeAppBuild } from '../native'
 import { downloadHistoryPdf } from '../historyPdf'
 import { copyText } from '../historyRestore'
 import './Site.css'
@@ -43,6 +43,7 @@ export default function AccountPage() {
   const [feedback, setFeedback] = useState('')
   const [openId, setOpenId] = useState<string | null>(null)
   const [copied, setCopied] = useState('')
+  const [appBuild, setAppBuild] = useState('')
 
   const copySession = async (session: SessionRow, key = session.id) => {
     const ok = await copyText(session.copy_text || session.items.map((item) => item.text).join('\n'))
@@ -52,6 +53,7 @@ export default function AccountPage() {
 
   useEffect(() => {
     document.title = `Account · ${PRODUCT_NAME}`
+    void readNativeAppBuild().then(setAppBuild)
     void (async () => {
       const user = await fetchMe()
       if (!user) {
@@ -71,7 +73,10 @@ export default function AccountPage() {
   if (!me) {
     return (
       <div className="nod-site-page">
-        <div className="site-wrap">Loading account…</div>
+        <div className="site-wrap">
+          Loading account…
+          {appBuild ? <p>Installed {appBuild}</p> : null}
+        </div>
       </div>
     )
   }
@@ -160,6 +165,12 @@ export default function AccountPage() {
                 <i style={{ width: `${pct(u.llm_tokens, u.llm_limit)}%` }} />
               </div>
             </div>
+            {appBuild ? (
+              <div className="quota-card">
+                <span>Installed app</span>
+                <b>{appBuild}</b>
+              </div>
+            ) : null}
           </div>
           <div className="hero-actions">
             <a className="button button-primary" href="/app">
