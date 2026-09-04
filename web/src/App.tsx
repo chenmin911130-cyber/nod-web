@@ -755,7 +755,11 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case 'seed_translate': {
       const ts = formatClock()
-      const translatePairs = [...state.translatePairs, { id: action.id, ts, original: action.text, translation: '', to: state.translateTo }]
+      // Typed input has no STT from-tag, so translateSourceTag would fall back
+      // to 'en' and the language chip always showed EN. Guess a CJK script tag
+      // from glyphs (zh/ja) so the chip reflects the real source language.
+      const from: PairLang | undefined = looksLikeTarget(action.text, 'zh') ? 'zh' : looksLikeTarget(action.text, 'ja') ? 'ja' : undefined
+      const translatePairs = [...state.translatePairs, { id: action.id, ts, original: action.text, translation: '', to: state.translateTo, from }]
       return { ...state, translatePairs, currentQ: action.text, translateBindId: action.id }
     }
     case 'bind_translate':
