@@ -2732,12 +2732,13 @@ class Session:
             # Clear the pause BEFORE opening the listener so its own _emit_phase
             # reads capture=listening, not a stale "paused" frame (order bug:
             # resume used to pulse paused -> listening).
-            # Pause stops AssemblyAI but the idle/watch clocks keep running, so
-            # rewind them too: a long pause must not read as "15 minutes of
-            # silence" (or "2h elapsed") the instant we resume.
+            # Pause stops AssemblyAI but the idle/watch clock keeps running, so
+            # rewind the VOICE clock: a long pause must not read as "15 minutes
+            # of silence" the instant we resume. Do NOT rewind _listen_started_at
+            # — the 2h cap must accumulate across pause/resume, or a pause lets
+            # a session bypass the billing guard.
             self._paused = False
             self._last_voice_at = time.time()
-            self._listen_started_at = time.time()
             self._start_listening(resume=True)
         else:
             # Not wanted (or manual recording): just clear the paused latch.
