@@ -16,11 +16,13 @@ def test_latin_lock_accepts_plain_sentences():
     assert matches_locked_speech("Eu gosto muito de musica", "pt", None)
 
 
-def test_latin_lock_still_rejects_cjk_and_other_tags():
+def test_latin_lock_rejects_cjk_but_not_a_mis_tagged_en():
     assert not matches_locked_speech("你好世界这是中文", "it", None)
     assert not matches_locked_speech("こんにちは、ありがとう。", "it", "ja")
-    # STT confidently tagged a different language.
-    assert not matches_locked_speech("Buongiorno a tutti", "it", "en")
+    # A Latin lock is already constrained to that Latin language, so a guessed
+    # / STT 'en' tag (a short or ambiguous turn mis-tagged) must NOT veto it.
+    assert matches_locked_speech("Buongiorno a tutti", "it", "en")
+    assert matches_locked_speech("Il treno parte alle otto.", "it", "en")
 
 
 def test_cjk_locks_unchanged():

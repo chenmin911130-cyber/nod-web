@@ -44,6 +44,26 @@ export function translateShouldPassthrough(text: string, to: PairLang, fromTag?:
   return looksLikeTarget(text, to)
 }
 
+/**
+ * Client-side lock guard (mirror of server matches_locked_speech): drop a turn
+ * only when it is genuinely a different script (CJK / Hangul), or the word
+ * markers confidently name a different Latin language. A guessed or STT 'en'
+ * tag must NOT veto a Latin lock — the STT is already constrained to that Latin
+ * language, and short/ambiguous turns are often mis-tagged 'en'.
+ */
+export function matchesLockedFrom(text: string, locked: PairLang, heard: PairLang | null): boolean {
+  if (heard && heard !== locked && !(LATIN_TARGETS.has(locked) && heard === 'en')) return false
+  if (locked === 'en' || locked === 'zh' || locked === 'ja') return looksLikeTarget(text, locked)
+  if (/[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]/u.test(text)) return false
+  const t = compact(text)
+  if (/[¿¡ñ]|cómo|está|hola\b/i.test(t)) return locked === 'es'
+  if (/[çœæ]|pourquoi|bonjour|\bça\b/i.test(t)) return locked === 'fr'
+  if (/[äöüß]|nicht\b|wie geht/i.test(t)) return locked === 'de'
+  if (/perché|ciao\b|grazie|più/i.test(t)) return locked === 'it'
+  if (/[ãõ]|você|não|olá/i.test(t)) return locked === 'pt'
+  return true
+}
+
 /** A `done` closes this translate only when it carries this ask's server id. */
 export function translateDoneBelongsToAsk(askId: string, doneId?: string): boolean {
   return Boolean(askId) && Boolean(doneId) && askId === doneId

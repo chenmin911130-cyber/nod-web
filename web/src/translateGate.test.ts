@@ -1,5 +1,6 @@
 import {
   looksLikeTarget,
+  matchesLockedFrom,
   translateAskIdAfterDone,
   translateDoneBelongsToAsk,
   translateShouldPassthrough,
@@ -55,6 +56,26 @@ eq(
   translateShouldPassthrough('Quiero comer algo antes de la reunion', 'en', undefined),
   true,
   'no STT tag falls back to the glyph check (Spanish looks like English)',
+)
+
+// matchesLockedFrom: a Latin lock is already constrained to that Latin
+// language, so a guessed / STT 'en' tag (a short or ambiguous turn) must not
+// veto it; only a genuinely different script (CJK) or a distinct non-en tag does.
+eq(
+  matchesLockedFrom('Dobbiamo finire il lavoro entro domani', 'it', 'en'),
+  true,
+  'Italian lock: an en tag must not veto a Latin turn',
+)
+eq(
+  matchesLockedFrom('Dobbiamo finire il lavoro entro domani', 'it', null),
+  true,
+  'Italian lock: no tag falls through to the glyph check',
+)
+eq(matchesLockedFrom('你好世界', 'it', 'zh'), false, 'Italian lock: a real CJK tag vetoes')
+eq(
+  matchesLockedFrom('Hello world this is fine', 'it', null),
+  true,
+  'Italian lock: a plain English line still passes (the lock is about script, not word-guess)',
 )
 
 console.log('translateGate ok')

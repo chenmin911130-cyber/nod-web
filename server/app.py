@@ -819,7 +819,12 @@ def matches_locked_speech(text: str, locked: str | None, heard: str | None = Non
     if not t:
         return False
     if heard and heard != locked:
-        return False
+        # A guessed / STT 'en' tag must not veto a Latin lock: the STT is
+        # already constrained to that Latin language, and a short/ambiguous
+        # turn is often mis-tagged 'en'. Only a genuinely different script
+        # (CJK / Hangul) or a non-Latin tag vetoes — handled below.
+        if not (locked in _LATIN_TRANSLATE_LANGS and heard == "en"):
+            return False
     guessed = detect_question_lang(t)
     if locked == "en":
         if _CJK_OR_HANGUL.search(t) or _NON_EN_MARKS.search(t) or _NON_EN_WORDS.search(t):
@@ -3168,7 +3173,14 @@ class Session:
             self.emit({"type": "partial", "text": ""})
             return
         ev: dict[str, Any] = {"type": "partial", "text": text}
-        if lang:
+        if self._workspace == "translate":
+            # Locked Translate From: the STT tag may be absent, so emit the
+            # locked language rather than letting the client guess 'en' and
+            # veto a Latin turn (the flash).
+            tag = heard_lang_from_text(text, lang or self._effective_stt_lang())
+            if tag:
+                ev["language"] = tag
+        elif lang:
             ev["language"] = lang
         if speaker:
             ev["speaker"] = speaker
@@ -3195,7 +3207,7 @@ class Session:
             if now - ts < 5.0 and _ratio(cleaned.lower(), t.lower()) > 0.85:
                 self.emit({"type": "partial", "text": ""})
                 return
-        heard = heard_lang_from_text(cleaned, lang)
+        heard = heard_lang_from_text(cleaned, lang or self._effective_stt_lang())
         if self._workspace == "translate":
             # 不取消在途翻译：取消会让被中断的句子等 25s 超时重试（双倍 token + 字幕卡死）。
             # 新 final 照常入队，前端 pump 一次只发一条，翻译自然串行。

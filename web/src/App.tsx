@@ -15,7 +15,7 @@ import SavePrompt from './components/SavePrompt'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
 import { canSwitchWorkspace, sessionListening } from './iphoneCopy'
-import { looksLikeTarget, translateAskIdAfterDone, translateDoneBelongsToAsk, translateShouldPassthrough } from './translateGate'
+import { looksLikeTarget, matchesLockedFrom, translateAskIdAfterDone, translateDoneBelongsToAsk, translateShouldPassthrough } from './translateGate'
 import AnswerPane from './components/AnswerPane'
 import ListenPane from './components/ListenPane'
 import TranslatePane from './components/TranslatePane'
@@ -857,19 +857,6 @@ function wrongScriptForTarget(text: string, to: PairLang): boolean {
   if (to === 'zh') return han === 0
   if (to === 'ja') return han + kana === 0
   return (han + kana + hangul) / chars.length >= 0.5
-}
-
-function matchesLockedFrom(text: string, locked: PairLang, heard: PairLang | null): boolean {
-  if (heard && heard !== locked) return false
-  if (locked === 'en' || locked === 'zh' || locked === 'ja') return looksLikeTarget(text, locked)
-  if (/[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]/u.test(text)) return false
-  const t = normOriginal(text)
-  if (/[¿¡ñ]|cómo|está|hola\b/i.test(t)) return locked === 'es'
-  if (/[çœæ]|pourquoi|bonjour|\bça\b/i.test(t)) return locked === 'fr'
-  if (/[äöüß]|nicht\b|wie geht/i.test(t)) return locked === 'de'
-  if (/perché|ciao\b|grazie|più/i.test(t)) return locked === 'it'
-  if (/[ãõ]|você|não|olá/i.test(t)) return locked === 'pt'
-  return true
 }
 
 function parseHeardLang(raw: string | undefined, text: string): PairLang | null {
