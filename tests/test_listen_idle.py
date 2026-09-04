@@ -72,8 +72,10 @@ class ForgottenListenTests(unittest.TestCase):
         Regression: resume_listen opened the stream but left ``_last_voice_at``
         at its pre-pause value, so the idle watch thread (running 5s after
         ``_idle_check_at = 0``) saw ``now - last >= LISTEN_IDLE_SECONDS`` and
-        stopped the freshly resumed session. Rewind the VOICE clock on resume;
-        keep ``_listen_started_at`` so the 2h cap is not bypassed by a pause (P2).
+        stopped the freshly resumed session. Rewind the VOICE clock on resume and
+        start a NEW segment clock (``_listen_started_at = now``); the pause's
+        listened time stays banked in ``_listen_accum_sec``, so a long pause
+        neither consumes nor bypasses the 2h cap (which is ACCUMULATED listen time).
         """
         sess = self._session()
         sess._paused = True
