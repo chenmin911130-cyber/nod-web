@@ -13,7 +13,7 @@ import { test, expect } from '@playwright/test'
  */
 test.describe('Nod app shell', () => {
   test('loads the app and shows the workspace switchers', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('/app')
 
     // Top bar product name.
     await expect(page.locator('body')).toContainText('Nod')

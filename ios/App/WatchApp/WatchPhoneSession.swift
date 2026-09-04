@@ -25,7 +25,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var mode = "meeting"
 
     private var localModeHeld = false
-    private var sawPhoneListening = false
     private var phoneModeSeen = false
     private var speechPlayer: AVAudioPlayer?
     private var savedAckWork: DispatchWorkItem?
@@ -145,7 +144,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         previous = ""
         elapsedMs = 0
         localModeHeld = phoneModeSeen
-        sawPhoneListening = false
         send(action: "record")
         beginMic(hint: "Recording · Pause anytime, Done for report")
     }
@@ -271,7 +269,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         offeringSave = false
         savedAck = false
         localModeHeld = phoneModeSeen
-        sawPhoneListening = false
         send(action: "start")
         if Self.usesWatchMic(mode) {
             beginMic(hint: reachable ? "Watch mic" : "Recording on Watch")
@@ -330,70 +327,68 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         listening && !reachable
     }
 
-    enum PhoneListenSync {
-        case ignore, stop, pause
-    }
-
-    /// Phone Stop / Pause moves the Watch. Leftover listening=true must not start.
-    static func phoneListenSync(
-        phoneListening: Bool,
-        phonePaused: Bool,
-        watchListening: Bool,
-        watchPaused: Bool,
-        watchRecording: Bool,
-        sawPhoneListening: Bool
-    ) -> PhoneListenSync {
-        if phoneListening { return .ignore }
-        if !sawPhoneListening { return .ignore }
-        let watchLive = watchListening || watchPaused || watchRecording
-        if !watchLive { return .ignore }
-        if phonePaused {
-            return watchPaused && !watchListening && !watchRecording ? .ignore : .pause
-        }
-        return .stop
-    }
-
+    /// Start / Record carry the Watch chip. Pause / Stop / leftovers must not.
     static func commandShouldSendMode(_ action: String) -> Bool {
         action == "start" || action == "record"
     }
 
-    static func startShouldClearPhoneListenLatch(_ action: String) -> Bool {
-        action == "start" || action == "record"
-    }
-
+    /// A held Watch mode stays until the phone reports the same workspace.
     static func phoneModeShouldApply(localModeHeld: Bool, watchListening: Bool, watchPaused: Bool) -> Bool {
         if localModeHeld { return false }
         return true
     }
 
-    private func applyPhoneStop() {
-        offeringSave = false
-        savedAck = false
-        paused = false
-        WatchRecorder.shared.stop()
-        stopRuntime()
-        listening = false
-        startedAt = nil
-        elapsedMs = 0
-        WatchGlanceStore.clear()
-        hint = WatchCopy.ready
-        localModeHeld = false
-        flushUnsent()
-        resetPcmBuffer()
+    /// Phone reports the authoritative `capture` (ADR 0001). The Watch mirrors
+    /// the session state directly — no latch, no inference — while its own
+    /// recorder / runtime stay controlled by local Start / Pause / Resume.
+    private func syncFromCapture(_ capture: String) {
+        switch capture {
+        case "listening", "recording":
+            // Live session: the Watch shows listening. It does NOT seize the mic
+            // from local Watch Start; a phone-initiated session just mirrors.
+            if !listening || paused {
+                paused = false
+                listening = true
+                if startedAt == nil {
+                    startedAt = Date()
+                    elapsedMs = 0
+                }
+                WatchGlanceStore.setStartedAt(startedAt)
+            }
+        case "paused":
+            if !paused {
+                if let startedAt { elapsedMs = Date().timeIntervalSince(startedAt) }
+                WatchRecorder.shared.stop()
+                stopRuntime()
+                listening = false
+                paused = true
+                WatchGlanceStore.setPaused(elapsed: elapsedMs)
+                hint = WatchCopy.paused
+            }
+        case "off":
+            // Session is over. Stop the Watch side, but leave offeringSave /
+            // savedAck alone — the Watch's own Stop->Save flow owns them, and a
+            // phone-initiated stop arrives with them already false.
+            if listening || paused || WatchRecorder.shared.isRunning {
+                WatchRecorder.shared.stop()
+                stopRuntime()
+                listening = false
+                paused = false
+                startedAt = nil
+                elapsedMs = 0
+                WatchGlanceStore.clear()
+                localModeHeld = false
+                flushUnsent()
+                resetPcmBuffer()
+                if !offeringSave, !savedAck {
+                    hint = WatchCopy.ready
+                }
+            }
+        default:
+            break
+        }
     }
 
-    private func applyPhonePause() {
-        guard listening || WatchRecorder.shared.isRunning || paused else { return }
-        if let startedAt {
-            elapsedMs = Date().timeIntervalSince(startedAt)
-        }
-        WatchRecorder.shared.stop()
-        stopRuntime()
-        listening = false
-        paused = true
-        WatchGlanceStore.setPaused(elapsed: elapsedMs)
-        hint = WatchCopy.paused
-    }
 
     static func flushShouldSend(pendingBytes: Int) -> Bool {
         pendingBytes > 0
@@ -545,26 +540,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let pair = payload["langPair"] as? String, !pair.isEmpty {
             langPair = pair
         }
-        if payload["listening"] is Bool {
-            let phoneListening = payload["listening"] as? Bool ?? false
-            let phonePaused = payload["paused"] as? Bool ?? false
-            if phoneListening { sawPhoneListening = true }
-            switch Self.phoneListenSync(
-                phoneListening: phoneListening,
-                phonePaused: phonePaused,
-                watchListening: listening,
-                watchPaused: paused,
-                watchRecording: WatchRecorder.shared.isRunning,
-                sawPhoneListening: sawPhoneListening
-            ) {
-            case .stop:
-                applyPhoneStop()
-                sawPhoneListening = false
-            case .pause:
-                applyPhonePause()
-            case .ignore:
-                break
-            }
+        if let capture = payload["capture"] as? String {
+            syncFromCapture(capture)
         }
         if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck {
             self.hint = hint

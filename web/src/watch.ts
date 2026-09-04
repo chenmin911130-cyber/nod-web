@@ -9,8 +9,7 @@ type WatchHistItem = { id: string; title: string; text: string }
 type WatchPlugin = {
   ready(): Promise<void>
   setStatus(opts: {
-    listening: boolean
-    paused?: boolean
+    capture?: string
     hint?: string
     original?: string
     translation?: string
@@ -64,12 +63,12 @@ export function watchWorkspaceForMode(mode: WatchListenMode): {
  */
 export function watchListenControlShouldApplyMode(input: {
   action: string
-  sessionPaused: boolean
-  run: string
+  paused: boolean
+  capture: string
 }): boolean {
   if (input.action !== 'start' && input.action !== 'record') return false
-  if (input.sessionPaused) return false
-  if (input.action === 'record' && (input.run === 'listen' || input.run === 'record')) return false
+  if (input.paused) return false
+  if (input.action === 'record' && (input.capture === 'listening' || input.capture === 'recording')) return false
   return true
 }
 
@@ -153,29 +152,6 @@ export function watchLiveStreamShouldReset(listening: boolean, reachable: boolea
   return listening && !reachable
 }
 
-export type WatchPhoneListenSync = 'ignore' | 'stop' | 'pause'
-
-/**
- * Phone Stop / Pause must move the Watch. Leftover listening=true must not start_listen.
- */
-export function watchPhoneListenSync(input: {
-  phoneListening: boolean
-  phonePaused?: boolean
-  watchListening: boolean
-  watchPaused: boolean
-  watchRecording?: boolean
-  sawPhoneListening?: boolean
-}): WatchPhoneListenSync {
-  if (input.phoneListening) return 'ignore'
-  if (!input.sawPhoneListening) return 'ignore'
-  const watchLive = input.watchListening || input.watchPaused || Boolean(input.watchRecording)
-  if (!watchLive) return 'ignore'
-  if (input.phonePaused) {
-    return input.watchPaused && !input.watchListening && !input.watchRecording ? 'ignore' : 'pause'
-  }
-  return 'stop'
-}
-
 /** Start / Record carry the Watch chip. Pause / Stop / leftovers must not. */
 export function watchCommandShouldSendMode(action: string): boolean {
   return action === 'start' || action === 'record'
@@ -184,11 +160,6 @@ export function watchCommandShouldSendMode(action: string): boolean {
 /** Leftover default Meeting must not ride on Start and kick the phone off Translate. */
 export function watchStartShouldAttachMode(modeKnown: boolean): boolean {
   return modeKnown
-}
-
-/** Fresh Watch Start must ignore leftover phone idle until the phone is listening again. */
-export function watchStartShouldClearPhoneListenLatch(action: string): boolean {
-  return action === 'start' || action === 'record'
 }
 
 /** A held Watch mode stays until the phone reports the same workspace. */
@@ -316,8 +287,7 @@ export function installWatchRemote(handlers: {
 }
 
 export function pushWatchStatus(face: {
-  listening: boolean
-  paused?: boolean
+  capture: string
   hint?: string
   original?: string
   translation?: string
@@ -328,8 +298,7 @@ export function pushWatchStatus(face: {
 }): void {
   if (!isNativeApp()) return
   void NodWatch.setStatus({
-    listening: face.listening,
-    paused: face.paused,
+    capture: face.capture,
     hint: (face.hint || '').slice(0, 140),
     original: (face.original || '').slice(0, 800),
     translation: (face.translation || '').slice(0, 800),

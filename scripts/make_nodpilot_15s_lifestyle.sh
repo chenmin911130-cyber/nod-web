@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/Users/minchen/Desktop/nod-web"
+ROOT="/Users/minchen/Projects/nod-web"
 ASSETS="$ROOT/docs/creatify-assets"
 OUT_DIR="$ASSETS/exports"
 TMP_DIR="$(mktemp -d /tmp/nodpilot-15s.XXXXXX)"

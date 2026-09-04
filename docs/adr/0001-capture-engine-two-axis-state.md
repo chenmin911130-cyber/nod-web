@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Implementation lives on `capture-engine-state` after the money/security fixes are stable.
+Done. Implemented in the `capture-engine-state` migration (L1 server, L2 phone JS, L3 Watch Swift, L5 removed legacy `state`).
 
 ## Context
 

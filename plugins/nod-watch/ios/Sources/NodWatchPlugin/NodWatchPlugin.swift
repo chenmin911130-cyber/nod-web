@@ -27,8 +27,7 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func setStatus(_ call: CAPPluginCall) {
-        let listening = call.getBool("listening") ?? false
-        let paused = call.getBool("paused") ?? false
+        let capture = call.getString("capture") ?? ""
         let hint = call.getString("hint") ?? ""
         let original = call.getString("original") ?? ""
         let translation = call.getString("translation") ?? ""
@@ -47,8 +46,7 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
             }
         }
         WatchBridge.shared.pushStatus(
-            listening: listening,
-            paused: paused,
+            capture: capture,
             hint: hint,
             original: original,
             translation: translation,

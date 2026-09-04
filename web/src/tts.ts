@@ -78,7 +78,7 @@ export function readTtsMode(): TtsMode {
 }
 
 /** Auto speech is Translate-only. Meeting / Interview must stay silent. */
-export function listenSessionShouldAutoSpeak(workspaceMode: string, _run?: string): boolean {
+export function listenSessionShouldAutoSpeak(workspaceMode: string): boolean {
   return workspaceMode === 'translate'
 }
 
@@ -90,7 +90,6 @@ export function ttsAutoShouldConfirm(current: TtsMode, next: TtsMode): boolean {
 export function nextLiveUtterances(input: {
   live: boolean
   workspaceMode: string
-  run?: string
   translateOn: boolean
   bindId: string
   spoken: Iterable<string>
@@ -98,7 +97,7 @@ export function nextLiveUtterances(input: {
   lines: Array<{ id: string; translation?: string }>
 }): Array<{ id: string; text: string }> {
   if (!input.live) return []
-  if (!listenSessionShouldAutoSpeak(input.workspaceMode, input.run || 'idle')) return []
+  if (!listenSessionShouldAutoSpeak(input.workspaceMode)) return []
   const spoken = new Set(input.spoken)
   const out: Array<{ id: string; text: string }> = []
   if (input.workspaceMode === 'translate') {

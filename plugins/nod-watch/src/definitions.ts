@@ -5,6 +5,7 @@ export interface NodWatchPlugin {
   setStatus(opts: {
     listening: boolean
     paused?: boolean
+    capture?: string
     hint?: string
     original?: string
     translation?: string

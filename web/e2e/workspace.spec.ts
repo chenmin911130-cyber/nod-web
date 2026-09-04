@@ -11,7 +11,7 @@ import { test, expect } from '@playwright/test'
  */
 test.describe('Workspace switcher', () => {
   test('starts on Listen and can switch to Translate and back', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('/app')
 
     const tablist = page.getByRole('tablist', { name: /workspace mode/i })
     await expect(tablist).toBeVisible()

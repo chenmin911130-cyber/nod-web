@@ -141,16 +141,11 @@ export function listenStatusDot(input: { listening: boolean; paused: boolean }):
   return 'standby'
 }
 
-/** Chrome stays on Listening while STT gaps or a translate/ask think. */
-export function sessionListening(input: {
-  run: string
-  wanted?: boolean
-  paused?: boolean
-}): boolean {
-  if (input.paused) return false
-  if (input.run === 'listen' || input.run === 'record') return true
-  if (input.wanted) return true
-  return false
+/** Mic is live while capture is listening/recording (ADR 0001). Paused/off is
+ * not capturing. `run` no longer decides this — a generating model keeps
+ * capture='listening' so the mic stays up mid-answer. */
+export function sessionListening(input: { capture: string }): boolean {
+  return input.capture === 'listening' || input.capture === 'recording'
 }
 
 export function canSwitchWorkspace(input: { listening: boolean; paused?: boolean }): boolean {

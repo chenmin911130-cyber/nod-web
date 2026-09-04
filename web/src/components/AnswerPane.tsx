@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Turn } from '../types'
 import type { AttachPayload, LocalAttach } from '../attach'
 import { toPayload } from '../attach'
-import { AnswerContent } from './AnswerContent'
+import { QaAnswerCard } from './QaAnswerCard'
 import PromptAttach from './PromptAttach'
 import EmptyState from './EmptyState'
 
@@ -28,9 +28,24 @@ function Sparkle() {
 export default function AnswerPane({ currentQ, partial, turns, busy, listening, onAsk, onCompose }: Props) {
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<LocalAttach[]>([])
+  const [now, setNow] = useState(() => Date.now())
   const bottomRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const firstSeen = useRef(new Map<string, number>())
   const [pinned, setPinned] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const msAgo = (id: string) => {
+    if (!firstSeen.current.has(id)) firstSeen.current.set(id, Date.now())
+    return now - (firstSeen.current.get(id) || now)
+  }
+
+  const followUp = () => inputRef.current?.focus()
 
   useEffect(() => {
     if (pinned) return
@@ -76,51 +91,38 @@ export default function AnswerPane({ currentQ, partial, turns, busy, listening, 
         <span className="kicker-hint"> · F2 Record · F3 Listen · F4 Clear</span>
       </div>
       <div className="tr-sheet">
-        <div className="qa-head">
-          <div className="tr-col-head">Question</div>
-          <div className="tr-col-head qa-head-right">Answer</div>
-        </div>
         <div className="tr-body" ref={scrollRef} onScroll={handleScroll}>
           {isEmpty ? (
             <EmptyState compact title={listening ? 'Listening for the next question' : 'Waiting for the next question'} />
           ) : (
             <>
-              {turns.map((t) => {
-                const generating = busy && t.id === last?.id && !t.a
-                return (
-                  <div key={t.id} className={`qa-pair${generating ? ' live' : ''}`}>
-                    <div className="tr-cell">
-                      <span>{t.q}</span>
-                    </div>
-                    <div className={`tr-cell${t.a ? '' : ' pending'}`}>
-                      {t.a ? (
-                        <AnswerContent answer={t.a} base={`ap-${t.id}`} />
-                      ) : (
-                        <span>{generating ? 'Generating answer…' : 'Waiting…'}</span>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
+              {turns.map((t) => (
+                <QaAnswerCard
+                  key={t.id}
+                  question={t.q}
+                  answer={t.a}
+                  generating={busy && t.id === last?.id && !t.a}
+                  msAgo={msAgo(t.id)}
+                  onFollowUp={followUp}
+                />
+              ))}
               {orphanQ && (
-                <div className="qa-pair">
-                  <div className="tr-cell">
-                    <span>{currentQ}</span>
-                  </div>
-                  <div className="tr-cell pending">
-                    <span>{busy ? 'Generating answer…' : 'Waiting…'}</span>
-                  </div>
-                </div>
+                <QaAnswerCard
+                  question={currentQ}
+                  answer=""
+                  generating={busy}
+                  msAgo={msAgo('orphan')}
+                  onFollowUp={followUp}
+                />
               )}
               {showLive && (
-                <div className="qa-pair live">
-                  <div className="tr-cell pending">
-                    <span>Listening… {liveQ}</span>
-                  </div>
-                  <div className="tr-cell pending">
-                    <span>Waiting…</span>
-                  </div>
-                </div>
+                <QaAnswerCard
+                  question={liveQ}
+                  answer=""
+                  listening
+                  msAgo={msAgo('live')}
+                  onFollowUp={followUp}
+                />
               )}
               <div ref={bottomRef} />
             </>
@@ -142,6 +144,7 @@ export default function AnswerPane({ currentQ, partial, turns, busy, listening, 
         disabled={busy}
       >
         <input
+          ref={inputRef}
           className="prompt-input"
           placeholder="Type a question."
           value={input}

@@ -240,8 +240,8 @@ class SessionListenLifecycleTests(unittest.TestCase):
         self.assertFalse(a._listen_wanted)
         self.assertIsNone(a._listener)
         a.pipeline.abort_stream.assert_not_called()
-        idle = [c.args[0] for c in a.emit.call_args_list if c.args[0].get("type") == "state"]
-        self.assertTrue(any(ev.get("state") == "idle" for ev in idle))
+        phases = [c.args[0] for c in a.emit.call_args_list if c.args[0].get("type") == "phase"]
+        self.assertTrue(any(ev.get("capture") == "off" for ev in phases))
         b_kinds = [c.args[0].get("type") for c in b.emit.call_args_list]
         self.assertNotIn("listen_taken", b_kinds)
 

@@ -223,11 +223,11 @@ class QuotaSettingsTests(unittest.TestCase):
         sess = Session.__new__(Session)
         sess._manual = True
         sess._listener = None
-        self.assertEqual(sess._active_run_state(), "record")
+        self.assertEqual(sess._capture(), "recording")
         sess._manual = False
-        self.assertEqual(sess._active_run_state(), "idle")
+        self.assertEqual(sess._capture(), "off")
         sess._listener = object()
-        self.assertEqual(sess._active_run_state(), "listen")
+        self.assertEqual(sess._capture(), "listening")
 
     def test_caption_repair_keeps_wild_rewrites_out(self):
         src = "David will walk through Nodpilot after lunch."
@@ -601,9 +601,9 @@ class InterviewWaitFlushTests(unittest.TestCase):
         self.assertEqual(args[0], "当下经济情况")
         self.assertEqual(args[1], "ask")
 
-    def test_answer_cleanup_releases_busy_and_emits_state(self):
+    def test_answer_cleanup_releases_busy_and_emits_phase(self):
         # The finally block in work() is the only thing that unsticks the UI.
-        # If it raises on its first line, busy stays held and no state ships.
+        # If it raises on its first line, busy stays held and no phase ships.
         sess = self._session()
         sess._on_final("告诉我当下经济啊。", "zh")
         for _ in range(60):
@@ -611,12 +611,12 @@ class InterviewWaitFlushTests(unittest.TestCase):
                 break
             time.sleep(0.05)
         self.assertFalse(sess._busy, "busy stayed held; next question would be dropped")
-        states = [
-            c.args[0]["state"]
+        phases = [
+            c.args[0]
             for c in sess.emit.call_args_list
-            if c.args and c.args[0].get("type") == "state"
+            if c.args and c.args[0].get("type") == "phase"
         ]
-        self.assertIn("listen", states, f"no terminal state emitted, got {states}")
+        self.assertIn("listening", [p.get("capture") for p in phases], f"no terminal phase emitted, got {phases}")
 
     def test_answer_cleanup_runs_queued_ask(self):
         sess = self._session()
