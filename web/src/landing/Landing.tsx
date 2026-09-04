@@ -26,7 +26,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
   const t = COPY[locale]
   const primaryHref = signedIn ? '/app' : '/signup'
   const primaryLabel = signedIn ? t.enterWorkspace : t.startFree
-  const home = '/'
+  const home = locale === 'zh' ? '/zh' : '/'
   const askMap = {
     '1': { q: t.ask1, a: t.askA1 },
     '2': { q: t.ask2, a: t.askA2 },
@@ -40,7 +40,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
       title: t.title,
       description: t.description,
       ogTitle: t.ogTitle,
-      url: `${origin}/`,
+      url: `${origin}${locale === 'zh' ? '/zh' : '/'}`,
       lang: t.htmlLang,
       image: `${origin}/og.png`,
     })
@@ -304,17 +304,10 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
               </article>
               <article className="use-case-card">
                 <span className="use-case-icon">04</span>
-                <h3>{t.sitPresentation}</h3>
-                <p>{t.sitPresentationP}</p>
-              </article>
-            </div>
-            <aside className="more-use reveal">
-              <span className="mono">{t.sitMore}</span>
-              <div>
                 <h3>{t.sitInterview}</h3>
                 <p>{t.sitInterviewP}</p>
-              </div>
-            </aside>
+              </article>
+            </div>
           </div>
         </section>
 
@@ -331,7 +324,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
                 <strong>{t.memQuery}</strong>
               </label>
               <div className="ask-reply">
-                <small>NOD</small>
+                <small>{t.memHit}</small>
                 <p>{t.memAnswer}</p>
               </div>
             </div>

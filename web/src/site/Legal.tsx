@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from 'react'
 import { track } from './track'
 import './Site.css'
 import { PRODUCT_NAME } from '../brand'
+import { CONSENT_LEAD, CONSENT_USE, PRIVACY_AUDIO, TERMS_SERVICE } from '../legalCopy'
 import NodMark from './NodMark'
 
 function Shell({ title, children }: { title: string; children: ReactNode }) {
@@ -37,7 +38,7 @@ export function PrivacyPage() {
   }, [])
   return (
     <Shell title="Privacy Policy">
-      <p>Last updated: 1 September 2026. Nodpilot (“Nodpilot”, “we”) is an early product in free public testing.</p>
+      <p>Last updated: 5 September 2026. Nodpilot (“Nodpilot”, “we”) is an early product in free public testing.</p>
       <h2>What we collect</h2>
       <ul>
         <li>Account data: email, name, one-time sign-in codes, and optional Google account id.</li>
@@ -46,11 +47,7 @@ export function PrivacyPage() {
         <li>Feedback you send through the product.</li>
       </ul>
       <h2>Audio</h2>
-      <p>
-        When you enable the microphone, audio is streamed to AssemblyAI for transcription. We do not keep the raw audio file
-        after the live session. Transcript text may be stored on your account until you delete it. Everyone using the product
-        sends the same audio and text.
-      </p>
+      <p>{PRIVACY_AUDIO}</p>
       <h2>Language models</h2>
       <p>
         Transcripts, questions, and attached text may be sent to DeepSeek or OpenRouter to generate answers, minutes, or captions.
@@ -65,8 +62,8 @@ export function PrivacyPage() {
       <p>We use an HTTP-only session cookie and an optional local token so you stay signed in.</p>
       <h2>Retention and deletion</h2>
       <p>
-        You can delete your account from Account. That removes stored history and the login. Copies already processed by speech or
-        model providers cannot be pulled back from this screen.
+        History is kept for 30 days. You can delete a session or your account from Account. That removes stored history and the
+        login. Copies already processed by speech or model providers cannot be pulled back from this screen.
       </p>
       <h2>Contact</h2>
       <p>
@@ -80,18 +77,17 @@ export function PrivacyPage() {
 export function TermsPage() {
   return (
     <Shell title="Terms of Service">
-      <p>Last updated: 1 September 2026.</p>
+      <p>Last updated: 5 September 2026.</p>
       <h2>The service</h2>
       <p>
-        Nodpilot provides a live voice workspace for interview rehearsal, meeting notes, and captions. During this free public test,
-        access is not sold as a paid plan. Features can change while the product is in early access.
+        {TERMS_SERVICE}
       </p>
       <h2>Your responsibilities</h2>
       <ul>
         <li>You must have the right to record or transcribe the room you are in. Many places require consent from everyone present.</li>
         <li>
-          AI Listening Assistant is for rehearsal, spoken-answer practice, and post-session reflection. You are responsible for accuracy and for
-          following interviewer and platform rules.
+          AI Listening Assistant is for listening, notes, captions, and drafting a spoken answer in the room you are in. You are
+          responsible for accuracy and for following the rules of that room.
         </li>
         <li>Do not use Nodpilot to break the law, harass people, or overload the service.</li>
       </ul>
@@ -118,16 +114,12 @@ export function TermsPage() {
 export function ConsentPage() {
   return (
     <Shell title="Recording consent">
-      <p>
-        Nodpilot listens through your browser microphone on the web. Windows desktop (system audio from Zoom or Teams)
-        is coming soon for public download. Speech is sent to AssemblyAI. Text may be sent to a language model. Other people in the
-        call may not know you are transcribing unless you tell them.
-      </p>
+      <p>{CONSENT_LEAD}</p>
       <h2>Before you start recording</h2>
       <ul>
         <li>This confirmation appears the first time you enable the microphone.</li>
         <li>Tell participants you are using a transcription tool, if the law or the room requires it.</li>
-        <li>Use AI Listening Assistant for rehearsal, spoken-answer practice, and post-session reflection — not as a hidden prompt in a live interview if that violates the employer’s rules.</li>
+        <li>{CONSENT_USE}</li>
         <li>You can withdraw by signing out and deleting your account. That does not erase provider logs they already hold.</li>
       </ul>
       <p>

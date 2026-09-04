@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react'
 import { sitePathFromLocation } from '../native'
+import { localeFromSitePath } from '../siteLocale'
 import Landing from '../landing/Landing'
 import AdminPage from './Admin'
 import AccountPage from './Account'
@@ -40,7 +41,7 @@ export default function Site({ clerkEnabled = false }: { clerkEnabled?: boolean 
     ) : path === '/admin' ? (
       <AdminPage />
     ) : (
-      <Landing locale="en" clerkEnabled={clerkEnabled} />
+      <Landing locale={localeFromSitePath(path)} clerkEnabled={clerkEnabled} />
     )
 
   if (!clerkEnabled) return page
