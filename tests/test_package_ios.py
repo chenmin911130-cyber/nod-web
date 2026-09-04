@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -12,6 +13,8 @@ class PackageIosTests(unittest.TestCase):
         self.assertTrue(SCRIPT.is_file())
 
     def test_linux_exits_with_mac_instructions(self):
+        if sys.platform == "darwin":
+            self.skipTest("this host is a Mac; the Darwin path is for the user's machine")
         proc = subprocess.run(
             ["bash", str(SCRIPT)],
             cwd=ROOT,
@@ -19,8 +22,6 @@ class PackageIosTests(unittest.TestCase):
             text=True,
             check=False,
         )
-        if proc.returncode == 0:
-            self.skipTest("this host is a Mac; the Darwin path is for the user's machine")
         self.assertEqual(proc.returncode, 1)
         self.assertIn("Mac", proc.stderr)
         self.assertIn("npm run cap:ios", proc.stderr)
