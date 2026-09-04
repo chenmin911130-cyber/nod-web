@@ -41,5 +41,20 @@ eq(
   'a Chinese line may passthrough when the target is Chinese',
 )
 eq(looksLikeTarget('嗯', 'zh'), false, 'a one-character filler is not "already Chinese"')
+eq(
+  translateShouldPassthrough('Quiero comer algo antes de la reunion', 'en', 'es'),
+  false,
+  'Spanish -> English must go to the LLM, not passthrough',
+)
+eq(
+  translateShouldPassthrough('Dobbiamo finire il lavoro entro domani', 'en', 'it'),
+  false,
+  'Italian -> English must go to the LLM',
+)
+eq(
+  translateShouldPassthrough('Quiero comer algo antes de la reunion', 'en', undefined),
+  true,
+  'no STT tag falls back to the glyph check (Spanish looks like English)',
+)
 
 console.log('translateGate ok')

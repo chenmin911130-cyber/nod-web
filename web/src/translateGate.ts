@@ -30,7 +30,17 @@ export function looksLikeTarget(text: string, to: PairLang): boolean {
  * Skip the LLM only when the text itself is already the target language.
  * STT's from-tag must not decide this — mixed EN+zh is often tagged zh.
  */
-export function translateShouldPassthrough(text: string, to: PairLang, _fromTag?: string): boolean {
+const LATIN_TARGETS = new Set<PairLang>(['es', 'fr', 'de', 'it', 'pt'])
+
+/**
+ * Skip the LLM only when the text itself is already the target language.
+ * STT's from-tag must not decide this — mixed EN+zh is often tagged zh.
+ * EXCEPT when translating INTO English: Latin scripts all look like English, so
+ * an AssemblyAI Latin from-tag (es/fr/de/it/pt) means the source is genuinely
+ * that language and must go to the LLM, not passthrough.
+ */
+export function translateShouldPassthrough(text: string, to: PairLang, fromTag?: PairLang): boolean {
+  if (to === 'en' && fromTag && LATIN_TARGETS.has(fromTag)) return false
   return looksLikeTarget(text, to)
 }
 

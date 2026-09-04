@@ -230,6 +230,9 @@ def model_allowed(cfg: dict[str, Any], provider: str, model: str) -> bool:
 
 
 _TRANSLATE_LANGS = ("zh", "ja", "en", "it", "es", "fr", "de", "pt")
+# Latin-script Translate targets whose glyphs cannot be told apart from English;
+# for these we must trust AssemblyAI's detected language, not _speech_script's "en".
+_LATIN_TRANSLATE_LANGS = ("es", "fr", "de", "it", "pt")
 # English first so mixed rooms do not collapse English into Chinese.
 _STT_AUTO_LANGS = ("en", "zh", "ja")
 _LANG_NAMES = {
@@ -515,8 +518,15 @@ def _is_answer_echo(text: str, last_answer: str | None) -> bool:
 
 
 def heard_lang_from_text(text: str, heard: str | None = None) -> str | None:
-    """Prefer the script on the page over AssemblyAI's language tag."""
+    """Prefer CJK script on the page, but trust AssemblyAI for Latin languages.
+
+    ``_speech_script`` maps any >=3-latin-glyph line to ``en``, which erases
+    AssemblyAI's es/fr/de/it/pt detection. Latin scripts cannot be told apart by
+    glyphs, so for those let the STT ``heard`` tag win over the script's "en".
+    """
     script = _speech_script(text)
+    if script == "en" and heard in _LATIN_TRANSLATE_LANGS:
+        return heard
     if script:
         return script
     return heard or detect_question_lang(text) or None
@@ -612,6 +622,11 @@ def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
     lang = _normalize_any_lang(stt.get("language"))
     if lang:
         params.append(("language_codes", lang))
+    else:
+        # No locked language: make AssemblyAI detect and report the language on
+        # every turn, so heard_lang_from_turn has a real tag instead of a
+        # glyph-guessed "en" for Spanish/Italian/French/German/Portuguese.
+        params.append(("language_detection", "true"))
     params.append(("prompt", _stt_prompt(cfg)))
     keyterms = _stt_keyterms(cfg)
     if keyterms:
