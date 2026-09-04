@@ -57,6 +57,8 @@ export const IPHONE_COPY = {
   saveBody: 'Keep this meeting so you can reopen it later.',
   saveYes: 'Save',
   saveNo: "Don't save",
+  keepRecording: 'Keep recording',
+  keepRecordingHelp: 'Audio stays on your account for 30 days. Uncheck to keep notes only.',
   listenAny: 'Listen · Any language',
   notesSheetHelp: 'Notes are written in this language only',
   enhance: 'More accurate',

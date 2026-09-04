@@ -31,8 +31,8 @@ export default function SavePrompt({
           <label className="save-prompt-opt">
             <input type="checkbox" checked={audio} onChange={(e) => setAudio(e.target.checked)} />
             <span>
-              <b>Keep recording</b>
-              The audio from this session
+              <b>{IPHONE_COPY.keepRecording}</b>
+              {IPHONE_COPY.keepRecordingHelp}
             </span>
           </label>
         )}

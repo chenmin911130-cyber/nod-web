@@ -32,6 +32,12 @@ eq(IPHONE_COPY.start, 'Start', 'Translate ready CTA is Start')
 eq(IPHONE_COPY.recordingStatus, 'Listening', 'live status is Listening')
 eq(IPHONE_COPY.more, 'More', 'PDF/Save/History live in More')
 eq(IPHONE_COPY.saveTitle, 'Save to History?', 'Stop asks save only')
+eq(IPHONE_COPY.keepRecording, 'Keep recording', 'Save can keep the WAV')
+eq(
+  IPHONE_COPY.keepRecordingHelp.includes('30 days'),
+  true,
+  'Keep recording must say audio stays 30 days',
+)
 eq(listenDetectChip('auto'), 'Auto Detect', 'speech chip is Auto Detect')
 eq(listenChipLabel('auto'), 'Auto Detect', 'do not use Auto → CH')
 eq(listenChipLabel('en'), 'English', 'pinned listen language')
