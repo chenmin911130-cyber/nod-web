@@ -1896,7 +1896,13 @@ export default function App() {
     const s = stateRef.current
     const id = pairId || `cap-${Date.now()}`
     const pair = pairId ? s.translatePairs.find((p) => p.id === pairId) : undefined
-    const sameLang = translateShouldPassthrough(text, s.translateTo, pair?.from)
+    // Typed input (id 'typed-…') has no STT from-tag, so the glyph check would
+    // misread an unaccented Latin line as English and passthrough it (shown as
+    // the source text twice + 'Same lang'). The user typing explicitly wants a
+    // translation, so never passthrough typed input. Only a spoken pair (which
+    // carries the STT from-tag) may passthrough.
+    const typed = String(pairId || '').startsWith('typed-')
+    const sameLang = !typed && translateShouldPassthrough(text, s.translateTo, pair?.from)
     if (sameLang) {
       askedTranslate.current.add(id)
       dispatch({ type: 'fill_translate', id, translation: text, passthrough: true })
