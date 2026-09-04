@@ -3795,6 +3795,17 @@ a.tb-menu-action {
   text-decoration: none;
 }
 
+.tb-version {
+  color: #8aa0b8;
+  cursor: default;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.tb-version:hover {
+  background: transparent;
+}
+
 .status-toast {
   position: absolute;
   top: 66px;

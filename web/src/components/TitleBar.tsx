@@ -3,7 +3,7 @@ import type { AudioSource, Lang, PairLang, WorkspaceMode } from '../types'
 import { isWeb } from '../platform'
 import { logout } from '../auth'
 import { PRODUCT_NAME } from '../brand'
-import { isNativeApp, nativeGo } from '../native'
+import { isNativeApp, nativeGo, readNativeAppBuild } from '../native'
 import { usePhoneChrome } from '../phoneChrome'
 import OpacityBar from './OpacityBar'
 import PetTimer from './PetTimer'
@@ -25,7 +25,6 @@ export interface TitleIconsProps {
   onFullScreen: () => void
   onMenuOpen?: () => void
   onOpenHistory?: () => void
-  onOpenAccount?: () => void
   onMore?: () => void
 }
 
@@ -51,7 +50,6 @@ interface Props {
   onStealth: (on: boolean) => void
   onFullScreen: () => void
   onOpenHistory?: () => void
-  onOpenAccount?: () => void
   onMore?: () => void
 }
 
@@ -155,7 +153,12 @@ export function TitleIcons(props: TitleIconsProps) {
   const { mode, source, opacity, pinned, systemMuted, micMuted, stealth } = props
   const phone = usePhoneChrome()
   const [menuOpen, setMenuOpen] = useState(false)
+  const [appVer, setAppVer] = useState('')
   const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    void readNativeAppBuild().then(setAppVer)
+  }, [])
 
   useEffect(() => {
     if (!menuOpen) return
@@ -284,16 +287,6 @@ export function TitleIcons(props: TitleIconsProps) {
                   className="tb-menu-action"
                   onClick={() => {
                     setMenuOpen(false)
-                    props.onOpenAccount?.()
-                  }}
-                >
-                  Account
-                </button>
-                <button
-                  type="button"
-                  className="tb-menu-action"
-                  onClick={() => {
-                    setMenuOpen(false)
                     props.onMore?.()
                   }}
                 >
@@ -303,16 +296,9 @@ export function TitleIcons(props: TitleIconsProps) {
             )}
             {isWeb && (
               <>
-                <button
-                  type="button"
-                  className="tb-menu-action"
-                  onClick={() => {
-                    setMenuOpen(false)
-                    nativeGo('/account')
-                  }}
-                >
-                  Account
-                </button>
+                <div className="tb-menu-action tb-version">
+                  {appVer ? `Version ${appVer}` : 'Version'}
+                </div>
                 <button
                   type="button"
                   className="tb-menu-action"
@@ -389,7 +375,6 @@ export default function TitleBar(props: Props) {
             onStealth={props.onStealth}
             onFullScreen={props.onFullScreen}
             onOpenHistory={props.onOpenHistory}
-            onOpenAccount={props.onOpenAccount}
             onMore={props.onMore}
           />
         )}
