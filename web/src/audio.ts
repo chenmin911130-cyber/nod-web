@@ -79,6 +79,15 @@ export function shouldReacquirePhoneMic(opts: {
   return opts.nativeApp && opts.running && !opts.watchPreferred && !opts.hasNativeHandle && !opts.hasStream
 }
 
+/** Watch Translate / Live Q&A Start must drop the phone mic so the wrist is the only capture. */
+export function shouldReleasePhoneMicForWatch(opts: {
+  running: boolean
+  watchPreferred: boolean
+  hasPhoneCapture: boolean
+}): boolean {
+  return opts.running && opts.watchPreferred && opts.hasPhoneCapture
+}
+
 export class MicCapture {
   private ctx: AudioContext | null = null
   private stream: MediaStream | null = null
@@ -103,13 +112,19 @@ export class MicCapture {
   }
 
   start(): Promise<void> {
+    const watchPreferred = isWatchMicPreferred()
     if (
       shouldReacquirePhoneMic({
         nativeApp: isNativeApp(),
         running: this.running,
-        watchPreferred: isWatchMicPreferred(),
+        watchPreferred,
         hasNativeHandle: this.nativeHandle !== null,
         hasStream: this.stream !== null,
+      }) ||
+      shouldReleasePhoneMicForWatch({
+        running: this.running,
+        watchPreferred,
+        hasPhoneCapture: this.nativeHandle !== null || this.stream !== null,
       })
     ) {
       this.release()

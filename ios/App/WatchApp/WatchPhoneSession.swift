@@ -24,6 +24,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var langPair = "Auto → CH"
     @Published var mode = "meeting"
 
+    private var localModeHeld = false
+    private var sawPhoneListening = false
+    private var phoneModeSeen = false
     private var speechPlayer: AVAudioPlayer?
     private var savedAckWork: DispatchWorkItem?
 
@@ -44,27 +47,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         WatchRecorder.shared.onPcm = { [weak self] data in
             self?.forwardPcm(data)
         }
-        listenForHostProbe()
         guard WCSession.isSupported() else { return }
         WCSession.default.delegate = self
         WCSession.default.activate()
-    }
-
-    /// Mac can post Darwin `com.nodpilot.watch.probe` to start Listen without a tap.
-    private func listenForHostProbe() {
-        let name = "com.nodpilot.watch.probe" as CFString
-        CFNotificationCenterAddObserver(
-            CFNotificationCenterGetDarwinNotifyCenter(),
-            Unmanaged.passUnretained(self).toOpaque(),
-            { _, observer, _, _, _ in
-                guard let observer else { return }
-                let session = Unmanaged<WatchPhoneSession>.fromOpaque(observer).takeUnretainedValue()
-                DispatchQueue.main.async { session.startSession() }
-            },
-            name,
-            nil,
-            .deliverImmediately
-        )
     }
 
     private static let modeKey = "nod.watch.listenMode"
@@ -90,6 +75,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if !listening, !paused {
             hint = "\(Self.modeLabel(next)) · tap Listen"
         }
+    }
+
+    func pickMode(_ next: String) {
+        setMode(next)
+        localModeHeld = true
     }
 
     static func usesWatchMic(_ mode: String) -> Bool {
@@ -154,6 +144,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         translation = ""
         previous = ""
         elapsedMs = 0
+        localModeHeld = phoneModeSeen
+        sawPhoneListening = false
         send(action: "record")
         beginMic(hint: "Recording · Pause anytime, Done for report")
     }
@@ -247,6 +239,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         offeringSave = hadContent
         savedAck = false
         hint = hadContent ? WatchCopy.saveAsk : WatchCopy.ready
+        localModeHeld = false
         send(action: "stop")
         flushUnsent()
         resetPcmBuffer()
@@ -277,6 +270,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         elapsedMs = 0
         offeringSave = false
         savedAck = false
+        localModeHeld = phoneModeSeen
+        sawPhoneListening = false
         send(action: "start")
         if Self.usesWatchMic(mode) {
             beginMic(hint: reachable ? "Watch mic" : "Recording on Watch")
@@ -335,6 +330,71 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         listening && !reachable
     }
 
+    enum PhoneListenSync {
+        case ignore, stop, pause
+    }
+
+    /// Phone Stop / Pause moves the Watch. Leftover listening=true must not start.
+    static func phoneListenSync(
+        phoneListening: Bool,
+        phonePaused: Bool,
+        watchListening: Bool,
+        watchPaused: Bool,
+        watchRecording: Bool,
+        sawPhoneListening: Bool
+    ) -> PhoneListenSync {
+        if phoneListening { return .ignore }
+        if !sawPhoneListening { return .ignore }
+        let watchLive = watchListening || watchPaused || watchRecording
+        if !watchLive { return .ignore }
+        if phonePaused {
+            return watchPaused && !watchListening && !watchRecording ? .ignore : .pause
+        }
+        return .stop
+    }
+
+    static func commandShouldSendMode(_ action: String) -> Bool {
+        action == "start" || action == "record"
+    }
+
+    static func startShouldClearPhoneListenLatch(_ action: String) -> Bool {
+        action == "start" || action == "record"
+    }
+
+    static func phoneModeShouldApply(localModeHeld: Bool, watchListening: Bool, watchPaused: Bool) -> Bool {
+        if localModeHeld { return false }
+        return true
+    }
+
+    private func applyPhoneStop() {
+        offeringSave = false
+        savedAck = false
+        paused = false
+        WatchRecorder.shared.stop()
+        stopRuntime()
+        listening = false
+        startedAt = nil
+        elapsedMs = 0
+        WatchGlanceStore.clear()
+        hint = WatchCopy.ready
+        localModeHeld = false
+        flushUnsent()
+        resetPcmBuffer()
+    }
+
+    private func applyPhonePause() {
+        guard listening || WatchRecorder.shared.isRunning || paused else { return }
+        if let startedAt {
+            elapsedMs = Date().timeIntervalSince(startedAt)
+        }
+        WatchRecorder.shared.stop()
+        stopRuntime()
+        listening = false
+        paused = true
+        WatchGlanceStore.setPaused(elapsed: elapsedMs)
+        hint = WatchCopy.paused
+    }
+
     static func flushShouldSend(pendingBytes: Int) -> Bool {
         pendingBytes > 0
     }
@@ -367,6 +427,12 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
 
     private func forwardPcm(_ data: Data) {
         guard !data.isEmpty else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.sendPcm(data)
+        }
+    }
+
+    private func sendPcm(_ data: Data) {
         let session = WCSession.default
         let reachable = session.activationState == .activated && session.isReachable
         if Self.pcmShouldBuffer(reachable: reachable) {
@@ -430,7 +496,10 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     func send(action: String) {
-        let payload: [String: Any] = ["action": action, "at": Date().timeIntervalSince1970]
+        var payload: [String: Any] = ["action": action, "at": Date().timeIntervalSince1970]
+        if Self.commandShouldSendMode(action), phoneModeSeen {
+            payload["mode"] = mode
+        }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         if session.isReachable {
@@ -464,11 +533,38 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     private func apply(_ payload: [String: Any], live: Bool) {
+        if payload["ok"] != nil { return }
         if let next = payload["mode"] as? String, ["meeting", "lecture", "interview", "translate"].contains(next) {
-            setMode(next)
+            phoneModeSeen = true
+            if next == mode {
+                localModeHeld = false
+            } else if Self.phoneModeShouldApply(localModeHeld: localModeHeld, watchListening: listening, watchPaused: paused) {
+                setMode(next)
+            }
         }
         if let pair = payload["langPair"] as? String, !pair.isEmpty {
             langPair = pair
+        }
+        if payload["listening"] is Bool {
+            let phoneListening = payload["listening"] as? Bool ?? false
+            let phonePaused = payload["paused"] as? Bool ?? false
+            if phoneListening { sawPhoneListening = true }
+            switch Self.phoneListenSync(
+                phoneListening: phoneListening,
+                phonePaused: phonePaused,
+                watchListening: listening,
+                watchPaused: paused,
+                watchRecording: WatchRecorder.shared.isRunning,
+                sawPhoneListening: sawPhoneListening
+            ) {
+            case .stop:
+                applyPhoneStop()
+                sawPhoneListening = false
+            case .pause:
+                applyPhonePause()
+            case .ignore:
+                break
+            }
         }
         if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck {
             self.hint = hint

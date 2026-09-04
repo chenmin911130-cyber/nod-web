@@ -150,3 +150,75 @@ if (qaTwo.translation !== '产品经理，周一同步。') throw new Error(`cur
 if (qaTwo.previous !== 'QA 还没完，建议下周一。') {
   throw new Error(`Watch Q&A must keep one muted previous answer, got ${qaTwo.previous}`)
 }
+
+// A transient 'think' during a live session must stay "listening" so the Watch
+// does not treat it as a Stop and jump back to the main face. Live Q&A answers
+// are not auto-spoken, so keeping the mic on while drafting is safe.
+const translateThink = buildWatchFace({
+  run: 'think',
+  consentOpen: false,
+  notesAskId: '',
+  notesRaw: '',
+  partial: '',
+  workspaceMode: 'translate',
+  translateOn: true,
+  translatePairs: [{ id: '5', original: 'hello', translation: '' }],
+  meetingLines: [],
+})
+if (!translateThink.listening) throw new Error('Translate think must still count as listening')
+
+const meetingThink = buildWatchFace({
+  run: 'think',
+  consentOpen: false,
+  notesAskId: '',
+  notesRaw: '',
+  partial: '',
+  workspaceMode: 'meeting',
+  translateOn: false,
+  translatePairs: [],
+  meetingLines: [{ id: 'm2', text: 'ship friday' }],
+})
+if (!meetingThink.listening) throw new Error('Meeting think must still count as listening')
+
+// Live Q&A: drafting the answer (think) is still an in-session state — the Watch
+// must stay on the Q&A page, not jump back to the main face.
+const interviewThink = buildWatchFace({
+  run: 'think',
+  consentOpen: false,
+  notesAskId: '',
+  notesRaw: '',
+  partial: '',
+  workspaceMode: 'interview',
+  translateOn: false,
+  translatePairs: [],
+  meetingLines: [],
+  turns: [{ id: 'q3', q: 'Why?', a: '' }],
+})
+if (!interviewThink.listening) throw new Error('Interview think must still count as listening')
+
+// --- Exhaustive run × workspace matrix for buildWatchFace.listening ---
+// listening must be true for ANY non-idle run (listen/record/think) in EVERY workspace,
+// and false only for idle. This is the invariant that fixes the translate → Live Q&A jumps.
+function eqListen(run: string, workspaceMode: string, expected: boolean): void {
+  const f = buildWatchFace({
+    run,
+    consentOpen: false,
+    notesAskId: '',
+    notesRaw: '',
+    partial: '',
+    workspaceMode,
+    translateOn: workspaceMode === 'translate',
+    translatePairs: workspaceMode === 'translate' ? [{ id: 'x', original: 'hi', translation: expected ? 'ok' : '' }] : [],
+    meetingLines: workspaceMode === 'meeting' ? [{ id: 'm', text: 'hi' }] : [],
+    turns: workspaceMode === 'interview' ? [{ id: 'q', q: 'why?', a: '' }] : [],
+  })
+  if (f.listening !== expected) {
+    throw new Error(`run=${run} workspace=${workspaceMode} must report listening=${expected}, got ${f.listening}`)
+  }
+}
+for (const ws of ['meeting', 'interview', 'translate']) {
+  eqListen('idle', ws, false)
+  eqListen('listen', ws, true)
+  eqListen('record', ws, true)
+  eqListen('think', ws, true)
+}

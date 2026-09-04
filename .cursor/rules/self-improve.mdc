@@ -1,0 +1,10 @@
+---
+description: Read and append the agent error log so Watch/listen misses do not repeat.
+alwaysApply: true
+---
+
+# Self-improve
+
+Before Watch, listen, Translate, or phone↔watch sync work: read `.cursor/skills/self-improve/errors.md` and follow `.cursor/skills/self-improve/SKILL.md`.
+
+When the user says 还是不行, Hermes 修好了, or you confirm a miss: append one dated entry to `errors.md` (what you thought, what it actually was, the one-line rule). Do not stack another latch until you have read the live `run` / `listening` / `paused` payload.

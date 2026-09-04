@@ -2751,9 +2751,20 @@ export default function App() {
               />
             }
             onScene={(scene) => {
+              // Scene switching must be locked while listening/paused, matching the
+              // workspace switch (handleMode → canSwitchWorkspace). The in-meeting
+              // scene switch (meeting↔lecture) used to bypass this gate.
+              const s = stateRef.current
+              if (!canSwitchWorkspace({
+                listening: sessionListening({ run: s.run, wanted: listenWanted.current, paused: sessionPaused.current }),
+                paused: sessionPaused.current,
+              })) {
+                dispatch({ type: 'engine', ev: { type: 'status', text: 'Stop listening first' } })
+                return
+              }
               dispatch({ type: 'listen_scene', scene })
               if (scene === 'interview') handleMode('interview', 'interview')
-              else if (state.workspaceMode !== 'meeting') handleMode('meeting', scene)
+              else if (s.workspaceMode !== 'meeting') handleMode('meeting', scene)
               else window.api.send({ type: 'set_workspace', mode: 'meeting', scene, speakers_expected: speakersExpected(scene) })
             }}
             onTranslate={(on) => {

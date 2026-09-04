@@ -12,6 +12,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var pending: [(action: String, at: Double?, live: Bool, mode: String)] = []
     private var pendingPcm: [String] = []
     private var lastListening = false
+    private var lastPaused = false
     private var lastHint = "Ready"
     private var lastOriginal = ""
     private var lastTranslation = ""
@@ -37,6 +38,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         pushStatus(
             listening: lastListening,
+            paused: lastPaused,
             hint: lastHint,
             original: lastOriginal,
             translation: lastTranslation,
@@ -62,6 +64,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         pushStatus(
             listening: lastListening,
+            paused: lastPaused,
             hint: lastHint,
             original: lastOriginal,
             translation: lastTranslation,
@@ -72,6 +75,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
 
     public func pushStatus(
         listening: Bool,
+        paused: Bool = false,
         hint: String,
         original: String = "",
         translation: String = "",
@@ -81,6 +85,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         langPair: String = ""
     ) {
         lastListening = listening
+        lastPaused = paused
         lastHint = hint
         lastOriginal = original
         lastTranslation = translation
@@ -96,6 +101,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let session = WCSession.default
         var payload: [String: Any] = [
             "listening": listening,
+            "paused": paused,
             "hint": hint,
             "original": original,
             "translation": translation,
@@ -292,6 +298,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         if activationState == .activated {
             pushStatus(
                 listening: lastListening,
+                paused: lastPaused,
                 hint: lastHint,
                 original: lastOriginal,
                 translation: lastTranslation,

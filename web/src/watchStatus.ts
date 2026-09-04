@@ -59,7 +59,11 @@ export function buildWatchFace(input: {
   meetingLines: Line[]
   turns?: Turn[]
 }): WatchFace {
-  const listening = input.run === 'listen' || input.run === 'record'
+  // run pulses to 'think' while the engine transcribes/generates a chunk. A live
+  // session (listen/record/think) must NOT report listening=false, or the Watch's
+  // phoneListenSync treats it as "Phone Stop" and kills the session — for
+  // translate, meeting AND Live Q&A alike. Only run='idle' means the session ended.
+  const listening = input.run !== 'idle'
   const lastPair = [...input.translatePairs].reverse().find((p) => p.original.trim())
   const lastTurn = [...(input.turns || [])].reverse().find((t) => t.q.trim() || t.a.trim())
   const lastLine = [...input.meetingLines].reverse().find((ln) => ln.text.trim())

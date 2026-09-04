@@ -1,4 +1,4 @@
-import { shouldReacquirePhoneMic } from './audio'
+import { shouldReacquirePhoneMic, shouldReleasePhoneMicForWatch } from './audio'
 
 if (
   !shouldReacquirePhoneMic({
@@ -46,4 +46,34 @@ if (
   })
 ) {
   throw new Error('web listen must not use the native reacquire path')
+}
+
+if (
+  !shouldReleasePhoneMicForWatch({
+    running: true,
+    watchPreferred: true,
+    hasPhoneCapture: true,
+  })
+) {
+  throw new Error('Watch Translate Start must release an already-open phone mic')
+}
+
+if (
+  shouldReleasePhoneMicForWatch({
+    running: true,
+    watchPreferred: true,
+    hasPhoneCapture: false,
+  })
+) {
+  throw new Error('a Watch dummy session has no phone capture to release')
+}
+
+if (
+  shouldReleasePhoneMicForWatch({
+    running: true,
+    watchPreferred: false,
+    hasPhoneCapture: true,
+  })
+) {
+  throw new Error('phone Start must keep the phone mic')
 }

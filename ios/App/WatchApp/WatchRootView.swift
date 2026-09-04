@@ -53,11 +53,31 @@ struct WatchRootView: View {
                     }
                 }
             } else if translate {
-                Text(session.translation)
-                    .font(.caption)
-                    .foregroundStyle(ink)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(3)
+                // Always-On bilingual: source (muted, small) above target (ink, large),
+                // mirroring the live page but static (no animation — AOD is dim/battery-lean).
+                VStack(spacing: 4) {
+                    if session.original.isEmpty, session.translation.isEmpty {
+                        Text(WatchCopy.listening)
+                            .font(.caption2)
+                            .foregroundStyle(muted)
+                            .multilineTextAlignment(.center)
+                    } else {
+                        if !session.original.isEmpty {
+                            Text(session.original)
+                                .font(.caption2)
+                                .foregroundStyle(muted)
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+                        }
+                        if !session.translation.isEmpty {
+                            Text(session.translation)
+                                .font(.caption)
+                                .foregroundStyle(ink)
+                                .multilineTextAlignment(.center)
+                                .lineLimit(3)
+                        }
+                    }
+                }
             } else {
                 VStack(spacing: 8) {
                     if let startedAt = session.startedAt {

@@ -10,6 +10,7 @@ type WatchPlugin = {
   ready(): Promise<void>
   setStatus(opts: {
     listening: boolean
+    paused?: boolean
     hint?: string
     original?: string
     translation?: string
@@ -152,9 +153,65 @@ export function watchLiveStreamShouldReset(listening: boolean, reachable: boolea
   return listening && !reachable
 }
 
+export type WatchPhoneListenSync = 'ignore' | 'stop' | 'pause'
+
+/**
+ * Phone Stop / Pause must move the Watch. Leftover listening=true must not start_listen.
+ */
+export function watchPhoneListenSync(input: {
+  phoneListening: boolean
+  phonePaused?: boolean
+  watchListening: boolean
+  watchPaused: boolean
+  watchRecording?: boolean
+  sawPhoneListening?: boolean
+}): WatchPhoneListenSync {
+  if (input.phoneListening) return 'ignore'
+  if (!input.sawPhoneListening) return 'ignore'
+  const watchLive = input.watchListening || input.watchPaused || Boolean(input.watchRecording)
+  if (!watchLive) return 'ignore'
+  if (input.phonePaused) {
+    return input.watchPaused && !input.watchListening && !input.watchRecording ? 'ignore' : 'pause'
+  }
+  return 'stop'
+}
+
+/** Start / Record carry the Watch chip. Pause / Stop / leftovers must not. */
+export function watchCommandShouldSendMode(action: string): boolean {
+  return action === 'start' || action === 'record'
+}
+
+/** Leftover default Meeting must not ride on Start and kick the phone off Translate. */
+export function watchStartShouldAttachMode(modeKnown: boolean): boolean {
+  return modeKnown
+}
+
+/** Fresh Watch Start must ignore leftover phone idle until the phone is listening again. */
+export function watchStartShouldClearPhoneListenLatch(action: string): boolean {
+  return action === 'start' || action === 'record'
+}
+
+/** A held Watch mode stays until the phone reports the same workspace. */
+export function watchPhoneModeShouldApply(input: {
+  localModeHeld: boolean
+  watchListening: boolean
+  watchPaused: boolean
+}): boolean {
+  if (input.localModeHeld) return false
+  return true
+}
+
 /** Done must send leftover PCM even if some chunks already went live. */
 export function watchFlushShouldSend(pendingBytes: number): boolean {
   return pendingBytes > 0
+}
+
+/**
+ * File-recorder fallback may only read leftover WAV bytes while still running.
+ * Stop must pump those bytes before clearing `running`, or the last ~200ms is lost.
+ */
+export function watchFallbackStopSequence(): Array<'pump' | 'stopRecorder' | 'clearRunning'> {
+  return ['pump', 'stopRecorder', 'clearRunning']
 }
 
 const LISTEN_CMDS = new Set(['start', 'stop', 'record', 'pause', 'resume'])
@@ -260,6 +317,7 @@ export function installWatchRemote(handlers: {
 
 export function pushWatchStatus(face: {
   listening: boolean
+  paused?: boolean
   hint?: string
   original?: string
   translation?: string
@@ -271,6 +329,7 @@ export function pushWatchStatus(face: {
   if (!isNativeApp()) return
   void NodWatch.setStatus({
     listening: face.listening,
+    paused: face.paused,
     hint: (face.hint || '').slice(0, 140),
     original: (face.original || '').slice(0, 800),
     translation: (face.translation || '').slice(0, 800),

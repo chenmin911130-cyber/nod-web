@@ -3,13 +3,19 @@ import {
   setPreferWatchMic,
   takePhoneMic,
   watchFileShouldStartListen,
+  watchCommandShouldSendMode,
+  watchPhoneListenSync,
+  watchPhoneModeShouldApply,
   watchHardwareAction,
   watchListenControlShouldApplyMode,
   watchListenMode,
   watchPcmShouldClaimMic,
   watchQueuedCommandShouldRun,
   watchShouldApplyMode,
+  watchStartShouldAttachMode,
+  watchStartShouldClearPhoneListenLatch,
   watchStartShouldPreferWatchMic,
+  watchFallbackStopSequence,
   watchFlushShouldSend,
   watchLiveStreamShouldReset,
   watchPcmShouldBuffer,
@@ -159,6 +165,14 @@ if (!watchFlushShouldSend(3200) || watchFlushShouldSend(0)) {
   throw new Error('Done must flush leftover PCM and skip an empty buffer')
 }
 
+const fallbackStop = watchFallbackStopSequence()
+if (fallbackStop[0] !== 'pump' || fallbackStop.indexOf('pump') > fallbackStop.indexOf('clearRunning')) {
+  throw new Error('Watch fallback stop must pump leftover WAV bytes before clearing running')
+}
+if (fallbackStop.indexOf('stopRecorder') < 0 || fallbackStop.indexOf('stopRecorder') < fallbackStop.indexOf('pump')) {
+  throw new Error('Watch fallback stop must pump before stopping the file recorder')
+}
+
 if (watchFileShouldStartListen()) {
   throw new Error('a disconnect flush file must stay PCM-only and must not start_listen')
 }
@@ -200,3 +214,134 @@ if (watchHardwareAction('side', live) !== 'pause' || watchHardwareAction('side',
 if (watchHardwareAction('crown', saving) || watchHardwareAction('side', saving)) {
   throw new Error('hardware keys must not fire on the Save prompt')
 }
+
+if (watchPhoneListenSync({
+  phoneListening: false,
+  phonePaused: false,
+  watchListening: true,
+  watchPaused: false,
+  sawPhoneListening: true,
+}) !== 'stop') {
+  throw new Error('iPhone Stop must stop a Watch that is still listening')
+}
+
+if (watchPhoneListenSync({
+  phoneListening: false,
+  phonePaused: false,
+  watchListening: false,
+  watchPaused: true,
+  sawPhoneListening: true,
+}) !== 'stop') {
+  throw new Error('iPhone Stop must stop a paused Watch')
+}
+
+if (watchPhoneListenSync({
+  phoneListening: false,
+  phonePaused: true,
+  watchListening: true,
+  watchPaused: false,
+  sawPhoneListening: true,
+}) !== 'pause') {
+  throw new Error('iPhone Pause must pause the Watch, not leave it listening')
+}
+
+if (watchPhoneListenSync({
+  phoneListening: false,
+  phonePaused: false,
+  watchListening: true,
+  watchPaused: false,
+  sawPhoneListening: false,
+}) !== 'ignore') {
+  throw new Error('a stale phone idle after Watch Start must not stop Translate')
+}
+
+if (watchPhoneListenSync({
+  phoneListening: true,
+  phonePaused: false,
+  watchListening: false,
+  watchPaused: false,
+}) !== 'ignore') {
+  throw new Error('leftover phone listening=true must not start_listen on the Watch')
+}
+
+if (watchPhoneListenSync({
+  phoneListening: false,
+  phonePaused: false,
+  watchListening: false,
+  watchPaused: false,
+}) !== 'ignore') {
+  throw new Error('an idle Watch must stay idle when the phone is idle')
+}
+
+if (!watchCommandShouldSendMode('start') || !watchCommandShouldSendMode('record')) {
+  throw new Error('Watch Start / Record must send the selected mode so Translate can open')
+}
+if (watchStartShouldAttachMode(false)) {
+  throw new Error('Watch Start must not send leftover Meeting before it has the phone workspace')
+}
+if (!watchStartShouldAttachMode(true)) {
+  throw new Error('once the Watch has the phone workspace, Start may send Translate')
+}
+if (watchCommandShouldSendMode('stop') || watchCommandShouldSendMode('pause') || watchCommandShouldSendMode('resume')) {
+  throw new Error('Pause / Resume / Stop must not switch Meeting / Interview / Translate')
+}
+
+if (watchPhoneModeShouldApply({ localModeHeld: true, watchListening: false, watchPaused: false })) {
+  throw new Error('a Ready mode chip must not be overwritten by leftover phone mode')
+}
+if (!watchPhoneModeShouldApply({ localModeHeld: false, watchListening: false, watchPaused: false })) {
+  throw new Error('opening the Watch may follow the phone workspace when the user has not picked')
+}
+if (watchPhoneModeShouldApply({ localModeHeld: true, watchListening: true, watchPaused: false })) {
+  throw new Error('Watch Translate Start must not be overwritten by leftover phone Meeting')
+}
+if (!watchStartShouldClearPhoneListenLatch('start') || !watchStartShouldClearPhoneListenLatch('record')) {
+  throw new Error('Watch Start / Record must drop the leftover phone-listen latch')
+}
+if (watchStartShouldClearPhoneListenLatch('stop') || watchStartShouldClearPhoneListenLatch('pause')) {
+  throw new Error('Pause / Stop must keep the phone-listen latch so iPhone Stop still moves the Watch')
+}
+
+// --- Exhaustive state matrix for watchPhoneListenSync ---
+// The bug that bit translate → Live Q&A: the phone reports listening=false while it is
+// merely busy (think). Enumerate every branch so a future change cannot regress one cell.
+function eqSync(input: {
+  phoneListening: boolean
+  phonePaused: boolean
+  watchListening: boolean
+  watchPaused: boolean
+  watchRecording?: boolean
+  sawPhoneListening: boolean
+}, expected: string, msg: string): void {
+  const got = watchPhoneListenSync({
+    phoneListening: input.phoneListening,
+    phonePaused: input.phonePaused,
+    watchListening: input.watchListening,
+    watchPaused: input.watchPaused,
+    watchRecording: input.watchRecording ?? false,
+    sawPhoneListening: input.sawPhoneListening,
+  })
+  if (got !== expected) throw new Error(`${msg}: expected ${expected}, got ${got}`)
+}
+
+// Group A — phone is actively listening: never move the Watch.
+eqSync({ phoneListening: true, phonePaused: false, watchListening: true, watchPaused: false, sawPhoneListening: true }, 'ignore', 'phone listening=true must always ignore')
+eqSync({ phoneListening: true, phonePaused: true, watchListening: false, watchPaused: true, watchRecording: true, sawPhoneListening: false }, 'ignore', 'phone listening=true ignores even a whacky Watch state')
+
+// Group B — we never saw the phone listening: a false push is stale, ignore.
+eqSync({ phoneListening: false, phonePaused: false, watchListening: true, watchPaused: false, sawPhoneListening: false }, 'ignore', 'no phone-listen latch must ignore a stop')
+eqSync({ phoneListening: false, phonePaused: false, watchListening: false, watchPaused: true, sawPhoneListening: false }, 'ignore', 'no latch + paused watch must ignore')
+eqSync({ phoneListening: false, phonePaused: false, watchListening: false, watchPaused: false, watchRecording: true, sawPhoneListening: false }, 'ignore', 'no latch + recording watch must ignore')
+
+// Group C — phone not listening, not paused, latch set = real phone Stop.
+eqSync({ phoneListening: false, phonePaused: false, watchListening: true, watchPaused: false, sawPhoneListening: true }, 'stop', 'phone stop must stop a listening Watch')
+eqSync({ phoneListening: false, phonePaused: false, watchListening: false, watchPaused: true, sawPhoneListening: true }, 'stop', 'phone stop must stop a paused Watch')
+eqSync({ phoneListening: false, phonePaused: false, watchListening: false, watchPaused: false, watchRecording: true, sawPhoneListening: true }, 'stop', 'phone stop must stop a recording Watch')
+eqSync({ phoneListening: false, phonePaused: false, watchListening: false, watchPaused: false, sawPhoneListening: true }, 'ignore', 'phone stop must ignore an already-stopped Watch')
+
+// Group D — phone paused, latch set = real phone Pause.
+eqSync({ phoneListening: false, phonePaused: true, watchListening: true, watchPaused: false, sawPhoneListening: true }, 'pause', 'phone pause must pause a listening Watch')
+eqSync({ phoneListening: false, phonePaused: true, watchListening: false, watchPaused: false, watchRecording: true, sawPhoneListening: true }, 'pause', 'phone pause must pause a recording Watch')
+eqSync({ phoneListening: false, phonePaused: true, watchListening: true, watchPaused: true, sawPhoneListening: true }, 'pause', 'phone pause must pause a Watch that is listening and paused')
+eqSync({ phoneListening: false, phonePaused: true, watchListening: false, watchPaused: true, sawPhoneListening: true }, 'ignore', 'phone pause must not double-pause an already-paused Watch')
+eqSync({ phoneListening: false, phonePaused: true, watchListening: false, watchPaused: false, sawPhoneListening: true }, 'ignore', 'phone pause must ignore an idle Watch')

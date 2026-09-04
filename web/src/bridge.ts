@@ -4,7 +4,7 @@ import { getToken } from './auth'
 import { MicCapture } from './audio'
 import { apiUrl, isNativeApp, wsUrl } from './native'
 import { micSilenceShouldWarn } from './micGuard'
-import { setWatchPcmSink } from './watch'
+import { isWatchMicPreferred, setWatchPcmSink } from './watch'
 
 const EVENT_TYPES = new Set([
   'ready',
@@ -167,6 +167,7 @@ export function installWebApi(): void {
                 listening: lastRun === 'listen' || lastRun === 'record',
                 pcmBytes,
                 elapsedMs: Date.now() - listenSince,
+                watchPreferred: isWatchMicPreferred(),
               })
             ) {
               window.clearInterval(silenceWatch)
@@ -259,7 +260,7 @@ export function installWebApi(): void {
   }
 
   setWatchPcmSink((buf) => {
-    if (mic.active) mic.onPcm(buf)
+    if (mic.active || isWatchMicPreferred()) mic.onPcm(buf)
   })
 
   mic.onFallbackFailed = () => {

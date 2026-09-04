@@ -220,13 +220,15 @@ final class WatchRecorder {
     }
 
     private func teardown() {
-        running = false
-        pump?.cancel()
-        pump = nil
+        // pumpFile() guards on `running`. Flush leftover WAV bytes first or
+        // the last pump period (~200ms) never reaches onPcm / transferFile.
         if fileRecorder?.isRecording == true {
             queue.sync { self.pumpFile() }
             fileRecorder?.stop()
         }
+        running = false
+        pump?.cancel()
+        pump = nil
         fileRecorder = nil
         fileURL = nil
         fileOffset = 0

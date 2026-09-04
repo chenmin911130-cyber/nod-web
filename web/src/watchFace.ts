@@ -15,7 +15,7 @@ export type WatchPhase =
 export type WatchScreen = {
   phase: WatchPhase
   mascot: false
-  showModePicker: false
+  showModePicker: boolean
   showHistoryList: false
   modeLabel: string
   langPair?: string
@@ -78,7 +78,7 @@ export function buildWatchScreen(input: {
 }): WatchScreen {
   const base = {
     mascot: false as const,
-    showModePicker: false as const,
+    showModePicker: false,
     showHistoryList: false as const,
     modeLabel: modeCapsule(input.workspaceMode, input.listenScene),
   }

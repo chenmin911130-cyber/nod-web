@@ -61,6 +61,7 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
             text = CLKSimpleTextProvider(text: "Nodpilot")
         }
         let image = CLKImageProvider(onePieceImage: markImage())
+        image.tintColor = UIColor(red: 0, green: 210 / 255, blue: 1, alpha: 1)
         let colorImage = CLKFullColorImageProvider(fullColorImage: markImage())
 
         switch family {

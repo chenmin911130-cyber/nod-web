@@ -21,3 +21,7 @@ if (micSilenceShouldWarn({ listening: true, pcmBytes: 320, elapsedMs: 8000 })) {
 if (micSilenceShouldWarn({ listening: false, pcmBytes: 0, elapsedMs: 8000 })) {
   throw new Error('idle must not warn about a silent microphone')
 }
+
+if (micSilenceShouldWarn({ listening: true, pcmBytes: 0, elapsedMs: 8000, watchPreferred: true })) {
+  throw new Error('Watch-mic listen must not trip the iPhone silent-mic warning')
+}

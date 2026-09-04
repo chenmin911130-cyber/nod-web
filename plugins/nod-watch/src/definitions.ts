@@ -4,6 +4,7 @@ export interface NodWatchPlugin {
   ready(): Promise<void>
   setStatus(opts: {
     listening: boolean
+    paused?: boolean
     hint?: string
     original?: string
     translation?: string
