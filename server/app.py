@@ -1965,6 +1965,12 @@ class Session:
         self._archive_total = 0
         self._archive_part = 1
         self._consent_ok: bool | None = None
+        # Two-axis state (ADR 0001): capture is the single source of truth for
+        # the mic/session (off/listening/recording/paused); engine reflects the
+        # STT/LLM axis (idle/transcribing/generating). Old `state` events still
+        # ship for backward compatibility, then a `phase` event pairs them.
+        self._paused = False
+        self._engine = "idle"
 
     def _archive_prefix(self) -> str:
         return f"users/{self.user_id}/sessions/{self.usage_session_id}/audio/"
@@ -2088,7 +2094,10 @@ class Session:
         st = self.pipeline.key_status()
         self.emit({"type": "keys_status", "has_llm": st["has_llm"], "has_stt": st["has_stt"]})
         self.emit({"type": "ready"})
-        self.emit({"type": "state", "state": "idle"})
+        # Reconnecting clients get their first two-axis frame right after ready,
+        # before any state event, so they can render from `capture`.
+        self._emit_phase()
+        self._emit_run("idle")
         self.emit({"type": "status", "text": STATUS_READY})
 
     def close(self) -> None:
@@ -2189,6 +2198,10 @@ class Session:
             self.start_listen()
         elif mtype == "stop_listen":
             self.stop_listen()
+        elif mtype == "pause_listen":
+            self.pause_listen()
+        elif mtype == "resume_listen":
+            self.resume_listen()
         elif mtype == "keep_history":
             self.keep_history(content=msg.get("content", True), audio=msg.get("audio", True))
         elif mtype == "discard_history":
@@ -2367,6 +2380,7 @@ class Session:
         stop() already set _stop, so _notify_drop will not fire. Clear the
         latch and tell the UI. Do not cancel an in-flight answer.
         """
+        self._paused = False
         self._listen_wanted = False
         self._pending = None
         self._cancel_stt_restart_timer()
@@ -2385,7 +2399,7 @@ class Session:
         else:
             self._flush_meeting_hold()
         self.emit({"type": "listen_taken", "text": LISTEN_TAKEN_MSG})
-        self.emit({"type": "state", "state": "idle"})
+        self._emit_run("idle")
         self.emit({"type": "status", "text": LISTEN_TAKEN_MSG})
         self._flush_cloud_archive(final=False)
         self._offer_save_history()
@@ -2610,6 +2624,7 @@ class Session:
         if self._manual:
             self.emit({"type": "status", "text": "Stop recording before enabling Auto"})
             return
+        self._paused = False
         self._listen_wanted = True
         with self._listen_lock():
             if self._listener or getattr(self, "_listen_starting", False):
@@ -2620,6 +2635,7 @@ class Session:
         self._start_listening()
 
     def stop_listen(self) -> None:
+        self._paused = False
         self._listen_wanted = False
         if self._manual:
             self._stop_manual()
@@ -2627,9 +2643,33 @@ class Session:
         if self._listener:
             self._stop_listening()
         else:
-            self.emit({"type": "state", "state": "idle"})
+            self._emit_run("idle")
             self.emit({"type": "status", "text": STATUS_READY})
         self._offer_save_history()
+
+    def pause_listen(self) -> None:
+        """Pause live capture without tearing down the session.
+
+        ``capture`` becomes ``paused`` (single source of truth) while the
+        legacy ``state`` keeps reporting ``listen``, so old clients do not
+        hard-stop the websocket. New clients read ``capture`` and stop sending
+        audio; the cloud listener stays alive to resume instantly.
+        """
+        if self._listener is None and not self._manual:
+            self.emit({"type": "status", "text": "Not listening"})
+            return
+        self._paused = True
+        self._emit_run(self._active_run_state())
+        self.emit({"type": "status", "text": "Listening paused"})
+
+    def resume_listen(self) -> None:
+        """Leave a pause: ``capture`` returns to ``listening``/``off``."""
+        if not self._paused:
+            self.emit({"type": "status", "text": "Not paused"})
+            return
+        self._paused = False
+        self._emit_run(self._active_run_state())
+        self.emit({"type": "status", "text": "Listening resumed"})
 
     def _offer_save_history(self) -> None:
         if not getattr(self, "user_id", None) or not getattr(self, "usage_session_id", None):
@@ -2741,7 +2781,7 @@ class Session:
             self._listen_started_at = now
         self._last_voice_at = now
         self._idle_check_at = 0.0
-        self.emit({"type": "state", "state": "listen"})
+        self._emit_run("listen")
         if not resume:
             self.emit({"type": "status", "text": STATUS_LISTEN})
 
@@ -2781,7 +2821,7 @@ class Session:
             self._flush_interview_wait()
         else:
             self._flush_meeting_hold()
-        self.emit({"type": "state", "state": "idle"})
+        self._emit_run("idle")
         self.emit({"type": "status", "text": STATUS_READY})
         self._flush_cloud_archive(final=False)
 
@@ -2805,7 +2845,7 @@ class Session:
         self._manual_buf = bytearray()
         self._manual_offset = 0
         self._manual_started = time.time()
-        self.emit({"type": "state", "state": "record"})
+        self._emit_run("record")
         self.emit({"type": "status", "text": STATUS_RECORD})
 
     def _live_manual_captions(self) -> bool:
@@ -2817,6 +2857,51 @@ class Session:
         if self._listener is not None:
             return "listen"
         return "idle"
+
+    def _capture(self) -> str:
+        """Single source of truth for the microphone/session axis.
+
+        Precedence: recording (manual) > paused > listening > off. The engine
+        axis is deliberately separate (see ``_engine``), so a model generating
+        an answer no longer reads as "not listening" on the Watch.
+        """
+        if getattr(self, "_manual", False):
+            return "recording"
+        if getattr(self, "_paused", False):
+            return "paused"
+        if getattr(self, "_listener", None) is not None:
+            return "listening"
+        return "off"
+
+    def _set_engine(self, engine: str) -> None:
+        """Set the STT/LLM engine axis (idle/transcribing/generating).
+
+        Pure setter: callers emit the state/phase right after, so the engine
+        value rides along on the next ``_emit_run``/``_emit_phase``.
+        """
+        self._engine = engine
+
+    def _emit_phase(self) -> None:
+        """Emit the two-axis phase event. New clients read ``capture`` and
+        ``engine``; old clients keep using the companion ``state`` event.
+
+        ``getattr`` keeps a ``Session.__new__``-built instance (tests, and any
+        path that touches these before ``__init__`` runs) from failing.
+        """
+        self.emit({
+            "type": "phase",
+            "capture": self._capture(),
+            "engine": getattr(self, "_engine", "idle"),
+        })
+
+    def _emit_run(self, state: str) -> None:
+        """Legacy ``state`` event, immediately followed by a two-axis ``phase``.
+
+        This is the only place a bare ``state`` is emitted; every call site
+        routes through here so the state->phase pairing invariant holds.
+        """
+        self.emit({"type": "state", "state": state})
+        self._emit_phase()
 
     def _maybe_flush_manual_chunk(self, force: bool = False) -> None:
         if not self._live_manual_captions():
@@ -2876,7 +2961,7 @@ class Session:
             with self._manual_lock:
                 self._manual_jobs = max(0, self._manual_jobs - 1)
                 if not self._manual and self._manual_jobs == 0:
-                    self.emit({"type": "state", "state": "idle"})
+                    self._emit_run("idle")
                     self.emit({"type": "status", "text": STATUS_READY})
 
     def _stop_manual(self) -> None:
@@ -2887,10 +2972,10 @@ class Session:
             self._manual_offset = 0
             with self._manual_lock:
                 if self._manual_jobs <= 0:
-                    self.emit({"type": "state", "state": "idle"})
+                    self._emit_run("idle")
                     self.emit({"type": "status", "text": STATUS_READY})
                 else:
-                    self.emit({"type": "state", "state": "think"})
+                    self._emit_run("think")
                     self.emit({"type": "status", "text": STATUS_TRANSCRIBE})
             self._offer_save_history()
             return
@@ -2900,48 +2985,56 @@ class Session:
         self._manual_offset = 0
         dur = len(pcm) / (SR * 2)
         if dur < MANUAL_MIN_SEC:
-            self.emit({"type": "state", "state": "idle"})
+            self._emit_run("idle")
             self.emit({"type": "status", "text": "Recording too short, try again"})
             return
-        self.emit({"type": "state", "state": "think"})
+        self._emit_run("think")
         self.emit({"type": "status", "text": STATUS_TRANSCRIBE})
         threading.Thread(target=self._finish_manual, args=(pcm,), daemon=True).start()
         self._offer_save_history()
 
     def _finish_manual(self, pcm: bytes) -> None:
+        self._set_engine("transcribing")
         try:
             text, lang = self._transcribe_manual_pcm(pcm)
         except Exception as e:
             self.emit({"type": "error", "text": f"Transcription failed:{e}"})
-            self.emit({"type": "state", "state": "idle"})
+            self._set_engine("idle")
+            self._emit_run("idle")
             return
         text = self._polish_manual_text(text)
         if not (text or "").strip():
             self.emit({"type": "status", "text": STATUS_EMPTY})
-            self.emit({"type": "state", "state": "idle"})
+            self._set_engine("idle")
+            self._emit_run("idle")
             return
         if self._workspace in ("translate", "meeting"):
             self._on_final(text, lang)
-            self.emit({"type": "state", "state": "idle"})
+            self._set_engine("idle")
+            self._emit_run("idle")
             return
         cleaned, _ = clean_transcript(text or "", None, self.pipeline._last_answer)
         if not cleaned:
             self.emit({"type": "status", "text": STATUS_EMPTY})
-            self.emit({"type": "state", "state": "idle"})
+            self._set_engine("idle")
+            self._emit_run("idle")
             return
         heard = lang or detect_question_lang(cleaned)
         if not self._speech_allowed(cleaned, lang or heard):
             self.emit({"type": "partial", "text": ""})
-            self.emit({"type": "state", "state": "idle"})
+            self._set_engine("idle")
+            self._emit_run("idle")
             return
         if not self._claim_busy():
             return
         self.pipeline._cancel.clear()
+        self._set_engine("generating")
         try:
             self.pipeline.process_text(cleaned, "ask", heard)
         finally:
             self._release_busy()
-            self.emit({"type": "state", "state": "idle"})
+            self._set_engine("idle")
+            self._emit_run("idle")
             self._drain_pending_ask()
 
     def _drain_pending_ask(self) -> None:
@@ -2994,14 +3087,16 @@ class Session:
             self.emit({"type": "done", "id": "", "stt": 0, "llm": 0, "ok": False})
             return
         self.pipeline._cancel.clear()
-        self.emit({"type": "state", "state": "think"})
+        self._set_engine("generating")
+        self._emit_run("think")
 
         def work():
             try:
                 self.pipeline.process_text(llm_text, mode, images=images, display_text=display)
             finally:
                 self._release_busy()
-                self.emit({"type": "state", "state": self._active_run_state()})
+                self._set_engine("idle")
+                self._emit_run(self._active_run_state())
                 self._drain_pending_ask()
 
         threading.Thread(target=work, daemon=True).start()
@@ -3100,7 +3195,8 @@ class Session:
             self._pending = (cleaned, lang)
             return
         self.pipeline._cancel.clear()
-        self.emit({"type": "state", "state": "think"})
+        self._set_engine("generating")
+        self._emit_run("think")
         self.emit({"type": "status", "text": STATUS_CHECK})
 
         def work():
@@ -3108,7 +3204,8 @@ class Session:
                 self.pipeline.process_text(cleaned, "ask", heard)
             finally:
                 self._release_busy()
-                self.emit({"type": "state", "state": self._active_run_state()})
+                self._set_engine("idle")
+                self._emit_run(self._active_run_state())
                 pending = self._pending
                 self._pending = None
                 if pending:
