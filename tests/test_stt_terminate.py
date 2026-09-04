@@ -120,6 +120,9 @@ class SessionListenLifecycleTests(unittest.TestCase):
         sess._meeting_lock = threading.Lock()
         sess._stt_drops = 0
         sess._stt_drop_at = 0.0
+        sess._paused = False
+        sess._engine = "idle"
+        sess._manual = False
         sess.pipeline = mock.Mock()
         sess.pipeline.assemblyai_key.return_value = "test-key"
         sess._stt_cfg = mock.Mock(return_value={"stt": {}})
@@ -255,3 +258,35 @@ class SessionListenLifecycleTests(unittest.TestCase):
         kinds = [c.args[0].get("type") for c in sess.emit.call_args_list]
         self.assertNotIn("listen_taken", kinds)
         self.assertTrue(sess._listen_wanted)
+
+    def test_pause_terminates_assemblyai_without_looking_like_stop(self):
+        sess = self._session()
+        lst = mock.Mock()
+        sess._listener = lst
+        sess.pipeline.abort_stream = mock.Mock()
+        sess.pause_listen()
+        lst.stop.assert_called_once()
+        self.assertIsNone(sess._listener)
+        self.assertTrue(sess._paused)
+        self.assertTrue(sess._listen_wanted)
+        sess.pipeline.abort_stream.assert_not_called()
+        kinds = [c.args[0].get("type") for c in sess.emit.call_args_list]
+        self.assertNotIn("save_prompt", kinds)
+        phases = [c.args[0] for c in sess.emit.call_args_list if c.args[0].get("type") == "phase"]
+        self.assertTrue(phases)
+        self.assertEqual(phases[-1]["capture"], "paused")
+
+    def test_resume_after_pause_opens_a_new_assemblyai_session(self):
+        sess = self._session()
+        old = mock.Mock()
+        new = mock.Mock()
+        sess._listener = old
+        sess.pause_listen()
+        with mock.patch("server.app.CloudListener", return_value=new):
+            sess.resume_listen()
+        old.stop.assert_called()
+        new.start.assert_called()
+        self.assertIs(sess._listener, new)
+        self.assertFalse(sess._paused)
+        phases = [c.args[0] for c in sess.emit.call_args_list if c.args[0].get("type") == "phase"]
+        self.assertEqual(phases[-1]["capture"], "listening")

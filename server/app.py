@@ -2680,25 +2680,30 @@ class Session:
         self._offer_save_history()
 
     def pause_listen(self) -> None:
-        """Pause live capture without tearing down the session.
+        """Pause live capture and stop AssemblyAI billing.
 
-        ``capture`` becomes ``paused`` (single source of truth) while the
-        legacy ``state`` keeps reporting ``listen``, so old clients do not
-        hard-stop the websocket. New clients read ``capture`` and stop sending
-        audio; the cloud listener stays alive to resume instantly.
+        ``capture`` stays ``paused`` so the Watch does not treat this as Stop.
+        The cloud socket is Terminated; Resume opens a new stream.
         """
         if self._listener is None and not self._manual:
             self.emit({"type": "status", "text": "Not listening"})
             return
         self._paused = True
+        if self._listener:
+            with self._listen_lock():
+                lst = self._listener
+                self._listener = None
+            self._stop_listener(lst)
         self._emit_phase()
         self.emit({"type": "status", "text": "Listening paused"})
 
     def resume_listen(self) -> None:
-        """Leave a pause: ``capture`` returns to ``listening``/``off``."""
+        """Leave a pause and reopen AssemblyAI if listen is still wanted."""
         if not self._paused:
             self.emit({"type": "status", "text": "Not paused"})
             return
+        if self._listen_wanted and self._listener is None and not getattr(self, "_manual", False):
+            self._start_listening(resume=True)
         self._paused = False
         self._emit_phase()
         self.emit({"type": "status", "text": "Listening resumed"})

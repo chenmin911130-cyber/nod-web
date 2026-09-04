@@ -93,14 +93,22 @@ class PhasePairingTests(unittest.TestCase):
 
 
 class PauseResumeTests(unittest.TestCase):
-    def test_pause_and_resume_set_and_clear_capture(self):
-        sess = _session(_listener=object())
+    def test_pause_sets_capture_paused_without_listener(self):
+        import threading
+
+        lst = mock.Mock()
+        sess = _session(_listener=lst, _listen_wanted=True, _workspace="interview")
+        sess._listen_mu = threading.RLock()
         sess.pause_listen()
         self.assertTrue(sess._paused)
+        self.assertIsNone(sess._listener)
         self.assertEqual(_phases(sess)[-1]["capture"], "paused")
+
+    def test_resume_without_wanted_listen_goes_off(self):
+        sess = _session(_paused=True, _listen_wanted=False)
         sess.resume_listen()
         self.assertFalse(sess._paused)
-        self.assertEqual(_phases(sess)[-1]["capture"], "listening")
+        self.assertEqual(_phases(sess)[-1]["capture"], "off")
 
     def test_pause_listen_noop_when_nothing_to_pause(self):
         sess = _session()  # no listener, no manual
