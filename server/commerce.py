@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from server.db import AuditLog, Feedback, Order, ResetToken, User, db_session, utcnow
+from server.db import AuditLog, Feedback, Order, ResetToken, StripeEvent, User, db_session, utcnow
 from server.mailer import send_otp_email, send_reset_email
 from server.otp import OTP_OK, consume_otp, issue_otp
 from server.meter import delete_history_session, delete_user_data, list_history, plan_of, session_file_key, session_file_url, usage_snapshot
@@ -576,6 +576,14 @@ async def stripe_webhook(request: Request):
         event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
     except Exception as e:
         raise HTTPException(400, f"Invalid webhook: {e}")
+    eid = str(event.get("id") or "")
+    if eid:
+        try:
+            with db_session() as db:
+                db.add(StripeEvent(id=eid, at=utcnow()))
+                db.flush()
+        except IntegrityError:
+            return {"ok": True}
     etype = event.get("type")
     data = event.get("data", {}).get("object", {})
     if etype in ("checkout.session.completed", "customer.subscription.updated", "customer.subscription.created"):

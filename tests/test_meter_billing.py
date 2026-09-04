@@ -229,3 +229,69 @@ def test_usage_snapshot_shape(meter_env):
     assert snap["plan"] == "free"
     for key in ("stt_seconds", "stt_limit", "llm_tokens", "llm_limit", "sessions", "session_limit"):
         assert key in snap
+
+
+def test_stream_usage_beats_character_estimate():
+    from server.app import estimate_llm_tokens, llm_usage_from_chunk, resolve_llm_usage
+
+    class _U:
+        prompt_tokens = 12
+        completion_tokens = 34
+
+    class _Ch:
+        usage = _U()
+
+    assert llm_usage_from_chunk(_Ch()) == (12, 34)
+    assert resolve_llm_usage((12, 34), "hello " * 80, "world " * 80) == (12, 34)
+    assert resolve_llm_usage(None, "abcd", "efgh") == estimate_llm_tokens("abcd", "efgh") == (1, 1)
+
+
+def test_stream_rechecks_quota_every_n_chunks():
+    from server.app import LLM_QUOTA_CHECK_EVERY, stream_should_recheck_quota
+
+    assert stream_should_recheck_quota(0) is False
+    assert stream_should_recheck_quota(LLM_QUOTA_CHECK_EVERY) is True
+    assert stream_should_recheck_quota(LLM_QUOTA_CHECK_EVERY - 1) is False
+
+
+def test_record_usage_uses_stream_tokens_not_estimate(meter_env):
+    from server.app import Pipeline
+    from server.meter import consume_llm, open_usage_session
+
+    _add_user(meter_env)
+    sid, _ = open_usage_session("u1", "interview")
+    events: list[dict] = []
+    pipe = Pipeline({"llm": {"provider": "deepseek", "model": "deepseek-chat"}}, {}, events.append)
+    pipe.user_id = "u1"
+    pipe.usage_session_id = sid
+    with mock.patch("server.meter.consume_llm", wraps=consume_llm) as wrapped:
+        pipe._record_usage("hello " * 200, "world " * 200, "ask", "q1", False, (9, 11))
+        wrapped.assert_called_once()
+        assert wrapped.call_args.args[2:4] == (9, 11)
+    with meter_env() as db:
+        row = db.get(UsageSession, sid)
+        assert row.llm_input_tokens == 9
+        assert row.llm_output_tokens == 11
+
+
+def test_mid_stream_quota_aborts_before_done(meter_env):
+    from types import SimpleNamespace
+
+    from server.app import LLM_QUOTA_CHECK_EVERY, Pipeline
+
+    events: list[dict] = []
+    pipe = Pipeline({"llm": {"provider": "deepseek", "model": "deepseek-chat"}}, {}, events.append)
+    pipe.user_id = "u1"
+
+    def _chunk(text: str):
+        return SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=text, reasoning_content=None))], usage=None)
+
+    chunks = [_chunk("x") for _ in range(LLM_QUOTA_CHECK_EVERY)]
+    pipe.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **_k: chunks)))
+    with mock.patch("server.meter.check_can_generate", side_effect=[(True, {"ok": True}), (False, {"ok": False, "reason": "llm"})]):
+        pipe.process_text("hello there", mode="ask")
+    kinds = [e.get("type") for e in events]
+    assert "quota_exceeded" in kinds
+    assert kinds[-1] == "done"
+    assert any(e.get("type") == "done" and e.get("ok") is False for e in events)
+    assert not any(e.get("type") == "done" and e.get("ok") is True for e in events)

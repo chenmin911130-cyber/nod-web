@@ -279,6 +279,39 @@ class ApiGuardTests(unittest.TestCase):
         res = self.client.post("/api/billing/webhook", content=b"{}", headers={"content-type": "application/json"})
         self.assertIn(res.status_code, (400, 503))
 
+    def test_stripe_webhook_duplicate_event_is_ignored(self):
+        from server.db import StripeEvent, User, db_session
+        from server.security import new_id
+
+        uid = new_id()
+        with db_session() as db:
+            db.add(User(id=uid, email=f"{uid}@test.local", password_hash="", plan="free"))
+        payload = {
+            "id": f"evt_{uid}",
+            "type": "customer.subscription.updated",
+            "data": {"object": {"status": "active", "metadata": {"nod_user": uid}}},
+        }
+        with (
+            mock.patch("server.commerce.STRIPE_SECRET_KEY", "sk_test"),
+            mock.patch("server.commerce.STRIPE_WEBHOOK_SECRET", "whsec_test"),
+            mock.patch("stripe.Webhook.construct_event", return_value=payload),
+        ):
+            first = self.client.post(
+                "/api/billing/webhook",
+                content=b"{}",
+                headers={"stripe-signature": "t", "content-type": "application/json"},
+            )
+            second = self.client.post(
+                "/api/billing/webhook",
+                content=b"{}",
+                headers={"stripe-signature": "t", "content-type": "application/json"},
+            )
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 200, second.text)
+        with db_session() as db:
+            self.assertEqual(db.get(User, uid).plan, "pro")
+            self.assertEqual(db.query(StripeEvent).filter(StripeEvent.id == payload["id"]).count(), 1)
+
     def test_ws_rejects_anonymous_without_cookie(self):
         with self.client.websocket_connect("/ws") as ws:
             ws.send_text("{}")

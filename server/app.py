@@ -20,7 +20,7 @@ from typing import Any, Callable
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -30,7 +30,7 @@ from starlette.concurrency import run_in_threadpool
 from server.admin import router as admin_router
 from server.commerce import router as commerce_router
 from server.cors import cors_origins
-from server.db import init_db
+from server.db import User, init_db
 from server.headers import CloudflareOriginMiddleware, HostLockMiddleware, SecurityHeadersMiddleware
 from server.logging_setup import backup_now, setup_logging
 from server.settings import (
@@ -43,7 +43,7 @@ from server.settings import (
     QUOTA_DISABLED,
 )
 from server.ratelimit import MAX_WS_FRAME, WS_FRAMES_PER_SEC, allow, ws_client_ip, ws_connect, ws_disconnect
-from server.security import is_local_scope, user_from_token
+from server.security import current_user, is_local_scope, user_from_token
 
 SR = 16000
 STT_CLOUD = "assemblyai"
@@ -1020,6 +1020,58 @@ def attachment_images(files) -> list[dict[str, str]]:
 _ATTACH_TTL = 600.0
 _ATTACH_CACHE: dict[str, dict[str, Any]] = {}
 _ATTACH_LOCK = threading.Lock()
+ATTACH_MAX_FILE_BYTES = 8 * 1024 * 1024
+ATTACH_MAX_FILES = 5
+ATTACH_MAX_BODY_BYTES = ATTACH_MAX_FILE_BYTES * ATTACH_MAX_FILES
+ATTACH_MAX_B64_CHARS = (ATTACH_MAX_FILE_BYTES * 4 + 2) // 3
+
+
+def attach_body_too_large(content_length: str | None) -> bool:
+    if content_length is None or str(content_length).strip() == "":
+        return False
+    try:
+        return int(content_length) > ATTACH_MAX_BODY_BYTES
+    except (TypeError, ValueError):
+        return True
+
+
+def attach_b64_too_large(data: object) -> bool:
+    if not isinstance(data, str):
+        return True
+    return len(data) > ATTACH_MAX_B64_CHARS
+
+
+LLM_QUOTA_CHECK_EVERY = 16
+
+
+def estimate_llm_tokens(prompt: str, answer: str) -> tuple[int, int]:
+    return max(1, len(prompt) // 4), max(1, len(answer) // 4)
+
+
+def llm_usage_from_chunk(ch: Any) -> tuple[int, int] | None:
+    usage = getattr(ch, "usage", None)
+    if usage is None and isinstance(ch, dict):
+        usage = ch.get("usage")
+    if usage is None:
+        return None
+    if isinstance(usage, dict):
+        inp, out = usage.get("prompt_tokens"), usage.get("completion_tokens")
+    else:
+        inp = getattr(usage, "prompt_tokens", None)
+        out = getattr(usage, "completion_tokens", None)
+    if inp is None or out is None:
+        return None
+    return max(0, int(inp)), max(0, int(out))
+
+
+def resolve_llm_usage(stream_usage: tuple[int, int] | None, prompt: str, answer: str) -> tuple[int, int]:
+    if stream_usage is not None:
+        return stream_usage
+    return estimate_llm_tokens(prompt, answer)
+
+
+def stream_should_recheck_quota(chunk_index: int, every: int = LLM_QUOTA_CHECK_EVERY) -> bool:
+    return chunk_index > 0 and chunk_index % every == 0
 
 
 def _prune_attach_cache(now: float | None = None) -> None:
@@ -1573,6 +1625,7 @@ class Pipeline:
         elif mode == "translate":
             max_tokens = max(max_tokens, 800)
         answer = ""
+        stream_usage: tuple[int, int] | None = None
         messages = self._with_images(self._build_messages(t, mode), images)
         last_err: Exception | None = None
         for attempt in range(2):
@@ -1586,6 +1639,7 @@ class Pipeline:
                     messages=messages,
                     max_tokens=max_tokens,
                     stream=True,
+                    stream_options={"include_usage": True},
                 )
                 if not str(self._model).startswith(("o1", "o3")):
                     kwargs["temperature"] = llm.get("temperature", 0.5)
@@ -1595,10 +1649,14 @@ class Pipeline:
                 with self._stream_lock():
                     self._stream = stream
                 reasoning = ""
+                n_chunks = 0
                 for ch in stream:
                     if seq != self._gen_seq or self._cancel.is_set():
                         self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
                         return
+                    got = llm_usage_from_chunk(ch)
+                    if got is not None:
+                        stream_usage = got
                     if not ch.choices:
                         continue
                     delta = ch.choices[0].delta
@@ -1606,6 +1664,17 @@ class Pipeline:
                     if piece:
                         answer += piece
                         self.emit({"type": "chunk", "id": qid, "text": piece})
+                        n_chunks += 1
+                        if self.user_id and stream_should_recheck_quota(n_chunks):
+                            from server.meter import check_can_generate
+
+                            ok, snap = check_can_generate(self.user_id)
+                            if not ok:
+                                self.emit({"type": "quota", **snap})
+                                self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "llm"})
+                                self.emit({"type": "error", "text": "Usage limit reached. Open Account to see remaining quota."})
+                                self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
+                                return
                     think = getattr(delta, "reasoning_content", None) or ""
                     if think:
                         reasoning += think
@@ -1652,16 +1721,23 @@ class Pipeline:
             # the client only releases the translate gate and closes the answer
             # card on it, so a DB hiccup here would stick the UI on Translating.
             try:
-                self._record_usage(t, answer, mode, qid, internal)
+                self._record_usage(t, answer, mode, qid, internal, stream_usage)
             except Exception:
                 logging.getLogger("nod").exception("usage accounting failed")
         self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": True})
 
-    def _record_usage(self, t: str, answer: str, mode: str, qid: str, internal: bool) -> None:
+    def _record_usage(
+        self,
+        t: str,
+        answer: str,
+        mode: str,
+        qid: str,
+        internal: bool,
+        stream_usage: tuple[int, int] | None = None,
+    ) -> None:
         from server.meter import consume_llm, save_history
 
-        inp = max(1, len(t) // 4)
-        out = max(1, len(answer) // 4)
+        inp, out = resolve_llm_usage(stream_usage, t, answer)
         ok, snap = consume_llm(self.user_id, self.usage_session_id, inp, out)
         self.emit({"type": "quota", **snap})
         kind_q = "transcript" if mode in ("translate", "summary") else "question"
@@ -3110,10 +3186,12 @@ def health():
 
 
 @app.post("/api/attach/extract")
-async def attach_extract(request: Request):
+async def attach_extract(request: Request, _user: User = Depends(current_user)):
     """Park uploaded files off the WebSocket. Ask messages over 200KB are dropped."""
     from server.ratelimit import allow, client_ip
 
+    if attach_body_too_large(request.headers.get("content-length")):
+        raise HTTPException(413, "Upload too large")
     if not allow(f"attach:{client_ip(request)}", 20, 60.0):
         raise HTTPException(429, "Too many uploads. Wait a moment.")
     try:
@@ -3123,8 +3201,12 @@ async def attach_extract(request: Request):
     files = body.get("files") if isinstance(body, dict) else None
     if not isinstance(files, list) or not files:
         raise HTTPException(400, "Attach a file first")
-    if len(files) > 5:
+    if len(files) > ATTACH_MAX_FILES:
         raise HTTPException(400, "Up to 5 files")
+    for item in files:
+        data = (item or {}).get("data") if isinstance(item, dict) else None
+        if attach_b64_too_large(data):
+            raise HTTPException(413, "File too large")
     aid = store_attach_files(files)
     names = [str((item or {}).get("name") or "file") for item in files]
     return {"id": aid, "names": names}
