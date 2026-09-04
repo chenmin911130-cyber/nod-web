@@ -77,13 +77,8 @@ const TRANSLATE_PAIRS: TranslatePair[] = [
 const INTERVIEW_TURNS: Turn[] = [
   {
     id: 'i1',
-    q: 'Walk me through a product decision you owned.',
-    a: 'I cut admin export from v1 so the September 8 beta could ship. We moved export to 1.1.',
-  },
-  {
-    id: 'i2',
-    q: 'What would you do in the first 30 days?',
-    a: 'Talk to five users who dropped during onboarding, then ship one checklist fix.',
+    q: 'How many people live in New Zealand?',
+    a: 'About 5.2 million people live in New Zealand as of 2024. Auckland is its largest urban area.',
   },
 ]
 

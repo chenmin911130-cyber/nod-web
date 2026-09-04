@@ -951,12 +951,6 @@ export default function ListenPane(props: Props) {
 
       {props.qa ? (
         <div className="listen-qa">
-          {props.listening || props.partial ? (
-            <div className="listen-qa-live" aria-live="polite">
-              <b>{props.listening ? 'Listening' : 'Heard'}</b>
-              {props.partial.trim() || (props.listening ? 'Speak a question — it will appear here.' : '')}
-            </div>
-          ) : null}
           {props.qaSlot}
         </div>
       ) : (
