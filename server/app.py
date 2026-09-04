@@ -2019,7 +2019,17 @@ class Session:
         return True
 
     def push_pcm(self, pcm: bytes) -> None:
-        if self._mic_muted or not pcm:
+        if not pcm:
+            return
+        if self._listener:
+            # ANY byte (even silence, even while muted or consent-blocked) proves the
+            # client is alive and streaming — refresh the zero-PCM clock BEFORE the
+            # mute/consent gates. Mute is server-side (the client keeps streaming and
+            # set_mic_muted keeps the socket up), so a muted session must never read as
+            # 'no microphone'. Refreshing under the consent gate too is harmless: no
+            # consent means no real listening, so the socket holds only briefly.
+            self._last_pcm_at = time.time()
+        if self._mic_muted:
             return
         if self.user_id and not self._has_consent():
             return
@@ -2057,7 +2067,6 @@ class Session:
                 self._maybe_flush_manual_chunk()
             return
         if self._listener:
-            self._last_pcm_at = time.time()  # ANY byte (even silence) refreshes this
             self._archive_append(pcm)
             self._listener.push_pcm(pcm)
             self._maybe_stop_forgotten_listen()

@@ -133,3 +133,19 @@ class ForgottenListenTests(unittest.TestCase):
         sess._last_voice_at = time.time()
         sess._maybe_stop_forgotten_listen()
         sess._stop_listening.assert_not_called()
+
+    def test_muted_stream_keeps_listen_alive(self) -> None:
+        """Mute is server-side: the client keeps streaming frames and set_mic_muted
+        keeps the socket up, we just drop them. push_pcm must still refresh
+        _last_pcm_at, or a 25s mute would trip the zero-PCM guard and kill a
+        perfectly good mic with 'No microphone audio received'."""
+        sess = self._session()
+        sess._mic_muted = True
+        sess._listener = object()
+        sess._last_pcm_at = time.time() - LISTEN_ZERO_PCM_SECONDS - 10
+        sess.push_pcm(b"\x00\x01frame")  # client still streams; we drop it
+        # The clock must refresh even though the frame is discarded:
+        self.assertGreater(sess._last_pcm_at, time.time() - 1)
+        # And the guard must NOT fire while muted + streaming:
+        sess._maybe_stop_forgotten_listen()
+        sess._stop_listening.assert_not_called()
