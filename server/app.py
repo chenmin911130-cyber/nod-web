@@ -2688,6 +2688,11 @@ class Session:
         if self._listener is None and not self._manual:
             self.emit({"type": "status", "text": "Not listening"})
             return
+        if self._manual:
+            # Manual recording (F2) has no listen snapshot to pause. Don't stash
+            # a dormant paused state that would surface after the recording ends.
+            self.emit({"type": "status", "text": "Not listening"})
+            return
         self._paused = True
         if self._listener:
             with self._listen_lock():
@@ -2703,9 +2708,20 @@ class Session:
             self.emit({"type": "status", "text": "Not paused"})
             return
         if self._listen_wanted and self._listener is None and not getattr(self, "_manual", False):
+            # Clear the pause BEFORE opening the listener so its own _emit_phase
+            # reads capture=listening, not a stale "paused" frame (order bug:
+            # resume used to pulse paused -> listening).
+            # Pause stops AssemblyAI but the idle/watch clocks keep running, so
+            # rewind them too: a long pause must not read as "15 minutes of
+            # silence" (or "2h elapsed") the instant we resume.
+            self._paused = False
+            self._last_voice_at = time.time()
+            self._listen_started_at = time.time()
             self._start_listening(resume=True)
-        self._paused = False
-        self._emit_phase()
+        else:
+            # Not wanted (or manual recording): just clear the paused latch.
+            self._paused = False
+            self._emit_phase()
         self.emit({"type": "status", "text": "Listening resumed"})
 
     def _offer_save_history(self) -> None:

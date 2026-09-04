@@ -64,3 +64,27 @@ class ForgottenListenTests(unittest.TestCase):
         _tick_live_idle_watches()
         sess._stop_listening.assert_called_once()
         self.assertFalse(sess._listen_wanted)
+
+    def test_resume_after_long_pause_rewinds_voice_clock(self):
+        """A pause > 15 min must not read as silence the instant we resume.
+
+        Regression: resume_listen opened the stream but left ``_last_voice_at``
+        at its pre-pause value, so the idle watch thread (running 5s after
+        ``_idle_check_at = 0``) saw ``now - last >= LISTEN_IDLE_SECONDS`` and
+        stopped the freshly resumed session. Rewind both clocks on resume.
+        """
+        sess = self._session()
+        sess._paused = True
+        sess._listen_wanted = True
+        sess._listener = None
+        # Simulate a long pause: last voice more than idle budget ago, session
+        # open past the 2h cap. If resume does not rewind, the first idle tick
+        # after resume immediately stops listening.
+        sess._last_voice_at = time.time() - LISTEN_IDLE_SECONDS - 300
+        sess._listen_started_at = time.time() - LISTEN_MAX_SECONDS - 300
+        sess._start_listening = mock.Mock()
+        sess.resume_listen()
+        sess._start_listening.assert_called_once_with(resume=True)
+        self.assertFalse(sess._paused)
+        self.assertGreater(sess._last_voice_at, time.time() - 1)
+        self.assertGreater(sess._listen_started_at, time.time() - 1)
