@@ -6,7 +6,7 @@ Reads nodpilot-short-raw.mp4, saves nodpilot-short-final.mp4.
 import os, subprocess, math
 from PIL import Image, ImageDraw, ImageFont
 
-BASE = "/Users/minchen/Desktop/nod-web/docs/creatify-assets"
+BASE = "/Users/minchen/Projects/nod-web/docs/creatify-assets"
 SRC = os.path.join(BASE, "nodpilot-wip.mp4")
 TMP = "/tmp/nodpilot_frames"
 os.makedirs(TMP, exist_ok=True)

@@ -2,7 +2,7 @@
 import json, math, os, subprocess
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-BASE = "/Users/minchen/Desktop/nod-web/docs/creatify-assets"
+BASE = "/Users/minchen/Projects/nod-web/docs/creatify-assets"
 TMP = "/tmp/pov_voiced"
 os.makedirs(TMP, exist_ok=True)
 

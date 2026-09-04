@@ -6,7 +6,7 @@ Default: word-timed big White-on-black captions, animated pop-in per scene.
 import os, math, subprocess
 from PIL import Image, ImageDraw, ImageFont
 
-BASE = "/Users/minchen/Desktop/nod-web/docs/creatify-assets"
+BASE = "/Users/minchen/Projects/nod-web/docs/creatify-assets"
 SRC = "/tmp/pov_timeline.mp4"
 TMP = "/tmp/pov_frames"
 os.makedirs(TMP, exist_ok=True)
