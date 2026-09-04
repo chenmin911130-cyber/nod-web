@@ -37,7 +37,12 @@ Key 读取顺序：环境变量 → Hermes `.env` → `%APPDATA%\Nod\secrets.jso
 
 ## 部署
 
-GitHub + Railway。Railway 服务需要环境变量：
+GitHub + Railway。生产服务 `nod-web` 跟 `main`。Volume 必须挂到 `/data`（录音和 SQLite 都写这里）；`DATA_DIR=/data`。
+
+`AUTH_SECRET` 用环境变量，不要把 `auth_secret.key` 提交进仓库。已在跑的实例改这个值会让所有用户重新登录。本地没有该变量时，开发机才会在 `DATA_DIR` 里生成文件。
+
+Railway 服务还需要：
 
 - `DEEPSEEK_API_KEY` 或 `OPENROUTER_API_KEY`
 - `ASSEMBLYAI_API_KEY`
+- `AUTH_SECRET`（`python -c "import secrets; print(secrets.token_hex(32))"`）
