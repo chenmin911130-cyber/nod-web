@@ -11,6 +11,7 @@ type WatchPlugin = {
   setStatus(opts: {
     listening: boolean
     paused?: boolean
+    capture?: string
     hint?: string
     original?: string
     translation?: string
@@ -318,6 +319,7 @@ export function installWatchRemote(handlers: {
 export function pushWatchStatus(face: {
   listening: boolean
   paused?: boolean
+  capture?: string
   hint?: string
   original?: string
   translation?: string
@@ -330,6 +332,7 @@ export function pushWatchStatus(face: {
   void NodWatch.setStatus({
     listening: face.listening,
     paused: face.paused,
+    capture: face.capture,
     hint: (face.hint || '').slice(0, 140),
     original: (face.original || '').slice(0, 800),
     translation: (face.translation || '').slice(0, 800),

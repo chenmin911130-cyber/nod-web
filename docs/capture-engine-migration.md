@@ -10,7 +10,10 @@
   - ✅ **commit 状态**：已提交 `acd655d`（capture-engine-state）
   - ⏳ **部署**：未推送 Railway（推生产必须用户确认，不做）
 
-- [ ] **L2 手机 JS**：删 `sessionPaused` ref 和 `sessionListening` 里的 `wanted` 推导；`capture` 成为 Ready/Listening/Paused 唯一事实来源；`handlePause`/watch `onPause` 改发 `pause_listen`（不再发 `stop_listen`）；`buildWatchFace` 读 `capture`；pushWatchStatus 负载新增 `capture` 字段
+- [x] **L2 手机 JS**：`capture` 成为 Ready/Listening/Paused 唯一事实来源；删 `sessionPaused` ref 与 `sessionListening` 的 `wanted` 推导；`handlePause`/watch `onPause`/手表 `onResume` 改发 `pause_listen`/`resume_listen`（不再 `stop_listen`）；`buildWatchFace` 读 `capture`；pushWatchStatus 负载新增 `capture` 字段；bridge 把麦克风从 `phase`(capture) 驱动
+  - ✅ tsc --noEmit、vite build、web 全套测试 全绿
+  - 改动了 `web/src/`（App/bridge/iphoneCopy/watch/watchStatus/types + 2 个测试）与 `plugins/nod-watch/src/definitions.ts`
+  - ⏳ **装真机**：未 `cap:sync` / 未装手机+手表（需用户确认、需设备，且按纪律装完用 Bundle Version 核对）
 - [ ] **L3 手表 Swift**：`WatchPhoneSession.apply()` 读 `capture`；删 `sawPhoneListening`/`phoneListenSync`/`applyPhoneStop`/`applyPhonePause`；删 JS 镜像 `watchPhoneListenSync`/`watchStartShouldClearPhoneListenLatch`
 - [ ] **L5 删旧 state**：服务端 `_emit_run` 不发 `state`、删 `_active_run_state`；`bridge.ts` 去 `'state'`、reducer 删 `run`；Swift 删旧布尔读取；pushWatchStatus 去 `listening`/`paused`；ADR 0001 标 Done
 

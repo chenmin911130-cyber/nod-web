@@ -1,7 +1,7 @@
 import { buildWatchFace, watchPreviousCaption } from './watchStatus'
 
 const face = buildWatchFace({
-  run: 'listen',
+  capture: 'listening',
   consentOpen: false,
   notesAskId: '',
   notesRaw: '',
@@ -30,7 +30,7 @@ const prev = watchPreviousCaption([
 if (prev !== '你好') throw new Error(`previous line must be the last finished caption, got ${prev}`)
 
 const stacked = buildWatchFace({
-  run: 'listen',
+  capture: 'listening',
   consentOpen: false,
   notesAskId: '',
   notesRaw: '',
@@ -48,7 +48,7 @@ if (stacked.previous !== '你好') throw new Error(`Watch must keep one muted pr
 
 const longZh = '今天的发布会改到下周一上午十点，请把客户邮件和测试清单一起带上，不要只发一句摘要。'
 const longFace = buildWatchFace({
-  run: 'listen',
+  capture: 'listening',
   consentOpen: false,
   notesAskId: '',
   notesRaw: '',
@@ -63,7 +63,7 @@ if (longFace.translation !== longZh) {
 }
 
 const meeting = buildWatchFace({
-  run: 'listen',
+  capture: 'listening',
   consentOpen: false,
   notesAskId: '',
   notesRaw: '',
@@ -82,7 +82,7 @@ if (meeting.hint !== 'we will ship friday') {
 if (meeting.previous) throw new Error('Meeting must not grow a previous-caption stack')
 
 const same = buildWatchFace({
-  run: 'listen',
+  capture: 'listening',
   consentOpen: false,
   notesAskId: '',
   notesRaw: '',
@@ -100,7 +100,7 @@ if (same.translation !== 'Buongiorno') {
 }
 
 const doubled = buildWatchFace({
-  run: 'listen',
+  capture: 'listening',
   consentOpen: false,
   notesAskId: '',
   notesRaw: '',
@@ -115,7 +115,7 @@ if (doubled.translation.includes('\n') || doubled.original === doubled.translati
 }
 
 const qaOne = buildWatchFace({
-  run: 'listen',
+  capture: 'listening',
   consentOpen: false,
   notesAskId: '',
   notesRaw: '',
@@ -131,7 +131,7 @@ if (qaOne.translation !== 'QA 还没完，建议下周一。') throw new Error(`
 if (qaOne.previous) throw new Error('the first Q&A answer has no previous line')
 
 const qaTwo = buildWatchFace({
-  run: 'listen',
+  capture: 'listening',
   consentOpen: false,
   notesAskId: '',
   notesRaw: '',
@@ -155,7 +155,7 @@ if (qaTwo.previous !== 'QA 还没完，建议下周一。') {
 // does not treat it as a Stop and jump back to the main face. Live Q&A answers
 // are not auto-spoken, so keeping the mic on while drafting is safe.
 const translateThink = buildWatchFace({
-  run: 'think',
+  capture: 'listening',
   consentOpen: false,
   notesAskId: '',
   notesRaw: '',
@@ -168,7 +168,7 @@ const translateThink = buildWatchFace({
 if (!translateThink.listening) throw new Error('Translate think must still count as listening')
 
 const meetingThink = buildWatchFace({
-  run: 'think',
+  capture: 'listening',
   consentOpen: false,
   notesAskId: '',
   notesRaw: '',
@@ -183,7 +183,7 @@ if (!meetingThink.listening) throw new Error('Meeting think must still count as 
 // Live Q&A: drafting the answer (think) is still an in-session state — the Watch
 // must stay on the Q&A page, not jump back to the main face.
 const interviewThink = buildWatchFace({
-  run: 'think',
+  capture: 'listening',
   consentOpen: false,
   notesAskId: '',
   notesRaw: '',
@@ -196,12 +196,14 @@ const interviewThink = buildWatchFace({
 })
 if (!interviewThink.listening) throw new Error('Interview think must still count as listening')
 
-// --- Exhaustive run × workspace matrix for buildWatchFace.listening ---
-// listening must be true for ANY non-idle run (listen/record/think) in EVERY workspace,
-// and false only for idle. This is the invariant that fixes the translate → Live Q&A jumps.
-function eqListen(run: string, workspaceMode: string, expected: boolean): void {
+// --- Exhaustive capture × workspace matrix for buildWatchFace.listening ---
+// listening is true only while the session is actively capturing (listening /
+// recording), in EVERY workspace; off and paused are not. A generating model
+// (engine) keeps capture='listening', which is exactly why the Watch no longer
+// sees a transient run='think' as "Phone Stop".
+function eqListen(capture: string, workspaceMode: string, expected: boolean): void {
   const f = buildWatchFace({
-    run,
+    capture,
     consentOpen: false,
     notesAskId: '',
     notesRaw: '',
@@ -213,12 +215,12 @@ function eqListen(run: string, workspaceMode: string, expected: boolean): void {
     turns: workspaceMode === 'interview' ? [{ id: 'q', q: 'why?', a: '' }] : [],
   })
   if (f.listening !== expected) {
-    throw new Error(`run=${run} workspace=${workspaceMode} must report listening=${expected}, got ${f.listening}`)
+    throw new Error(`capture=${capture} workspace=${workspaceMode} must report listening=${expected}, got ${f.listening}`)
   }
 }
 for (const ws of ['meeting', 'interview', 'translate']) {
-  eqListen('idle', ws, false)
-  eqListen('listen', ws, true)
-  eqListen('record', ws, true)
-  eqListen('think', ws, true)
+  eqListen('off', ws, false)
+  eqListen('listening', ws, true)
+  eqListen('recording', ws, true)
+  eqListen('paused', ws, false)
 }

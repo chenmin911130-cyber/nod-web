@@ -131,6 +131,8 @@ const storedPair = readStoredPair()
 
 const initial: AppState = {
   run: 'idle',
+  capture: 'off',
+  engine: 'idle',
   status: 'Starting…',
   currentQ: PLACEHOLDER,
   currentQId: '',
@@ -312,7 +314,7 @@ function reducer(state: AppState, action: Action): AppState {
       }
       switch (ev.type) {
         case 'ready':
-          return { ...state, status: STATUS_READY, run: 'idle' }
+          return { ...state, status: STATUS_READY, run: 'idle', capture: 'off', engine: 'idle' }
         case 'keys_status':
           return { ...state, keys: { hasLlm: ev.has_llm, hasStt: ev.has_stt } }
         case 'state': {
@@ -335,6 +337,12 @@ function reducer(state: AppState, action: Action): AppState {
           else if (run === 'idle' && !generating && !interviewAsking) busy = false
           return { ...state, run, autoOn, view, busy, meetingStartedAt }
         }
+        case 'phase': {
+          // ADR 0001: capture is the single source of truth for the mic/session.
+          // run (legacy state) still arrives and keeps driving autoOn/busy/view,
+          // but listening/paused now read from capture.
+          return { ...state, capture: ev.capture, engine: ev.engine }
+        }
         case 'listen_taken': {
           // Stolen STT must leave Listening. Do not clear Interview / Ask busy.
           const text = ev.text || LISTEN_TAKEN_TEXT
@@ -342,6 +350,7 @@ function reducer(state: AppState, action: Action): AppState {
             ...state,
             status: text,
             run: 'idle',
+            capture: 'off',
             autoOn: false,
             view: 'workspace',
           }
@@ -906,7 +915,6 @@ export default function App() {
   const watchAutoNotes = useRef(false)
   const autoReport = useRef(false)
   const recordHeard = useRef(false)
-  const sessionPaused = useRef(false)
   const watchRestoreTried = useRef(false)
   const handleModeRef = useRef<(mode: WorkspaceMode, scene?: ListenScene) => void>(() => undefined)
   const [watchReportOpen, setWatchReportOpen] = useState(false)
@@ -918,7 +926,6 @@ export default function App() {
   const startListen = (opts?: { fromWatch?: boolean }) => {
     if (!opts?.fromWatch) takePhoneMic()
     listenWanted.current = true
-    sessionPaused.current = false
     setSavePrompt(false)
     if (!watchAutoNotes.current && !autoReport.current) {
       clearWatchReport()
@@ -1070,7 +1077,7 @@ export default function App() {
       onStart: (mode) => {
         applyWatchMic(mode)
         const s = stateRef.current
-        if (!watchListenControlShouldApplyMode({ action: 'start', sessionPaused: sessionPaused.current, run: s.run })) {
+        if (!watchListenControlShouldApplyMode({ action: 'start', sessionPaused: s.capture === 'paused', run: s.run })) {
           guardMic(() => startListen({ fromWatch: true }))
           return
         }
@@ -1090,13 +1097,12 @@ export default function App() {
       onRecord: (mode) => {
         applyWatchMic(mode)
         const s = stateRef.current
-        if (!watchListenControlShouldApplyMode({ action: 'record', sessionPaused: sessionPaused.current, run: s.run })) {
-          if (sessionPaused.current) {
+        if (!watchListenControlShouldApplyMode({ action: 'record', sessionPaused: s.capture === 'paused', run: s.run })) {
+          if (s.capture === 'paused') {
             guardMic(() => startListen({ fromWatch: true }))
             return
           }
           if (s.run === 'listen' || s.run === 'record') {
-            sessionPaused.current = false
             stopListen()
           }
           return
@@ -1116,12 +1122,13 @@ export default function App() {
         guardMic(() => startListen({ fromWatch: true }))
       },
       onPause: () => {
-        sessionPaused.current = true
+        // Pause keeps the session alive (capture=paused) instead of tearing it
+        // down; resume_listen brings it back without a fresh start.
+        window.api.send({ type: 'pause_listen' })
         const s = stateRef.current
         if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
           dispatch({ type: 'meeting_clock', startedAt: s.meetingStartedAt, elapsedMs: Date.now() - s.meetingStartedAt })
         }
-        stopListen()
       },
       onResume: () => {
         applyWatchMic()
@@ -1129,10 +1136,9 @@ export default function App() {
         if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
           dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
         }
-        guardMic(() => startListen({ fromWatch: true }))
+        window.api.send({ type: 'resume_listen' })
       },
       onStop: () => {
-        sessionPaused.current = false
         stopListen()
         if (stateRef.current.workspaceMode === 'meeting') {
           dispatch({ type: 'meeting_ended' })
@@ -1180,7 +1186,7 @@ export default function App() {
   useEffect(() => {
     if (!isNativeApp()) return
     const face = buildWatchFace({
-      run: state.run,
+      capture: state.capture,
       consentOpen,
       notesAskId: state.notesAskId,
       notesRaw: state.notesRaw,
@@ -1194,7 +1200,8 @@ export default function App() {
     const timer = window.setTimeout(() => {
       pushWatchStatus({
         ...face,
-        paused: sessionPaused.current,
+        paused: state.capture === 'paused',
+        capture: state.capture,
         mode: watchStatusMode(state.workspaceMode, state.listenScene),
         langPair: watchLangPair(state.translateTo),
       })
@@ -1202,6 +1209,7 @@ export default function App() {
     return () => window.clearTimeout(timer)
   }, [
     consentOpen,
+    state.capture,
     state.meetingLines,
     state.notesAskId,
     state.notesRaw,
@@ -1284,7 +1292,7 @@ export default function App() {
         } else if (sessionShouldOpenSavePrompt({
           workspaceMode: stateRef.current.workspaceMode,
           kept: historyKeptRef.current,
-          paused: sessionPaused.current,
+          paused: stateRef.current.capture === 'paused',
         })) {
           setSavePrompt(true)
         }
@@ -1371,11 +1379,7 @@ export default function App() {
       const mode = stateRef.current.workspaceMode
       if (k === 'f2') handleRecordRef.current()
       else if (k === 'f3') {
-        const running = sessionListening({
-          run: stateRef.current.run,
-          wanted: listenWanted.current,
-          paused: sessionPaused.current,
-        })
+        const running = sessionListening({ capture: stateRef.current.capture })
         if (running) stopListen()
         else guardMic(startListen)
       }
@@ -1453,11 +1457,7 @@ export default function App() {
         return
       }
       if (k === 'a') {
-        const running = sessionListening({
-          run: stateRef.current.run,
-          wanted: listenWanted.current,
-          paused: sessionPaused.current,
-        })
+        const running = sessionListening({ capture: stateRef.current.capture })
         if (running) stopListen()
         else guardMic(startListen)
       }
@@ -1469,7 +1469,6 @@ export default function App() {
   }, [copyLatest])
 
   const doClear = useCallback(() => {
-    sessionPaused.current = false
     spokenTranslate.current.clear()
     stopSpeech()
     askedTranslate.current.clear()
@@ -1697,8 +1696,8 @@ export default function App() {
     const nextScene = scene ?? (mode === 'interview' ? 'interview' : s.listenScene)
     if (mode === s.workspaceMode && nextScene === s.listenScene) return
     if (!canSwitchWorkspace({
-      listening: sessionListening({ run: s.run, wanted: listenWanted.current, paused: sessionPaused.current }),
-      paused: sessionPaused.current,
+      listening: sessionListening({ capture: s.capture }),
+      paused: s.capture === 'paused',
     })) {
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Stop listening first' } })
       return
@@ -1740,11 +1739,14 @@ export default function App() {
 
   const handlePrimary = useCallback(() => {
     const s = stateRef.current
-    const live = sessionListening({
-      run: s.run,
-      wanted: listenWanted.current,
-      paused: sessionPaused.current,
-    })
+    const live = sessionListening({ capture: s.capture })
+    if (s.capture === 'paused') {
+      // Paused resumes, not a fresh start: start_listen returns early without
+      // emitting when the listener is still alive, so capture would stay
+      // 'paused'. resume_listen emits the phase that flips it back.
+      window.api.send({ type: 'resume_listen' })
+      return
+    }
     if (s.workspaceMode === 'interview') {
       if (s.run === 'record') return
       if (live) stopListen()
@@ -1783,8 +1785,7 @@ export default function App() {
 
   const handleStop = useCallback(() => {
     const s = stateRef.current
-    sessionPaused.current = false
-    if (sessionListening({ run: s.run, wanted: listenWanted.current, paused: false })) {
+    if (sessionListening({ capture: s.capture })) {
       handlePrimary()
       return
     }
@@ -1802,8 +1803,7 @@ export default function App() {
       return
     }
     if (s.workspaceMode !== 'meeting') return
-    if (sessionPaused.current) {
-      sessionPaused.current = false
+    if (s.capture === 'paused') {
       autoReport.current = true
       recordHeard.current = true
       stopListen()
@@ -1812,8 +1812,7 @@ export default function App() {
       queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
       return
     }
-    if (sessionListening({ run: s.run, wanted: listenWanted.current, paused: false })) {
-      sessionPaused.current = false
+    if (sessionListening({ capture: s.capture })) {
       autoReport.current = true
       recordHeard.current = true
       stopListen()
@@ -1837,14 +1836,18 @@ export default function App() {
 
   const handlePause = useCallback(() => {
     const s = stateRef.current
-    if (sessionListening({ run: s.run, wanted: listenWanted.current, paused: sessionPaused.current })) {
-      sessionPaused.current = true
+    if (sessionListening({ capture: s.capture })) {
       if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
         dispatch({ type: 'meeting_clock', startedAt: s.meetingStartedAt, elapsedMs: Date.now() - s.meetingStartedAt })
       }
-      stopListen()
+      window.api.send({ type: 'pause_listen' })
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Paused · resume when ready' } })
     }
+  }, [])
+
+  const handleResume = useCallback(() => {
+    window.api.send({ type: 'resume_listen' })
+    dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening resumed' } })
   }, [])
 
   const handleMark = useCallback(() => {
@@ -2086,7 +2089,7 @@ export default function App() {
       workspaceMode: state.workspaceMode,
       busy: state.busy,
       lineCount: state.meetingLines.length,
-      paused: sessionPaused.current,
+      paused: state.capture === 'paused',
     })
     if (next === 'wait') return
     watchAutoNotes.current = false
@@ -2486,11 +2489,7 @@ export default function App() {
     )
   }
 
-  const listening = sessionListening({
-    run: state.run,
-    wanted: listenWanted.current,
-    paused: sessionPaused.current,
-  })
+  const listening = sessionListening({ capture: state.capture })
   const study = studyMode
   const hideRail = () => {
     setRailDismissed(true)
@@ -2511,7 +2510,7 @@ export default function App() {
       meetingPaused={meetingRailIsPaused({
         workspaceMode: state.workspaceMode,
         listening,
-        userPaused: sessionPaused.current,
+        userPaused: state.capture === 'paused',
         started: state.meetingStartedAt != null,
         ended: state.meetingEnded,
       })}
@@ -2530,20 +2529,20 @@ export default function App() {
         kept: historyKept,
         hasContent: meetingHasSaveableContent(state),
         listening,
-        paused: sessionPaused.current,
+        paused: state.capture === 'paused',
       })}
       sessionSaved={state.workspaceMode === 'meeting' && historyKept && meetingHasSaveableContent(state)}
     />
   )
 
-  const iphonePaused = sessionPaused.current && !listening
+  const iphonePaused = state.capture === 'paused'
   const canSaveSession = sessionShouldOfferSave({
     workspaceMode: state.workspaceMode,
     ended: state.meetingEnded,
     kept: historyKept,
     hasContent: meetingHasSaveableContent(state),
     listening,
-    paused: sessionPaused.current,
+    paused: state.capture === 'paused',
   })
   const phoneActions = phone ? (
     <IphoneActions
@@ -2556,7 +2555,7 @@ export default function App() {
       variant={state.workspaceMode === 'translate' ? 'translate' : state.workspaceMode === 'interview' ? 'interview' : 'listen'}
       onStart={handlePrimary}
       onPause={handlePause}
-      onResume={handlePrimary}
+      onResume={handleResume}
       onStop={handleStop}
       onMore={() => setMoreOpen(true)}
       moreOpen={moreOpen}
@@ -2756,8 +2755,8 @@ export default function App() {
               // scene switch (meeting↔lecture) used to bypass this gate.
               const s = stateRef.current
               if (!canSwitchWorkspace({
-                listening: sessionListening({ run: s.run, wanted: listenWanted.current, paused: sessionPaused.current }),
-                paused: sessionPaused.current,
+                listening: sessionListening({ capture: s.capture }),
+                paused: s.capture === 'paused',
               })) {
                 dispatch({ type: 'engine', ev: { type: 'status', text: 'Stop listening first' } })
                 return

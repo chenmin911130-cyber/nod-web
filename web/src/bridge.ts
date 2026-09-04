@@ -1,4 +1,4 @@
-import type { Api, AppConfig, EngineEvent, EngineMsg } from './types'
+import type { Api, AppConfig, CaptureState, EngineEvent, EngineMsg, EngineState } from './types'
 import { PRODUCT_NAME } from './brand'
 import { getToken } from './auth'
 import { MicCapture } from './audio'
@@ -11,6 +11,7 @@ const EVENT_TYPES = new Set([
   'pong',
   'keys_status',
   'state',
+  'phase',
   'status',
   'partial',
   'question',
@@ -41,6 +42,15 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
   switch (type) {
     case 'state':
       return { type: 'state', state: asText(o.state) }
+    case 'phase': {
+      const capture = asText(o.capture)
+      const engine = asText(o.engine)
+      return {
+        type: 'phase',
+        capture: (['off', 'listening', 'recording', 'paused'].includes(capture) ? capture : 'off') as CaptureState,
+        engine: (['idle', 'transcribing', 'generating'].includes(engine) ? engine : 'idle') as EngineState,
+      }
+    }
     case 'status':
       return { type: 'status', text: asText(o.text) }
     case 'error':
@@ -67,7 +77,7 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
 
 // Replaying a stale start_listen after a long outage is how a reconnect turns
 // into a surprise recording, so one-shot commands expire; state sync does not.
-const TRANSIENT_MSGS = new Set(['manual', 'toggle_listen', 'start_listen', 'stop_listen', 'clear', 'cancel_generate', 'ask'])
+const TRANSIENT_MSGS = new Set(['manual', 'toggle_listen', 'start_listen', 'stop_listen', 'pause_listen', 'resume_listen', 'clear', 'cancel_generate', 'ask'])
 const LAST_WINS_MSGS = new Set([
   'set_workspace',
   'set_llm',
@@ -81,6 +91,8 @@ const LAST_WINS_MSGS = new Set([
   // stack three AssemblyAI sockets from one click.
   'start_listen',
   'stop_listen',
+  'pause_listen',
+  'resume_listen',
 ])
 const PENDING_MAX = 32
 const PENDING_STALE_MS = 10_000
@@ -107,7 +119,7 @@ export function installWebApi(): void {
   let ws: WebSocket | null = null
   let reconnectTimer = 0
   let pingTimer = 0
-  let lastRun = 'idle'
+  let lastRun = 'off'
   let micStopTimer = 0
   let retries = 0
   let closing = false
@@ -147,13 +159,16 @@ export function installWebApi(): void {
     emit({ type: 'status', text: `Connecting to ${PRODUCT_NAME}…` })
   }
 
-  const syncMic = async (run?: string) => {
-    // 'think' only says the model is generating; it carries no intent about the
-    // mic. Treating it as a run state used to tear the mic down mid-sentence
-    // and drop everything said while an answer streamed.
-    if (run && run !== 'think') lastRun = run
+  const syncMic = async (capture?: string) => {
+    // capture is the single source of truth for the mic (ADR 0001): it feeds
+    // audio only while the session is actively listening/recording. A paused
+    // session (capture='paused') stops feeding, and a generating model only
+    // changes the engine axis — capture stays 'listening', so the mic is never
+    // torn down mid-answer. 'think' was a workaround for exactly that; the two
+    // axes remove the need for it.
+    if (capture) lastRun = capture
     window.clearTimeout(micStopTimer)
-    const need = lastRun === 'listen' || lastRun === 'record'
+    const need = lastRun === 'listening' || lastRun === 'recording'
     if (need) {
       try {
         await mic.start()
@@ -164,7 +179,7 @@ export function installWebApi(): void {
           silenceWatch = window.setInterval(() => {
             if (
               micSilenceShouldWarn({
-                listening: lastRun === 'listen' || lastRun === 'record',
+                listening: lastRun === 'listening' || lastRun === 'recording',
                 pcmBytes,
                 elapsedMs: Date.now() - listenSince,
                 watchPreferred: isWatchMicPreferred(),
@@ -189,7 +204,7 @@ export function installWebApi(): void {
       pcmBytes = 0
       window.clearInterval(silenceWatch)
       micStopTimer = window.setTimeout(() => {
-        if (lastRun !== 'listen' && lastRun !== 'record' && mic.active) mic.stop()
+        if (lastRun !== 'listening' && lastRun !== 'recording' && mic.active) mic.stop()
       }, 500)
     }
   }
@@ -245,7 +260,7 @@ export function installWebApi(): void {
       }
       const payload = normalizeEvent(raw)
       if (!payload) return
-      if (payload.type === 'state') void syncMic(payload.state)
+      if (payload.type === 'phase') void syncMic(payload.capture)
       emit(payload)
     }
     socket.onclose = (ev) => {
