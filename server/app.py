@@ -629,6 +629,9 @@ def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
 # same second used to open three sockets and keep only the last reference.
 _LIVE_STT: dict[str, tuple[CloudListener, Session]] = {}
 _LIVE_STT_MU = threading.Lock()
+_IDLE_WATCH_INTERVAL_SEC = 5.0
+_idle_watch_thread: threading.Thread | None = None
+_idle_watch_stop = threading.Event()
 
 
 def _stt_owner_slot(user_id: str | None, workspace: str | None, session_key: int) -> str:
@@ -659,6 +662,36 @@ def _drop_live_stt(slot: str, listener: CloudListener) -> None:
 def _reset_live_stt() -> None:
     with _LIVE_STT_MU:
         _LIVE_STT.clear()
+
+
+def _tick_live_idle_watches() -> None:
+    """Stop forgotten streams even when the client sends no PCM.
+
+    Idle/max checks used to run only inside push_pcm. A Start that never
+    forwards audio left the AssemblyAI WebSocket open and billing.
+    """
+    with _LIVE_STT_MU:
+        owners = [sess for _, sess in list(_LIVE_STT.values())]
+    for sess in owners:
+        try:
+            sess._maybe_stop_forgotten_listen()
+        except Exception:
+            logging.getLogger("nod").exception("idle watch failed")
+
+
+def _idle_watch_loop() -> None:
+    while not _idle_watch_stop.wait(_IDLE_WATCH_INTERVAL_SEC):
+        _tick_live_idle_watches()
+
+
+def _ensure_idle_watch_thread() -> None:
+    global _idle_watch_thread
+    t = _idle_watch_thread
+    if t is not None and t.is_alive():
+        return
+    t = threading.Thread(target=_idle_watch_loop, name="nod-stt-idle", daemon=True)
+    _idle_watch_thread = t
+    t.start()
 
 
 def _terminate_assemblyai_session(ws, done: threading.Event | None = None) -> None:
@@ -2739,8 +2772,9 @@ class Session:
         now = time.time()
         if not resume or not self._listen_started_at:
             self._listen_started_at = now
-        self._last_voice_at = now
+            self._last_voice_at = now
         self._idle_check_at = 0.0
+        _ensure_idle_watch_thread()
         self.emit({"type": "state", "state": "listen"})
         if not resume:
             self.emit({"type": "status", "text": STATUS_LISTEN})
@@ -2758,12 +2792,14 @@ class Session:
         started = self._listen_started_at or now
         last = self._last_voice_at or started
         if now - started >= LISTEN_MAX_SECONDS:
+            self._paused = False
             self._listen_wanted = False
             self._stop_listening()
             self.emit({"type": "status", "text": "Listening stopped after 2 hours. Start again if you still need it."})
             self._offer_save_history()
             return
         if now - last >= LISTEN_IDLE_SECONDS:
+            self._paused = False
             self._listen_wanted = False
             self._stop_listening()
             self.emit({"type": "status", "text": "Listening stopped after 15 minutes of silence."})

@@ -3,11 +3,17 @@ import time
 import unittest
 from unittest import mock
 
-from server.app import Session
+from server.app import Session, _adopt_live_stt, _reset_live_stt, _tick_live_idle_watches
 from server.settings import LISTEN_IDLE_SECONDS, LISTEN_MAX_SECONDS
 
 
 class ForgottenListenTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _reset_live_stt()
+
+    def tearDown(self) -> None:
+        _reset_live_stt()
+
     def _session(self) -> Session:
         sess = Session.__new__(Session)
         sess._listener = object()
@@ -47,3 +53,14 @@ class ForgottenListenTests(unittest.TestCase):
         self.assertFalse(sess.pipeline._cancel.is_set())
         status = sess.emit.call_args[0][0]
         self.assertIn("hours", status["text"].lower())
+
+    def test_live_idle_watch_stops_listen_without_pcm(self):
+        """AssemblyAI bills open sockets. Idle stop used to run only inside push_pcm."""
+        sess = self._session()
+        lst = sess._listener
+        sess._last_voice_at = time.time() - LISTEN_IDLE_SECONDS - 1
+        sess._listen_started_at = sess._last_voice_at
+        _adopt_live_stt("user-1:meeting", lst, sess)
+        _tick_live_idle_watches()
+        sess._stop_listening.assert_called_once()
+        self.assertFalse(sess._listen_wanted)
