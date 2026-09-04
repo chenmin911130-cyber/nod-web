@@ -14,7 +14,10 @@
   - ✅ tsc --noEmit、vite build、web 全套测试 全绿
   - 改动了 `web/src/`（App/bridge/iphoneCopy/watch/watchStatus/types + 2 个测试）与 `plugins/nod-watch/src/definitions.ts`
   - ⏳ **装真机**：未 `cap:sync` / 未装手机+手表（需用户确认、需设备，且按纪律装完用 Bundle Version 核对）
-- [ ] **L3 手表 Swift**：`WatchPhoneSession.apply()` 读 `capture`；删 `sawPhoneListening`/`phoneListenSync`/`applyPhoneStop`/`applyPhonePause`；删 JS 镜像 `watchPhoneListenSync`/`watchStartShouldClearPhoneListenLatch`
+- [x] **L3 手表 Swift**：`WatchPhoneSession.apply()` 读 `capture`（listing=capture是listening/recording, paused=capture是paused）；删 `sawPhoneListening`/`phoneListenSync`/`applyPhoneStop`/`applyPhonePause`；删 JS 镜像 `watchPhoneListenSync`/`watchStartShouldClearPhoneListenLatch`
+  - ✅ Web 侧：`WatchPhoneSession.swift` 在 `WatchApp` target (`xcodebuild` generic watchOS, CODE_SIGNING_ALLOWED=NO) 编译通过 BUILD SUCCEEDED
+  - ✅ Web 侧：删函数后 `tsc --noEmit`、web 全套测试 全绿；删了 Finder 重复 `watchMic.test 2.ts`
+  - ⏳ **装真机**：未 `cap:sync` / 未装手机+手表（需用户确认、需设备；装完用 Bundle Version 核对；note：capture="off" 时保留 offeringSave/savedAck，手表 Stop→Save 流程不被手机回推冲掉）
 - [ ] **L5 删旧 state**：服务端 `_emit_run` 不发 `state`、删 `_active_run_state`；`bridge.ts` 去 `'state'`、reducer 删 `run`；Swift 删旧布尔读取；pushWatchStatus 去 `listening`/`paused`；ADR 0001 标 Done
 
 ## 关联文件（L2 从这些开始读）
