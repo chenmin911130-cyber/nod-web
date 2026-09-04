@@ -4,7 +4,7 @@ Regression for the Italian bug: STT locked to a Latin language must not
 drop ordinary sentences just because word-marker guessing said "en".
 """
 
-from server.app import heard_lang_from_text, matches_locked_speech
+from server.lang import heard_lang_from_text, matches_locked_speech
 
 
 def test_latin_lock_accepts_plain_sentences():
