@@ -1,4 +1,3 @@
-export type RunState = 'idle' | 'record' | 'listen' | 'think'
 export type CaptureState = 'off' | 'listening' | 'recording' | 'paused'
 export type EngineState = 'idle' | 'transcribing' | 'generating'
 export type Turn = { id: string; q: string; a: string }
@@ -65,7 +64,6 @@ export interface TranslatePair {
 }
 
 export interface AppState {
-  run: RunState
   capture: CaptureState
   engine: EngineState
   status: string
@@ -127,7 +125,6 @@ export type EngineEvent =
   | { type: 'ready' }
   | { type: 'pong' }
   | { type: 'keys_status'; has_llm: boolean; has_stt: boolean }
-  | { type: 'state'; state: string }
   | { type: 'phase'; capture: CaptureState; engine: EngineState }
   | { type: 'status'; text: string }
   | { type: 'partial'; text: string; language?: string; speaker?: string }

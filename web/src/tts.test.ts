@@ -36,11 +36,11 @@ eq(nextLiveUtterances({
   lines: [],
 }), [{ id: '3', text: 'new line' }])
 
-eq(listenSessionShouldAutoSpeak('meeting', 'listen'), false)
-eq(listenSessionShouldAutoSpeak('meeting', 'record'), false)
-eq(listenSessionShouldAutoSpeak('meeting', 'idle'), false)
-eq(listenSessionShouldAutoSpeak('interview', 'listen'), false)
-eq(listenSessionShouldAutoSpeak('translate', 'listen'), true)
+eq(listenSessionShouldAutoSpeak('meeting'), false)
+eq(listenSessionShouldAutoSpeak('meeting'), false)
+eq(listenSessionShouldAutoSpeak('meeting'), false)
+eq(listenSessionShouldAutoSpeak('interview'), false)
+eq(listenSessionShouldAutoSpeak('translate'), true)
 
 eq(ttsAutoShouldConfirm('tap', 'live'), true)
 eq(ttsAutoShouldConfirm('live', 'live'), false)
@@ -50,7 +50,6 @@ eq(ttsAutoShouldConfirm('tap', 'tap'), false)
 eq(nextLiveUtterances({
   live: true,
   workspaceMode: 'meeting',
-  run: 'listen',
   translateOn: true,
   bindId: '',
   spoken: [],
@@ -64,7 +63,6 @@ eq(nextLiveUtterances({
 eq(nextLiveUtterances({
   live: true,
   workspaceMode: 'meeting',
-  run: 'idle',
   translateOn: true,
   bindId: '',
   spoken: [],

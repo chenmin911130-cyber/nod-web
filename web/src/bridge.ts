@@ -10,7 +10,6 @@ const EVENT_TYPES = new Set([
   'ready',
   'pong',
   'keys_status',
-  'state',
   'phase',
   'status',
   'partial',
@@ -40,8 +39,6 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
   const type = o.type
   if (typeof type !== 'string' || !EVENT_TYPES.has(type)) return null
   switch (type) {
-    case 'state':
-      return { type: 'state', state: asText(o.state) }
     case 'phase': {
       const capture = asText(o.capture)
       const engine = asText(o.engine)

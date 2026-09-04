@@ -1,8 +1,9 @@
-import type { RunState, WorkspaceMode } from '../types'
+import type { CaptureState, EngineState, WorkspaceMode } from '../types'
 
 interface Props {
   mode: WorkspaceMode
-  run: RunState
+  capture: CaptureState
+  engine: EngineState
   autoOn: boolean
   onPrimary: () => void
   onRecord: () => void
@@ -127,10 +128,10 @@ function primaryLabel(listening: boolean): string {
 }
 
 export default function SideRail(props: Props) {
-  const { mode, run, autoOn, meetingPaused } = props
-  const recording = run === 'record'
-  const listening = run === 'listen' || recording
-  const primaryOn = mode === 'interview' ? autoOn || run === 'listen' : listening
+  const { mode, capture, engine, autoOn, meetingPaused } = props
+  const recording = capture === 'recording'
+  const listening = capture === 'listening' || recording
+  const primaryOn = mode === 'interview' ? autoOn || capture === 'listening' : listening
   const primaryDisabled = mode === 'interview' || mode === 'translate' ? recording : false
   const live = primaryOn || recording
 
@@ -140,7 +141,7 @@ export default function SideRail(props: Props) {
       ? (mode === 'meeting' ? 'In meeting' : 'Listening')
       : meetingPaused
         ? 'Paused'
-        : run === 'think'
+        : engine !== 'idle'
           ? 'Thinking'
           : 'Ready'
 
@@ -198,13 +199,13 @@ export default function SideRail(props: Props) {
             onClick={props.onRecord}
             disabled={autoOn}
             title={
-              recording || run === 'listen' || meetingPaused
+              listening || meetingPaused
                 ? 'Finish and write report'
                 : 'Record, then auto-write a report'
             }
           >
             <RecIcon />
-            <span className="rail-lbl-full">{recording || run === 'listen' || meetingPaused ? 'Stop + Report' : 'Record'}</span>
+            <span className="rail-lbl-full">{listening || meetingPaused ? 'Stop + Report' : 'Record'}</span>
             <span className="rail-lbl-short">Rec</span>
           </button>
           <button className="rail-icon-btn" onClick={props.onExport} title="Summarize all sections and export PDF">
@@ -220,7 +221,7 @@ export default function SideRail(props: Props) {
           <button
             className={`rail-icon-btn${recording ? ' live' : ''}`}
             onClick={props.onRecord}
-            disabled={autoOn || run === 'listen'}
+            disabled={autoOn || capture === 'listening'}
             title={recording ? 'Stop recording (F2)' : 'Record your microphone (F2)'}
           >
             <RecIcon />

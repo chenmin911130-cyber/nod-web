@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { RunState, Turn } from '../types'
+import type { CaptureState, EngineState, Turn } from '../types'
 import { AnswerContent, QuestionBlock } from './AnswerContent'
 import { PRODUCT_NAME } from '../brand'
 import { isWeb } from '../platform'
 
 interface Props {
-  run: RunState
+  capture: CaptureState
+  engine: EngineState
   currentQ: string
   partial: string
   turns: Turn[]
@@ -115,7 +116,7 @@ let lastScrollTop = 0
 /* ---------- 主组件 ---------- */
 
 export default function AutoOverlay(props: Props) {
-  const { run, currentQ, partial, turns, busy, autoOn, fullscreen, draft,
+  const { capture, engine, currentQ, partial, turns, busy, autoOn, fullscreen, draft,
     pinned, stealth, micMuted, onDraft, onAsk, onCopy, onExpand, onStop,
     onViewToggle, onPinned, onStealth, onMicMuted } = props
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -228,9 +229,9 @@ export default function AutoOverlay(props: Props) {
     inputRef.current?.focus()
   }
 
-  const listening = run === 'listen' || run === 'record'
+  const listening = capture === 'listening' || capture === 'recording'
   const transcribing = !!partial
-  const generating = run === 'think' || busy
+  const generating = engine !== 'idle' || busy
   const ready = !!answer && !generating
 
   const statusText = generating

@@ -130,7 +130,6 @@ function swapTranslatePair(from: Lang, to: PairLang, heard: PairLang | null): { 
 const storedPair = readStoredPair()
 
 const initial: AppState = {
-  run: 'idle',
   capture: 'off',
   engine: 'idle',
   status: 'Starting…',
@@ -308,40 +307,38 @@ function reducer(state: AppState, action: Action): AppState {
       const ev = action.ev
       if (
         readDemoScene()
-        && (ev.type === 'ready' || ev.type === 'state' || ev.type === 'keys_status' || ev.type === 'status')
+        && (ev.type === 'ready' || ev.type === 'keys_status' || ev.type === 'status')
       ) {
         return state
       }
       switch (ev.type) {
         case 'ready':
-          return { ...state, status: STATUS_READY, run: 'idle', capture: 'off', engine: 'idle' }
+          return { ...state, status: STATUS_READY, capture: 'off', engine: 'idle' }
         case 'keys_status':
           return { ...state, keys: { hasLlm: ev.has_llm, hasStt: ev.has_stt } }
-        case 'state': {
-          const run = ev.state as AppState['run']
+        case 'phase': {
+          // ADR 0001: capture/engine are the two axes. A live session keeps
+          // capture 'listening'/'recording', so autoOn + meeting clock stay on;
+          // 'paused' freezes it; 'off' ends it. Engine busy keeps `busy` set.
+          const capture = ev.capture
+          const engine = ev.engine
           let autoOn = state.autoOn
           let view = state.view
           let meetingStartedAt = state.meetingStartedAt
-          if (run === 'listen') {
+          if (capture === 'listening' || capture === 'recording') {
             if (!isWeb && state.workspaceMode === 'interview' && !autoOn && view === 'workspace') view = 'focus'
             autoOn = true
             if (state.workspaceMode === 'meeting' && meetingStartedAt == null) meetingStartedAt = Date.now()
-          } else if (run === 'idle') {
+          } else if (capture === 'off') {
             autoOn = false
             if (view !== 'workspace') view = 'workspace'
           }
           const generating = Boolean(state.translateAskId || state.summaryAskId || state.notesAskId)
           const interviewAsking = state.workspaceMode === 'interview' && state.busy
           let busy = state.busy
-          if (run === 'think') busy = true
-          else if (run === 'idle' && !generating && !interviewAsking) busy = false
-          return { ...state, run, autoOn, view, busy, meetingStartedAt }
-        }
-        case 'phase': {
-          // ADR 0001: capture is the single source of truth for the mic/session.
-          // run (legacy state) still arrives and keeps driving autoOn/busy/view,
-          // but listening/paused now read from capture.
-          return { ...state, capture: ev.capture, engine: ev.engine }
+          if (engine === 'generating' || engine === 'transcribing') busy = true
+          else if (engine === 'idle' && !generating && !interviewAsking) busy = false
+          return { ...state, capture, engine, autoOn, view, busy, meetingStartedAt }
         }
         case 'listen_taken': {
           // Stolen STT must leave Listening. Do not clear Interview / Ask busy.
@@ -349,7 +346,6 @@ function reducer(state: AppState, action: Action): AppState {
           return {
             ...state,
             status: text,
-            run: 'idle',
             capture: 'off',
             autoOn: false,
             view: 'workspace',
@@ -976,7 +972,7 @@ export default function App() {
   const [moreOpen, setMoreOpen] = useState(false)
   const restoreHistory = useCallback((session: HistorySession) => {
     const s = stateRef.current
-    if (s.busy || s.run === 'listen' || s.run === 'record' || listenWanted.current) {
+    if (s.busy || s.capture !== 'off' || listenWanted.current) {
       dispatch({
         type: 'engine',
         ev: { type: 'status', text: 'Stop listening or wait for the answer before opening a saved session.' },
@@ -1030,7 +1026,7 @@ export default function App() {
   useEffect(() => onSpeakingChange(setSpeaking), [])
 
   const guardMic = (fn: () => void) => {
-    const running = stateRef.current.run === 'listen' || stateRef.current.run === 'record'
+    const running = sessionListening({ capture: stateRef.current.capture })
     if (running || consentRef.current === true) {
       fn()
       return
@@ -1077,7 +1073,7 @@ export default function App() {
       onStart: (mode) => {
         applyWatchMic(mode)
         const s = stateRef.current
-        if (!watchListenControlShouldApplyMode({ action: 'start', sessionPaused: s.capture === 'paused', run: s.run })) {
+        if (!watchListenControlShouldApplyMode({ action: 'start', paused: s.capture === 'paused', capture: s.capture })) {
           guardMic(() => startListen({ fromWatch: true }))
           return
         }
@@ -1097,12 +1093,12 @@ export default function App() {
       onRecord: (mode) => {
         applyWatchMic(mode)
         const s = stateRef.current
-        if (!watchListenControlShouldApplyMode({ action: 'record', sessionPaused: s.capture === 'paused', run: s.run })) {
+        if (!watchListenControlShouldApplyMode({ action: 'record', paused: s.capture === 'paused', capture: s.capture })) {
           if (s.capture === 'paused') {
             guardMic(() => startListen({ fromWatch: true }))
             return
           }
-          if (s.run === 'listen' || s.run === 'record') {
+          if (sessionListening({ capture: s.capture })) {
             stopListen()
           }
           return
@@ -1199,9 +1195,12 @@ export default function App() {
     })
     const timer = window.setTimeout(() => {
       pushWatchStatus({
-        ...face,
-        paused: state.capture === 'paused',
         capture: state.capture,
+        hint: face.hint,
+        original: face.original,
+        translation: face.translation,
+        previous: face.previous,
+        history: face.history,
         mode: watchStatusMode(state.workspaceMode, state.listenScene),
         langPair: watchLangPair(state.translateTo),
       })
@@ -1214,7 +1213,6 @@ export default function App() {
     state.notesAskId,
     state.notesRaw,
     state.partial,
-    state.run,
     state.translateOn,
     state.translatePairs,
     state.turns,
@@ -1318,7 +1316,7 @@ export default function App() {
           queueMicrotask(() => pumpTranslateRef.current())
         }
       }
-      if (e.type === 'state' && e.state === 'idle') {
+      if (e.type === 'phase' && e.capture === 'off') {
         const stuck = inflightTranslate.current
         // Live captions also emit idle. That must not abort an in-flight
         // translation — it is why rows flipped to Failed while still listening.
@@ -1497,7 +1495,7 @@ export default function App() {
 
   const handleNewSession = useCallback(() => {
     const s = stateRef.current
-    if (s.busy || s.run === 'listen' || s.run === 'record' || listenWanted.current) {
+    if (s.busy || s.capture !== 'off' || listenWanted.current) {
       dispatch({
         type: 'engine',
         ev: { type: 'status', text: 'Stop listening or wait for the answer before starting a new session.' },
@@ -1748,7 +1746,7 @@ export default function App() {
       return
     }
     if (s.workspaceMode === 'interview') {
-      if (s.run === 'record') return
+      if (s.capture === 'recording') return
       if (live) stopListen()
       else guardMic(startListen)
       return
@@ -1770,7 +1768,7 @@ export default function App() {
       guardMic(startListen)
       return
     }
-    if (s.run === 'record') return
+    if (s.capture === 'recording') return
     if (live) {
       stopListen()
       return
@@ -1975,7 +1973,7 @@ export default function App() {
   pumpTranslateRef.current = pumpTranslate
 
   useEffect(() => {
-    const liveOn = ttsMode === 'live' && listenSessionShouldAutoSpeak(state.workspaceMode, state.run)
+    const liveOn = ttsMode === 'live' && listenSessionShouldAutoSpeak(state.workspaceMode)
     if (!liveOn) {
       if (state.workspaceMode !== 'translate') stopSpeech()
       return
@@ -1983,7 +1981,6 @@ export default function App() {
     const next = nextLiveUtterances({
       live: true,
       workspaceMode: state.workspaceMode,
-      run: state.run,
       translateOn: state.translateOn,
       bindId: state.translateBindId,
       spoken: spokenTranslate.current,
@@ -2000,7 +1997,7 @@ export default function App() {
         })
       })
     }
-  }, [state.translatePairs, state.meetingLines, state.translateBindId, state.workspaceMode, state.translateOn, state.run, ttsMode, ttsVoice])
+  }, [state.translatePairs, state.meetingLines, state.translateBindId, state.workspaceMode, state.translateOn, ttsMode, ttsVoice])
 
   // Stable identity so memoised transcript rows are not invalidated on every
   // parent render — with thousands of lines that dominates the frame budget.
@@ -2079,17 +2076,17 @@ export default function App() {
   useEffect(() => {
     const fromWatch = isNativeApp() && watchAutoNotes.current
     const flagged = fromWatch || autoReport.current
-    if (flagged && (state.run === 'listen' || state.run === 'record' || state.run === 'think')) {
+    if (flagged && (state.capture !== 'off' || state.engine !== 'idle')) {
       recordHeard.current = true
     }
     const next = shouldGenerateAutoReport({
       flagged,
       heardListen: recordHeard.current,
-      run: state.run,
+      capture: state.capture,
+      engine: state.engine,
       workspaceMode: state.workspaceMode,
       busy: state.busy,
       lineCount: state.meetingLines.length,
-      paused: state.capture === 'paused',
     })
     if (next === 'wait') return
     watchAutoNotes.current = false
@@ -2108,7 +2105,7 @@ export default function App() {
     if (!snap) return
     markWatchReport()
     writeWatchReportSnapshot(snap)
-  }, [state.busy, state.meetingLines.length, state.run, state.workspaceMode])
+  }, [state.busy, state.meetingLines.length, state.capture, state.engine, state.workspaceMode])
 
   useEffect(() => {
     if (!isNativeApp() || !readWatchReport()) return
@@ -2130,7 +2127,7 @@ export default function App() {
     if (
       !shouldRestoreWatchReport({
         mark,
-        listening: s.run === 'listen' || s.run === 'record' || listenWanted.current,
+        listening: s.capture !== 'off' || listenWanted.current,
         busy: s.busy,
         hasWorkspace: s.meetingLines.length > 0 || Boolean(s.notesRaw.trim()),
       })
@@ -2430,13 +2427,13 @@ export default function App() {
     void writePdf()
   }, [state.busy, state.notesRaw, writePdf, generateNotes])
 
-  // 'think' is a generation state, not a pause: it must not freeze the clock,
-  // but it must not restart it either when the meeting is genuinely paused.
+  // 'generating'/'transcribing' is an engine state, not a pause: it must not
+  // freeze the clock, but it must not restart it either when paused.
   const [clockRunning, setClockRunning] = useState(false)
   useEffect(() => {
-    if (state.run === 'think') return
-    setClockRunning(state.run === 'listen' || state.run === 'record')
-  }, [state.run])
+    if (state.engine === 'generating' || state.engine === 'transcribing') return
+    setClockRunning(state.capture === 'listening' || state.capture === 'recording')
+  }, [state.capture, state.engine])
 
   // Meeting elapsed clock
   useEffect(() => {
@@ -2459,7 +2456,8 @@ export default function App() {
     return (
       <div className={`app overlay-app${fullscreen ? ' fullscreen' : ''}`}>
         <AutoOverlay
-          run={state.run}
+          capture={state.capture}
+          engine={state.engine}
           currentQ={state.currentQ}
           partial={state.partial}
           turns={state.turns}
@@ -2499,7 +2497,8 @@ export default function App() {
   const sideRail = (
     <SideRail
       mode={state.workspaceMode}
-      run={state.run}
+      capture={state.capture}
+      engine={state.engine}
       autoOn={state.autoOn}
       onPrimary={handlePrimary}
       onRecord={handleRecord}

@@ -11,8 +11,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private(set) var jsReady = false
     private var pending: [(action: String, at: Double?, live: Bool, mode: String)] = []
     private var pendingPcm: [String] = []
-    private var lastListening = false
-    private var lastPaused = false
+    private var lastCapture = ""
     private var lastHint = "Ready"
     private var lastOriginal = ""
     private var lastTranslation = ""
@@ -37,8 +36,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             session.activate()
         }
         pushStatus(
-            listening: lastListening,
-            paused: lastPaused,
+            capture: lastCapture,
             hint: lastHint,
             original: lastOriginal,
             translation: lastTranslation,
@@ -63,8 +61,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             plugin?.notifyListeners("pcm", data: ["data": chunk])
         }
         pushStatus(
-            listening: lastListening,
-            paused: lastPaused,
+            capture: lastCapture,
             hint: lastHint,
             original: lastOriginal,
             translation: lastTranslation,
@@ -74,8 +71,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     }
 
     public func pushStatus(
-        listening: Bool,
-        paused: Bool = false,
+        capture: String,
         hint: String,
         original: String = "",
         translation: String = "",
@@ -84,8 +80,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         mode: String = "",
         langPair: String = ""
     ) {
-        lastListening = listening
-        lastPaused = paused
+        if !capture.isEmpty {
+            lastCapture = capture
+        }
         lastHint = hint
         lastOriginal = original
         lastTranslation = translation
@@ -100,8 +97,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         var payload: [String: Any] = [
-            "listening": listening,
-            "paused": paused,
+            "capture": lastCapture,
             "hint": hint,
             "original": original,
             "translation": translation,
@@ -297,8 +293,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     public func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
         if activationState == .activated {
             pushStatus(
-                listening: lastListening,
-                paused: lastPaused,
+                capture: lastCapture,
                 hint: lastHint,
                 original: lastOriginal,
                 translation: lastTranslation,
@@ -320,7 +315,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
 
     public func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
         handle(message, live: true)
-        var reply: [String: Any] = ["ok": true, "listening": lastListening, "hint": lastHint]
+        var reply: [String: Any] = ["ok": true, "capture": lastCapture, "hint": lastHint]
         if !lastMode.isEmpty {
             reply["mode"] = lastMode
         }

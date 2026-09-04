@@ -59,12 +59,12 @@ class CaptureAxisTests(unittest.TestCase):
 
 
 class PhasePairingTests(unittest.TestCase):
-    def test_emit_run_emits_state_then_phase(self):
+    def test_emit_phase_sends_capture_and_engine(self):
         sess = _session(_listener=object())
-        sess._emit_run("listen")
-        types = [e["type"] for e in sess.emit.events]
-        self.assertEqual(types, ["state", "phase"])
-        self.assertEqual(sess.emit.events[0], {"type": "state", "state": "listen"})
+        sess._emit_phase()
+        self.assertEqual(sess.emit.events, [
+            {"type": "phase", "capture": "listening", "engine": "idle"},
+        ])
 
     def test_start_emits_phase_right_after_ready(self):
         # Reconnecting clients read `capture` from the first frame after ready.
@@ -80,19 +80,10 @@ class PhasePairingTests(unittest.TestCase):
         # Decoupling: a model generating does NOT read as "stopped" on the Watch.
         sess = _session(_listener=object())
         sess._set_engine("generating")
-        sess._emit_run("think")
+        sess._emit_phase()
         phase = _phases(sess)[-1]
         self.assertEqual(phase["capture"], "listening")
         self.assertEqual(phase["engine"], "generating")
-
-    def test_every_state_is_followed_by_phase(self):
-        sess = _session()
-        for st in ("idle", "listen", "record", "think", "idle"):
-            sess._emit_run(st)
-        types = [e["type"] for e in sess.emit.events]
-        for i, t in enumerate(types):
-            if t == "state":
-                self.assertEqual(types[i + 1], "phase", f"state at {i} not paired")
 
     def test_set_engine_changes_engine_axis(self):
         sess = _session()

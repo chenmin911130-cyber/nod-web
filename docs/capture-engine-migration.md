@@ -18,7 +18,11 @@
   - ✅ Web 侧：`WatchPhoneSession.swift` 在 `WatchApp` target (`xcodebuild` generic watchOS, CODE_SIGNING_ALLOWED=NO) 编译通过 BUILD SUCCEEDED
   - ✅ Web 侧：删函数后 `tsc --noEmit`、web 全套测试 全绿；删了 Finder 重复 `watchMic.test 2.ts`
   - ⏳ **装真机**：未 `cap:sync` / 未装手机+手表（需用户确认、需设备；装完用 Bundle Version 核对；note：capture="off" 时保留 offeringSave/savedAck，手表 Stop→Save 流程不被手机回推冲掉）
-- [ ] **L5 删旧 state**：服务端 `_emit_run` 不发 `state`、删 `_active_run_state`；`bridge.ts` 去 `'state'`、reducer 删 `run`；Swift 删旧布尔读取；pushWatchStatus 去 `listening`/`paused`；ADR 0001 标 Done
+- [x] **L5 删旧 state**：服务端 `_emit_run` 不再发 `state`、删 `_active_run_state`；`bridge.ts` 去 `'state'`、reducer 去 `run`；Swift 删旧布尔读取；pushWatchStatus 负载去 `listening`/`paused` 只留 `capture`；ADR 0001 标 Done
+  - ✅ **修复 L3 缺口**：手机→手表负载原本由 `NodWatchPlugin.setStatus`/`WatchBridge.pushStatus` 构建，**并未携带 `capture`**（L3 改的 `apply()` 读不到）。L5 已把 `capture` 穿透进 Native 侧（plugin setStatus + WatchBridge payload + reply），并删掉 `listening`/`paused`
+  - ✅ 服务端 pytest `220 passed / 1 skipped`；`tsc --noEmit`、`vite build`、web 全套测试 全绿；`xcodebuild` App 与 WatchApp 均 BUILD SUCCEEDED
+  - ✅ **全部 4 层（L1/L2/L3/L5）代码完成**；⭐ **唯一剩余 = 真机部署验证**（未 cap:sync / 未装手机+手表；需用户确认，装完用 Bundle Version 核对）
+- [x] 全链路：服务端 / 手机 JS / 手表 Swift 均已切到 `capture`（单一事实来源），旧 `state` 事件已彻底移除
 
 ## 关联文件（L2 从这些开始读）
 

@@ -9,8 +9,6 @@ type WatchHistItem = { id: string; title: string; text: string }
 type WatchPlugin = {
   ready(): Promise<void>
   setStatus(opts: {
-    listening: boolean
-    paused?: boolean
     capture?: string
     hint?: string
     original?: string
@@ -65,12 +63,12 @@ export function watchWorkspaceForMode(mode: WatchListenMode): {
  */
 export function watchListenControlShouldApplyMode(input: {
   action: string
-  sessionPaused: boolean
-  run: string
+  paused: boolean
+  capture: string
 }): boolean {
   if (input.action !== 'start' && input.action !== 'record') return false
-  if (input.sessionPaused) return false
-  if (input.action === 'record' && (input.run === 'listen' || input.run === 'record')) return false
+  if (input.paused) return false
+  if (input.action === 'record' && (input.capture === 'listening' || input.capture === 'recording')) return false
   return true
 }
 
@@ -289,9 +287,7 @@ export function installWatchRemote(handlers: {
 }
 
 export function pushWatchStatus(face: {
-  listening: boolean
-  paused?: boolean
-  capture?: string
+  capture: string
   hint?: string
   original?: string
   translation?: string
@@ -302,8 +298,6 @@ export function pushWatchStatus(face: {
 }): void {
   if (!isNativeApp()) return
   void NodWatch.setStatus({
-    listening: face.listening,
-    paused: face.paused,
     capture: face.capture,
     hint: (face.hint || '').slice(0, 140),
     original: (face.original || '').slice(0, 800),

@@ -113,28 +113,28 @@ if (!toLecture || toLecture.workspace !== 'meeting' || toLecture.scene !== 'lect
 }
 
 if (
-  watchListenControlShouldApplyMode({ action: 'pause', sessionPaused: false, run: 'listen' })
-  || watchListenControlShouldApplyMode({ action: 'resume', sessionPaused: true, run: 'idle' })
-  || watchListenControlShouldApplyMode({ action: 'stop', sessionPaused: false, run: 'listen' })
+  watchListenControlShouldApplyMode({ action: 'pause', paused: false, capture: 'listening' })
+  || watchListenControlShouldApplyMode({ action: 'resume', paused: true, capture: 'off' })
+  || watchListenControlShouldApplyMode({ action: 'stop', paused: false, capture: 'listening' })
 ) {
   throw new Error('Pause / Resume / Done must not switch Meeting / Interview / Translate')
 }
 
-if (watchListenControlShouldApplyMode({ action: 'start', sessionPaused: true, run: 'idle' })) {
+if (watchListenControlShouldApplyMode({ action: 'start', paused: true, capture: 'off' })) {
   throw new Error('Watch resume after Pause must keep the phone workspace')
 }
 
-if (watchListenControlShouldApplyMode({ action: 'record', sessionPaused: false, run: 'listen' })) {
+if (watchListenControlShouldApplyMode({ action: 'record', paused: false, capture: 'listening' })) {
   throw new Error('Watch Record while already listening must stop, not switch mode')
 }
 
-if (watchFileShouldStartListen() || watchListenControlShouldApplyMode({ action: '', sessionPaused: false, run: 'idle' })) {
+if (watchFileShouldStartListen() || watchListenControlShouldApplyMode({ action: '', paused: false, capture: 'off' })) {
   throw new Error('a leftover Watch file or empty action must not apply a mode or start_listen')
 }
 
 if (
-  !watchListenControlShouldApplyMode({ action: 'start', sessionPaused: false, run: 'idle' })
-  || !watchListenControlShouldApplyMode({ action: 'record', sessionPaused: false, run: 'idle' })
+  !watchListenControlShouldApplyMode({ action: 'start', paused: false, capture: 'off' })
+  || !watchListenControlShouldApplyMode({ action: 'record', paused: false, capture: 'off' })
 ) {
   throw new Error('Watch Listen / Record from idle must still apply the selected mode then start_listen')
 }
@@ -179,8 +179,8 @@ if (watchAction('save') !== 'save' || watchAction('discard') !== 'discard') {
   throw new Error('Watch Save / Don\'t save must be session actions, not start_listen')
 }
 if (
-  watchListenControlShouldApplyMode({ action: 'save', sessionPaused: false, run: 'idle' })
-  || watchListenControlShouldApplyMode({ action: 'discard', sessionPaused: false, run: 'idle' })
+  watchListenControlShouldApplyMode({ action: 'save', paused: false, capture: 'off' })
+  || watchListenControlShouldApplyMode({ action: 'discard', paused: false, capture: 'off' })
 ) {
   throw new Error('Watch Save / Don\'t save must not switch Meeting / Interview / Translate')
 }
