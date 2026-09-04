@@ -1,20 +1,20 @@
 # Nod Web
 
-网页版 Nod：浏览器麦克风采音，**AssemblyAI 云端流式转写**，DeepSeek / OpenRouter 流式回答。面试 / 会议 / 翻译三个工作区都保留。
+Nodpilot：浏览器 / iPhone / Watch 上的 AI Listening Assistant。麦克风采音，**AssemblyAI** 流式转写，**DeepSeek** 生成笔记、翻译和问答。顶栏是 **Listen** 和 **Translate**；Meeting / Lecture / Live Q&A 是 Listen 里的场景。
 
 Copyright © 2026 Min Chen. All rights reserved. NODPILOT™ is a trademark of Min Chen. See [LICENSE](LICENSE).
 
-完整用户文档见 **[产品说明书](docs/产品说明书.md)**（功能、快捷键、工作区、部署与常见问题）。
+用户文档见 **[产品说明书](docs/产品说明书.md)**。功能设计见 **[docs/nodpilot-product-design.html](docs/nodpilot-product-design.html)**。
 
-桌面版的置顶、隐身、系统扬声器抓取在浏览器里做不到，已去掉。其余快捷键、附件、导出打印都在。
+网页听不到 Zoom / Teams 系统声。废弃的桌面 Nod Agent（`dsh web` / 3080）不要再开。
 
 ## 本地运行
 
 ```bash
 python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
+.venv/bin/pip install -r requirements.txt
 cd web && npm install && npm run build && cd ..
-.venv\Scripts\python -m uvicorn server.app:app --host 127.0.0.1 --port 9320
+.venv/bin/python -m uvicorn server.app:app --host 127.0.0.1 --port 9320
 ```
 
 打开 http://127.0.0.1:9320
@@ -23,14 +23,14 @@ iOS App（Capacitor 套现有网页，Apple Watch 表麦录音）见 **[ios/READ
 
 开发热更新：先起后端 `9320`，再 `cd web && npm run dev`（Vite `5174`，会把 `/ws` `/api` 代理到后端）。
 
-Key 读取顺序：环境变量 → Hermes `.env` → `%APPDATA%\Nod\secrets.json`。也可以在页面里填写。
+Key 读取顺序：环境变量 → Hermes `.env` → 本机 secrets。也可以在页面里填写。
 
 ## 快捷键
 
 | 键 | 功能 |
 |---|---|
 | F2 | 手动录音 |
-| F3 | 自动监听 |
+| F3 | 开始 / 停止听写 |
 | F4 | 清空 |
 
 允许浏览器使用麦克风后即可说话。转写走 AssemblyAI Universal 3.5 Pro。
