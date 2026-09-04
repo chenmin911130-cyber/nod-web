@@ -1316,7 +1316,7 @@ export default function App() {
           queueMicrotask(() => pumpTranslateRef.current())
         }
       }
-      if (e.type === 'phase' && e.capture === 'off') {
+      if (e.type === 'phase' && e.capture === 'off' && e.engine === 'idle') {
         const stuck = inflightTranslate.current
         // Live captions also emit idle. That must not abort an in-flight
         // translation — it is why rows flipped to Failed while still listening.
