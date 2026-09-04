@@ -20,6 +20,7 @@ class ForgottenListenTests(unittest.TestCase):
         sess._listen_wanted = True
         sess._idle_check_at = 0.0
         sess._listen_started_at = time.time()
+        sess._listen_accum_sec = 0.0
         sess._last_voice_at = time.time()
         sess.pipeline = mock.Mock()
         sess.pipeline._cancel = threading.Event()
@@ -78,9 +79,11 @@ class ForgottenListenTests(unittest.TestCase):
         sess._paused = True
         sess._listen_wanted = True
         sess._listener = None
-        # Simulate a long pause: last voice more than idle budget ago, session
-        # open past the 2h cap. If resume does not rewind, the first idle tick
-        # after resume immediately stops listening.
+        # Simulate a long pause: last voice long ago, segment start far in the
+        # past, but only 5 min of REAL listening banked. A long pause must not
+        # read as silence (voice clock) NOR as "2h elapsed": the 2h quota is the
+        # ACCUMULATED listen time, which a pause does not consume.
+        sess._listen_accum_sec = 300.0
         sess._last_voice_at = time.time() - LISTEN_IDLE_SECONDS - 300
         sess._listen_started_at = time.time() - LISTEN_MAX_SECONDS - 300
         sess._start_listening = mock.Mock()
@@ -88,6 +91,22 @@ class ForgottenListenTests(unittest.TestCase):
         sess._start_listening.assert_called_once_with(resume=True)
         self.assertFalse(sess._paused)
         self.assertGreater(sess._last_voice_at, time.time() - 1)
-        # P2: resume must NOT rewind the 2h counter — the cap accumulates across
-        # pause/resume so a paused session can't run past the billing guard.
-        self.assertLess(sess._listen_started_at, time.time() - LISTEN_MAX_SECONDS)
+        # Resume starts a NEW segment clock (so the past pause isn't counted) and
+        # keeps the banked quota; neither the 2h cap nor idle is immediately hit.
+        self.assertGreater(sess._listen_started_at, time.time() - 1)
+        self.assertEqual(sess._listen_accum_sec, 300.0)
+        self.assertTrue(
+            sess._listen_accum_sec + (time.time() - sess._listen_started_at) < LISTEN_MAX_SECONDS
+        )
+
+    def test_accumulated_listen_cap_hits_after_a_pause(self) -> None:
+        """The 2h cap is ACCUMULATED real listening time, so it holds across a
+        pause and stops once the sum reaches the cap (even right after resume)."""
+        sess = self._session()
+        # Segment A banked 100s; segment B is already just short of the cap.
+        sess._listen_accum_sec = 100.0
+        sess._listen_started_at = time.time() - (LISTEN_MAX_SECONDS - 100)
+        sess._last_voice_at = time.time()
+        sess._maybe_stop_forgotten_listen()
+        sess._stop_listening.assert_called_once()
+        self.assertFalse(sess._listen_wanted)

@@ -30,6 +30,8 @@ def _session(**overrides) -> Session:
     sess._listener = None
     sess._paused = False
     sess._engine = "idle"
+    sess._listen_accum_sec = 0.0
+    sess._listen_started_at = 0.0
     sess._workspace = "interview"
     for key, val in overrides.items():
         setattr(sess, key, val)

@@ -2011,6 +2011,7 @@ class Session:
         self._stt_drop_at = 0.0
         self._listen_wanted = False
         self._listen_started_at = 0.0
+        self._listen_accum_sec = 0.0
         self._last_voice_at = 0.0
         self._idle_check_at = 0.0
         self._archive_fp = None
@@ -2716,6 +2717,9 @@ class Session:
             return
         self._paused = True
         if self._listener:
+            # Bank the just-listened segment into the accumulated 2h quota so
+            # the wall-clock pause doesn't keep consuming the cap.
+            self._listen_accum_sec = getattr(self, "_listen_accum_sec", 0.0) + (time.time() - self._listen_started_at)
             with self._listen_lock():
                 lst = self._listener
                 self._listener = None
@@ -2733,12 +2737,13 @@ class Session:
             # reads capture=listening, not a stale "paused" frame (order bug:
             # resume used to pulse paused -> listening).
             # Pause stops AssemblyAI but the idle/watch clock keeps running, so
-            # rewind the VOICE clock: a long pause must not read as "15 minutes
-            # of silence" the instant we resume. Do NOT rewind _listen_started_at
-            # — the 2h cap must accumulate across pause/resume, or a pause lets
-            # a session bypass the billing guard.
+            # rewind the VOICE clock (a long pause must not read as "15 minutes
+            # of silence") and start a NEW segment clock for the 2h cap. The
+            # pause already banked its listened time into _listen_accum_sec, so
+            # a long pause neither consumes the quota nor bypasses it.
             self._paused = False
             self._last_voice_at = time.time()
+            self._listen_started_at = time.time()
             self._start_listening(resume=True)
         else:
             # Not wanted (or manual recording): just clear the paused latch.
@@ -2852,6 +2857,8 @@ class Session:
         if old and old is not listener:
             self._stop_listener(old)
         now = time.time()
+        if not resume:
+            self._listen_accum_sec = 0.0  # a new session zeroes the accumulated quota
         if not resume or not self._listen_started_at:
             self._listen_started_at = now
             self._last_voice_at = now
@@ -2873,7 +2880,7 @@ class Session:
         self._idle_check_at = now
         started = self._listen_started_at or now
         last = self._last_voice_at or started
-        if now - started >= LISTEN_MAX_SECONDS:
+        if getattr(self, "_listen_accum_sec", 0.0) + (now - started) >= LISTEN_MAX_SECONDS:
             self._paused = False
             self._listen_wanted = False
             self._stop_listening()
@@ -2888,6 +2895,7 @@ class Session:
             self._offer_save_history()
 
     def _stop_listening(self) -> None:
+        self._listen_accum_sec = 0.0  # session over; reset the accumulated quota
         self._pending = None
         self._cancel_stt_restart_timer()
         with self._listen_lock():
