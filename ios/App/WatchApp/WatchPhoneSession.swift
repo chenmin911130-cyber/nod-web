@@ -354,6 +354,12 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                     elapsedMs = 0
                 }
                 WatchGlanceStore.setStartedAt(startedAt)
+                if Self.usesWatchMic(mode) && !WatchRecorder.shared.isRunning {
+                    // Resume over the phone is a SECOND resume path (the Watch's
+                    // own resume() opens the mic). Mirror it, or translate /
+                    // Live Q&A silently records nothing after a phone Pause.
+                    beginMic(hint: reachable ? "Watch mic" : "Recording on Watch", resetClock: false)
+                }
             }
         case "paused":
             if !paused {
