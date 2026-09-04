@@ -144,6 +144,11 @@ MAX_AUDIO_HOURS = max(0.5, float(os.environ.get("MAX_AUDIO_HOURS") or "8"))
 HISTORY_RETENTION_DAYS = max(1, int(float(os.environ.get("HISTORY_RETENTION_DAYS") or "30")))
 LISTEN_IDLE_SECONDS = max(60, int(float(os.environ.get("LISTEN_IDLE_SECONDS") or str(15 * 60))))
 LISTEN_MAX_SECONDS = max(LISTEN_IDLE_SECONDS, int(float(os.environ.get("LISTEN_MAX_SECONDS") or str(2 * 3600))))
+# A live AssemblyAI socket with ZERO bytes arriving must be torn down quickly.
+# Such a socket is ALWAYS a dead/never-started client mic, never a quiet room —
+# a quiet room still streams silence frames, so it keeps _last_pcm_at fresh and
+# never trips this. 15-min idle stays the fallback for the quiet-room case.
+LISTEN_ZERO_PCM_SECONDS = max(10, int(float(os.environ.get("LISTEN_ZERO_PCM_SECONDS") or "25")))
 
 PLANS: dict[str, dict] = {
     "free": {

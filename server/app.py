@@ -57,6 +57,7 @@ from server.settings import (
     COOKIE_NAME,
     LISTEN_IDLE_SECONDS,
     LISTEN_MAX_SECONDS,
+    LISTEN_ZERO_PCM_SECONDS,
     PUBLIC_URL,
     QUOTA_DISABLED,
 )
@@ -1829,6 +1830,7 @@ class Session:
         self._listen_wanted = False
         self._listen_started_at = 0.0
         self._listen_accum_sec = 0.0
+        self._last_pcm_at = 0.0
         self._last_voice_at = 0.0
         self._idle_check_at = 0.0
         self._archive_fp = None
@@ -2055,6 +2057,7 @@ class Session:
                 self._maybe_flush_manual_chunk()
             return
         if self._listener:
+            self._last_pcm_at = time.time()  # ANY byte (even silence) refreshes this
             self._archive_append(pcm)
             self._listener.push_pcm(pcm)
             self._maybe_stop_forgotten_listen()
@@ -2680,6 +2683,7 @@ class Session:
             self._listen_started_at = now
             self._last_voice_at = now
         self._idle_check_at = 0.0
+        self._last_pcm_at = now  # grace window for the freshly-opened socket
         _ensure_idle_watch_thread()
         self._emit_phase()
         if not resume:
@@ -2704,6 +2708,14 @@ class Session:
             self.emit({"type": "status", "text": "Listening stopped after 2 hours. Start again if you still need it."})
             self._offer_save_history()
             return
+        last_pcm = getattr(self, "_last_pcm_at", 0.0) or now
+        if now - last_pcm >= LISTEN_ZERO_PCM_SECONDS:
+            self._paused = False
+            self._listen_wanted = False
+            self._stop_listening()
+            self.emit({"type": "status", "text": f"No microphone audio received for {int(LISTEN_ZERO_PCM_SECONDS)} seconds — stopped listening. Tap Start to retry."})
+            self._offer_save_history()
+            return
         if now - last >= LISTEN_IDLE_SECONDS:
             self._paused = False
             self._listen_wanted = False
@@ -2713,6 +2725,7 @@ class Session:
 
     def _stop_listening(self) -> None:
         self._listen_accum_sec = 0.0  # session over; reset the accumulated quota
+        self._last_pcm_at = 0.0  # zero-PCM guard must not carry into the next session
         self._pending = None
         self._cancel_stt_restart_timer()
         with self._listen_lock():

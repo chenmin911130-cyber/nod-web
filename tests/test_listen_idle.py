@@ -4,7 +4,7 @@ import unittest
 from unittest import mock
 
 from server.app import Session, _adopt_live_stt, _reset_live_stt, _tick_live_idle_watches
-from server.settings import LISTEN_IDLE_SECONDS, LISTEN_MAX_SECONDS
+from server.settings import LISTEN_IDLE_SECONDS, LISTEN_MAX_SECONDS, LISTEN_ZERO_PCM_SECONDS
 
 
 class ForgottenListenTests(unittest.TestCase):
@@ -22,6 +22,7 @@ class ForgottenListenTests(unittest.TestCase):
         sess._listen_started_at = time.time()
         sess._listen_accum_sec = 0.0
         sess._last_voice_at = time.time()
+        sess._last_pcm_at = time.time()
         sess.pipeline = mock.Mock()
         sess.pipeline._cancel = threading.Event()
         sess.emit = mock.Mock()
@@ -112,3 +113,23 @@ class ForgottenListenTests(unittest.TestCase):
         sess._maybe_stop_forgotten_listen()
         sess._stop_listening.assert_called_once()
         self.assertFalse(sess._listen_wanted)
+
+    def test_zero_pcm_stops_listen_even_with_voice(self) -> None:
+        """A live socket with ZERO bytes for the zero-PCM window is a dead/never-started
+        mic, never a quiet room (a quiet room still streams silence frames). Stop it fast
+        even if voice was seen recently — the idle clock would wait a full 15 min."""
+        sess = self._session()
+        sess._last_pcm_at = time.time() - LISTEN_ZERO_PCM_SECONDS - 1
+        sess._last_voice_at = time.time()  # recent voice: only the zero-PCM guard fires
+        sess._maybe_stop_forgotten_listen()
+        sess._stop_listening.assert_called_once()
+        self.assertFalse(sess._listen_wanted)
+
+    def test_zero_pcm_guard_not_fired_on_recent_pcm(self) -> None:
+        """Any arriving PCM refreshes _last_pcm_at, so a quiet-but-streaming room is never
+        torn down by the zero-PCM guard (the 15-min idle clock owns that case)."""
+        sess = self._session()
+        sess._last_pcm_at = time.time()
+        sess._last_voice_at = time.time()
+        sess._maybe_stop_forgotten_listen()
+        sess._stop_listening.assert_not_called()
