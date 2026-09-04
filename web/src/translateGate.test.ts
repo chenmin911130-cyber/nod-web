@@ -71,6 +71,11 @@ eq(
   true,
   'Italian lock: no tag falls through to the glyph check',
 )
+eq(
+  matchesLockedFrom('Dobbiamo finire il lavoro entro domani', 'it', 'es'),
+  true,
+  'Italian lock: a nearby Latin mis-tag (es) also must not veto',
+)
 eq(matchesLockedFrom('你好世界', 'it', 'zh'), false, 'Italian lock: a real CJK tag vetoes')
 eq(
   matchesLockedFrom('Hello world this is fine', 'it', null),

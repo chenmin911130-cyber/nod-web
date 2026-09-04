@@ -52,7 +52,7 @@ export function translateShouldPassthrough(text: string, to: PairLang, fromTag?:
  * language, and short/ambiguous turns are often mis-tagged 'en'.
  */
 export function matchesLockedFrom(text: string, locked: PairLang, heard: PairLang | null): boolean {
-  if (heard && heard !== locked && !(LATIN_TARGETS.has(locked) && heard === 'en')) return false
+  if (heard && heard !== locked && !(LATIN_TARGETS.has(locked) && (LATIN_TARGETS.has(heard) || heard === 'en'))) return false
   if (locked === 'en' || locked === 'zh' || locked === 'ja') return looksLikeTarget(text, locked)
   if (/[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]/u.test(text)) return false
   const t = compact(text)
