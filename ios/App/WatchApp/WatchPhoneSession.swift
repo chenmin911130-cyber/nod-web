@@ -40,6 +40,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     private let pcmLock = NSLock()
     private let maxPending = 8 * 1024 * 1024
     private var runtime: WKExtendedRuntimeSession?
+    /// True when the Watch's own recorder was running right before a pause, so
+    /// a phone-initiated resume reopens the mic only for a session that was
+    /// actually recording on the Watch — not for a phone-mic session (which
+    /// would otherwise double the audio into one transcription).
+    private var micWasRunningBeforePause = false
 
     override private init() {
         super.init()
@@ -347,6 +352,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             // Live session: the Watch shows listening. It does NOT seize the mic
             // from local Watch Start; a phone-initiated session just mirrors.
             if !listening || paused {
+                let resuming = paused
                 paused = false
                 listening = true
                 if startedAt == nil {
@@ -354,15 +360,18 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                     elapsedMs = 0
                 }
                 WatchGlanceStore.setStartedAt(startedAt)
-                if Self.usesWatchMic(mode) && !WatchRecorder.shared.isRunning {
-                    // Resume over the phone is a SECOND resume path (the Watch's
-                    // own resume() opens the mic). Mirror it, or translate /
-                    // Live Q&A silently records nothing after a phone Pause.
+                // Only reopen the Watch mic after a pause of a session that was
+                // recording on the Watch. A plain off->listening for a phone-mic
+                // session must NOT start the Watch recorder, or both mics feed
+                // one transcription (double audio).
+                if resuming && micWasRunningBeforePause && !WatchRecorder.shared.isRunning {
                     beginMic(hint: reachable ? "Watch mic" : "Recording on Watch", resetClock: false)
                 }
+                micWasRunningBeforePause = false
             }
         case "paused":
             if !paused {
+                micWasRunningBeforePause = WatchRecorder.shared.isRunning
                 if let startedAt { elapsedMs = Date().timeIntervalSince(startedAt) }
                 WatchRecorder.shared.stop()
                 stopRuntime()
