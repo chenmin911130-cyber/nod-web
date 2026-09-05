@@ -1,4 +1,4 @@
-import { keepShouldWaitForNotes, shouldGenerateAutoReport } from './recordReport'
+import { keepShouldWaitForNotes, shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
 
 function eq(got: string, want: string) {
   if (got !== want) throw new Error(`expected ${want}, got ${got}`)
@@ -31,3 +31,8 @@ eq(report({ capture: 'off', engine: 'generating', workspaceMode: 'meeting', busy
 if (keepShouldWaitForNotes('ask-1') !== true) throw new Error('streaming notes => save waits')
 if (keepShouldWaitForNotes('__pending__') !== true) throw new Error('pending notes => save waits')
 if (keepShouldWaitForNotes('') !== false) throw new Error('no notes in flight => save now')
+
+// A Meeting stopped while paused must release the server listener, or capture
+// stays 'paused' and auto-notes never fire.
+if (stopShouldReleaseListener('paused') !== true) throw new Error('paused => release the listener')
+if (stopShouldReleaseListener('off') !== false) throw new Error('off => no listener to release')

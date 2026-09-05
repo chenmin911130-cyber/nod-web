@@ -28,7 +28,7 @@ import { usePhoneChrome } from './phoneChrome'
 import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchListenMode, watchShouldApplyMode, watchStartShouldPreferWatchMic } from './watch'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
-import { keepShouldWaitForNotes, shouldGenerateAutoReport } from './recordReport'
+import { keepShouldWaitForNotes, shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
 import {
   clearWatchReport,
   markWatchReport,
@@ -1808,6 +1808,7 @@ export default function App() {
     if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
       autoReport.current = true
       recordHeard.current = true
+      if (stopShouldReleaseListener(s.capture)) stopListen()
       dispatch({ type: 'meeting_ended' })
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped · writing notes' } })
       queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
