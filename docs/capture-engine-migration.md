@@ -15,11 +15,17 @@
 1. **item 1 · 客户端 `phase(off, idle)` 修复** —— 排在真机测试 ① 之后。根因/时序/修法在 **GitHub issue #11**（OPEN）。落地时删掉帧级翻译重叠 gate 的 `test.fail` 行（d22a6c1 里标 expected-fail 的那行）。
 2. 重连排查（零 PCM 时间戳对部署时间）—— **不在交接顺序里，暂不开**，留到以后。
 
-**Meeting 审查（09-05，新，已建 issue #12–#16）**
-- **#12** `lang.py` 拉丁句尾丢空格 —— **已修已测未推**（服务端，随下次 `push origin main`/Railway 部署走）。
-- **#15 / #16** `pdf.ts` 拉丁词不中断 + `/Title` UTF-16BE 乱码 —— **已修已测未推**（web 侧，按规则随 build 20，与 item 1 一起）。
-- **#14** 笔记语言耦合（`translate_to` 连带改 `notesLang`）—— **待你确认根因**（12:16 会话 History 的 `OUTPUT LANGUAGE (hard rule): … Italian only`）+ 定产品规则后再改。
-- **#13** 按说话人拆 turn（改动重，属设计改动）—— 单独立项，排序另定，不与 ① 抢。
+**Meeting 审查（09-05，已建 #12–#22；#12/#22 已关）**
+- **#12** `lang.py` 拉丁句尾丢空格 —— **已推已上线**（`fcc4b71`，服务端，Railway `9c0338a7`），issue 已关。
+- **#15 / #16** `pdf.ts` 拉丁词不中断 + `/Title` UTF-16BE —— **已推**（`1f289cd`），web 随 build 20 已装设备核对。
+- **#17 Summary 语言通道** 服务端 `e78e682` 已上线，客户端 `afaa5ab` 随 build 20。
+- **#18 capTranscript** `7b7da17` 随 build 20；**#20 Bilingual 修复** `96a72ae`+`ac27cf9` 随 build 20；**#21 ellipsize** `287e68c` 随 build 20。
+- **#19 Meeting 人数选择** `9be703c`（web）+ `ce38869`（iPhone chip）随 build 20。
+- **#22 STT trace** `05646e2`+`8b74ad2` 已上线（服务端），issue 已关。
+- **#14** 笔记语言耦合 —— **待你确认根因**（12:16 History 的 `OUTPUT LANGUAGE (hard rule): … Italian only`）+ 定产品规则后再改。
+- **#13** 按说话人拆 turn —— 设计改动，等 #22 trace 数据再定，不与 ① 抢。
+
+**build 20（09-05）已装设备**：iPhone + Watch 均 `com.nodpilot.app` 1.0 **20**，Bundle Version 已核对，新 web bundle `App-CgUDCLxq.js` 在机内。剩真机验收：3=Pause/Resume 真暂停、4=手表跟随 capture、5=手表 Stop→Save 保护、手机麦→手表不开麦（双麦）、翻译到英文说拉丁语应出翻译。
 
 **教训入口（动手上文工作前必读）**
 - `.cursor/skills/self-improve/errors.md` —— e2e 本地绿 CI 红、`phase(off,idle)` 兜底 vs `done` 重试、`think` 被当 Phone Stop、手表 UI 翻面、只装手表原生没 `cap:sync` 等
