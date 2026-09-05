@@ -7,7 +7,7 @@
 新会话从这里核对起（别考古）：`git -C ~/Projects/nod-web status` + `git log --oneline -4`。
 
 **已核实（本会话工具验证）**
-- `main` = `origin/main`，HEAD `7e93305`。工作区干净，仅 2 个**未跟踪** docs：`docs/Nodpilot 产品功能设计.pdf`、`docs/nodpilot-product-design.html`（遗留，勿动）。
+- `main` = `origin/main`，HEAD `64bb3c7`（交接快照提交；上一提交 `7e93305` 为 build 23）。工作区干净，仅 2 个**未跟踪** docs：`docs/Nodpilot 产品功能设计.pdf`、`docs/nodpilot-product-design.html`（遗留，勿动）。
 - CI 最新 run `33957151207` **success**；Railway `ec273f99` **SUCCESS**；`/api/health` 200。
 - ⚠️ **线上 DB 是 SQLite `/data/nod.db`，不是 Postgres**（DATABASE_URL 未设；railway 无独立 PG 服务；SQL 用 SQLite 语法）。native app 连 `https://nodpilot.com`；`push origin/main` → CI+Railway 自动部署。
 
