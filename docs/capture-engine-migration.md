@@ -2,35 +2,30 @@
 
 单一事实来源（single source of truth）文档：所有"做到哪层了 / 下一步做什么"都在这里更新，**不要**只写在对话上下文里。设计依据见 `docs/adr/0001-capture-engine-two-axis-state.md`。
 
-## 当前状态（2026-09-05）· 窗口交接快照
+## 最新状态（2026-09-05 深夜）· 窗口交接快照
 
-新会话从这里核对起（别考古）：`git -C ~/Projects/nod-web status` + `git log --oneline -4` 应看到下面这套。
+新会话从这里核对起（别考古）：`git -C ~/Projects/nod-web status` + `git log --oneline -4`。
 
 **已核实（本会话工具验证）**
-- `main` = `origin/main`，HEAD `d22a6c1`（e2e: mark translate overlap gate as expected-fail until #11 item(1) lands）；工作区干净，仅 2 个**未跟踪** docs：`docs/Nodpilot 产品功能设计.pdf`、`docs/nodpilot-product-design.html`（遗留，勿动）。
-- CI 最新 run `33949673588` **success**（backend/frontend/e2e 全绿），headSha = `d22a6c1`。⚠️ 其前两个 run `33931234994`、`33928639290` 是 **failure** —— 即 e2e 本地绿/CI 红的坑，d22a6c1 用「帧级 gate 标 expected-fail」翻绿，并非无中生有。
-- **依赖信息（用户快照，未再单独核实）**：Railway deploy `5a267579` SUCCESS、`/api/health` 200；iPhone 端无需重装。
+- `main` = `origin/main`，HEAD `7e93305`。工作区干净，仅 2 个**未跟踪** docs：`docs/Nodpilot 产品功能设计.pdf`、`docs/nodpilot-product-design.html`（遗留，勿动）。
+- CI 最新 run `33957151207` **success**；Railway `ec273f99` **SUCCESS**；`/api/health` 200。
+- ⚠️ **线上 DB 是 SQLite `/data/nod.db`，不是 Postgres**（DATABASE_URL 未设；railway 无独立 PG 服务；SQL 用 SQLite 语法）。native app 连 `https://nodpilot.com`；`push origin/main` → CI+Railway 自动部署。
 
-**接下来（队列，按序）**
-1. **item 1 · 客户端 `phase(off, idle)` 修复** —— 排在真机测试 ① 之后。根因/时序/修法在 **GitHub issue #11**（OPEN）。落地时删掉帧级翻译重叠 gate 的 `test.fail` 行（d22a6c1 里标 expected-fail 的那行）。
-2. 重连排查（零 PCM 时间戳对部署时间）—— **不在交接顺序里，暂不开**，留到以后。
+**配额/计费（已上线，多轮改动）**
+- 月会话额度 **60 只数 `kept=True`**（`de035e5`，只数点过 Save 的）；未 Save 会话 History 不显示、不占 60，但 `stt_seconds` 仍全计（钱/听写上限不变）。
+- Don't save → 标 `discarded_at` 不删行（item4 `e238cc2`，仍计）；quota 拦截时服务端 `_quota_copy(snap)` 带 reason 文案（item1 `71b757e`），`usage_snapshot` 也报 sessions reason（item2 `f4b55ce`）、记日志（item1）。
+- 已清 chenmin 用户 58 条幽灵(kept=False),本月 `usage.sessions=1`。
 
-**Meeting 审查（09-05，已建 #12–#22；#12/#22 已关）**
-- **#12** `lang.py` 拉丁句尾丢空格 —— **已推已上线**（`fcc4b71`，服务端，Railway `9c0338a7`），issue 已关。
-- **#15 / #16** `pdf.ts` 拉丁词不中断 + `/Title` UTF-16BE —— **已推**（`1f289cd`），web 随 build 20 已装设备核对。
-- **#17 Summary 语言通道** 服务端 `e78e682` 已上线，客户端 `afaa5ab` 随 build 20。
-- **#18 capTranscript** `7b7da17` 随 build 20；**#20 Bilingual 修复** `96a72ae`+`ac27cf9` 随 build 20；**#21 ellipsize** `287e68c` 随 build 20。
-- **#19 Meeting 人数选择** `9be703c`（web）+ `ce38869`（iPhone chip）随 build 20。
-- **#22 STT trace** `05646e2`+`8b74ad2` 已上线（服务端），issue 已关。
-- **#14** 笔记语言耦合 —— **待你确认根因**（12:16 History 的 `OUTPUT LANGUAGE (hard rule): … Italian only`）+ 定产品规则后再改。
-- **#13** 按说话人拆 turn —— 设计改动，等 #22 trace 数据再定，不与 ① 抢。
+**build 23（已装设备）**：iPhone + Watch 均 `com.nodpilot.app` 1.0 **23**，Bundle Version 已核对。build 21/22/23 装了：chip 行/人数菜单、PDF 折行+标题、summary 语言通道、Bilingual 修复、capTranscript、quota UI/文案、Admin discarded、Account"Saved sessions"。
 
-**build 20（09-05）已装设备**：iPhone + Watch 均 `com.nodpilot.app` 1.0 **20**，Bundle Version 已核对，新 web bundle `App-CgUDCLxq.js` 在机内。剩真机验收：3=Pause/Resume 真暂停、4=手表跟随 capture、5=手表 Stop→Save 保护、手机麦→手表不开麦（双麦）、翻译到英文说拉丁语应出翻译。
+**待办 issue（按优先级）**
+- **#11 item1** 客户端 `phase(off,idle)` 修复（改 App.tsx ~1326 兜底，别碰；排在真机测试①后，落地删 `test.fail` 行）。
+- **#13** 按说话人拆 turn（设计改动，等 #22 trace 数据）；**#14** notes 语言解耦（等你定产品规则）；**#19** meeting 人数菜单 CSS 左对齐（three-line fix，跟 item1 下个 build）；**#23** History UTC 时间戳。
+- 已关：#12、#22（服务端）；web 侧 #15/16/17/18/20/21 留给 build 20 设备核对（现状已装,可关）。
 
-**教训入口（动手上文工作前必读）**
-- `.cursor/skills/self-improve/errors.md` —— e2e 本地绿 CI 红、`phase(off,idle)` 兜底 vs `done` 重试、`think` 被当 Phone Stop、手表 UI 翻面、只装手表原生没 `cap:sync` 等
-- `nod-web` skill —— 零 PCM 守卫、终态 stop 非 paused、静音放置坑
-- 本文件下方 L1–L5 迁移记录（09-04 已完成）
+**剩真机验收**：3=Pause/Resume 真暂停、4=手表跟随 capture、5=手表 Stop→Save 保护、手机麦→手表不开麦（双麦）、翻译到英文说拉丁语应出翻译。
+
+**教训入口（动手前必读）**：`.cursor/skills/self-improve/errors.md`（e2e 本地绿 CI 红、History-vs-cap、SQLite-not-PG）+ `nod-web` skill（零 PCM、终态 stop、静音坑）+ 本文件下方 L1–L5 记录。
 
 ## 当前状态（2026-09-04）
 
