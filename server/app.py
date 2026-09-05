@@ -1651,6 +1651,7 @@ class CloudListener:
         self._was_ready = False
         self._drop_sent = False
         self._terminated = threading.Event()
+        self._turn_order = 0
 
     def set_muted(self, muted: bool) -> None:
         self._muted = bool(muted)
@@ -1749,7 +1750,7 @@ class CloudListener:
                 if os.environ.get("NOD_STT_TRACE") == "1":
                     # Instrument turn boundaries for the "English line every 10s /
                     # half-sentence cut" investigation (issue #22). Logging only.
-                    self._turn_order = getattr(self, "_turn_order", 0) + 1
+                    self._turn_order += 1
                     words = data.get("words") or []
                     word_speakers: dict[str, int] = {}
                     for w in words:
