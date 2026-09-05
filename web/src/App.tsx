@@ -1318,6 +1318,11 @@ export default function App() {
           setSavePrompt(true)
         }
       }
+      if (e.type === 'history_kept') {
+        // Server confirmed the save; only then flip the kept flag (the keep may
+        // be a restored session by id, not the live usage id).
+        markHistoryKept(true)
+      }
       const translateAskBefore = stateRef.current.translateAskId
       dispatch({ type: 'engine', ev: e })
       if (e.type === 'question' && stateRef.current.workspaceMode === 'meeting' && stateRef.current.translateOn) {
@@ -2675,13 +2680,11 @@ export default function App() {
           setSavePrompt(false)
           const restoredId = pendingRestoreId.current
           pendingRestoreId.current = null
+          // markHistoryKept(true) happens on the server's history_kept ack.
           if (restoredId) {
-            // Recovered session: save it by id (it is not the live usage id).
-            markHistoryKept(true)
             window.api.send({ type: 'keep_history', id: restoredId, content: opts.content, audio: opts.audio })
             return
           }
-          markHistoryKept(true)
           window.api.send({ type: 'keep_history', content: opts.content, audio: opts.audio })
           if (pendingNewAfterSave.current) {
             pendingNewAfterSave.current = false
@@ -2699,6 +2702,7 @@ export default function App() {
             window.api.send({ type: 'discard_history', id: restoredId })
             return
           }
+          markHistoryKept(false)
           window.api.send({ type: 'discard_history' })
           if (pendingNewAfterSave.current) {
             pendingNewAfterSave.current = false

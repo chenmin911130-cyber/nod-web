@@ -29,6 +29,20 @@ def pick_watch_report_session(sessions):
     return None
 
 
+def _cap_transcript(lines, budget=120_000):
+    """Mirror of capTranscript: keep the tail by character budget, not a fixed count."""
+    chars = 0
+    start = len(lines)
+    for i in range(len(lines) - 1, -1, -1):
+        entry = lines[i]
+        text = entry.get("text") if isinstance(entry, dict) else entry
+        chars += len((text or "")) + 16
+        if chars > budget:
+            break
+        start = i
+    return lines[start:]
+
+
 def snapshot_from_workspace(mode: str, scene: str, notes: str, lines):
     if not is_watch_report_scene(scene, mode):
         return None
@@ -36,7 +50,7 @@ def snapshot_from_workspace(mode: str, scene: str, notes: str, lines):
         "mode": "meeting",
         "scene": "lecture" if scene == "lecture" else "meeting",
         "notes": notes,
-        "lines": lines[-500:],
+        "lines": _cap_transcript(lines),
     }
 
 

@@ -270,54 +270,68 @@ async function renderPages(title: string, blocks: PdfBlock[], options: PdfOption
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('Canvas unavailable')
 
-  const pages: Array<{ jpeg: Uint8Array; w: number; h: number }> = []
   const pad = 36 * SCALE
   const footerH = 28 * SCALE
-  let y = 0
-  let pageIndex = 0
 
   const headerH = (first: boolean) => {
     if (options.theme === 'plain') return first ? 28 * SCALE : 20 * SCALE
     return first ? 118 * SCALE : 52 * SCALE
   }
 
-  const startPage = (first: boolean) => {
-    pageIndex += 1
-    ctx.fillStyle = theme.paper
-    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H)
-    drawHeader(ctx, theme, title, options, first, pad)
-    y = pad + headerH(first) + (first && options.theme !== 'plain' ? 10 * SCALE : 0)
-  }
+  // The footer needs the page total ("N / total", matching the DOM path), which
+  // is only known after pagination. Run the layout twice: a counting pass to
+  // find the total, then a rendering pass that draws the footer with it.
+  const run = async (draw: boolean, total: number): Promise<{ pages: Array<{ jpeg: Uint8Array; w: number; h: number }>; count: number }> => {
+    let y = 0
+    let pageIndex = 0
+    const pages: Array<{ jpeg: Uint8Array; w: number; h: number }> = []
 
-  const flushPage = async () => {
-    drawFooter(ctx, theme, title, pageIndex)
-    const jpeg = await canvasToJpeg(canvas)
-    pages.push({ jpeg, w: CANVAS_W, h: CANVAS_H })
-  }
-
-  const bottom = () => CANVAS_H - pad - footerH
-
-  const ensure = async (need: number) => {
-    if (y + need <= bottom()) return
-    await flushPage()
-    startPage(false)
-  }
-
-  startPage(true)
-  for (const block of blocks) {
-    if (options.theme === 'plain') {
-      await drawPlainBlock(ctx, block, pad, async (need) => {
-        if (y + need > bottom()) {
-          await flushPage()
-          startPage(false)
-        }
-      }, (next) => { y = next }, () => y, theme)
-      continue
+    const startPage = (first: boolean) => {
+      pageIndex += 1
+      if (draw) {
+        ctx.fillStyle = theme.paper
+        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H)
+        drawHeader(ctx, theme, title, options, first, pad)
+      }
+      y = pad + headerH(first) + (first && options.theme !== 'plain' ? 10 * SCALE : 0)
     }
-    await drawThemedBlock(ctx, block, theme, pad, () => y, ensure, (next) => { y = next })
+
+    const flushPage = async () => {
+      if (draw) {
+        drawFooter(ctx, theme, title, pageIndex, total)
+        const jpeg = await canvasToJpeg(canvas)
+        pages.push({ jpeg, w: CANVAS_W, h: CANVAS_H })
+      }
+    }
+
+    const bottom = () => CANVAS_H - pad - footerH
+
+    const ensure = async (need: number) => {
+      if (y + need <= bottom()) return
+      await flushPage()
+      startPage(false)
+    }
+
+    startPage(true)
+    for (const block of blocks) {
+      if (options.theme === 'plain') {
+        await drawPlainBlock(ctx, block, pad, async (need) => {
+          if (y + need > bottom()) {
+            await flushPage()
+            startPage(false)
+          }
+        }, (next) => { y = next }, () => y, theme)
+        continue
+      }
+      await drawThemedBlock(ctx, block, theme, pad, () => y, ensure, (next) => { y = next })
+    }
+    await flushPage()
+    return { pages, count: pageIndex }
   }
-  await flushPage()
-  return pages
+
+  const measured = await run(false, 0)
+  const rendered = await run(true, measured.count)
+  return rendered.pages
 }
 
 function drawHeader(
@@ -387,12 +401,12 @@ function drawHeader(
   ctx.fillText(theme.kind, CANVAS_W - pad - kindW, 28 * SCALE)
 }
 
-function drawFooter(ctx: CanvasRenderingContext2D, theme: Theme, title: string, page: number) {
+function drawFooter(ctx: CanvasRenderingContext2D, theme: Theme, title: string, page: number, total: number) {
   const y = CANVAS_H - 22 * SCALE
   ctx.font = `500 ${8 * SCALE}px ${theme.font}`
   ctx.fillStyle = theme.muted
   ctx.fillText(pdfBrandMark(title), 36 * SCALE, y)
-  const mark = String(page)
+  const mark = `${page} / ${total}`
   ctx.fillText(mark, CANVAS_W - 36 * SCALE - ctx.measureText(mark).width, y)
 }
 

@@ -2697,6 +2697,9 @@ class Session:
         keep_usage_session(self.user_id, sid, keep_content=keep_content, keep_audio=keep_audio)
         parts = [name for on, name in ((keep_content, "session"), (keep_audio, "recording")) if on]
         self.emit({"type": "status", "text": "Saved to History · " + " and ".join(parts)})
+        # Acknowledge so the client flips its kept flag only after the server
+        # confirmed the write (it may be a restored, non-live session by id).
+        self.emit({"type": "history_kept", "id": sid})
 
     def discard_history(self, session_id: str | None = None) -> None:
         sid = session_id if session_id is not None else self.usage_session_id
