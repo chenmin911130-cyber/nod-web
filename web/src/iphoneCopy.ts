@@ -19,7 +19,6 @@ export const IPHONE_COPY = {
   keyPoint: 'Key Point',
   actionItem: 'Action Item',
   aiInsight: 'AI Insight',
-  meetingSummary: 'Meeting Summary',
   keyTakeaways: 'Key Takeaways',
   copyLine: 'Copy',
   shareSummary: 'Share',

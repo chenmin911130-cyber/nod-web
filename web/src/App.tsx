@@ -77,7 +77,6 @@ function isPendingCatchId(id: string): boolean {
 const PLACEHOLDER = 'Waiting for the next question…'
 const STATUS_READY = 'Ready · F2 record / F3 listen / F4 clear'
 const TRANSLATE_PREFIX = 'Translate to '
-const SUMMARY_PREFIX = 'Summarize the following meeting transcript'
 const TRANSLATE_PAIR_KEY = 'nod_translate_pair'
 const NOTES_LANG_KEY = 'nod_notes_lang'
 
@@ -163,7 +162,6 @@ const initial: AppState = {
   keys: { hasLlm: true, hasStt: true },
   workspaceMode: 'meeting',
   meetingLines: [],
-  meetingSummary: '',
   meetingStartedAt: null,
   meetingPausedAt: null,
   meetingElapsedMs: 0,
@@ -175,7 +173,6 @@ const initial: AppState = {
   heardLang: null,
   translateAskId: '',
   translateBindId: '',
-  summaryAskId: '',
   listenScene: 'meeting' as ListenScene,
   translateOn: true,
   catchNotes: [],
@@ -220,7 +217,6 @@ type Action =
   | { type: 'ask_start' }
   | { type: 'seed_ask'; text: string }
   | { type: 'fail_ask'; text: string }
-  | { type: 'expect_meeting_ask' }
   | { type: 'listen_scene'; scene: ListenScene }
   | { type: 'translate_on'; on: boolean }
   | { type: 'listen_new' }
@@ -291,10 +287,6 @@ function applyTranslateChunk(pairs: TranslatePair[], bindId: string, chunk: stri
   return next
 }
 
-function isSummaryPrompt(text: string): boolean {
-  return text.startsWith(SUMMARY_PREFIX) || text.startsWith('[NOD_SUMMARY')
-}
-
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'config': {
@@ -343,7 +335,7 @@ function reducer(state: AppState, action: Action): AppState {
             autoOn = false
             if (view !== 'workspace') view = 'workspace'
           }
-          const generating = Boolean(state.translateAskId || state.summaryAskId || state.notesAskId)
+          const generating = Boolean(state.translateAskId || state.notesAskId)
           const interviewAsking = state.workspaceMode === 'interview' && state.busy
           let busy = state.busy
           if (engine === 'generating' || engine === 'transcribing') busy = true
@@ -391,9 +383,6 @@ function reducer(state: AppState, action: Action): AppState {
               partial: '',
               busy: true,
             }
-          }
-          if (isSummaryPrompt(text)) {
-            return { ...state, summaryAskId: qid, meetingSummary: '', partial: '', busy: true }
           }
           if (isCatchPrompt(text) || isAskPrompt(text)) {
             const pending = state.catchNotes.find((note) => isPendingCatchId(note.id))
@@ -486,7 +475,6 @@ function reducer(state: AppState, action: Action): AppState {
           return { ...state, turns, currentQ: text, currentQId: qid, partial: '', busy: true, heardLang: heard ?? state.heardLang }
         }
         case 'chunk': {
-          let meetingSummary = state.meetingSummary
           let translatePairs = state.translatePairs
           let translateAskId = state.translateAskId
           let catchNotes = state.catchNotes
@@ -494,16 +482,10 @@ function reducer(state: AppState, action: Action): AppState {
           let notesRaw = state.notesRaw
           let notesAskId = state.notesAskId
           let meetingLines = state.meetingLines
-          let summaryAskId = state.summaryAskId
-          if (summaryAskId === '__pending__' || (ev.id && ev.id === summaryAskId)) {
-            meetingSummary += ev.text ?? ''
-            if (ev.id) summaryAskId = ev.id
-          }
           {
             const byId = ev.id ? catchNotes.find((note) => note.id === ev.id) : undefined
             const foreign = Boolean(ev.id) && (
               ev.id === state.translateAskId
-              || ev.id === state.summaryAskId
               || ev.id === state.notesAskId
             )
             const pending = !byId && !foreign
@@ -523,8 +505,7 @@ function reducer(state: AppState, action: Action): AppState {
             notesAskId = ev.id || notesAskId
           }
           const foreignAsk = Boolean(ev.id) && (
-            ev.id === state.summaryAskId
-            || ev.id === state.notesAskId
+            ev.id === state.notesAskId
             || catchNotes.some((note) => note.id === ev.id)
           )
           if (!translateAskId && state.translateBindId && ev.id && !foreignAsk) {
@@ -544,10 +525,10 @@ function reducer(state: AppState, action: Action): AppState {
               const turns = state.turns.slice()
               const row = turns[idx]
               turns[idx] = { ...row, id: ev.id || row.id, a: row.a + (ev.text ?? '') }
-              return { ...state, turns, meetingSummary, summaryAskId, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
+              return { ...state, turns, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
             }
           }
-          return { ...state, meetingSummary, summaryAskId, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
+          return { ...state, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
         }
         case 'done': {
           const waitingAsk = state.catchNotes.some((note) => isPendingCatchId(note.id))
@@ -565,7 +546,6 @@ function reducer(state: AppState, action: Action): AppState {
             busy: waitingAsk,
             status: waitingAsk ? state.status : 'Ready',
             translateAskId: translateAskIdAfterDone(state.translateAskId, ev.id),
-            summaryAskId: '',
             catchAskId: waitingAsk ? state.catchAskId : '',
             notesAskId: '',
           }
@@ -640,7 +620,6 @@ function reducer(state: AppState, action: Action): AppState {
         partial: '',
         status: 'Cleared',
         meetingLines: [],
-        meetingSummary: '',
         meetingStartedAt: null,
         meetingElapsedMs: 0,
         meetingEnded: false,
@@ -650,7 +629,6 @@ function reducer(state: AppState, action: Action): AppState {
         translatePairs: [],
         translateAskId: '',
         translateBindId: '',
-        summaryAskId: '',
         catchNotes: [],
         catchPendingTitle: '',
         catchAskId: '',
@@ -670,7 +648,6 @@ function reducer(state: AppState, action: Action): AppState {
         currentQ: lastTurn?.q || PLACEHOLDER,
         currentQId: lastTurn?.id || '',
         notesRaw: action.notes,
-        meetingSummary: action.summary,
         translatePairs: action.pairs,
         meetingStartedAt: Date.now(),
         meetingEnded: false,
@@ -697,7 +674,6 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         meetingLines: [],
-        meetingSummary: '',
         speakerNames: {},
         speakerNameLocked: {},
         partialSpeaker: '',
@@ -768,7 +744,6 @@ function reducer(state: AppState, action: Action): AppState {
         catchNotes,
         catchAskId: '',
         notesAskId: state.notesAskId === '__pending__' ? '' : state.notesAskId,
-        summaryAskId: state.summaryAskId === '__pending__' ? '' : state.summaryAskId,
       }
     }
     case 'seed_translate': {
@@ -830,8 +805,6 @@ function reducer(state: AppState, action: Action): AppState {
       )
       return { ...state, turns, busy: false, status: action.text }
     }
-    case 'expect_meeting_ask':
-      return { ...state, summaryAskId: '__pending__', meetingSummary: '', busy: true, status: 'Asking…', translateBindId: '', translateAskId: '' }
     case 'fail_translate': {
       const translatePairs = state.translatePairs.map((p) =>
         p.id === action.id ? { ...p, failed: true } : p,
@@ -1341,7 +1314,7 @@ export default function App() {
       dispatch({ type: 'engine', ev: e })
       if (e.type === 'question' && stateRef.current.workspaceMode === 'meeting' && stateRef.current.translateOn) {
         const text = e.text ?? ''
-        if (!isTranslatePrompt(text) && !isCatchPrompt(text) && !isNotesPrompt(text) && !isSummaryPrompt(text)) {
+        if (!isTranslatePrompt(text) && !isCatchPrompt(text) && !isNotesPrompt(text)) {
           queueMicrotask(() => pumpTranslateRef.current())
         }
       }
@@ -2101,39 +2074,6 @@ export default function App() {
     if (state.workspaceMode !== 'translate') return
     pumpTranslate()
   }, [state.translatePairs, state.meetingLines, state.translateOn, state.workspaceMode, pumpTranslate])
-
-  const handleGenerateSummary = useCallback((note?: string, files?: AttachPayload[]) => {
-    const s = stateRef.current
-    killInflightTranslation()
-    if (note || files?.length) {
-      dispatch({ type: 'expect_meeting_ask' })
-      window.api.send({ type: 'ask', mode: 'summary', text: note || 'Please review the attached files.', files })
-      return
-    }
-    const cap = capTranscript(s.meetingLines)
-    const notice =
-      cap.dropped > 0 ? `(Transcript is truncated: the first ${cap.dropped} lines (before ${cap.fromTs}) are not included.)\n` : ''
-    const body = notice + cap.lines.map((ln) => {
-      const who = resolveSpeakerName(s.speakerNames, ln.speaker)
-      return `[${ln.ts}${who ? ` ${who}` : ''}${ln.marked ? ' ACTION' : ''}] ${ln.text}`
-    }).join('\n')
-    if (!body.trim()) {
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'No transcript to summarize yet.' } })
-      return
-    }
-    dispatch({ type: 'expect_meeting_ask' })
-    if (cap.dropped > 0) {
-      dispatch({
-        type: 'engine',
-        ev: { type: 'status', text: `Summary covers ${cap.lines.length}/${s.meetingLines.length} lines (from ${cap.fromTs})` },
-      })
-    }
-    window.api.send({
-      type: 'ask',
-      mode: 'summary',
-      text: `${nodTag('SUMMARY', s.notesLang, s.translateOn)}\n${outLangRule(s.notesLang, 'summary', s.translateOn)}${SUMMARY_PREFIX} as concise bullet points. Only the bullets:\n\n${body}`,
-    })
-  }, [])
 
   const generateNotes = useCallback(() => {
     const s = stateRef.current

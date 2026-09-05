@@ -6,12 +6,7 @@ function eq<T>(got: T, want: T, label?: string) {
   }
 }
 
-// A: Summary gets its own language channel.
-eq(nodTag('SUMMARY', 'zh', false), '[NOD_SUMMARY:zh]', 'summary tag')
-eq(nodTag('SUMMARY', 'auto', true), '[NOD_SUMMARY:auto:bi]', 'summary tag bilingual')
 eq(nodTag('NOTES', 'zh', false, 'meeting'), '[NOD_NOTES:meeting:zh]', 'notes tag keeps scene')
-if (!outLangRule('zh', 'summary').includes('Chinese only')) throw new Error('summary fixed lang')
-if (!outLangRule('auto', 'summary').includes('majority language')) throw new Error('summary auto follows transcript')
 
 // D (phase 1): Bilingual is dead when Notes = Auto. But an already-ON Bilingual
 // must stay toggleable OFF, so it is only disabled when it is NOT on.

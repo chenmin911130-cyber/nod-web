@@ -1277,7 +1277,7 @@ class Pipeline:
 
     def _out_lang_from_tag(self, question: str) -> str | None:
         inner = self._tag_inner(question)
-        if not inner.startswith(("NOD_CATCH:", "NOD_ASK:", "NOD_NOTES:", "NOD_SUMMARY:")):
+        if not inner.startswith(("NOD_CATCH:", "NOD_ASK:", "NOD_NOTES:")):
             return None
         parts = [p for p in inner.split(":")[1:] if p and p != "bi"]
         if not parts:
@@ -1304,17 +1304,17 @@ class Pipeline:
 
     def _strip_nod_tag(self, question: str) -> str:
         text = question or ""
-        if text.startswith(("[NOD_TRANSLATE", "[NOD_SUMMARY", "[NOD_CATCH", "[NOD_ASK", "[NOD_NOTES")):
+        if text.startswith(("[NOD_TRANSLATE", "[NOD_CATCH", "[NOD_ASK", "[NOD_NOTES")):
             nl = text.find("\n")
             if nl >= 0:
                 return text[nl + 1:].strip()
         return text
 
     def _is_internal(self, question: str, mode: str) -> bool:
-        if mode in ("translate", "summary", "catchup", "notes", "listen_ask"):
+        if mode in ("translate", "catchup", "notes", "listen_ask"):
             return True
         t = (question or "").lstrip()
-        return t.startswith(("[NOD_TRANSLATE", "[NOD_SUMMARY", "[NOD_CATCH", "[NOD_ASK", "[NOD_NOTES", "Translate to "))
+        return t.startswith(("[NOD_TRANSLATE", "[NOD_CATCH", "[NOD_ASK", "[NOD_NOTES", "Translate to "))
 
     def _with_images(self, messages: list[dict], images: list[dict[str, str]] | None) -> list[dict]:
         if not images:
@@ -1337,19 +1337,6 @@ class Pipeline:
         out_lang = self._out_lang_from_tag(question)
         out_rule = self._output_lang_rule(out_lang, self._bilingual_from_tag(question))
         question = self._strip_nod_tag(question)
-        if mode == "summary" or question.startswith("Summarize the following meeting transcript"):
-            return [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a meeting notetaker. Write a recap the user can scan after the call.\n"
-                        "Output exactly these sections, using short bullets:\n"
-                        "- Key points\n- Decisions\n- Action items (include owner only if it was said)\n"
-                        "No preamble. Do not invent people, numbers, or commitments." + out_rule
-                    ),
-                },
-                {"role": "user", "content": question},
-            ]
         if mode == "translate" or question.startswith("Translate to "):
             # The target lives inside the user message; models sometimes drift
             # to the context language (e.g. answered Chinese for an EN target),
@@ -1528,7 +1515,7 @@ class Pipeline:
         max_tokens = int(llm.get("max_tokens") or 800)
         if mode in ("ask", "file_ask"):
             max_tokens = max(max_tokens, 1600)
-        elif mode in ("summary", "notes", "catchup", "listen_ask"):
+        elif mode in ("notes", "catchup", "listen_ask"):
             max_tokens = max(max_tokens, 1600)
         elif mode == "translate":
             max_tokens = max(max_tokens, 800)
@@ -1653,11 +1640,11 @@ class Pipeline:
         inp, out = resolve_llm_usage(stream_usage, t, answer)
         ok, snap = consume_llm(self.user_id, self.usage_session_id, inp, out)
         self.emit({"type": "quota", **snap})
-        kind_q = "transcript" if mode in ("translate", "summary") else "question"
+        kind_q = "transcript" if mode == "translate" else "question"
         if not internal:
             save_history(self.user_id, self.usage_session_id, kind_q, self._strip_nod_tag(t), qid)
         save_history(self.user_id, self.usage_session_id, "answer" if mode == "ask" else mode, answer, qid)
-        if mode in ("ask", "summary", "notes"):
+        if mode in ("ask", "notes"):
             try:
                 from server.meter import write_session_notes
 
@@ -3068,11 +3055,9 @@ class Session:
         if not self._ensure_usage():
             return
         body = llm_text
-        if body.startswith(("[NOD_TRANSLATE", "[NOD_SUMMARY", "[NOD_CATCH", "[NOD_ASK", "[NOD_NOTES")):
+        if body.startswith(("[NOD_TRANSLATE", "[NOD_CATCH", "[NOD_ASK", "[NOD_NOTES")):
             nl = body.find("\n")
             body = body[nl + 1:].strip() if nl >= 0 else body
-        if mode == "ask" and body.startswith("Summarize the following meeting transcript"):
-            mode = "summary"
         if mode == "ask" and body.startswith("Translate to "):
             mode = "translate"
         if mode == "ask" and (body.startswith("Catch the listener up") or llm_text.lstrip().startswith("[NOD_CATCH")):
@@ -3082,7 +3067,7 @@ class Session:
         if mode == "ask" and (body.startswith("Write structured notes") or llm_text.lstrip().startswith("[NOD_NOTES")):
             mode = "notes"
         if not self._claim_busy():
-            if mode in ("translate", "summary", "catchup", "notes", "listen_ask", "file_ask"):
+            if mode in ("translate", "catchup", "notes", "listen_ask", "file_ask"):
                 self._pending_asks.append((user_text, mode, files))
                 return
             self.emit({"type": "status", "text": "Still working, please wait"})

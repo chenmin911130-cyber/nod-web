@@ -87,7 +87,6 @@ export interface AppState {
   keys: { hasLlm: boolean; hasStt: boolean }
   workspaceMode: WorkspaceMode
   meetingLines: MeetingLine[]
-  meetingSummary: string
   meetingStartedAt: number | null
   meetingPausedAt: number | null
   meetingElapsedMs: number
@@ -99,7 +98,6 @@ export interface AppState {
   heardLang: PairLang | null
   translateAskId: string
   translateBindId: string
-  summaryAskId: string
   listenScene: 'meeting' | 'lecture' | 'interview'
   translateOn: boolean
   catchNotes: CatchNote[]
