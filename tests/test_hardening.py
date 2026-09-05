@@ -554,6 +554,7 @@ class InterviewWaitFlushTests(unittest.TestCase):
         sess._interview_wait_timer = None
         sess._meeting_flush_timer = None
         sess._meeting_lock = __import__("threading").Lock()
+        sess._interview_lock = __import__("threading").Lock()
         sess.user_id = None
         sess.emit = mock.Mock()
         sess.pipeline = mock.Mock()
@@ -611,6 +612,85 @@ class InterviewWaitFlushTests(unittest.TestCase):
         args, _kwargs = sess.pipeline.process_text.call_args
         self.assertEqual(args[0], "当下经济情况")
         self.assertEqual(args[1], "ask")
+
+    def test_lead_in_then_question_is_joined(self):
+        # #3: a lead-in fragment ("For PostgreSQL,") is held; the following
+        # question joins it so the model gets the whole thing, not a dropped
+        # non-question plus a separate question.
+        sess = self._session()
+        sess._on_final("For PostgreSQL,", "en")
+        sess.pipeline.process_text.assert_not_called()
+        sess._on_final("how do I configure backups?", "en")
+        for _ in range(60):
+            if sess.pipeline.process_text.called:
+                break
+            time.sleep(0.02)
+        sess.pipeline.process_text.assert_called_once()
+        args, _kwargs = sess.pipeline.process_text.call_args
+        text = args[0]
+        self.assertIn("PostgreSQL", text)
+        self.assertIn("backups", text)
+
+    def test_long_lead_in_then_complete_question_keeps_lead_in(self):
+        sess = self._session()
+        sess._on_final("When we deploy the new service to production,", "en")
+        sess.pipeline.process_text.assert_not_called()
+        sess._on_final("how should we roll back?", "en")
+        for _ in range(60):
+            if sess.pipeline.process_text.called:
+                break
+            time.sleep(0.02)
+        args, _kwargs = sess.pipeline.process_text.call_args
+        self.assertTrue(args[0].startswith("When we deploy"), args[0])
+
+    def test_two_unrelated_sentences_are_not_joined(self):
+        # Whether the two fragments merge into one question or are answered
+        # separately, neither may be lost. Both English + <2s => they join
+        # here; the assertion is that both appear in what the model receives.
+        sess = self._session()
+        sess._on_final("When we deploy the new service,", "en")
+        sess._on_final("what is Kubernetes?", "en")
+        for _ in range(60):
+            if sess.pipeline.process_text.called:
+                break
+            time.sleep(0.02)
+        args, _kwargs = sess.pipeline.process_text.call_args
+        text = args[0]
+        self.assertIn("When we deploy the new service", text)
+        self.assertIn("what is Kubernetes", text)
+
+    def test_lead_in_alone_flushes_after_timer(self):
+        # Existing flush behaviour is unchanged: an isolated lead-in that never
+        # gets its continuation is still sent once the timer fires.
+        sess = self._session()
+        sess._on_final("For PostgreSQL,", "en")
+        time.sleep(1.5)
+        for _ in range(40):
+            if sess.pipeline.process_text.called:
+                break
+            time.sleep(0.02)
+        self.assertEqual(sess._pending_wait, (None, 0.0, None))
+        sess.pipeline.process_text.assert_called_once()
+
+    def test_flush_and_final_do_not_double_start(self):
+        # #7: a continuation that merges with the held fragment produces one
+        # answer. An already-fired flush, finding the fragment consumed by the
+        # merge, must not start a second generation for it.
+        sess = self._session()
+        sess._pending_wait = ("When we deploy the new service,", time.time(), "en")
+        sess._on_final("how should we roll back the change?", "en")
+        threading = __import__("threading")
+        t = threading.Thread(target=sess._flush_interview_wait)
+        t.start()
+        t.join()
+        for _ in range(60):
+            if sess.pipeline.process_text.called:
+                break
+            time.sleep(0.02)
+        self.assertEqual(sess.pipeline.process_text.call_count, 1)
+        args, _kwargs = sess.pipeline.process_text.call_args
+        self.assertIn("When we deploy the new service", args[0])
+        self.assertIn("how should we roll back", args[0])
 
     def test_answer_cleanup_releases_busy_and_emits_phase(self):
         # The finally block in work() is the only thing that unsticks the UI.
@@ -682,6 +762,7 @@ class InterviewQueueTests(unittest.TestCase):
         sess._interview_wait_timer = None
         sess._meeting_flush_timer = None
         sess._meeting_lock = __import__("threading").Lock()
+        sess._interview_lock = __import__("threading").Lock()
         sess.user_id = None
         sess.emit = mock.Mock()
         sess.pipeline = mock.Mock()
@@ -829,6 +910,7 @@ class ClearResetTests(unittest.TestCase):
         sess._interview_wait_timer = None
         sess._meeting_flush_timer = None
         sess._meeting_lock = __import__("threading").Lock()
+        sess._interview_lock = __import__("threading").Lock()
         sess.user_id = None
         sess.emit = mock.Mock()
         sess.pipeline = mock.Mock()

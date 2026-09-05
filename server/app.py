@@ -716,6 +716,24 @@ def guard_question(text: str, recent_questions, last_answer=None) -> str:
     return "reject"
 
 
+def _looks_like_lead_in(text: str) -> bool:
+    """True for a short fragment that reads as the start of a longer question.
+
+    ``"For PostgreSQL,"`` or ``"When we deploy the new service,"`` are lead-ins:
+    they should be held (``wait``) so the rest of the question can join them,
+    not dropped as a non-question. Only applies to short fragments (< 16 units);
+    a long sentence ending in a comma is a statement, not a lead-in.
+    """
+    t = (text or "").rstrip()
+    if not t:
+        return False
+    low = t.lower()
+    trailing = t.endswith((",", "，", "、")) or low.endswith(
+        (" and", " or", " the", " a", " for", " in", " with", " about")
+    )
+    return trailing and _guard_units(t) < 16
+
+
 _TRANSIENT_LLM = (
     "timeout", "timed out", "connection", "network", "temporarily",
     "503", "502", "429", "overloaded", "reset", "unavailable",
@@ -1867,6 +1885,7 @@ class Session:
         self._meeting_flush_timer: threading.Timer | None = None
         self._interview_wait_timer: threading.Timer | None = None
         self._meeting_lock = threading.Lock()
+        self._interview_lock = threading.Lock()
         self._follow_lang: str | None = None
         self._follow_switch_lang: str | None = None
         self._follow_switch_hits = 0
@@ -2454,8 +2473,9 @@ class Session:
 
     def _flush_interview_wait(self) -> None:
         self._interview_wait_timer = None
-        ptxt, _pts, plang = self._pending_wait
-        self._pending_wait = (None, 0.0, None)
+        with self._interview_lock:
+            ptxt, _pts, plang = self._pending_wait
+            self._pending_wait = (None, 0.0, None)
         if ptxt and self._workspace == "interview":
             self._start_interview_answer(ptxt, plang)
 
@@ -3178,31 +3198,36 @@ class Session:
             self._hold_or_emit_meeting(cleaned, lang, speaker)
             return
         recent_qs = [h["q"] for h in self.pipeline._qa_history]
-        verdict = guard_question(cleaned, recent_qs, self.pipeline._last_answer)
-        if verdict == "wait":
+        with self._interview_lock:
             ptxt, pts, plang = self._pending_wait
+            joined: str | None = None
             if ptxt and time.time() - pts < 2.0 and _same_speech_script(ptxt, cleaned):
+                joined = _join_speech_frags(ptxt, cleaned)
+            candidate = joined or cleaned
+            verdict = guard_question(candidate, recent_qs, self.pipeline._last_answer)
+            leftover: tuple[str, str | None] | None = None
+            if verdict == "reject" and joined:
+                # 拼起来不像问题，就按原来的方式各自处理
+                candidate, verdict = cleaned, guard_question(cleaned, recent_qs, self.pipeline._last_answer)
+                leftover = (ptxt, plang)
+            if verdict == "reject" and _looks_like_lead_in(cleaned):
+                verdict = "wait"          # 短前置片段先 hold，不直接丢
+            if verdict == "wait":
                 self._cancel_interview_wait_timer()
-                self._pending_wait = (None, 0.0, None)
-                self._on_final(_join_speech_frags(ptxt, cleaned), plang or lang)
-            elif ptxt:
-                leftover, leftover_lang = ptxt, plang
-                self._cancel_interview_wait_timer()
-                self._pending_wait = (None, 0.0, None)
-                self._on_final(leftover, leftover_lang)
-                self._on_final(cleaned, lang)
-            else:
-                self._pending_wait = (cleaned, time.time(), lang)
+                self._pending_wait = (candidate, time.time(), plang or lang)
                 self._schedule_interview_wait_flush()
-                self.emit({"type": "partial", "text": cleaned})
+                self.emit({"type": "partial", "text": candidate})
                 self.emit({"type": "status", "text": STATUS_WAIT_MORE})
-            return
-        self._cancel_interview_wait_timer()
-        self._pending_wait = (None, 0.0, None)
+                return
+            self._cancel_interview_wait_timer()
+            self._pending_wait = (None, 0.0, None)
+        # 锁外：原「各自处理」语义
+        if leftover:
+            self._on_final(*leftover)
         if verdict == "reject":
             self.emit({"type": "partial", "text": ""})
             return
-        self._start_interview_answer(cleaned, lang)
+        self._start_interview_answer(candidate, plang or lang)
 
     def _start_interview_answer(self, cleaned: str, lang: str | None) -> None:
         heard = heard_lang_from_text(cleaned, lang)
