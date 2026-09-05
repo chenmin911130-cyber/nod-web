@@ -1099,6 +1099,31 @@ def assemblyai_transcribe_pcm(api_key: str, pcm: bytes, cfg: dict[str, Any], tim
     return result["text"], result.get("lang")
 
 
+def _fmt_hours(seconds) -> str:
+    if not seconds:
+        return "0h"
+    return f"{round(seconds / 3600 * 10) / 10:g}h"
+
+
+def _quota_copy(snap: dict) -> str:
+    """Reason-specific 'limit reached' line, mirroring web/src/quotaCopy.ts so the
+    server error/status text can't bury the reason under a generic message."""
+    reason = snap.get("reason") or ""
+    if reason == "sessions":
+        return f"Monthly session limit reached ({snap.get('session_limit') or 60}). Resets on the 1st."
+    if reason == "daily_stt":
+        return f"Daily listening limit reached ({_fmt_hours(snap.get('daily_stt_limit'))}). Resets at midnight UTC."
+    if reason == "llm":
+        return f"Monthly token limit reached ({snap.get('llm_limit') or 100000:,}). Resets on the 1st."
+    if reason == "daily":
+        return "Daily spending limit reached. Resets at midnight UTC."
+    if reason == "global":
+        return "Daily platform budget reached. Try again later."
+    if reason == "stt":
+        return f"Monthly listening limit reached ({_fmt_hours(snap.get('stt_limit'))}). Resets on the 1st."
+    return "Usage limit reached — open Account"
+
+
 class Pipeline:
     def __init__(self, cfg: dict[str, Any], keys: dict[str, str], emit: Callable[[dict], None]):
         self.cfg = cfg
@@ -1479,7 +1504,7 @@ class Pipeline:
                     snap.get("daily_cost_usd"), snap.get("global_cost_usd"),
                 )
                 self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "llm"})
-                self.emit({"type": "error", "text": "Usage limit reached. Open Account to see remaining quota."})
+                self.emit({"type": "error", "text": _quota_copy(snap)})
                 self.emit({"type": "done", "id": "", "stt": 0, "llm": 0, "ok": False})
                 return
         self._cancel.clear()
@@ -1560,7 +1585,7 @@ class Pipeline:
                                 )
                                 self.emit({"type": "quota", **snap})
                                 self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "llm"})
-                                self.emit({"type": "error", "text": "Usage limit reached. Open Account to see remaining quota."})
+                                self.emit({"type": "error", "text": _quota_copy(snap)})
                                 self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
                                 return
                     think = getattr(delta, "reasoning_content", None) or ""
@@ -2042,8 +2067,8 @@ class Session:
         )
         self.emit({"type": "quota", **snap})
         self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "limit"})
-        self.emit({"type": "error", "text": "Usage limit reached. Open Account to upgrade or wait for reset."})
-        self.emit({"type": "status", "text": "Usage limit reached"})
+        self.emit({"type": "error", "text": _quota_copy(snap)})
+        self.emit({"type": "status", "text": _quota_copy(snap)})
 
     def _ensure_usage(self) -> bool:
         if not self.user_id:

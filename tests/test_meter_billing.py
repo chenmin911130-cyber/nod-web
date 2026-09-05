@@ -254,6 +254,26 @@ def test_quota_exceeded_logs_reason(meter_env, caplog):
     assert any("quota_exceeded" in r.message and "sessions" in r.message and "60/60" in r.message for r in caplog.records)
 
 
+def test_quota_block_emits_reason_copy(meter_env):
+    """item1: _quota_block's error + status text must use _quota_copy(snap), so
+    the reason-specific copy isn't covered by a later generic message."""
+
+    from server.app import Session
+
+    events: list[dict] = []
+    sess = Session.__new__(Session)
+    sess.emit = events.append
+    sess.user_id = "u1"
+    sess._quota_block(
+        {"ok": False, "reason": "sessions", "sessions": 61, "session_limit": 60, "daily_cost_usd": 0.0, "global_cost_usd": 0.0}
+    )
+    err = next(e for e in events if e["type"] == "error")
+    stat = next(e for e in events if e["type"] == "status")
+    assert "session limit" in err["text"]
+    assert "session limit" in stat["text"]
+    assert "Monthly session limit reached (60)" in err["text"]
+
+
 def test_discard_keeps_quota_counting(meter_env):
     """item4: deleting a saved session from History must not erase it from the
     monthly cap — UsageSession is marked discarded_at, and usage_snapshot still
