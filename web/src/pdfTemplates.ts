@@ -1,3 +1,5 @@
+import { sceneSectionOrder } from './listen'
+
 export type ListenPdfTheme = 'meeting' | 'lecture'
 
 export type ListenPdfDoc = {
@@ -252,20 +254,28 @@ export function footerHtml(doc: ListenPdfDoc, page: number, total: number): stri
 export function sectionChunks(doc: ListenPdfDoc): string[] {
   const chunks: string[] = []
   if (doc.theme === 'lecture') {
-    if (doc.summary.trim()) chunks.push(`<p class="overview">${textHtml(doc.summary)}</p>`)
-    if (doc.keyPoints.length) {
-      chunks.push(`<p class="sec">CONCEPTS</p><ol class="concepts">${doc.keyPoints.map((item, i) => `<li><b>${String(i + 1).padStart(2, '0')}</b><span>${textHtml(item)}</span></li>`).join('')}</ol>`)
-    }
-    if (doc.revisionNotes.length) {
-      chunks.push(`<p class="sec">REVISE · EXAM / FORMULAS</p><div class="cards">${doc.revisionNotes.map((item) => `<div class="flash"><small>REVISE</small><p>${textHtml(item)}</p></div>`).join('')}</div>`)
-    }
-    if (doc.importantDetails.length) {
-      const [first, ...rest] = doc.importantDetails
-      chunks.push(`<div class="formula"><span>EXAMPLES &amp; DETAILS</span>${textHtml(first)}</div>`)
-      if (rest.length) chunks.push(`<ul class="details">${rest.map((item) => `<li>${textHtml(item)}</li>`).join('')}</ul>`)
-    }
-    if (doc.followUps.length) {
-      chunks.push(`<section class="hw"><p class="sec">HOMEWORK &amp; READING</p><ol>${doc.followUps.map((item) => `<li>${textHtml(item)}</li>`).join('')}</ol></section>`)
+    for (const id of sceneSectionOrder('lecture')) {
+      if (id === 'summary') {
+        if (doc.summary.trim()) chunks.push(`<p class="overview">${textHtml(doc.summary)}</p>`)
+      } else if (id === 'keyPoints') {
+        if (doc.keyPoints.length) {
+          chunks.push(`<p class="sec">CONCEPTS</p><ol class="concepts">${doc.keyPoints.map((item, i) => `<li><b>${String(i + 1).padStart(2, '0')}</b><span>${textHtml(item)}</span></li>`).join('')}</ol>`)
+        }
+      } else if (id === 'importantDetails') {
+        if (doc.importantDetails.length) {
+          const [first, ...rest] = doc.importantDetails
+          chunks.push(`<div class="formula"><span>EXAMPLES &amp; DETAILS</span>${textHtml(first)}</div>`)
+          if (rest.length) chunks.push(`<ul class="details">${rest.map((item) => `<li>${textHtml(item)}</li>`).join('')}</ul>`)
+        }
+      } else if (id === 'revisionNotes') {
+        if (doc.revisionNotes.length) {
+          chunks.push(`<p class="sec">REVISE · EXAM / FORMULAS</p><div class="cards">${doc.revisionNotes.map((item) => `<div class="flash"><small>REVISE</small><p>${textHtml(item)}</p></div>`).join('')}</div>`)
+        }
+      } else if (id === 'followUps') {
+        if (doc.followUps.length) {
+          chunks.push(`<section class="hw"><p class="sec">HOMEWORK &amp; READING</p><ol>${doc.followUps.map((item) => `<li>${textHtml(item)}</li>`).join('')}</ol></section>`)
+        }
+      }
     }
   } else {
     if (doc.summary.trim()) {

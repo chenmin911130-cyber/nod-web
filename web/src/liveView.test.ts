@@ -1,4 +1,4 @@
-import { emptyNotes } from './listen'
+import { emptyNotes, sectionTitle, sceneSectionOrder } from './listen'
 import {
   LIVE_MIC_HOLD_MS,
   formatActionItem,
@@ -135,11 +135,29 @@ eq(
     'Key Points',
     '• Marketing starts Monday',
     '',
-    'Action Items',
-    '• David → Finish QA',
-    '',
     'Decisions',
     '• Target Tuesday',
+    '',
+    'Action Items',
+    '• David → Finish QA',
   ].join('\n'),
   'Copy/Share uses the structured Summary, not raw JSON',
 )
+
+// item1: lecture copy/Share order follows sceneSectionOrder('lecture') — the
+// single source — and uses the lecture section titles.
+const lecText = summaryPlainText({
+  scene: 'lecture',
+  notes: {
+    ...emptyNotes(),
+    summary: 'The professor covered electromagnetic flux.',
+    keyPoints: ['Flux is the rate of field flow through a surface'],
+    importantDetails: ['The unit is the weber'],
+    revisionNotes: ['Revise Lenz law'],
+    followUps: ['Read chapter 4'],
+  },
+})
+const expectLecOrder = sceneSectionOrder('lecture').map((id) => sectionTitle('lecture', id))
+const lecIdx = expectLecOrder.map((t) => lecText.indexOf(t))
+if (lecIdx.some((i) => i < 0)) throw new Error(`lecture plain text missing a heading: ${JSON.stringify(expectLecOrder)} in ${JSON.stringify(lecText)}`)
+if (lecIdx.some((v, i) => i > 0 && v < lecIdx[i - 1])) throw new Error('lecture headings out of SCENE_SECTIONS order')

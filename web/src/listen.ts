@@ -120,6 +120,12 @@ const SCENE_SECTIONS: Record<ListenScene, NotesSectionId[]> = {
   interview: ['summary', 'takeaways', 'keyPoints', 'importantDetails', 'followUps'],
 }
 
+/** Single source of the section order for a scene. Every renderer (Live pane,
+ * PDF, copy/Share) must read this, never a local hardcoded array. */
+export function sceneSectionOrder(scene: ListenScene): NotesSectionId[] {
+  return SCENE_SECTIONS[scene]
+}
+
 export const SECTION_TITLE: Record<NotesSectionId, string> = {
   summary: 'Summary',
   takeaways: 'Q&A Takeaways',

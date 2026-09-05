@@ -63,6 +63,7 @@ import {
   meetingSpeakerId,
   setMeetingSpeaker,
   sectionTitle,
+  sceneSectionOrder,
   type ListenScene,
   type MeetingSpeakerId,
 } from './listen'
@@ -2350,28 +2351,40 @@ export default function App() {
       })
       title = doc.title
       blocks.push({ kind: 'h1', text: title })
-      if (notes.summary.trim()) {
-        blocks.push({ kind: 'h2', text: sectionTitle(s.listenScene, 'summary') })
-        blocks.push({ kind: 'p', text: notes.summary.trim() })
-      }
       if (lecture) {
-        if (notes.keyPoints.length) {
-          blocks.push({ kind: 'h2', text: sectionTitle('lecture', 'keyPoints') })
-          notes.keyPoints.forEach((item, i) => blocks.push({ kind: 'concept', text: item, owner: String(i + 1).padStart(2, '0') }))
-        }
-        if (notes.revisionNotes.length) {
-          blocks.push({ kind: 'h2', text: sectionTitle('lecture', 'revisionNotes') })
-          notes.revisionNotes.forEach((item) => blocks.push({ kind: 'flash', text: item, owner: 'Revise' }))
-        }
-        if (notes.importantDetails.length) {
-          blocks.push({ kind: 'h2', text: sectionTitle('lecture', 'importantDetails') })
-          for (const item of notes.importantDetails) blocks.push({ kind: 'bullet', text: item })
-        }
-        if (notes.followUps.length) {
-          blocks.push({ kind: 'h2', text: sectionTitle('lecture', 'followUps') })
-          for (const item of notes.followUps) blocks.push({ kind: 'bullet', text: item })
+        for (const id of sceneSectionOrder('lecture')) {
+          if (id === 'summary') {
+            if (notes.summary.trim()) {
+              blocks.push({ kind: 'h2', text: sectionTitle('lecture', id) })
+              blocks.push({ kind: 'p', text: notes.summary.trim() })
+            }
+          } else if (id === 'keyPoints') {
+            if (notes.keyPoints.length) {
+              blocks.push({ kind: 'h2', text: sectionTitle('lecture', id) })
+              notes.keyPoints.forEach((item, i) => blocks.push({ kind: 'concept', text: item, owner: String(i + 1).padStart(2, '0') }))
+            }
+          } else if (id === 'importantDetails') {
+            if (notes.importantDetails.length) {
+              blocks.push({ kind: 'h2', text: sectionTitle('lecture', id) })
+              for (const item of notes.importantDetails) blocks.push({ kind: 'bullet', text: item })
+            }
+          } else if (id === 'revisionNotes') {
+            if (notes.revisionNotes.length) {
+              blocks.push({ kind: 'h2', text: sectionTitle('lecture', id) })
+              notes.revisionNotes.forEach((item) => blocks.push({ kind: 'flash', text: item, owner: 'Revise' }))
+            }
+          } else if (id === 'followUps') {
+            if (notes.followUps.length) {
+              blocks.push({ kind: 'h2', text: sectionTitle('lecture', id) })
+              for (const item of notes.followUps) blocks.push({ kind: 'bullet', text: item })
+            }
+          }
         }
       } else {
+        if (notes.summary.trim()) {
+          blocks.push({ kind: 'h2', text: sectionTitle(s.listenScene, 'summary') })
+          blocks.push({ kind: 'p', text: notes.summary.trim() })
+        }
         if (notes.keyPoints.length) {
           blocks.push({ kind: 'h2', text: sectionTitle('meeting', 'keyPoints') })
           for (const item of notes.keyPoints) blocks.push({ kind: 'bullet', text: item })

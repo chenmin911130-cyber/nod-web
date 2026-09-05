@@ -1,4 +1,4 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, bilingualDisabled, capTranscript, nodTag, notesBodyText, notesPrompt, outLangRule, sceneChipLabel, sceneLabel, speakersExpected } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, bilingualDisabled, capTranscript, nodTag, notesBodyText, notesPrompt, outLangRule, sceneChipLabel, sceneLabel, sceneSectionOrder, speakersExpected } from './listen'
 
 function eq<T>(got: T, want: T, label?: string) {
   if (JSON.stringify(got) !== JSON.stringify(want)) {
@@ -51,6 +51,10 @@ eq(sceneLabel('interview'), 'Live Q&A')
 eq(LISTEN_SCENES.find((s) => s.id === 'interview')?.label, 'Live Q&A')
 eq(sceneLabel('meeting'), 'Meeting')
 eq(sceneLabel('lecture'), 'Lecture')
+
+// item1: the lecture section order is defined once (SCENE_SECTIONS), the single
+// source every renderer (Live pane / PDF / copy-Share) reads.
+eq(sceneSectionOrder('lecture'), ['summary', 'keyPoints', 'importantDetails', 'revisionNotes', 'followUps'], 'lecture section order is SCENE_SECTIONS')
 
 const zhNotes = notesPrompt(
   'meeting',

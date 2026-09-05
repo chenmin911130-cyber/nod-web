@@ -2,6 +2,7 @@ import { sameSpokenLine } from './iphoneCopy'
 import type { CatchNote } from './types'
 import {
   sectionTitle,
+  sceneSectionOrder,
   type ListenScene,
   type NotesDoc,
   type NotesSectionId,
@@ -66,10 +67,7 @@ export function summaryPlainText(input: {
   catchNotes?: CatchNote[]
 }): string {
   const blocks: string[] = []
-  const order: NotesSectionId[] =
-    input.scene === 'lecture'
-      ? ['summary', 'keyPoints', 'importantDetails', 'revisionNotes', 'followUps']
-      : ['summary', 'keyPoints', 'actionItems', 'decisions', 'importantDetails', 'followUps']
+  const order: NotesSectionId[] = sceneSectionOrder(input.scene)
   for (const id of order) {
     if (id === 'summary') {
       const summary = input.notes.summary.trim()

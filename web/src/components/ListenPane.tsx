@@ -456,66 +456,69 @@ function LectureStudy({
   sections: Array<{ id: NotesSectionId; title: string; items: string[] }>
   bilingual: boolean
 }) {
-  const byId = (id: NotesSectionId) => sections.find((row) => row.id === id)
-  const overview = byId('summary')
-  const concepts = byId('keyPoints')
-  const details = byId('importantDetails')
-  const revise = byId('revisionNotes')
-  const homework = byId('followUps')
-
   return (
     <div className="lec-sheet">
-      {overview && (
-        <div className="lec-overview">
-          <h3>{overview.title}</h3>
-          <BiText text={overview.items[0]} bilingual={bilingual} />
-        </div>
-      )}
-      {concepts && (
-        <div className="lec-block">
-          <h3>{concepts.title}</h3>
-          <ol className="lec-concepts">
-            {concepts.items.map((item, i) => (
-              <li key={`${i}-${item}`}>
-                <b>{i + 1}</b>
-                <span><BiText text={item} bilingual={bilingual} /></span>
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
-      {revise && (
-        <div className="lec-block">
-          <h3>{revise.title}</h3>
-          <div className="lec-revise">
-            {revise.items.map((item, i) => (
-              <div className="lec-flash" key={`${i}-${item}`}>
-                <BiText text={item} bilingual={bilingual} />
+      {sections.map((section) => {
+        if (section.id === 'summary') {
+          return (
+            <div className="lec-overview" key={section.id}>
+              <h3>{section.title}</h3>
+              <BiText text={section.items[0]} bilingual={bilingual} />
+            </div>
+          )
+        }
+        if (section.id === 'keyPoints') {
+          return (
+            <div className="lec-block" key={section.id}>
+              <h3>{section.title}</h3>
+              <ol className="lec-concepts">
+                {section.items.map((item, i) => (
+                  <li key={`${i}-${item}`}>
+                    <b>{i + 1}</b>
+                    <span><BiText text={item} bilingual={bilingual} /></span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )
+        }
+        if (section.id === 'revisionNotes') {
+          return (
+            <div className="lec-block" key={section.id}>
+              <h3>{section.title}</h3>
+              <div className="lec-revise">
+                {section.items.map((item, i) => (
+                  <div className="lec-flash" key={`${i}-${item}`}>
+                    <BiText text={item} bilingual={bilingual} />
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
+          )
+        }
+        if (section.id === 'followUps') {
+          return (
+            <div className="lec-hw" key={section.id}>
+              <h3>{section.title}</h3>
+              <ul>
+                {section.items.map((item, i) => (
+                  <li key={`${i}-${item}`}><BiText text={item} bilingual={bilingual} /></li>
+                ))}
+              </ul>
+            </div>
+          )
+        }
+        return (
+          <div className="lec-block" key={section.id}>
+            <h3>{section.title}</h3>
+            <ul>
+              {section.items.map((item, i) => (
+                <li key={`${i}-${item}`}><BiText text={item} bilingual={bilingual} /></li>
+              ))}
+            </ul>
           </div>
-        </div>
-      )}
-      {details && (
-        <div className="lec-block">
-          <h3>{details.title}</h3>
-          <ul>
-            {details.items.map((item, i) => (
-              <li key={`${i}-${item}`}><BiText text={item} bilingual={bilingual} /></li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {homework && (
-        <div className="lec-hw">
-          <h3>{homework.title}</h3>
-          <ul>
-            {homework.items.map((item, i) => (
-              <li key={`${i}-${item}`}><BiText text={item} bilingual={bilingual} /></li>
-            ))}
-          </ul>
-        </div>
-      )}
+        )
+      })}
     </div>
   )
 }
