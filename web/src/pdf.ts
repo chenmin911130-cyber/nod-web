@@ -607,7 +607,29 @@ function styleOf(kind: PdfBlock['kind'], theme: Theme) {
   return { font: `400 ${13 * SCALE}px ${theme.font}`, size: 13 * SCALE, color: theme.ink, gap: 8 * SCALE }
 }
 
-function wrap(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+const CJK_ATOM_RE = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/
+
+function wrapTokens(text: string): string[] {
+  // Latin words are atomic (never break mid-word); CJK chars are each their
+  // own atom (break is fine between glyphs); spaces separate Latin words.
+  const atoms: string[] = []
+  let word = ''
+  for (const ch of text) {
+    if (/\s/.test(ch) || CJK_ATOM_RE.test(ch)) {
+      if (word) {
+        atoms.push(word)
+        word = ''
+      }
+      atoms.push(ch)
+    } else {
+      word += ch
+    }
+  }
+  if (word) atoms.push(word)
+  return atoms
+}
+
+export function wrap(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
   const raw = (text || '').replace(/\r\n/g, '\n').split('\n')
   const out: string[] = []
   for (const para of raw) {
@@ -616,16 +638,30 @@ function wrap(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): st
       continue
     }
     let line = ''
-    for (const ch of para) {
-      const next = line + ch
-      if (ctx.measureText(next).width > maxWidth && line) {
-        out.push(line)
-        line = ch === ' ' ? '' : ch
-      } else {
+    for (const atom of wrapTokens(para)) {
+      if (!line && /\s/.test(atom)) continue // never start a line with a space
+      const next = line + atom
+      const fits = ctx.measureText(next).width <= maxWidth
+      if (fits) {
         line = next
+      } else if (line) {
+        // break at the atom boundary (a space or a word) — never mid-word
+        out.push(line.trimEnd())
+        line = /\s/.test(atom) ? '' : atom
+      } else {
+        // a single atom is wider than the line: fall back to char-level break
+        for (const ch of atom) {
+          const cnext = line + ch
+          if (ctx.measureText(cnext).width > maxWidth && line) {
+            out.push(line.trimEnd())
+            line = ch === ' ' ? '' : ch
+          } else {
+            line = cnext
+          }
+        }
       }
     }
-    if (line) out.push(line)
+    if (line) out.push(line.trimEnd())
   }
   return out.length ? out : ['']
 }
@@ -699,7 +735,7 @@ function buildPdf(title: string, pages: Array<{ jpeg: Uint8Array; w: number; h: 
     obj(contentObj, `<< /Length ${content.length} >>\nstream\n${content}\nendstream`)
   })
   const infoObj = 3 + pageCount * 3
-  obj(infoObj, `<< /Title (${pdfEscape(pdfDefaultTitle(title))}) /Producer (${PDF_BRAND}) >>`)
+  obj(infoObj, `<< /Title ${pdfTitleLiteral(title)} /Producer (${PDF_BRAND}) >>`)
   const xrefAt = size
   push(`xref\n0 ${infoObj + 1}\n`)
   push('0000000000 65535 f \n')
@@ -718,4 +754,31 @@ function buildPdf(title: string, pages: Array<{ jpeg: Uint8Array; w: number; h: 
 
 function pdfEscape(text: string): string {
   return text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)')
+}
+
+// /Title holds text a reader decodes as PDFDocEncoding (≈ Latin-1), so any
+// non-ASCII title written as raw UTF-8 turns into mojibake ("capacitÃ€…").
+// Per the PDF spec, non-ASCII text is written as a UTF-16BE hex string with a
+// BOM. Pure-ASCII titles stay as a plain escaped literal (compact, unchanged).
+export function pdfTitleLiteral(title: string): string {
+  const clean = pdfDefaultTitle(title)
+  if (/^[\x00-\x7f]*$/.test(clean)) return `(${pdfEscape(clean)})`
+  return `<${utf16BEHex(clean)}>`
+}
+
+function utf16BEHex(text: string): string {
+  let hex = 'FEFF' // byte-order mark
+  for (const ch of text) {
+    const cp = ch.codePointAt(0)!
+    if (cp > 0xffff) {
+      const c = cp - 0x10000
+      const hi = 0xd800 + (c >> 10)
+      const lo = 0xdc00 + (c & 0x3ff)
+      hex += hi.toString(16).padStart(4, '0')
+      hex += lo.toString(16).padStart(4, '0')
+    } else {
+      hex += cp.toString(16).padStart(4, '0')
+    }
+  }
+  return hex.toUpperCase()
 }
