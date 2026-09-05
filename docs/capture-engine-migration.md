@@ -2,13 +2,13 @@
 
 单一事实来源（single source of truth）文档：所有"做到哪层了 / 下一步做什么"都在这里更新，**不要**只写在对话上下文里。设计依据见 `docs/adr/0001-capture-engine-two-axis-state.md`。
 
-## 最新状态（2026-09-06 · notes 收口批 + 7-item batch shipped）· 窗口交接快照
+## 最新状态（2026-09-06 晚 · notes 收口 + 7-item + 收尾批全部 shipped）· 窗口交接快照
 
 新会话从这里核对起（别考古）：`git -C ~/Projects/nod-web status` + `git log --oneline -6`。
 
 **已核实（本会话工具验证）**
-- `main` = `origin/main`，HEAD `7ac2736`（iOS bundle 26；收口批 5 commit 已推）。工作区干净，仅 2 个**未跟踪** docs：`docs/Nodpilot 产品功能设计.pdf`、`docs/nodpilot-product-design.html`（遗留，勿动——后者已同步为事实来源）。
-- CI 最新 run `33959368572` **success**；Railway `754bde17` **SUCCESS**；`/api/health` 200。
+- `main` = `origin/main`，HEAD `308098f`。收尾批（已推）：`101a38f` 暂停中按 Stop 释放 listener（补洞）、`32c9b80` 产品设计 PDF 重导、`701c7cd` LLM 路由（无图 text→`deepseek-v4-flash`，带图 deepseek→`VISION_MODEL`）、`308098f` listen_ask 提示词声明不能查实时。工作区干净，无未跟踪遗留。
+- CI 最新 run `33989470669` **success**；Railway `e7c1546d` **SUCCESS**；`/api/health` 200。
 - ⚠️ **线上 DB 是 SQLite `/data/nod.db`，不是 Postgres**（DATABASE_URL 未设；railway 无独立 PG 服务；SQL 用 SQLite 语法）。native app 连 `https://nodpilot.com`；`push origin/main` → CI+Railway 自动部署。
 
 **收口批（Meeting Live / Notes，5 commit，已推 + iPhone/Watch bundle 26 核对）**
