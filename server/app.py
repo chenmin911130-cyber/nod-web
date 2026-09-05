@@ -1473,6 +1473,11 @@ class Pipeline:
             ok, snap = check_can_generate(self.user_id)
             self.emit({"type": "quota", **snap})
             if not ok:
+                logging.getLogger("nod").warning(
+                    "quota_exceeded user=%s reason=%s sessions=%s/%s daily_cost=%s global_cost=%s",
+                    self.user_id, snap.get("reason"), snap.get("sessions"), snap.get("session_limit"),
+                    snap.get("daily_cost_usd"), snap.get("global_cost_usd"),
+                )
                 self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "llm"})
                 self.emit({"type": "error", "text": "Usage limit reached. Open Account to see remaining quota."})
                 self.emit({"type": "done", "id": "", "stt": 0, "llm": 0, "ok": False})
@@ -1548,6 +1553,11 @@ class Pipeline:
 
                             ok, snap = check_can_generate(self.user_id)
                             if not ok:
+                                logging.getLogger("nod").warning(
+                                    "quota_exceeded user=%s reason=%s sessions=%s/%s daily_cost=%s global_cost=%s",
+                                    self.user_id, snap.get("reason"), snap.get("sessions"), snap.get("session_limit"),
+                                    snap.get("daily_cost_usd"), snap.get("global_cost_usd"),
+                                )
                                 self.emit({"type": "quota", **snap})
                                 self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "llm"})
                                 self.emit({"type": "error", "text": "Usage limit reached. Open Account to see remaining quota."})
@@ -1630,6 +1640,11 @@ class Pipeline:
             except Exception:
                 logging.getLogger("nod").exception("r2 notes upload failed")
         if not ok:
+            logging.getLogger("nod").warning(
+                "quota_exceeded user=%s reason=%s sessions=%s/%s daily_cost=%s global_cost=%s",
+                self.user_id, snap.get("reason"), snap.get("sessions"), snap.get("session_limit"),
+                snap.get("daily_cost_usd"), snap.get("global_cost_usd"),
+            )
             self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "llm"})
 
 
@@ -2020,6 +2035,11 @@ class Session:
             self.pipeline.usage_session_id = None
 
     def _quota_block(self, snap: dict) -> None:
+        logging.getLogger("nod").warning(
+            "quota_exceeded user=%s reason=%s sessions=%s/%s daily_cost=%s global_cost=%s",
+            self.user_id, snap.get("reason"), snap.get("sessions"), snap.get("session_limit"),
+            snap.get("daily_cost_usd"), snap.get("global_cost_usd"),
+        )
         self.emit({"type": "quota", **snap})
         self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "limit"})
         self.emit({"type": "error", "text": "Usage limit reached. Open Account to upgrade or wait for reset."})

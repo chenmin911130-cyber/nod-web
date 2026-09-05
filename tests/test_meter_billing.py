@@ -190,6 +190,36 @@ def test_quota_sessions_axis(meter_env):
     assert snap["reason"] == "sessions"
 
 
+def test_usage_snapshot_sessions_axis(meter_env):
+    """item2: the sessions limit lives in usage_snapshot, not can_start_session,
+    so /api/me (usage_snapshot) reports reason='sessions'."""
+
+    from server.meter import open_usage_session, usage_snapshot
+
+    _add_user(meter_env, plan="free")
+    for _ in range(60):
+        sid, snap = open_usage_session("u1", "interview")
+        assert sid, snap.get("reason")
+    snap = usage_snapshot("u1")
+    assert snap["ok"] is False
+    assert snap["reason"] == "sessions"
+
+
+def test_quota_exceeded_logs_reason(meter_env, caplog):
+    """item1: a quota block logs the reason + quota fields for observability."""
+    from server.app import Session
+
+    events: list[dict] = []
+    sess = Session.__new__(Session)
+    sess.emit = events.append
+    sess.user_id = "u1"
+    with caplog.at_level("WARNING", logger="nod"):
+        sess._quota_block(
+            {"ok": False, "reason": "sessions", "sessions": 60, "session_limit": 60, "daily_cost_usd": 0.0, "global_cost_usd": 0.0}
+        )
+    assert any("quota_exceeded" in r.message and "sessions" in r.message and "60/60" in r.message for r in caplog.records)
+
+
 # --- Plan downgrade on cancellation ---------------------------------------
 
 
