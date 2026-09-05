@@ -4,7 +4,7 @@ Regression for the Italian bug: STT locked to a Latin language must not
 drop ordinary sentences just because word-marker guessing said "en".
 """
 
-from server.lang import heard_lang_from_text, matches_locked_speech
+from server.lang import heard_lang_from_text, matches_locked_speech, split_code_switched
 
 
 def test_latin_lock_accepts_plain_sentences():
@@ -53,3 +53,30 @@ def test_heard_lang_no_tag_falls_back_to_en():
     """No STT tag; a plain English sentence's script still reads en."""
     assert heard_lang_from_text("That's a last-minute notification", None) == "en"
     assert heard_lang_from_text("That's a last-minute notification", "en") == "en"
+
+
+def test_split_code_switched_keeps_space_after_latin_stop():
+    """A Latin sentence-stop must keep a space before the next sentence.
+
+    Regression: the joiner suppressed the space for any sentence-stop,
+    including Latin ``. ! ?``. CJK stops (。！？) correctly need no space.
+    """
+    assert split_code_switched("GPT-6 Astra is here. It's our latest\u2026") == [
+        "GPT-6 Astra is here. It's our latest\u2026"
+    ]
+    assert split_code_switched("Lower 8? Checking now.") == ["Lower 8? Checking now."]
+    assert split_code_switched("Non so che dire. Ci sono molte opzioni.") == [
+        "Non so che dire. Ci sono molte opzioni."
+    ]
+
+
+def test_split_code_switched_cjk_keeps_no_space():
+    """CJK sentence-stops still join with no space (correct CJK convention)."""
+    assert split_code_switched("你好。世界。") == ["你好。世界。"]
+    assert split_code_switched("你好！再见？") == ["你好！再见？"]
+
+
+def test_split_code_switched_switches_script_on_script_change():
+    """A script change still splits into separate lines (never rewrite)."""
+    out = split_code_switched("Hello world. \u4f60\u597d\u3002")
+    assert out == ["Hello world.", "你好。"]

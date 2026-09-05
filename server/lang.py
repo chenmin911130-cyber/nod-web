@@ -125,7 +125,7 @@ def split_code_switched(text: str) -> list[str]:
     buf = parts[0]
     for part in parts[1:]:
         if _same_speech_script(buf, part):
-            joiner = "" if buf.endswith(("。", "！", "？", ".", "!", "?", "…")) else " "
+            joiner = "" if buf.endswith(("。", "！", "？")) else " "
             buf = f"{buf}{joiner}{part}"
         else:
             out.append(buf)
