@@ -1428,7 +1428,7 @@ class Pipeline:
                 {
                     "role": "system",
                     "content": (
-                        "You write structured listening notes after a session ends.\n"
+                        "You write structured listening notes for a live session. The transcript may be mid-session; summarize what has been said so far and do not say the session has ended unless the transcript shows it.\n"
                         "Return JSON only. No markdown fence.\n"
                         "Keys: summary (string), takeaways, keyPoints, decisions, actionItems, "
                         "importantDetails, followUps, revisionNotes.\n"
