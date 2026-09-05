@@ -13,6 +13,7 @@ function eq<T>(got: T, want: T, label: string) {
 }
 
 eq(watchStopShouldAutoKeepHistory(), false, 'Watch Stop must not silently keep History')
+eq(watchStopShouldAutoKeepHistory(true), true, 'AutoNotes auto-keeps History on save_prompt')
 eq(watchStopShouldOpenPhoneSave(), false, 'Watch Stop must not open the iPhone Save dialog')
 
 eq(

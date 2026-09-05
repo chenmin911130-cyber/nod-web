@@ -1,8 +1,12 @@
 import type { EngineMsg } from './types'
 
-/** Watch Stop asks on the wrist. Do not silently keep History. */
-export function watchStopShouldAutoKeepHistory(): boolean {
-  return false
+/**
+ * A Watch-driven session (AutoNotes) keeps History automatically on save_prompt,
+ * the same way a Watch Stop does — the wrist already asked. Without AutoNotes,
+ * the phone Meeting dialog asks first, so this returns false.
+ */
+export function watchStopShouldAutoKeepHistory(autoNotes?: boolean): boolean {
+  return autoNotes === true
 }
 
 /** Watch Stop asks on the wrist. The iPhone Meeting dialog stays for phone Stop. */

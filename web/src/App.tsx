@@ -1306,7 +1306,7 @@ export default function App() {
       if (e.type === 'save_prompt') {
         // Watch Stop asks on the wrist. Phone Meeting Save stays for phone Stop.
         if (watchAutoNotes.current) {
-          if (watchStopShouldAutoKeepHistory()) {
+          if (watchStopShouldAutoKeepHistory(watchAutoNotes.current)) {
             api.send(watchSaveCommand())
             markHistoryKept(true)
           }
