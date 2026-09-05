@@ -2,6 +2,24 @@
 
 单一事实来源（single source of truth）文档：所有"做到哪层了 / 下一步做什么"都在这里更新，**不要**只写在对话上下文里。设计依据见 `docs/adr/0001-capture-engine-two-axis-state.md`。
 
+## 当前状态（2026-09-05）· 窗口交接快照
+
+新会话从这里核对起（别考古）：`git -C ~/Projects/nod-web status` + `git log --oneline -4` 应看到下面这套。
+
+**已核实（本会话工具验证）**
+- `main` = `origin/main`，HEAD `d22a6c1`（e2e: mark translate overlap gate as expected-fail until #11 item(1) lands）；工作区干净，仅 2 个**未跟踪** docs：`docs/Nodpilot 产品功能设计.pdf`、`docs/nodpilot-product-design.html`（遗留，勿动）。
+- CI 最新 run `33949673588` **success**（backend/frontend/e2e 全绿），headSha = `d22a6c1`。⚠️ 其前两个 run `33931234994`、`33928639290` 是 **failure** —— 即 e2e 本地绿/CI 红的坑，d22a6c1 用「帧级 gate 标 expected-fail」翻绿，并非无中生有。
+- **依赖信息（用户快照，未再单独核实）**：Railway deploy `5a267579` SUCCESS、`/api/health` 200；iPhone 端无需重装。
+
+**接下来（队列，按序）**
+1. **item 1 · 客户端 `phase(off, idle)` 修复** —— 排在真机测试 ① 之后。根因/时序/修法在 **GitHub issue #11**（OPEN）。落地时删掉帧级翻译重叠 gate 的 `test.fail` 行（d22a6c1 里标 expected-fail 的那行）。
+2. 重连排查（零 PCM 时间戳对部署时间）—— **不在交接顺序里，暂不开**，留到以后。
+
+**教训入口（动手上文工作前必读）**
+- `.cursor/skills/self-improve/errors.md` —— e2e 本地绿 CI 红、`phase(off,idle)` 兜底 vs `done` 重试、`think` 被当 Phone Stop、手表 UI 翻面、只装手表原生没 `cap:sync` 等
+- `nod-web` skill —— 零 PCM 守卫、终态 stop 非 paused、静音放置坑
+- 本文件下方 L1–L5 迁移记录（09-04 已完成）
+
 ## 当前状态（2026-09-04）
 
 - [x] **L1 服务端**：实现完成，`tests/test_phase.py` 12 个用例全绿，全套 `221 passed / 1 skipped`，`server.app import OK`
