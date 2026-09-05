@@ -1252,7 +1252,7 @@ class Pipeline:
 
     def _out_lang_from_tag(self, question: str) -> str | None:
         inner = self._tag_inner(question)
-        if not inner.startswith(("NOD_CATCH:", "NOD_ASK:", "NOD_NOTES:")):
+        if not inner.startswith(("NOD_CATCH:", "NOD_ASK:", "NOD_NOTES:", "NOD_SUMMARY:")):
             return None
         parts = [p for p in inner.split(":")[1:] if p and p != "bi"]
         if not parts:
@@ -1320,7 +1320,7 @@ class Pipeline:
                         "You are a meeting notetaker. Write a recap the user can scan after the call.\n"
                         "Output exactly these sections, using short bullets:\n"
                         "- Key points\n- Decisions\n- Action items (include owner only if it was said)\n"
-                        "No preamble. Do not invent people, numbers, or commitments."
+                        "No preamble. Do not invent people, numbers, or commitments." + out_rule
                     ),
                 },
                 {"role": "user", "content": question},

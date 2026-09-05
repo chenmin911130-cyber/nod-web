@@ -810,6 +810,28 @@ class ListenAskRoutingTests(unittest.TestCase):
         self.assertIn("neutral", sys_msg.lower())
         self.assertIn("Question:", user_msg)
 
+    def test_summary_tag_follows_notes_language(self):
+        pipe = Pipeline.__new__(Pipeline)
+        pipe.cfg = {"llm": {}}
+        messages = pipe._build_messages(
+            "[NOD_SUMMARY:it]\nOUTPUT LANGUAGE (hard rule): Write the entire summary in Italian only.\n"
+            "Summarize the following meeting transcript\nSome bullets\n",
+            "summary",
+        )
+        sys_msg = messages[0]["content"]
+        self.assertIn("OUTPUT LANGUAGE", sys_msg)
+        self.assertIn("Italian", sys_msg)
+
+    def test_summary_auto_does_not_force_language(self):
+        pipe = Pipeline.__new__(Pipeline)
+        pipe.cfg = {"llm": {}}
+        messages = pipe._build_messages(
+            "[NOD_SUMMARY:auto]\nSummarize the following meeting transcript\nSome bullets\n",
+            "summary",
+        )
+        sys_msg = messages[0]["content"]
+        self.assertNotIn("OUTPUT LANGUAGE", sys_msg)
+
 
 class MailerEscapeTests(unittest.TestCase):
     def test_feedback_html_is_escaped(self):
