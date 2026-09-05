@@ -28,7 +28,7 @@ import { usePhoneChrome } from './phoneChrome'
 import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchListenMode, watchShouldApplyMode, watchStartShouldPreferWatchMic } from './watch'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
-import { shouldGenerateAutoReport } from './recordReport'
+import { keepShouldWaitForNotes, shouldGenerateAutoReport } from './recordReport'
 import {
   clearWatchReport,
   markWatchReport,
@@ -934,6 +934,7 @@ export default function App() {
   const pumpTranslateRef = useRef<() => void>(() => {})
   const generateNotesRef = useRef<() => void>(() => {})
   const exportAfterNotes = useRef(false)
+  const keepAfterNotes = useRef<{ content: boolean; audio: boolean } | null>(null)
   const autoNotesTried = useRef(false)
   const tickRef = useRef(0)
   const [consent, setConsent] = useState<boolean | null>(demoScene ? true : null)
@@ -1768,9 +1769,11 @@ export default function App() {
     }
     if (s.workspaceMode === 'meeting') {
       if (live) {
+        autoReport.current = true
+        recordHeard.current = true
         stopListen()
         dispatch({ type: 'meeting_ended' })
-        dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped' } })
+        dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped · writing notes' } })
         queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
         return
       }
@@ -1803,8 +1806,10 @@ export default function App() {
       return
     }
     if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
+      autoReport.current = true
+      recordHeard.current = true
       dispatch({ type: 'meeting_ended' })
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped' } })
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped · writing notes' } })
       queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
     }
   }, [handlePrimary])
@@ -2448,6 +2453,20 @@ export default function App() {
     void writePdf()
   }, [state.busy, state.notesRaw, writePdf, generateNotes])
 
+  // A Save tapped while Notes were still streaming waits until they land, then
+  // keeps the session (with its Notes section) instead of saving it empty.
+  useEffect(() => {
+    if (!keepAfterNotes.current || state.busy || state.notesAskId) return
+    const opts = keepAfterNotes.current
+    keepAfterNotes.current = null
+    window.api.send({ type: 'keep_history', content: opts.content, audio: opts.audio })
+    if (pendingNewAfterSave.current) {
+      pendingNewAfterSave.current = false
+      doClear()
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'Saved · new session' } })
+    }
+  }, [state.busy, state.notesAskId])
+
   // 'generating'/'transcribing' is an engine state, not a pause: it must not
   // freeze the clock, but it must not restart it either when paused.
   const [clockRunning, setClockRunning] = useState(false)
@@ -2635,6 +2654,13 @@ export default function App() {
           lastRestoredKeepId.current = restoredId
           if (restoredId) {
             window.api.send({ type: 'keep_history', id: restoredId, content: opts.content, audio: opts.audio })
+            return
+          }
+          // If Notes are still streaming, wait for them — a keep now would save
+          // the session without its Notes section. Deferred below.
+          if (keepShouldWaitForNotes(stateRef.current.notesAskId)) {
+            keepAfterNotes.current = { content: opts.content, audio: opts.audio }
+            dispatch({ type: 'engine', ev: { type: 'status', text: 'Saving after notes finish…' } })
             return
           }
           window.api.send({ type: 'keep_history', content: opts.content, audio: opts.audio })

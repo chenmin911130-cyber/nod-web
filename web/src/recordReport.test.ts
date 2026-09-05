@@ -1,4 +1,4 @@
-import { shouldGenerateAutoReport } from './recordReport'
+import { keepShouldWaitForNotes, shouldGenerateAutoReport } from './recordReport'
 
 function eq(got: string, want: string) {
   if (got !== want) throw new Error(`expected ${want}, got ${got}`)
@@ -26,3 +26,8 @@ eq(report({ capture: 'off', engine: 'idle', workspaceMode: 'meeting', busy: fals
 eq(report({ capture: 'off', engine: 'idle', workspaceMode: 'interview', busy: false, lineCount: 2 }), 'generate')
 eq(report({ capture: 'paused', engine: 'idle', workspaceMode: 'meeting', busy: false, lineCount: 2 }), 'wait')
 eq(report({ capture: 'off', engine: 'generating', workspaceMode: 'meeting', busy: false, lineCount: 2 }), 'wait')
+
+// A Save while Notes are still streaming must wait for them.
+if (keepShouldWaitForNotes('ask-1') !== true) throw new Error('streaming notes => save waits')
+if (keepShouldWaitForNotes('__pending__') !== true) throw new Error('pending notes => save waits')
+if (keepShouldWaitForNotes('') !== false) throw new Error('no notes in flight => save now')

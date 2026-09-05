@@ -16,3 +16,9 @@ export function shouldGenerateAutoReport(input: {
   if (input.lineCount === 0) return 'skip'
   return 'generate'
 }
+
+/** A Save / finish tapped while Notes are still streaming must wait for them,
+ * or the session is persisted without the Notes section. */
+export function keepShouldWaitForNotes(notesAskId: string): boolean {
+  return Boolean(notesAskId)
+}
