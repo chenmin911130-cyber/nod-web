@@ -2,6 +2,20 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-05 · 给 Hermes 的清库单写成 Postgres
+
+- 我以为：nodpilot 生产库是 Railway Postgres（看到 `docs/adr/0002-postgres-for-write-model.md` 的文件名就当已落地）。
+- 实际：`railway variables` 只有 `DATA_DIR=/data`，没有 `DATABASE_URL`；`settings.database_url()` 回落到 volume 上的 SQLite `/data/nod.db`。Hermes 用 `railway ssh` + `sqlite3` 才做成。
+- 规则：写涉及生产数据的指令前，先看 `settings.database_url()` 的实际分支和线上环境变量，不要拿 ADR 标题当现状。
+- 涉及：`server/settings.py database_url` · Railway `nod-web-volume /data`
+
+## 2026-09-05 · 把 History 条数当成月会话额度
+
+- 我以为：`/api/me` 的 `sessions: 60` 就是用户在 History / Account 里能看见的 60 条。
+- 实际：额度是 `count(UsageSession)`（本月每次 Listen 插一行，`kept=False`）。History 只列出 `kept=True` 且未 discarded 的。用户界面上一直只有约 9 条已保存会话；另外 ~50 条是点 Listen 但没 Save 的测试/短听，计入 60 但不出现在列表。删掉几条可见会话后额度从 60 降到 56，Listen 恢复；列表仍是 9 条左右。
+- 规则：说「会话上限」时先查 `usage_snapshot` 的 `sessions` 聚合到底数哪些行，再和 History 的 `list_history` 过滤条件对照；两者口径不同就先指出来，禁止用列表条数反驳或解释 `sessions`。（2026-09-05 起产品决定：额度只数 `kept=True`，两边口径已对齐。）
+- 涉及：`meter.py` `open_usage_session` / `usage_snapshot` / `list_history` · `kept`
+
 ## 2026-09-05 · e2e 本地绿、CI 连红三次没人看
 
 - 我以为：`translate.spec.ts` 本地过了、变异测试能抓双发，就是「已验证」；push 完等于交付。
