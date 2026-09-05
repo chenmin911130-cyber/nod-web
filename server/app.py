@@ -1375,6 +1375,7 @@ class Pipeline:
                         "Answer their question clearly and briefly.\n"
                         "Use the transcript when it helps. If it is empty or silent on the topic, say so, then answer from general knowledge if the question allows it.\n"
                         "Do not invent quotes, names, numbers, or decisions that were not said.\n"
+                        "If the question needs current information beyond the transcript, say you cannot check live sources, then answer what you can.\n"
                         "4-10 short sentences or bullets. No preamble."
                         + out_rule
                     ),
