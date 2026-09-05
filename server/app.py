@@ -1746,6 +1746,30 @@ class CloudListener:
                 if cleaned and cleaned != self._last_final:
                     self._last_final = cleaned
                     threading.Thread(target=self.on_final, args=(cleaned, lang, speaker), daemon=True).start()
+                if os.environ.get("NOD_STT_TRACE") == "1":
+                    # Instrument turn boundaries for the "English line every 10s /
+                    # half-sentence cut" investigation (issue #22). Logging only.
+                    self._turn_order = getattr(self, "_turn_order", 0) + 1
+                    words = data.get("words") or []
+                    word_speakers: dict[str, int] = {}
+                    for w in words:
+                        sp = str((w or {}).get("speaker") or "").strip()
+                        if sp:
+                            word_speakers[sp] = word_speakers.get(sp, 0) + 1
+                    first_w = words[0] if words else {}
+                    last_w = words[-1] if words else {}
+                    logging.getLogger("nod").info(
+                        "stt turn_order=%s end_of_turn_confidence=%s words=%s first_word_ms=%s last_word_ms=%s "
+                        "language_code=%s speakers=%s text=%s",
+                        self._turn_order,
+                        data.get("end_of_turn_confidence"),
+                        len(words),
+                        (first_w or {}).get("start"),
+                        (last_w or {}).get("end"),
+                        data.get("language_code") or lang,
+                        word_speakers,
+                        (cleaned or text)[:40],
+                    )
             elif speechy and self.on_partial:
                 self.on_partial(text, lang, speaker)
         elif kind == "Termination":
