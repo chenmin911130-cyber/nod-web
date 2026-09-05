@@ -48,6 +48,8 @@ import {
   isCatchPrompt,
   isNotesPrompt,
   notesPrompt,
+  nodTag,
+  outLangRule,
   exportNoteSections,
   parseNotes,
   promoteLectureSpeakers,
@@ -282,7 +284,7 @@ function applyTranslateChunk(pairs: TranslatePair[], bindId: string, chunk: stri
 }
 
 function isSummaryPrompt(text: string): boolean {
-  return text.startsWith(SUMMARY_PREFIX) || text.startsWith('[NOD_SUMMARY]')
+  return text.startsWith(SUMMARY_PREFIX) || text.startsWith('[NOD_SUMMARY')
 }
 
 function reducer(state: AppState, action: Action): AppState {
@@ -2054,7 +2056,7 @@ export default function App() {
     window.api.send({
       type: 'ask',
       mode: 'summary',
-      text: `${SUMMARY_PREFIX} as concise bullet points. Only the bullets:\n\n${body}`,
+      text: `${nodTag('SUMMARY', s.notesLang, s.translateOn)}\n${outLangRule(s.notesLang, 'summary', s.translateOn)}${SUMMARY_PREFIX} as concise bullet points. Only the bullets:\n\n${body}`,
     })
   }, [])
 

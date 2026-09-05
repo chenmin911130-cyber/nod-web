@@ -1,10 +1,17 @@
-import { LISTEN_SCENES, notesBodyText, notesPrompt, sceneLabel } from './listen'
+import { LISTEN_SCENES, nodTag, notesBodyText, notesPrompt, outLangRule, sceneLabel } from './listen'
 
 function eq<T>(got: T, want: T, label?: string) {
   if (JSON.stringify(got) !== JSON.stringify(want)) {
     throw new Error(`${label || 'assert'}: expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`)
   }
 }
+
+// A: Summary gets its own language channel.
+eq(nodTag('SUMMARY', 'zh', false), '[NOD_SUMMARY:zh]', 'summary tag')
+eq(nodTag('SUMMARY', 'auto', true), '[NOD_SUMMARY:auto:bi]', 'summary tag bilingual')
+eq(nodTag('NOTES', 'zh', false, 'meeting'), '[NOD_NOTES:meeting:zh]', 'notes tag keeps scene')
+if (!outLangRule('zh', 'summary').includes('Chinese only')) throw new Error('summary fixed lang')
+if (!outLangRule('auto', 'summary').includes('majority language')) throw new Error('summary auto follows transcript')
 
 eq(sceneLabel('interview'), 'Live Q&A')
 eq(LISTEN_SCENES.find((s) => s.id === 'interview')?.label, 'Live Q&A')

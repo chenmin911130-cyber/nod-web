@@ -5,7 +5,7 @@ function langName(lang: PairLang): string {
   return TRANSLATE_LANGS.find((item) => item.id === lang)?.name ?? 'Chinese'
 }
 
-function outLangRule(outLang: Lang, kind: 'answer' | 'catch-up' | 'json', bilingual = false): string {
+export function outLangRule(outLang: Lang, kind: 'answer' | 'catch-up' | 'json' | 'summary', bilingual = false): string {
   if (bilingual) {
     const name = outLang === 'auto' ? 'the listener notes language, or Chinese if unclear' : langName(outLang)
     if (kind === 'json') {
@@ -21,12 +21,15 @@ function outLangRule(outLang: Lang, kind: 'answer' | 'catch-up' | 'json', biling
     )
   }
   if (outLang === 'auto') {
-    if (kind === 'json') {
-      return 'OUTPUT LANGUAGE (hard rule): Write every JSON string in the language of the transcript. If the transcript mixes languages, follow the majority language. Do not force one language.\n'
+    if (kind === 'json' || kind === 'summary') {
+      return 'OUTPUT LANGUAGE (hard rule): Follow the transcript language. If the transcript mixes languages, write in the majority language. Do not force one language.\n'
     }
     return 'OUTPUT LANGUAGE (hard rule): Write in the language of the listener question if it is clear; otherwise follow the transcript. Do not force one language.\n'
   }
   const name = langName(outLang)
+  if (kind === 'summary') {
+    return `OUTPUT LANGUAGE (hard rule): Write the entire summary in ${name} only. Do not follow the transcript language.\n`
+  }
   if (kind === 'json') {
     return `OUTPUT LANGUAGE (hard rule): Every JSON string value must be in ${name} only. Do not follow the transcript language.\n`
   }
@@ -36,7 +39,7 @@ function outLangRule(outLang: Lang, kind: 'answer' | 'catch-up' | 'json', biling
   return `OUTPUT LANGUAGE (hard rule): Write the entire answer in ${name} only. Do not follow the transcript language.\n`
 }
 
-function nodTag(kind: 'ASK' | 'CATCH' | 'NOTES', outLang: Lang, bilingual: boolean, scene?: ListenScene): string {
+export function nodTag(kind: 'ASK' | 'CATCH' | 'NOTES' | 'SUMMARY', outLang: Lang, bilingual: boolean, scene?: ListenScene): string {
   const extra = bilingual ? ':bi' : ''
   if (kind === 'NOTES') return `[NOD_NOTES:${scene}:${outLang}${extra}]`
   return `[NOD_${kind}:${outLang}${extra}]`
