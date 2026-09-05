@@ -9,13 +9,14 @@ import {
   parseBiLines,
   parseNotes,
   resolveSpeakerName,
+  sceneChipLabel,
   sceneLabel,
   visibleSections,
   type ListenScene,
   type MeetingSpeakerId,
   type NotesSectionId,
 } from '../listen'
-import { IPHONE_COPY, listenChipParts, nativeListenChipOrder, notesChipParts, showLineTranslation, speakersChipParts } from '../iphoneCopy'
+import { IPHONE_COPY, listenChipParts, nativeListenChipOrder, notesChipParts, showLineTranslation } from '../iphoneCopy'
 import { usePhoneChrome } from '../phoneChrome'
 import { iphoneSummaryHeading, liveHeardLines, liveNotesLine, liveStageMode, summaryPlainText } from '../liveView'
 
@@ -262,66 +263,6 @@ function LangSelect({
   )
 }
 
-function MeetingSpeakersSelect({
-  value,
-  onChange,
-}: {
-  value: MeetingSpeakerId
-  onChange: (id: MeetingSpeakerId) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const boxRef = useDismiss(open, () => setOpen(false))
-  const current = MEETING_SPEAKER_OPTIONS.find((o) => o.id === value)
-  const phone = usePhoneChrome()
-
-  return (
-    <div className={`listen-lang-box${open ? ' open' : ''}`} ref={boxRef}>
-      <button
-        type="button"
-        className={`listen-lang-pair-btn${open ? ' on' : ''}`}
-        title={`Number of speakers · ${current?.label ?? '2 people'}`}
-        aria-label="Number of speakers"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={() => setOpen((v) => !v)}
-      >
-        {phone ? <ChipPeople /> : null}
-        {phone ? (
-          <span className="iphone-chip-copy">
-            <b>{speakersChipParts(value).title}</b>
-          </span>
-        ) : (
-          <>
-            <span className="listen-lang-tag">{current ? current.label.replace(' people', '') : '2'}</span>
-            <Chevron />
-          </>
-        )}
-      </button>
-      {open && (
-        <div className="listen-lang-menu" role="listbox">
-          {MEETING_SPEAKER_OPTIONS.map((o) => (
-            <button
-              key={o.id}
-              type="button"
-              role="option"
-              aria-selected={o.id === value}
-              className={o.id === value ? 'on' : ''}
-              onClick={() => {
-                onChange(o.id)
-                setOpen(false)
-              }}
-            >
-              <b>{o.count}</b>
-              <span>{o.label}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 const SPEECH_LANGS: Array<{ id: Lang; tag: string; name: string }> = [
   { id: 'auto', tag: 'Auto', name: 'Detect automatically' },
   ...TRANSLATE_LANGS,
@@ -414,7 +355,17 @@ function SpeechLangSelect({
   )
 }
 
-function SceneSelect({ scene, onScene }: { scene: ListenScene; onScene: (scene: ListenScene) => void }) {
+function SceneSelect({
+  scene,
+  onScene,
+  speakersId,
+  onSpeakers,
+}: {
+  scene: ListenScene
+  onScene: (scene: ListenScene) => void
+  speakersId: MeetingSpeakerId
+  onSpeakers: (id: MeetingSpeakerId) => void
+}) {
   const [open, setOpen] = useState(false)
   const boxRef = useDismiss(open, () => setOpen(false))
   const phone = usePhoneChrome()
@@ -430,34 +381,52 @@ function SceneSelect({ scene, onScene }: { scene: ListenScene; onScene: (scene: 
         onClick={() => setOpen((v) => !v)}
       >
         {phone ? <ChipPeople /> : null}
-        {sceneLabel(scene)}
+        {sceneChipLabel(scene, speakersId)}
         {phone ? null : <Chevron />}
       </button>
       {open && (
-        <div className="listen-scene-menu" role="listbox">
-          {LISTEN_SCENES.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="option"
-              aria-selected={scene === item.id}
-              className={scene === item.id ? 'on' : ''}
-              onClick={() => {
-                onScene(item.id)
-                setOpen(false)
-              }}
-            >
-              <SceneMark scene={item.id} size={20} />
-              <b>{item.label}</b>
-              <span>
-                {item.id === 'meeting'
-                  ? 'Decisions and action items'
-                  : item.id === 'lecture'
-                    ? 'Revision notes and homework'
-                    : 'Hear a question, draft an answer'}
-              </span>
-            </button>
-          ))}
+        <div className="listen-scene-menu">
+          <div role="listbox">
+            {LISTEN_SCENES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="option"
+                aria-selected={scene === item.id}
+                className={scene === item.id ? 'on' : ''}
+                onClick={() => {
+                  onScene(item.id)
+                  setOpen(false)
+                }}
+              >
+                <SceneMark scene={item.id} size={20} />
+                <b>{item.label}</b>
+                <span>
+                  {item.id === 'meeting'
+                    ? 'Decisions and action items'
+                    : item.id === 'lecture'
+                      ? 'Revision notes and homework'
+                      : 'Hear a question, draft an answer'}
+                </span>
+              </button>
+            ))}
+          </div>
+          {scene === 'meeting' && (
+            <div className="listen-scene-people" role="group" aria-label="Number of speakers">
+              {MEETING_SPEAKER_OPTIONS.map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={o.id === speakersId}
+                  className={o.id === speakersId ? 'on' : ''}
+                  onClick={() => onSpeakers(o.id)}
+                >
+                  {o.chip}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -889,10 +858,7 @@ export default function ListenPane(props: Props) {
           <>
             {nativeListenChipOrder(props.scene).map((chip) => {
               if (chip === 'scene') {
-                return <SceneSelect key="scene" scene={props.scene} onScene={props.onScene} />
-              }
-              if (chip === 'speakers') {
-                return <MeetingSpeakersSelect key="speakers" value={props.meetingSpeakersId} onChange={props.onMeetingSpeakers} />
+                return <SceneSelect key="scene" scene={props.scene} onScene={props.onScene} speakersId={props.meetingSpeakersId} onSpeakers={props.onMeetingSpeakers} />
               }
               if (chip === 'speech') {
                 return (
@@ -914,10 +880,7 @@ export default function ListenPane(props: Props) {
           </>
         ) : !props.qa ? (
           <>
-            <SceneSelect scene={props.scene} onScene={props.onScene} />
-            {props.scene === 'meeting' && (
-              <MeetingSpeakersSelect value={props.meetingSpeakersId} onChange={props.onMeetingSpeakers} />
-            )}
+            <SceneSelect scene={props.scene} onScene={props.onScene} speakersId={props.meetingSpeakersId} onSpeakers={props.onMeetingSpeakers} />
             <div className="listen-lang-pair" title="Speech to notes language">
               <SpeechLangSelect
                 value={props.speechLang}
@@ -930,7 +893,7 @@ export default function ListenPane(props: Props) {
           </>
         ) : (
           <>
-            <SceneSelect scene={props.scene} onScene={props.onScene} />
+            <SceneSelect scene={props.scene} onScene={props.onScene} speakersId={props.meetingSpeakersId} onSpeakers={props.onMeetingSpeakers} />
             <div className="listen-lang-pair listen-lang-single" title="Speech recognition language">
               <SpeechLangSelect
                 value={props.speechLang}

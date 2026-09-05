@@ -1,4 +1,4 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, bilingualDisabled, capTranscript, nodTag, notesBodyText, notesPrompt, outLangRule, sceneLabel, speakersExpected } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, bilingualDisabled, capTranscript, nodTag, notesBodyText, notesPrompt, outLangRule, sceneChipLabel, sceneLabel, speakersExpected } from './listen'
 
 function eq<T>(got: T, want: T, label?: string) {
   if (JSON.stringify(got) !== JSON.stringify(want)) {
@@ -45,6 +45,12 @@ eq(speakersExpected('meeting', 6), 6, 'meeting override 6')
 eq(speakersExpected('lecture'), 4, 'lecture stays 4')
 eq(speakersExpected('interview', 6), 2, 'interview ignores override')
 eq(MEETING_SPEAKER_OPTIONS.map((o) => o.count).join(','), '2,4,6', 'bucket counts')
+
+// item1: scene chip label shows the people-count badge only for non-default Meeting.
+eq(sceneChipLabel('meeting', '2'), 'Meeting', 'meeting default 2 has no badge')
+eq(sceneChipLabel('meeting', '3-4'), 'Meeting · 3–4', 'meeting 3-4 badge uses en-dash')
+eq(sceneChipLabel('meeting', '5+'), 'Meeting · 5+', 'meeting 5+ badge')
+eq(sceneChipLabel('lecture', '5+'), 'Lecture', 'lecture ignores the speaker badge')
 
 eq(sceneLabel('interview'), 'Live Q&A')
 eq(LISTEN_SCENES.find((s) => s.id === 'interview')?.label, 'Live Q&A')

@@ -134,6 +134,17 @@ export function sceneLabel(scene: ListenScene): string {
   return LISTEN_SCENES.find((s) => s.id === scene)?.label ?? 'Meeting'
 }
 
+// Scene chip label: append the people-count badge only for Meeting when it is
+// not the default (2). '3–4' uses the en-dash chip display, not the option id.
+export function sceneChipLabel(scene: ListenScene, speakersId: MeetingSpeakerId): string {
+  const base = sceneLabel(scene)
+  if (scene === 'meeting' && speakersId !== '2') {
+    const opt = MEETING_SPEAKER_OPTIONS.find((o) => o.id === speakersId)
+    return `${base} · ${opt?.chip ?? ''}`
+  }
+  return base
+}
+
 export function emptyNotes(): NotesDoc {
   return {
     summary: '',
@@ -225,9 +236,9 @@ export function visibleSections(scene: ListenScene, doc: NotesDoc): Array<{ id: 
 }
 
 export const MEETING_SPEAKER_OPTIONS = [
-  { id: '2', label: '2 people', count: 2 },
-  { id: '3-4', label: '3-4 people', count: 4 },
-  { id: '5+', label: '5+ people', count: 6 },
+  { id: '2', label: '2 people', chip: '2', count: 2 },
+  { id: '3-4', label: '3-4 people', chip: '3–4', count: 4 },
+  { id: '5+', label: '5+ people', chip: '5+', count: 6 },
 ] as const
 export type MeetingSpeakerId = (typeof MEETING_SPEAKER_OPTIONS)[number]['id']
 const MEETING_SPEAKER_KEY = 'nod_meeting_speakers'
