@@ -913,6 +913,7 @@ export default function App() {
     setHistoryKept(kept)
   }
   const pendingNewAfterSave = useRef(false)
+  const pendingRestoreId = useRef<string | null>(null)
   const offerSaveAfterMeetingStopRef = useRef<() => void>(() => undefined)
   const watchAutoNotes = useRef(false)
   const autoReport = useRef(false)
@@ -1006,6 +1007,20 @@ export default function App() {
   const wasInQa = useRef(inQa)
   const requestClearRef = useRef<() => void>(() => {})
   const handleRecordRef = useRef<() => void>(() => {})
+
+  // After a disconnect, a meeting session that produced content but was never
+  // saved is re-offered once. Query the server for it; if present, pop the
+  // SavePrompt and remember which session id the Save/Don't-save must target.
+  const checkPendingRestore = () => {
+    void authApi<{ sessions: HistorySession[] }>('/api/account/history?pending=1')
+      .then((out) => {
+        const pending = (out.sessions || [])[0]
+        if (!pending) return
+        pendingRestoreId.current = pending.id
+        setSavePrompt(true)
+      })
+      .catch(() => undefined)
+  }
 
   useEffect(() => {
     if (inQa && !wasInQa.current) setRailDismissed(true)
@@ -1280,6 +1295,7 @@ export default function App() {
     const offEvent = api.onEvent((e) => {
       if (e.type === 'ready') {
         syncWorkspace()
+        checkPendingRestore()
         if (listenWanted.current) {
           queueMicrotask(() => api.send({ type: 'start_listen' }))
         }
@@ -2657,6 +2673,14 @@ export default function App() {
         open={savePrompt}
         onKeep={(opts) => {
           setSavePrompt(false)
+          const restoredId = pendingRestoreId.current
+          pendingRestoreId.current = null
+          if (restoredId) {
+            // Recovered session: save it by id (it is not the live usage id).
+            markHistoryKept(true)
+            window.api.send({ type: 'keep_history', id: restoredId, content: opts.content, audio: opts.audio })
+            return
+          }
           markHistoryKept(true)
           window.api.send({ type: 'keep_history', content: opts.content, audio: opts.audio })
           if (pendingNewAfterSave.current) {
@@ -2667,6 +2691,14 @@ export default function App() {
         }}
         onDiscard={() => {
           setSavePrompt(false)
+          const restoredId = pendingRestoreId.current
+          pendingRestoreId.current = null
+          if (restoredId) {
+            // Recovered session: discard it by id (not the live usage id).
+            markHistoryKept(false)
+            window.api.send({ type: 'discard_history', id: restoredId })
+            return
+          }
           window.api.send({ type: 'discard_history' })
           if (pendingNewAfterSave.current) {
             pendingNewAfterSave.current = false

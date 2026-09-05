@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from server.db import AuditLog, Feedback, Order, ResetToken, StripeEvent, User, db_session, utcnow
 from server.mailer import send_otp_email, send_reset_email
 from server.otp import OTP_OK, consume_otp, issue_otp
-from server.meter import delete_history_session, delete_user_data, list_history, plan_of, session_file_key, session_file_url, usage_snapshot
+from server.meter import delete_history_session, delete_user_data, list_history, list_pending_history, plan_of, session_file_key, session_file_url, usage_snapshot
 from server.security import (
     cookie_kwargs,
     current_user,
@@ -446,7 +446,11 @@ def funnel_event(request: Request, body: EventIn, _: None = Depends(rate_limit("
 
 
 @router.get("/api/account/history")
-def history(user: User = Depends(workspace_user)):
+def history(pending: bool = False, user: User = Depends(workspace_user)):
+    if pending:
+        # Recoverable never-saved sessions (max 1, newest) so the client can
+        # re-offer "Save this session to History?" after a reconnect.
+        return {"ok": True, "sessions": list_pending_history(user.id)}
     return {"ok": True, "sessions": list_history(user.id)}
 
 

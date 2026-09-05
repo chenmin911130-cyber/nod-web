@@ -201,6 +201,23 @@ def is_session_kept(session_id: str | None) -> bool:
         return bool(row and row.kept)
 
 
+def session_has_history(session_id: str | None) -> bool:
+    """True when the session already captured at least one HistoryItem.
+
+    A meeting session that produced content and was never saved should be
+    recoverable on reconnect, not discarded at close.
+    """
+    if not session_id:
+        return False
+    with db_session() as db:
+        return (
+            db.execute(
+                select(HistoryItem.id).where(HistoryItem.session_id == session_id).limit(1)
+            ).scalar_one_or_none()
+            is not None
+        )
+
+
 def keep_usage_session(
     user_id: str,
     session_id: str,
@@ -265,6 +282,10 @@ def purge_expired_history(user_id: str) -> None:
     if not user_id:
         return
     cutoff = history_retention_cutoff()
+    # Pending (recoverable) sessions are only offered for a short window:
+    # a session closed >24h ago that was never saved is stale — discard it
+    # so a dangling "Save this session?" can't resurface much later.
+    cutoff_pending = utcnow() - timedelta(hours=24)
     with db_session() as db:
         expired = db.execute(
             select(UsageSession.id).where(
@@ -272,7 +293,16 @@ def purge_expired_history(user_id: str) -> None:
                 UsageSession.started_at < cutoff,
             )
         ).scalars().all()
-    for session_id in expired:
+        stale_pending = db.execute(
+            select(UsageSession.id).where(
+                UsageSession.user_id == user_id,
+                UsageSession.kept.is_(False),
+                UsageSession.ended_at.isnot(None),
+                UsageSession.discarded_at.is_(None),
+                UsageSession.ended_at < cutoff_pending,
+            )
+        ).scalars().all()
+    for session_id in set(expired) | set(stale_pending):
         discard_usage_session(user_id, session_id)
 
 
@@ -394,6 +424,33 @@ def save_history(user_id: str, session_id: str | None, kind: str, text: str, qid
                 row.title = preview
 
 
+def _session_entry(db, s) -> dict:
+    items = db.execute(
+        select(HistoryItem)
+        .where(HistoryItem.session_id == s.id)
+        .order_by(HistoryItem.created_at.asc())
+        .limit(80)
+    ).scalars().all()
+    from server.history_fmt import normalize_scene, session_copy_text
+
+    scene = normalize_scene(s.mode, getattr(s, "scene", "") or "")
+    item_rows = [{"kind": i.kind, "text": i.text, "at": i.created_at.isoformat() if i.created_at else None, "qid": i.qid} for i in items]
+    return {
+        "id": s.id,
+        "mode": s.mode,
+        "scene": scene,
+        "title": s.title,
+        "started_at": s.started_at.isoformat() if s.started_at else None,
+        "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+        "stt_seconds": round(s.stt_seconds, 2),
+        "llm_tokens": s.llm_input_tokens + s.llm_output_tokens,
+        "cost_usd": round(s.estimated_cost_usd, 4),
+        "items": item_rows,
+        "copy_text": session_copy_text(s.title, s.mode, scene, item_rows),
+        "files": [],
+    }
+
+
 def list_history(user_id: str, limit: int = 40) -> list[dict]:
     purge_expired_history(user_id)
     with db_session() as db:
@@ -406,36 +463,45 @@ def list_history(user_id: str, limit: int = 40) -> list[dict]:
         out: list[dict] = []
         file_refs: list[tuple] = []
         for s in sessions:
-            items = db.execute(
-                select(HistoryItem)
-                .where(HistoryItem.session_id == s.id)
-                .order_by(HistoryItem.created_at.asc())
-                .limit(80)
-            ).scalars().all()
-            from server.history_fmt import normalize_scene, session_copy_text
+            from server.history_fmt import normalize_scene
 
             scene = normalize_scene(s.mode, getattr(s, "scene", "") or "")
-            item_rows = [{"kind": i.kind, "text": i.text, "at": i.created_at.isoformat() if i.created_at else None, "qid": i.qid} for i in items]
-            out.append(
-                {
-                    "id": s.id,
-                    "mode": s.mode,
-                    "scene": scene,
-                    "title": s.title,
-                    "started_at": s.started_at.isoformat() if s.started_at else None,
-                    "ended_at": s.ended_at.isoformat() if s.ended_at else None,
-                    "stt_seconds": round(s.stt_seconds, 2),
-                    "llm_tokens": s.llm_input_tokens + s.llm_output_tokens,
-                    "cost_usd": round(s.estimated_cost_usd, 4),
-                    "items": item_rows,
-                    "copy_text": session_copy_text(s.title, s.mode, scene, item_rows),
-                    "files": [],
-                }
-            )
+            out.append(_session_entry(db, s))
             file_refs.append((s.id, s.mode, scene, s.started_at, s.audio_key or "", s.notes_key or ""))
     for entry, (sid, mode, scene, started, audio_key, notes_key) in zip(out, file_refs):
         entry["files"] = _session_files(sid, audio_key, notes_key, mode, scene, started)
     return out
+
+
+def list_pending_history(user_id: str) -> list[dict]:
+    """Recoverable, never-saved sessions with content: kept=False + ended + not discarded.
+
+    A meeting session that produced HistoryItems and closed without a Save is
+    offered once on the next connect. Only the newest such session is returned
+    (max 1 per user). Same shape as list_history so the client reuses its row.
+    """
+    if not user_id:
+        return []
+    with db_session() as db:
+        sid = db.execute(
+            select(UsageSession.id)
+            .where(
+                UsageSession.user_id == user_id,
+                UsageSession.kept.is_(False),
+                UsageSession.ended_at.isnot(None),
+                UsageSession.discarded_at.is_(None),
+            )
+            .order_by(UsageSession.started_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if not sid:
+            return []
+        s = db.get(UsageSession, sid)
+        if not s:
+            return []
+        entry = _session_entry(db, s)
+    entry["files"] = _session_files(s.id, s.audio_key or "", s.notes_key or "", s.mode, getattr(s, "scene", "") or "", s.started_at)
+    return [entry]
 
 
 def _session_files(

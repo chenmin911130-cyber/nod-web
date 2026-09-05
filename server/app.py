@@ -2050,10 +2050,18 @@ class Session:
         self.pipeline.abort_stream()
         self._flush_cloud_archive(final=True)
         if self.usage_session_id:
-            from server.meter import close_usage_session, discard_usage_session, is_session_kept
+            from server.meter import close_usage_session, discard_usage_session, is_session_kept, session_has_history
 
             if self.user_id and not is_session_kept(self.usage_session_id):
-                discard_usage_session(self.user_id, self.usage_session_id)
+                # A meeting session that already produced content is recoverable:
+                # keep the row around with kept=False so the next connect can
+                # re-offer "Save this session to History?" instead of silently
+                # throwing it away on a disconnect. Only meetings with HistoryItems
+                # qualify; anything else is discarded as before.
+                if getattr(self, "_workspace", "") == "meeting" and session_has_history(self.usage_session_id):
+                    close_usage_session(self.usage_session_id)
+                else:
+                    discard_usage_session(self.user_id, self.usage_session_id)
             else:
                 close_usage_session(self.usage_session_id)
             self.usage_session_id = None
@@ -2162,9 +2170,12 @@ class Session:
         elif mtype == "resume_listen":
             self.resume_listen()
         elif mtype == "keep_history":
-            self.keep_history(content=msg.get("content", True), audio=msg.get("audio", True))
+            self.keep_history(
+                content=msg.get("content", True), audio=msg.get("audio", True),
+                session_id=msg.get("id"),
+            )
         elif mtype == "discard_history":
-            self.discard_history()
+            self.discard_history(session_id=msg.get("id"))
         elif mtype == "ask":
             files = msg.get("files")
             if not files:
@@ -2671,14 +2682,14 @@ class Session:
             "text": "Save this session to History?",
         })
 
-    def keep_history(self, content: Any = True, audio: Any = True) -> None:
-        sid = self.usage_session_id
+    def keep_history(self, content: Any = True, audio: Any = True, session_id: str | None = None) -> None:
+        sid = session_id if session_id is not None else self.usage_session_id
         if not self.user_id or not sid:
             return
         keep_content = content is not False
         keep_audio = audio is not False
         if not keep_content and not keep_audio:
-            self.discard_history()
+            self.discard_history(session_id=sid)
             return
         self._flush_cloud_archive(final=False)
         from server.meter import keep_usage_session
@@ -2687,15 +2698,18 @@ class Session:
         parts = [name for on, name in ((keep_content, "session"), (keep_audio, "recording")) if on]
         self.emit({"type": "status", "text": "Saved to History · " + " and ".join(parts)})
 
-    def discard_history(self) -> None:
-        sid = self.usage_session_id
+    def discard_history(self, session_id: str | None = None) -> None:
+        sid = session_id if session_id is not None else self.usage_session_id
         if not self.user_id or not sid:
             return
         from server.meter import discard_usage_session
 
         discard_usage_session(self.user_id, sid)
-        self.usage_session_id = None
-        self.pipeline.usage_session_id = None
+        # Only clear the LIVE session pointer when we discarded the current one;
+        # a restored-pending session is unrelated and must not clobber a live id.
+        if sid == self.usage_session_id:
+            self.usage_session_id = None
+            self.pipeline.usage_session_id = None
         self.emit({"type": "status", "text": "Session discarded"})
 
     def toggle_listen(self) -> None:

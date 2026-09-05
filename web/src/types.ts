@@ -152,8 +152,8 @@ export type EngineMsg =
   | { type: 'stop_listen' }
   | { type: 'pause_listen' }
   | { type: 'resume_listen' }
-  | { type: 'keep_history'; content?: boolean; audio?: boolean }
-  | { type: 'discard_history' }
+  | { type: 'keep_history'; content?: boolean; audio?: boolean; id?: string }
+  | { type: 'discard_history'; id?: string }
   | { type: 'auth'; token: string }
   | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; attach_id?: string; mode?: string }
   | { type: 'set_workspace'; mode: WorkspaceMode; scene?: 'meeting' | 'lecture' | 'interview'; speakers_expected?: number }
