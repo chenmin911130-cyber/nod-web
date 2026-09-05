@@ -166,7 +166,7 @@ export default function AccountPage() {
               </div>
             </div>
             <div className="quota-card">
-              <span>Sessions this month</span>
+              <span>Saved sessions this month</span>
               <b>{Math.max(0, u.session_limit - u.sessions)}</b>
               <span>
                 {u.sessions} / {u.session_limit} this month
