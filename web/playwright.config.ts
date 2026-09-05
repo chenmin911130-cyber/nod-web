@@ -36,7 +36,7 @@ export default defineConfig({
     // repo-root venv that the README tells you to create.
     command:
       'DATA_DIR=/tmp/nod-e2e-data ASSEMBLYAI_API_KEY=test DEEPSEEK_API_KEY=test ' +
-      'QUOTA_DISABLED=1 ${PYTHON:-.venv/bin/python} -m uvicorn server.app:app --host 127.0.0.1 --port 9320',
+      'QUOTA_DISABLED=1 NOD_SKIP_DOTENV=1 ${PYTHON:-.venv/bin/python} -m uvicorn server.app:app --host 127.0.0.1 --port 9320',
     url: 'http://127.0.0.1:9320/api/health',
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,

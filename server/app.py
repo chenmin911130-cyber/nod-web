@@ -158,23 +158,29 @@ def _ratio(a: str, b: str) -> float:
 def load_all_keys() -> dict[str, str]:
     names = ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "ASSEMBLYAI_API_KEY"]
     keys: dict[str, str] = {}
-    hermes = os.environ.get("HERMES_ENV")
-    cands = [hermes] if hermes else []
-    local = os.environ.get("LOCALAPPDATA")
-    if local:
-        cands.append(os.path.join(local, "hermes", ".env"))
-    cands.append(str(ROOT / ".env"))
-    for env_path in cands:
-        if not env_path or not os.path.exists(env_path):
-            continue
-        try:
-            with open(env_path, encoding="utf-8") as f:
-                for line in f:
-                    m = re.match(r"\s*([A-Z_]+_API_KEY)\s*=\s*(.+)", line)
-                    if m and m.group(1) in names:
-                        keys[m.group(1)] = m.group(2).strip().strip('"').strip("'")
-        except OSError:
-            pass
+    # Test/e2e harnesses set NOD_SKIP_DOTENV so the repo's real .env (which
+    # load_all_keys reads FIRST — env vars are only a fallback) can never leak
+    # real keys into a mocked run. Without this, a local run that can read
+    # .env silently uses the real LLM and e2e passes, while CI (no .env) fails.
+    skip_dotenv = os.environ.get("NOD_SKIP_DOTENV", "").strip().lower() in ("1", "true", "yes")
+    if not skip_dotenv:
+        hermes = os.environ.get("HERMES_ENV")
+        cands = [hermes] if hermes else []
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            cands.append(os.path.join(local, "hermes", ".env"))
+        cands.append(str(ROOT / ".env"))
+        for env_path in cands:
+            if not env_path or not os.path.exists(env_path):
+                continue
+            try:
+                with open(env_path, encoding="utf-8") as f:
+                    for line in f:
+                        m = re.match(r"\s*([A-Z_]+_API_KEY)\s*=\s*(.+)", line)
+                        if m and m.group(1) in names:
+                            keys[m.group(1)] = m.group(2).strip().strip('"').strip("'")
+            except OSError:
+                pass
     for n in names:
         if not keys.get(n) and os.environ.get(n):
             keys[n] = os.environ[n].strip()
