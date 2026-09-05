@@ -50,6 +50,7 @@ import {
   notesPrompt,
   nodTag,
   outLangRule,
+  capTranscript,
   exportNoteSections,
   parseNotes,
   promoteLectureSpeakers,
@@ -2049,7 +2050,10 @@ export default function App() {
       window.api.send({ type: 'ask', mode: 'summary', text: note || 'Please review the attached files.', files })
       return
     }
-    const body = s.meetingLines.slice(-500).map((ln) => {
+    const cap = capTranscript(s.meetingLines)
+    const notice =
+      cap.dropped > 0 ? `(Transcript is truncated: the first ${cap.dropped} lines (before ${cap.fromTs}) are not included.)\n` : ''
+    const body = notice + cap.lines.map((ln) => {
       const who = resolveSpeakerName(s.speakerNames, ln.speaker)
       return `[${ln.ts}${who ? ` ${who}` : ''}${ln.marked ? ' ACTION' : ''}] ${ln.text}`
     }).join('\n')
@@ -2058,6 +2062,12 @@ export default function App() {
       return
     }
     dispatch({ type: 'expect_meeting_ask' })
+    if (cap.dropped > 0) {
+      dispatch({
+        type: 'engine',
+        ev: { type: 'status', text: `Notes cover ${cap.lines.length}/${s.meetingLines.length} lines (from ${cap.fromTs})` },
+      })
+    }
     window.api.send({
       type: 'ask',
       mode: 'summary',
@@ -2073,7 +2083,14 @@ export default function App() {
     }
     killInflightTranslation()
     dispatch({ type: 'expect_notes' })
-    window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, s.meetingLines.slice(-500), s.notesLang, s.translateOn, s.speakerNames), mode: 'notes' })
+    const cap = capTranscript(s.meetingLines)
+    window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, cap.lines, s.notesLang, s.translateOn, s.speakerNames, cap), mode: 'notes' })
+    if (cap.dropped > 0) {
+      dispatch({
+        type: 'engine',
+        ev: { type: 'status', text: `Notes cover ${cap.lines.length}/${s.meetingLines.length} lines (from ${cap.fromTs})` },
+      })
+    }
   }, [])
   generateNotesRef.current = generateNotes
 

@@ -51,6 +51,24 @@ export function bilingualDisabled(notesLang: Lang): boolean {
   return notesLang === 'auto'
 }
 
+// Keep the TAIL of a transcript within a character budget so a long meeting
+// does not silently drop the first half-hour (the old hardcoded slice(-500)).
+export type TranscriptCap<T> = { lines: T[]; dropped: number; fromTs: string | null }
+export function capTranscript<T extends { text: string; ts?: string }>(
+  lines: T[],
+  budgetChars = 120_000,
+): TranscriptCap<T> {
+  let chars = 0
+  let start = lines.length
+  for (let i = lines.length - 1; i >= 0; i--) {
+    chars += (lines[i].text || '').length + 16
+    if (chars > budgetChars) break
+    start = i
+  }
+  const kept = lines.slice(start)
+  return { lines: kept, dropped: start, fromTs: kept[0]?.ts ?? null }
+}
+
 export type ListenScene = 'meeting' | 'lecture' | 'interview'
 
 export type NotesSectionId =
@@ -402,6 +420,7 @@ export function notesPrompt(
   outLang: Lang = 'zh',
   bilingual = false,
   names: Record<string, string> = {},
+  cap?: { dropped: number; fromTs: string | null },
 ): string {
   const follow =
     scene === 'lecture'
@@ -418,7 +437,7 @@ export function notesPrompt(
     `Empty arrays when the transcript has nothing. ${follow}. ` +
     (scene === 'lecture' ? 'revisionNotes = exam / formula items. ' : 'revisionNotes usually []. ') +
     (scene === 'interview' ? 'takeaways = questions asked and what they cared about. ' : 'takeaways usually []. ') +
-    `Transcript:\n${transcriptBlock(lines, bilingual, names) || '(empty)'}`
+    `Transcript:\n${cap && cap.dropped > 0 ? `(Transcript is truncated: the first ${cap.dropped} lines (before ${cap.fromTs}) are not included.)\n` : ''}${transcriptBlock(lines, bilingual, names) || '(empty)'}`
   )
 }
 

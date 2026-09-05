@@ -1,4 +1,4 @@
-import { LISTEN_SCENES, bilingualDisabled, nodTag, notesBodyText, notesPrompt, outLangRule, sceneLabel } from './listen'
+import { LISTEN_SCENES, bilingualDisabled, capTranscript, nodTag, notesBodyText, notesPrompt, outLangRule, sceneLabel } from './listen'
 
 function eq<T>(got: T, want: T, label?: string) {
   if (JSON.stringify(got) !== JSON.stringify(want)) {
@@ -16,6 +16,25 @@ if (!outLangRule('auto', 'summary').includes('majority language')) throw new Err
 // D (phase 1): Bilingual is dead when Notes = Auto.
 if (bilingualDisabled('auto') !== true) throw new Error('notes auto disables bilingual')
 if (bilingualDisabled('zh') !== false) throw new Error('concrete notes lang enables bilingual')
+
+// B(1): capTranscript keeps the tail within a character budget, reports the drop.
+const capLines = [
+  { id: '1', ts: '0:00', text: 'line one' },
+  { id: '2', ts: '0:05', text: 'line two' },
+  { id: '3', ts: '0:10', text: 'line three' },
+]
+const capTrailing = capTranscript(capLines, 40)
+if (capTrailing.dropped !== 2 || capTrailing.fromTs !== '0:10' || capTrailing.lines.map((l) => l.id).join(',') !== '3') {
+  throw new Error(`cap keeps tail, got ${JSON.stringify(capTrailing)}`)
+}
+const capAll = capTranscript(capLines, 1000)
+if (capAll.dropped !== 0 || capAll.fromTs !== '0:00' || capAll.lines.length !== 3) throw new Error('cap under budget keeps all')
+const capBoundary = capTranscript(capLines, 52)
+if (capBoundary.dropped !== 1 || capBoundary.fromTs !== '0:05' || capBoundary.lines.map((l) => l.id).join(',') !== '2,3') {
+  throw new Error(`cap boundary, got ${JSON.stringify(capBoundary)}`)
+}
+const cappedNotes = notesPrompt('meeting', capTrailing.lines, 'zh', false, {}, { dropped: capTrailing.dropped, fromTs: capTrailing.fromTs })
+if (!cappedNotes.includes('Transcript is truncated') || !cappedNotes.includes('first 2')) throw new Error('notes prompt shows truncation notice')
 
 eq(sceneLabel('interview'), 'Live Q&A')
 eq(LISTEN_SCENES.find((s) => s.id === 'interview')?.label, 'Live Q&A')

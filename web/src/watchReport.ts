@@ -1,5 +1,7 @@
 /** Last Watch report so unlocking the iPhone can reopen Notes after a WebView kill. */
 
+import { capTranscript } from './listen'
+
 export const WATCH_REPORT_KEY = 'nod_watch_report'
 export const WATCH_REPORT_SNAP_KEY = 'nod_watch_report_snap'
 export const WATCH_REPORT_MAX_AGE_MS = 24 * 60 * 60 * 1000
@@ -88,7 +90,7 @@ export function snapshotFromWorkspace(input: {
     mode: 'meeting',
     scene,
     notes: input.notes,
-    lines: input.lines.slice(-500).map((ln) => ({
+    lines: capTranscript(input.lines).lines.map((ln) => ({
       id: ln.id,
       ts: ln.ts,
       text: ln.text,
