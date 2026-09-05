@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8" />
+  <title>Nodpilot 产品功能设计</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 18mm 16mm 20mm;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #fff;
+      color: #122033;
+      font: 11.5px/1.55 "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Segoe UI", sans-serif;
+    }
+    .page { max-width: 760px; margin: 0 auto; }
+    header.mast {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      border-bottom: 2px solid #00b7d4;
+      padding-bottom: 12px;
+      margin-bottom: 18px;
+    }
+    .brand { font-size: 11px; letter-spacing: 0.08em; color: #00a3bd; font-weight: 600; }
+    h1 {
+      font-size: 26px;
+      line-height: 1.2;
+      margin: 4px 0 0;
+      font-weight: 650;
+    }
+    .meta {
+      text-align: right;
+      color: #5b6d82;
+      font-size: 11px;
+    }
+    .lead { font-size: 13.5px; color: #2a3d54; margin: 0 0 14px; }
+    .principle {
+      background: #eefbfe;
+      border-left: 3px solid #00b7d4;
+      padding: 10px 14px;
+      margin: 0 0 22px;
+    }
+    .principle b { display: block; margin-bottom: 2px; }
+    .trio {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+      margin: 0 0 22px;
+    }
+    .stat {
+      border: 1px solid #d7e3ee;
+      padding: 12px 12px 10px;
+    }
+    .stat strong {
+      display: block;
+      font-size: 16px;
+      color: #00a3bd;
+      margin-bottom: 2px;
+    }
+    .stat span { color: #5b6d82; font-size: 11px; }
+    h2 {
+      font-size: 15px;
+      margin: 22px 0 8px;
+      padding-top: 6px;
+      border-top: 1px solid #e4edf4;
+      page-break-after: avoid;
+    }
+    h2:first-of-type { border-top: none; padding-top: 0; }
+    h3 { font-size: 12.5px; margin: 16px 0 6px; page-break-after: avoid; }
+    p { margin: 0 0 10px; }
+    .muted { color: #5b6d82; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0 0 14px;
+      font-size: 10.5px;
+      page-break-inside: auto;
+    }
+    th, td {
+      border: 1px solid #d7e3ee;
+      padding: 7px 8px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      background: #f3f8fb;
+      font-weight: 600;
+      color: #1a2b3d;
+    }
+    tr { page-break-inside: avoid; }
+    .cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin: 0 0 14px;
+    }
+    .cards.three { grid-template-columns: 1fr 1fr 1fr; }
+    .card {
+      border: 1px solid #d7e3ee;
+      padding: 10px 12px;
+      page-break-inside: avoid;
+    }
+    .card .kicker {
+      font-size: 10px;
+      color: #00a3bd;
+      letter-spacing: 0.04em;
+      margin-bottom: 4px;
+    }
+    .card h4 { margin: 0 0 6px; font-size: 13px; }
+    .card p { margin: 0; }
+    .warn {
+      background: #fff8e8;
+      border-left: 3px solid #d39b00;
+      padding: 10px 14px;
+      margin: 0 0 14px;
+      page-break-inside: avoid;
+    }
+    ol.board { margin: 0 0 12px; padding-left: 18px; }
+    ol.board li { margin: 0 0 8px; }
+    ol.board b { display: block; }
+    footer.note {
+      margin-top: 24px;
+      padding-top: 10px;
+      border-top: 1px solid #e4edf4;
+      color: #7a7f89;
+      font-size: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="mast">
+      <div>
+        <div class="brand">NODPILOT · PRODUCT DESIGN</div>
+        <h1>Nodpilot 产品功能设计</h1>
+      </div>
+      <div class="meta">
+        AI Listening Assistant<br />
+        2026-09-04 · 公测
+      </div>
+    </header>
+
+    <p class="lead">当场听懂正在发生的对话，结束后带走结构化笔记，之后还能搜回。</p>
+    <div class="principle">
+      <b>一条原则</b>
+      场景只决定笔记长什么样，不另开一套产品。用户面对的永远是同一场听写：开始听 → 当场理解 → 决定留不留。
+    </div>
+
+    <div class="trio">
+      <div class="stat"><strong>Listen</strong><span>当场听见：实时转写</span></div>
+      <div class="stat"><strong>Understand</strong><span>当场听懂：翻译 / Ask / 笔记</span></div>
+      <div class="stat"><strong>Remember</strong><span>事后记住：History 30 天</span></div>
+    </div>
+
+    <h2>1. 用户要完成的事</h2>
+    <p>不是「再做一个 GPT 聊天框」，也不是隐身面试小抄。目标用户是人在听：开会、上课、跨语言对话、现场问答。产品替他们把声音变成可以扫读、可以追问、可以带走的东西。</p>
+    <table>
+      <thead><tr><th>时刻</th><th>用户在做什么</th><th>产品给什么</th></tr></thead>
+      <tbody>
+        <tr><td>开始前</td><td>选场景、语言、麦克风</td><td>Meeting / Lecture / Live Q&amp;A / Translate；同意录音</td></tr>
+        <tr><td>进行中</td><td>听别人说话，偶尔没跟上</td><td>Live 转写、最新一句翻译、Ask</td></tr>
+        <tr><td>暂停 / 结束</td><td>决定这场留不留</td><td>Save = 提交进 History；Don't save = 丢掉 draft</td></tr>
+        <tr><td>之后</td><td>复盘、交作业、给同事看</td><td>打开 History、搜正文、导出 PDF / Files</td></tr>
+      </tbody>
+    </table>
+
+    <div class="cards">
+      <div class="card">
+        <div class="kicker">做</div>
+        <p>浏览器 / iPhone / Watch 上的听写工作台。会议决策与待办、讲座概念与复习、跨语言字幕、现场问答草稿。账号同步 History。</p>
+      </div>
+      <div class="card">
+        <div class="kicker">不做</div>
+        <p>隐身截屏、系统扬声器抓 Zoom/Teams、跨会话记忆问答、Presentation 独立场景、桌面 Nod Agent。网页听不到耳机里对方的声音。</p>
+      </div>
+    </div>
+
+    <h2>2. 信息架构</h2>
+    <p>顶栏只有两个入口：<b>Listen</b> 和 <b>Translate</b>。Listen 里再用场景芯片选笔记模板。代码里仍是三个 workspace（meeting / interview / translate），Lecture 是 meeting 的 scene，不要再暴露给用户。</p>
+    <div class="cards">
+      <div class="card">
+        <div class="kicker">主路径</div>
+        <h4>Listen</h4>
+        <p>一场录音。场景决定 Notes 板块：Meeting 写决策与待办，Lecture 写概念与复习，Live Q&amp;A 写问答与 takeaways。Ask、Save、History 都挂在这场上。</p>
+      </div>
+      <div class="card">
+        <div class="kicker">对照层</div>
+        <h4>Translate</h4>
+        <p>听一句出一句对照字幕。From 可 Auto，To 锁定目标语。Bilingual / More accurate 是显示开关，不是第二种产品。不进 Meeting 那套 Save 弹窗。</p>
+      </div>
+    </div>
+
+    <h2>3. 场景 × 笔记</h2>
+    <table>
+      <thead><tr><th>场景</th><th>何时选</th><th>进行中</th><th>结束后的笔记</th><th>Save</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Meeting</td>
+          <td>多人讨论、要决策</td>
+          <td>转写 + 说话人 + 最新一句译文</td>
+          <td>Summary · Key Points · Decisions · Action Items · Important Details · Follow-ups</td>
+          <td>Stop / Pause 后提交 History</td>
+        </tr>
+        <tr>
+          <td>Lecture</td>
+          <td>一个人讲、要复习</td>
+          <td>同一套听写，说话人可合并为讲师</td>
+          <td>Overview · Concepts · Examples · Revise · Homework</td>
+          <td>与 Meeting 相同</td>
+        </tr>
+        <tr>
+          <td>Live Q&amp;A</td>
+          <td>听见问题，要口头回答</td>
+          <td>完整问题才起草答案；侧栏问答</td>
+          <td>Summary · Q&amp;A Takeaways</td>
+          <td>不弹 Save；问答留在当场</td>
+        </tr>
+        <tr>
+          <td>Translate</td>
+          <td>当场要对着看字幕</td>
+          <td>原文 | 译文；可 TTS；Same lang 直通</td>
+          <td>对照 PDF，不是会议纪要</td>
+          <td>不弹 Save</td>
+        </tr>
+      </tbody>
+    </table>
+    <h3>语言是两层，不要合成一个开关</h3>
+    <p>Speech 是听见什么语言（Auto 或钉死中/英/日）。Notes 是笔记用什么语言写。Translate 另有 From / To。听写中途不可切场景。</p>
+    <p>Meeting / Lecture 里的 Bilingual 开关同时控制逐句译文和 Notes 双语；它就是 translateOn，不是第三个开关。</p>
+    <h3>Presentation 怎么处理</h3>
+    <p>落地页写了 Presentation，产品里没有第四个 scene。先把它映射成 Lecture：一个人讲、听众要带走结构。等真实用量证明「演示」和「上课」笔记真的不同，再拆。</p>
+
+    <h2>4. 端：同一场听写，三个入口</h2>
+    <table>
+      <thead><tr><th>端</th><th>采音</th><th>用户能做什么</th><th>刻意限制</th></tr></thead>
+      <tbody>
+        <tr><td>Web</td><td>浏览器麦克风</td><td>完整 Listen / Translate、Ask、History、账号</td><td>听不到 Zoom/Teams 系统声；标签会出现在屏幕共享里</td></tr>
+        <tr><td>iPhone</td><td>手机麦，锁屏可续录</td><td>同一套工作台；Save to Files 走系统文件夹</td><td>Capacitor 套现有网页；改 UI 才要重打 IPA</td></tr>
+        <tr><td>Apple Watch</td><td>手表麦（部分模式）</td><td>选模式、Listen / Pause / Done；腕上确认 Save</td><td>Meeting / Lecture 仍用手机麦；手表是遥控器 + 近场麦</td></tr>
+      </tbody>
+    </table>
+    <h3>手表麦归属</h3>
+    <table>
+      <thead><tr><th>手表选的模式</th><th>手机打开哪页</th><th>用哪只麦</th></tr></thead>
+      <tbody>
+        <tr><td>Meeting</td><td>Listen · Meeting</td><td>手机麦</td></tr>
+        <tr><td>Lecture</td><td>Listen · Lecture</td><td>手机麦</td></tr>
+        <tr><td>Live Q&amp;A</td><td>Live Q&amp;A</td><td>手表麦可以</td></tr>
+        <tr><td>Translate</td><td>Translate</td><td>手表麦可以</td></tr>
+      </tbody>
+    </table>
+    <p class="muted">只有当场点 Listen / Record 才切模式并开始。Pause / Resume / Done、残留文件、打开手表，都不得自己开听写或改场景。打开手表不得自动播放上一句语音。</p>
+    <div class="warn">
+      <b>桌面不在这份设计里。</b>
+      Windows 桌面（系统音频、置顶、隐身）是另一条产品。当前交付面是 nodpilot.com + iOS。不要把废弃的桌面 Nod Agent 拉回这条线。
+    </div>
+
+    <h2>5. 对外承诺 vs 现在真正有的</h2>
+    <table>
+      <thead><tr><th>承诺</th><th>现状</th><th>设计结论</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>可搜索记忆，之后还能问</td>
+          <td>History 关键词搜本场正文；保留 30 天；不能问「上周定价怎么定的」</td>
+          <td>对外改成「搜回这 30 天的场次」。跨会话 Ask 单独立项，未做就不写</td>
+        </tr>
+        <tr>
+          <td>Presentation 场景</td>
+          <td>只有 Meeting / Lecture / Live Q&amp;A</td>
+          <td>文案映射到 Lecture，不新增 scene</td>
+        </tr>
+        <tr>
+          <td>语音提问、不用打字</td>
+          <td>Ask 主要是打字；Live Q&amp;A 是听问题再起草</td>
+          <td>主路径保持打字 Ask。语音问要单独做，不要和听写抢同一只麦</td>
+        </tr>
+        <tr>
+          <td>隐私：当场不留原始音频</td>
+          <td>Save 勾 Keep recording 会把 WAV 存 R2</td>
+          <td>法律页与弹窗必须说清：默认可留录音，用户可关掉</td>
+        </tr>
+        <tr>
+          <td>产品说明书：面试隐身小抄</td>
+          <td>品牌已是 Listening Assistant；Live Q&amp;A 仍带 STAR 口头答案</td>
+          <td>说明书跟产品走。Live Q&amp;A 是现场起草，不是对面试官隐身</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>6. 动词已经定过，不要再混</h2>
+    <div class="cards three">
+      <div class="card">
+        <h4>Save</h4>
+        <p>把当前 draft 标成 kept，进账号 History。不结束会话，不导出到 Files。</p>
+      </div>
+      <div class="card">
+        <h4>Don't save</h4>
+        <p>丢掉这份 draft。没进 History，之后导不出来。</p>
+      </div>
+      <div class="card">
+        <h4>Save to Files</h4>
+        <p>只对已经 kept 的会话。拷 PDF / 录音到 iPhone Files 或电脑下载。</p>
+      </div>
+      <div class="card">
+        <h4>Summarize</h4>
+        <p>对当前 transcript 一次性生成 Notes，可在听的过程中按；Stop 后自动按一次。</p>
+      </div>
+      <div class="card">
+        <h4>Notes</h4>
+        <p>结构化笔记，桌面 / iPhone / PDF / History 同一份、同一套标题。</p>
+      </div>
+    </div>
+    <h3>两轴状态（ADR 0001）</h3>
+    <p>capture 是麦还在不在听（off / listening / recording / paused）。engine 是模型在不在干活（idle / transcribing / generating）。生成中不得被看成 Stop。Watch 和手机都读 capture，不要再用 run=think 推断听写。</p>
+
+    <h2>7. 路线</h2>
+    <p>公测期功能设计的工作是把现在已经有的能力说圆、用稳，而不是再开第四个工作区。按「不做会伤品牌」排序。</p>
+    <table>
+      <thead><tr><th>优先级</th><th>做什么</th><th>为什么现在做</th><th>明确不做</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>P0</td>
+          <td>Listen / Translate / Watch / Save 主路径保持正确</td>
+          <td>这就是产品。麦、场景、busy、Save 任一错，用户会觉得「不能听」</td>
+          <td>不要同一轮改界面、同步、录音三层</td>
+        </tr>
+        <tr>
+          <td>P0</td>
+          <td>对外文案对齐真实能力</td>
+          <td>落地页 Memory / Presentation / 语音问 超出现状；说明书还在写面试小抄</td>
+          <td>不要为了文案去补一个假 Memory</td>
+        </tr>
+        <tr>
+          <td>P1</td>
+          <td>Remember 做诚实：30 天、能搜、能导出、能删</td>
+          <td>Remember 是三角的第三边；现在只有场内搜索</td>
+          <td>跨所有历史的 LLM 问答放到 P2</td>
+        </tr>
+        <tr>
+          <td>P1</td>
+          <td>Live Q&amp;A 定位成现场起草，不是隐身</td>
+          <td>品牌已经离开「面试外挂」；能力可以留，话术要改</td>
+          <td>网页版不做 Stealth</td>
+        </tr>
+        <tr>
+          <td>P2</td>
+          <td>跨会话 Ask；桌面系统声（若重新开 Windows）</td>
+          <td>有真实用量再做。桌面是另一条线</td>
+          <td>废弃的 Nod Agent / 3080 不要碰</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>8. 建议立刻拍板的四件事</h2>
+    <ol class="board">
+      <li>
+        <b>1. 对外只讲两个入口：Listen 和 Translate。</b>
+        Meeting / Lecture / Live Q&amp;A 是 Listen 的场景芯片，不是三个 App。
+      </li>
+      <li>
+        <b>2. Memory 改口：搜回最近 30 天的场次。</b>
+        跨周问答等真做了再写。History 打开时删掉超期会话，这条已经在产品里。
+      </li>
+      <li>
+        <b>3. Save 继续只表示进 History。</b>
+        Files / PDF 留在 History。Pause 后 Save 仍写同一条，不拆场。
+      </li>
+      <li>
+        <b>4. 手表是这场听写的遥控器，不是第二个 Nodpilot。</b>
+        模式跟随手机；只有当场 Listen 才切场景和麦。
+      </li>
+    </ol>
+
+    <h2>9. 公测边界</h2>
+    <p>免费公开测试，站点上没有付费结账。配额在 Account 可见（每日听写约 2 小时）。转写走 AssemblyAI，生成走 DeepSeek。打开麦克风前先确认同意。用户对自己说出口的内容和是否允许录音负责。</p>
+
+    <footer class="note">
+      来源：现有 web / iPhone / Watch 代码、落地页 copy、Save/History 定义、ADR 0001。Nodpilot 公测中，尚未售卖付费档。© 2026 Min Chen
+    </footer>
+  </div>
+</body>
+</html>

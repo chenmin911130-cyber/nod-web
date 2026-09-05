@@ -2,14 +2,23 @@
 
 单一事实来源（single source of truth）文档：所有"做到哪层了 / 下一步做什么"都在这里更新，**不要**只写在对话上下文里。设计依据见 `docs/adr/0001-capture-engine-two-axis-state.md`。
 
-## 最新状态（2026-09-06 深夜 · 7-item batch shipped）· 窗口交接快照
+## 最新状态（2026-09-06 · notes 收口批 + 7-item batch shipped）· 窗口交接快照
 
 新会话从这里核对起（别考古）：`git -C ~/Projects/nod-web status` + `git log --oneline -6`。
 
 **已核实（本会话工具验证）**
-- `main` = `origin/main`，HEAD `5f9194b`（iOS bundle 25 bump；上一提交 `825a2db`）。工作区干净，仅 2 个**未跟踪** docs：`docs/Nodpilot 产品功能设计.pdf`、`docs/nodpilot-product-design.html`（遗留，勿动）。
+- `main` = `origin/main`，HEAD `26b9d56`（收口批第 5 项删 dead 代码；出版 bundle 26 待发布）。工作区干净，仅 2 个**未跟踪** docs：`docs/Nodpilot 产品功能设计.pdf`、`docs/nodpilot-product-design.html`（遗留，勿动——后者已同步为事实来源）。
 - CI 最新 run `33959368572` **success**；Railway `754bde17` **SUCCESS**；`/api/health` 200。
 - ⚠️ **线上 DB 是 SQLite `/data/nod.db`，不是 Postgres**（DATABASE_URL 未设；railway 无独立 PG 服务；SQL 用 SQLite 语法）。native app 连 `https://nodpilot.com`；`push origin/main` → CI+Railway 自动部署。
+
+**收口批（Meeting Live / Notes，5 commit，未 push）**
+- `9412cae` notes 提示词去掉「session ends」。
+- `691f6f4` 删死掉的 Summary 生成路径（只留 `[NOD_NOTES]`；`item.kind==='summary'` 读取侧保留）。
+- `c1a93b8` Stop 后自动写 Notes；Save 在 notes 流式时经 `keepShouldWaitForNotes` 等待再存（不存空 Notes）。
+- `cc838e6` 命名统一：`SECTION_TITLE` 为唯一来源，iPhone tab=Notes，去「Meeting Summary / Key Takeaways」。
+- `26b9d56` 删 `liveInsightCards`/`catchupPrompt`/server catchup 分支（NOD_CATCH + isCatchPrompt 保留）。
+
+**已关 issue（本批）**：#23、#14、#20、#15、#16、#17、#18、#19、#21。
 
 **本批（7 commit，均已推+部署；服务端 1/3/4，web 2/3/4/5/7，iOS bump）**
 - `5b993ba` **断线不丢会**：meeting+有 HistoryItem 的未保存会话 close 不再 discard，`GET /api/account/history?pending=1` 返回一条 pending；客户端重连后弹原 save_prompt，Save/Don't-save 带 `session_id`。`purge_expired_history` 清 >24h 的 pending。
