@@ -230,7 +230,7 @@
     </table>
     <h3>语言是两层，不要合成一个开关</h3>
     <p>Speech 是听见什么语言（Auto 或钉死中/英/日）。Notes 是笔记用什么语言写。Translate 另有 From / To。听写中途不可切场景。</p>
-    <p>Meeting / Lecture 里的 Bilingual 开关同时控制逐句译文和 Notes 双语；它就是 translateOn，不是第三个开关。</p>
+    <p>Meeting / Lecture 里的 Bilingual 开关只控制逐句译文的显示（它就是 translateOn）。Notes 单语，语言由 Notes 语言选择器（notesLang）决定；Bilingual 开着时转写连同译文一起喂给模型，但笔记本身不双语。</p>
     <h3>Presentation 怎么处理</h3>
     <p>落地页写了 Presentation，产品里没有第四个 scene。先把它映射成 Lecture：一个人讲、听众要带走结构。等真实用量证明「演示」和「上课」笔记真的不同，再拆。</p>
 
