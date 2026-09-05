@@ -68,6 +68,7 @@ type SessionRow = {
   stt_seconds: number
   llm_tokens: number
   cost_usd: number
+  discarded: boolean
 }
 
 type FeedbackRow = {
@@ -476,6 +477,7 @@ export default function AdminPage() {
                     <th>When</th>
                     <th>User</th>
                     <th>Mode</th>
+                    <th>Title</th>
                     <th>Duration</th>
                     <th>Est. cost</th>
                   </tr>
@@ -486,6 +488,10 @@ export default function AdminPage() {
                       <td>{s.started_at ? new Date(s.started_at).toLocaleString() : '—'}</td>
                       <td>{s.email}</td>
                       <td>{s.mode}</td>
+                      <td>
+                        {s.title}
+                        {s.discarded ? <span className="muted"> · discarded</span> : null}
+                      </td>
                       <td>{mins(s.stt_seconds)}</td>
                       <td>${s.cost_usd.toFixed(3)}</td>
                     </tr>
