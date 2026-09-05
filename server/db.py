@@ -78,6 +78,7 @@ class UsageSession(Base):
     notes_key: Mapped[str] = mapped_column(String(400), default="")
     kept: Mapped[bool] = mapped_column(Boolean, default=True)
     scene: Mapped[str] = mapped_column(String(32), default="")
+    discarded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class HistoryItem(Base):
@@ -196,6 +197,7 @@ def init_db() -> None:
     _add_column_if_missing("usage_sessions", "notes_key", "VARCHAR(400) DEFAULT ''")
     _add_column_if_missing("usage_sessions", "kept", "INTEGER DEFAULT 1")
     _add_column_if_missing("usage_sessions", "scene", "VARCHAR(32) DEFAULT ''")
+    _add_column_if_missing("usage_sessions", "discarded_at", "TIMESTAMP")
 
 
 @contextmanager

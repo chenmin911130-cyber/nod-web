@@ -233,7 +233,10 @@ def discard_usage_session(user_id: str | None, session_id: str | None) -> None:
         if not row or row.user_id != user_id:
             return
         db.execute(delete(HistoryItem).where(HistoryItem.session_id == session_id))
-        db.delete(row)
+        # Keep the UsageSession row so the monthly quota (stt_seconds + sessions,
+        # summed in usage_snapshot) still counts it; mark discarded instead of
+        # deleting it, so a "Don't save" can't erode the user's cap.
+        row.discarded_at = utcnow()
 
 
 def delete_history_session(user_id: str, session_id: str) -> bool:
@@ -389,7 +392,7 @@ def list_history(user_id: str, limit: int = 40) -> list[dict]:
     with db_session() as db:
         sessions = db.execute(
             select(UsageSession)
-            .where(UsageSession.user_id == user_id, UsageSession.kept.is_(True))
+            .where(UsageSession.user_id == user_id, UsageSession.kept.is_(True), UsageSession.discarded_at.is_(None))
             .order_by(UsageSession.started_at.desc())
             .limit(limit)
         ).scalars().all()
@@ -712,6 +715,7 @@ def admin_sessions(limit: int = 60) -> list[dict]:
                 "stt_seconds": round(s.stt_seconds, 2),
                 "llm_tokens": s.llm_input_tokens + s.llm_output_tokens,
                 "cost_usd": round(s.estimated_cost_usd, 4),
+                "discarded": s.discarded_at is not None,
             }
             for s in rows
         ]

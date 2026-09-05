@@ -40,8 +40,13 @@ def test_list_history_drops_sessions_older_than_30_days(meter_env):
     sessions = list_history("u1")
     assert [row["id"] for row in sessions] == ["fresh"]
     with meter_env() as db:
-        assert db.get(UsageSession, "old") is None
-        assert db.get(UsageSession, "fresh") is not None
+        # item4: discard marks discarded_at instead of deleting the row, so the
+        # old session stays in the DB (still counted toward quota) but is
+        # dropped from list_history.
+        row = db.get(UsageSession, "old")
+        assert row is not None
+        assert row.discarded_at is not None
+        assert db.get(UsageSession, "fresh").discarded_at is None
 
 
 def test_list_history_keeps_session_from_day_29(meter_env):

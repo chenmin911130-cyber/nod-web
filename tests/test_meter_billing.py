@@ -220,6 +220,34 @@ def test_quota_exceeded_logs_reason(meter_env, caplog):
     assert any("quota_exceeded" in r.message and "sessions" in r.message and "60/60" in r.message for r in caplog.records)
 
 
+def test_discard_keeps_quota_counting(meter_env):
+    """item4: discarding (Don't save) must not erase the session from the monthly
+    cap — UsageSession is marked discarded_at, and usage_snapshot still sums it;
+    list_history just stops returning it."""
+
+    from server.meter import consume_stt, discard_usage_session, list_history, open_usage_session, usage_snapshot
+
+    _add_user(meter_env)
+    sid, _ = open_usage_session("u1", "interview")
+    consume_stt("u1", 120.0, sid)
+    before = usage_snapshot("u1")
+    assert before["stt_seconds"] == pytest.approx(120.0)
+    assert before["sessions"] == 1
+
+    with mock.patch("server.r2.delete_prefix"):
+        discard_usage_session("u1", sid)
+
+    after = usage_snapshot("u1")
+    assert after["stt_seconds"] == before["stt_seconds"]
+    assert after["sessions"] == before["sessions"]
+
+    hist = list_history("u1")
+    assert all(s["id"] != sid for s in hist)
+
+    with meter_env() as db:
+        assert db.get(UsageSession, sid).discarded_at is not None
+
+
 # --- Plan downgrade on cancellation ---------------------------------------
 
 
