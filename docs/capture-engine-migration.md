@@ -7,11 +7,11 @@
 新会话从这里核对起（别考古）：`git -C ~/Projects/nod-web status` + `git log --oneline -6`。
 
 **已核实（本会话工具验证）**
-- `main` = `origin/main`，HEAD `26b9d56`（收口批第 5 项删 dead 代码；出版 bundle 26 待发布）。工作区干净，仅 2 个**未跟踪** docs：`docs/Nodpilot 产品功能设计.pdf`、`docs/nodpilot-product-design.html`（遗留，勿动——后者已同步为事实来源）。
+- `main` = `origin/main`，HEAD `7ac2736`（iOS bundle 26；收口批 5 commit 已推）。工作区干净，仅 2 个**未跟踪** docs：`docs/Nodpilot 产品功能设计.pdf`、`docs/nodpilot-product-design.html`（遗留，勿动——后者已同步为事实来源）。
 - CI 最新 run `33959368572` **success**；Railway `754bde17` **SUCCESS**；`/api/health` 200。
 - ⚠️ **线上 DB 是 SQLite `/data/nod.db`，不是 Postgres**（DATABASE_URL 未设；railway 无独立 PG 服务；SQL 用 SQLite 语法）。native app 连 `https://nodpilot.com`；`push origin/main` → CI+Railway 自动部署。
 
-**收口批（Meeting Live / Notes，5 commit，未 push）**
+**收口批（Meeting Live / Notes，5 commit，已推 + iPhone/Watch bundle 26 核对）**
 - `9412cae` notes 提示词去掉「session ends」。
 - `691f6f4` 删死掉的 Summary 生成路径（只留 `[NOD_NOTES]`；`item.kind==='summary'` 读取侧保留）。
 - `c1a93b8` Stop 后自动写 Notes；Save 在 notes 流式时经 `keepShouldWaitForNotes` 等待再存（不存空 Notes）。
