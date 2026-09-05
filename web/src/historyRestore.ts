@@ -91,8 +91,8 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
     if (!text) return
     const id = item.qid || `${session.id}-${i}`
     if (item.kind === 'transcript') {
-      lines.push({ id, ts: formatItemTs(item, lines.length), text, at: Date.parse(item.at || '') || Date.now(), speaker: item.speaker || '' })
-      originals.push({ id, text, ts: formatItemTs(item, originals.length) })
+      lines.push({ id, ts: formatItemTs(item, session.started_at, lines.length), text, at: Date.parse(item.at || '') || Date.now(), speaker: item.speaker || '' })
+      originals.push({ id, text, ts: formatItemTs(item, session.started_at, originals.length) })
     } else if (item.kind === 'question') {
       questions.push({ id, q: text })
     } else if (item.kind === 'answer' || item.kind === 'listen_ask') {
@@ -130,7 +130,17 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
   }
 }
 
-function formatItemTs(item: HistoryItem | undefined, index: number) {
+function formatItemTs(item: HistoryItem | undefined, startedAt: string | null, index: number) {
+  const start = startedAt ? Date.parse(startedAt) : NaN
+  const t = item?.at ? Date.parse(item.at) : NaN
+  if (Number.isFinite(start) && Number.isFinite(t)) {
+    // Elapsed time since the session started — matches live captions (mm:ss).
+    const sec = Math.max(0, Math.floor((t - start) / 1000))
+    const m = Math.floor(sec / 60)
+    const s = sec % 60
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  }
+  // No session-start anchor: fall back to the wall clock (or the index).
   if (item?.at) {
     const d = new Date(item.at)
     if (!Number.isNaN(d.getTime())) {

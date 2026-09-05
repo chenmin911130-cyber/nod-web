@@ -23,6 +23,20 @@ def _day() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
+def _iso_utc(dt: datetime | None) -> str | None:
+    """Serialize a stored UTC datetime as a tz-aware ISO string ending in Z.
+
+    SQLite can hand back a naive datetime (no tzinfo). We always write UTC via
+    utcnow(), so a naive value is assumed UTC and stamped with Z. That keeps the
+    client from mis-reading an offset-less string as a local time.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def _month_start() -> datetime:
     now = datetime.now(timezone.utc)
     return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -175,7 +189,7 @@ def open_usage_session(user_id: str, mode: str, scene: str = "") -> tuple[str | 
                 user_id=user_id,
                 mode=mode or "interview",
                 scene=scene,
-                title=f"{scene_label(scene)} · {utcnow().strftime('%b %d %H:%M')}",
+                title=f"{scene_label(scene)}",
                 kept=False,
             )
         )
@@ -440,7 +454,7 @@ def _session_entry(db, s) -> dict:
 
     scene = normalize_scene(s.mode, getattr(s, "scene", "") or "")
     item_rows = [
-        {"kind": i.kind, "text": i.text, "at": i.created_at.isoformat() if i.created_at else None, "qid": i.qid, "speaker": i.speaker or ""}
+        {"kind": i.kind, "text": i.text, "at": _iso_utc(i.created_at), "qid": i.qid, "speaker": i.speaker or ""}
         for i in items
     ]
     return {
@@ -448,8 +462,8 @@ def _session_entry(db, s) -> dict:
         "mode": s.mode,
         "scene": scene,
         "title": s.title,
-        "started_at": s.started_at.isoformat() if s.started_at else None,
-        "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+        "started_at": _iso_utc(s.started_at),
+        "ended_at": _iso_utc(s.ended_at),
         "stt_seconds": round(s.stt_seconds, 2),
         "llm_tokens": s.llm_input_tokens + s.llm_output_tokens,
         "cost_usd": round(s.estimated_cost_usd, 4),

@@ -122,3 +122,21 @@ const spoke: HistorySession = {
 const spokePayload = restoreFromSession(spoke)
 eq(spokePayload.lines[0].speaker || '', 'Speaker 1', 'restored line keeps its speaker')
 eq(spokePayload.lines[1].speaker || '', 'Speaker 2', 'restored line keeps speaker for the next turn')
+
+// A restored line's ts is the elapsed time since the session started (mm:ss),
+// matching the live caption clock — not a wall-clock HH:MM.
+const timed: HistorySession = {
+  id: 'tm',
+  mode: 'meeting',
+  scene: 'meeting',
+  title: 't',
+  started_at: at(11, 0, 0),
+  stt_seconds: 0,
+  items: [
+    { kind: 'transcript', text: 'Zero', qid: 'z', at: at(11, 0, 3) },
+    { kind: 'transcript', text: 'Later', qid: 'l', at: at(11, 0, 65) },
+  ],
+}
+const timedPayload = restoreFromSession(timed)
+eq(timedPayload.lines[0].ts, '00:03', 'first line is seconds after start')
+eq(timedPayload.lines[1].ts, '01:05', 'second line is mm:ss after start')
