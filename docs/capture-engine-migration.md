@@ -2,13 +2,13 @@
 
 单一事实来源（single source of truth）文档：所有"做到哪层了 / 下一步做什么"都在这里更新，**不要**只写在对话上下文里。设计依据见 `docs/adr/0001-capture-engine-two-axis-state.md`。
 
-## 最新状态（2026-09-06 晚 · notes 收口 + 7-item + 收尾批全部 shipped）· 窗口交接快照
+## 最新状态（2026-09-06 深夜 · + Lecture 收口批 shipped）· 窗口交接快照
 
 新会话从这里核对起（别考古）：`git -C ~/Projects/nod-web status` + `git log --oneline -6`。
 
 **已核实（本会话工具验证）**
-- `main` = `origin/main`，HEAD `308098f`。收尾批（已推）：`101a38f` 暂停中按 Stop 释放 listener（补洞）、`32c9b80` 产品设计 PDF 重导、`701c7cd` LLM 路由（无图 text→`deepseek-v4-flash`，带图 deepseek→`VISION_MODEL`）、`308098f` listen_ask 提示词声明不能查实时。工作区干净，无未跟踪遗留。
-- CI 最新 run `33989470669` **success**；Railway `e7c1546d` **SUCCESS**；`/api/health` 200。
+- `main` = `origin/main`，HEAD `0374550`。Lecture 收口批（已推，6 commit）：`0c7ca6f` 学习单板块顺序单一来源（`sceneSectionOrder`）、`d572ef9` Bilingual 不再控 Notes 双语（docs）、`0e05945` 讲师「发言最多自动标为讲师」文案（docs）、`19aa16b` Lecture STT 提示词补「one lecturer + audience」结构、`a56c617` `promoteLectureSpeakers` 直接测试 + 80% 滞后、`0374550` `exportNoteSections` 标题走场景。第 1/5/6 项是 web 逻辑，要进真机需等下一次 `cap:sync`。工作区仅剩一个**无关未提交** `errors.md`（fable 的 Listen 设计稿遗漏记录，勿动）。
+- CI 最新 run `33990875706` **success**；Railway `008f65ef` **SUCCESS**；`/api/health` 200。
 - ⚠️ **线上 DB 是 SQLite `/data/nod.db`，不是 Postgres**（DATABASE_URL 未设；railway 无独立 PG 服务；SQL 用 SQLite 语法）。native app 连 `https://nodpilot.com`；`push origin/main` → CI+Railway 自动部署。
 
 **收口批（Meeting Live / Notes，5 commit，已推 + iPhone/Watch bundle 26 核对）**
