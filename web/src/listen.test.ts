@@ -1,4 +1,4 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, bilingualDisabled, capTranscript, nodTag, notesBodyText, notesPrompt, outLangRule, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, speakersExpected } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, nodTag, notesBodyText, notesPrompt, outLangRule, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, speakersExpected } from './listen'
 import type { MeetingLine } from './types'
 
 function eq<T>(got: T, want: T, label?: string) {
@@ -75,6 +75,13 @@ eq(promoteLectureSpeakers(lines(4, 5), { A: 'Lecturer', B: 'Audience' }, {}), { 
 eq(promoteLectureSpeakers(lines(4, 6), { A: 'Lecturer', B: 'Audience' }, {}), { A: 'Audience', B: 'Lecturer' }, 'switch when the leader clears 80%')
 // (e) locked[A] keeps A's name even when it would be re-ranked.
 eq(promoteLectureSpeakers(lines(5, 2), { A: 'Lecturer' }, { A: true }), { A: 'Lecturer', B: 'Audience' }, 'locked speaker keeps its label')
+
+// item6: exportNoteSections titles follow the scene, not the generic SECTION_TITLE.
+{
+  const d = emptyNotes()
+  d.keyPoints = ['Flux is the rate of flow']
+  eq(exportNoteSections('lecture', d).find((s) => s.id === 'keyPoints')?.title, 'Concepts', 'lecture keyPoints title uses the scene title')
+}
 
 const zhNotes = notesPrompt(
   'meeting',

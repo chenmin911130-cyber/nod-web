@@ -244,15 +244,13 @@ function itemsForSection(doc: NotesDoc, id: NotesSectionId): string[] {
 export function exportNoteSections(scene: ListenScene, doc: NotesDoc): Array<{ id: NotesSectionId; title: string; items: string[] }> {
   return SCENE_SECTIONS[scene].map((id) => ({
     id,
-    title: SECTION_TITLE[id],
+    title: sectionTitle(scene, id),
     items: itemsForSection(doc, id),
   }))
 }
 
 export function visibleSections(scene: ListenScene, doc: NotesDoc): Array<{ id: NotesSectionId; title: string; items: string[] }> {
-  return exportNoteSections(scene, doc)
-    .filter((section) => section.items.length)
-    .map((section) => ({ ...section, title: sectionTitle(scene, section.id) }))
+  return exportNoteSections(scene, doc).filter((section) => section.items.length)
 }
 
 export const MEETING_SPEAKER_OPTIONS = [
