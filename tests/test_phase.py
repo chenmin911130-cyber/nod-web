@@ -10,6 +10,7 @@ split that apart. These tests drive the methods directly with a
 """
 
 import unittest
+from collections import deque
 from unittest import mock
 
 from server.app import Session
@@ -34,6 +35,7 @@ def _session(**overrides) -> Session:
     sess._listen_started_at = 0.0
     sess._last_pcm_at = 0.0
     sess._workspace = "interview"
+    sess._pending_q = deque(maxlen=8)
     for key, val in overrides.items():
         setattr(sess, key, val)
     return sess

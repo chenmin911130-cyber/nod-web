@@ -2,6 +2,7 @@ import asyncio
 import logging
 import time
 import unittest
+from collections import deque
 from unittest import mock
 
 from starlette.testclient import TestClient
@@ -540,7 +541,7 @@ class InterviewWaitFlushTests(unittest.TestCase):
         sess._manual = False
         sess._busy = False
         sess._busy_lock = __import__("threading").Lock()
-        sess._pending = None
+        sess._pending_q = deque(maxlen=8)
         sess._pending_wait = (None, 0.0, None)
         sess._pending_asks = []
         sess._pending_speaker = None
@@ -552,6 +553,7 @@ class InterviewWaitFlushTests(unittest.TestCase):
         sess._interview_wait_timer = None
         sess._meeting_flush_timer = None
         sess._meeting_lock = __import__("threading").Lock()
+        sess.user_id = None
         sess.emit = mock.Mock()
         sess.pipeline = mock.Mock()
         sess.pipeline._qa_history = []
@@ -652,6 +654,100 @@ class InterviewWaitFlushTests(unittest.TestCase):
         sess.cfg = {"stt": {"listen_scene": "interview"}, "ui": {}, "llm": {}}
         prompt = _stt_prompt(sess._stt_cfg())
         self.assertNotIn("job interview", prompt.lower())
+
+
+class InterviewQueueTests(unittest.TestCase):
+    """Voice/typed interview questions that arrive while busy are queued, not
+    dropped: the queue drains after the current answer, in arrival order."""
+
+    def _session(self) -> Session:
+        sess = Session.__new__(Session)
+        sess.cfg = {"stt": {}, "ui": {}, "llm": {}}
+        sess._workspace = "interview"
+        sess._listener = object()
+        sess._manual = False
+        sess._busy = False
+        sess._busy_lock = __import__("threading").Lock()
+        sess._pending_q = deque(maxlen=8)
+        sess._pending_wait = (None, 0.0, None)
+        sess._pending_asks = []
+        sess._pending_speaker = None
+        sess._recent_finals = []
+        sess._follow_lang = None
+        sess._follow_switch_lang = None
+        sess._follow_switch_hits = 0
+        sess._last_voice_at = 0.0
+        sess._interview_wait_timer = None
+        sess._meeting_flush_timer = None
+        sess._meeting_lock = __import__("threading").Lock()
+        sess.user_id = None
+        sess.emit = mock.Mock()
+        sess.pipeline = mock.Mock()
+        sess.pipeline._qa_history = []
+        sess.pipeline._last_answer = ""
+        sess.pipeline._cancel = __import__("threading").Event()
+        sess.pipeline.process_text = mock.Mock()
+        return sess
+
+    def test_second_question_while_busy_is_answered_after_first(self):
+        sess = self._session()
+        calls: list[str] = []
+        gate = __import__("threading").Event()
+
+        def fake_pt(text, mode, *a):
+            calls.append(text)
+            if len(calls) == 1:
+                gate.wait()
+
+        sess.pipeline.process_text = fake_pt
+        sess._start_interview_answer("What is a mutex?", "en")
+        for _ in range(40):
+            if len(calls) >= 1:
+                break
+            time.sleep(0.02)
+        sess._start_interview_answer("How does a semaphore differ?", "en")
+        gate.set()
+        for _ in range(80):
+            if len(calls) >= 2:
+                break
+            time.sleep(0.02)
+        self.assertEqual(calls, ["What is a mutex?", "How does a semaphore differ?"])
+
+    def test_third_question_does_not_overwrite_second(self):
+        sess = self._session()
+        calls: list[str] = []
+        gate = __import__("threading").Event()
+
+        def fake_pt(text, mode, *a):
+            calls.append(text)
+            if len(calls) == 1:
+                gate.wait()
+
+        sess.pipeline.process_text = fake_pt
+        sess._start_interview_answer("What is a mutex?", "en")
+        for _ in range(40):
+            if len(calls) >= 1:
+                break
+            time.sleep(0.02)
+        sess._start_interview_answer("How does a semaphore differ?", "en")
+        sess._start_interview_answer("What about a reader-writer lock?", "en")
+        gate.set()
+        for _ in range(120):
+            if len(calls) >= 3:
+                break
+            time.sleep(0.02)
+        self.assertEqual(
+            calls,
+            ["What is a mutex?", "How does a semaphore differ?", "What about a reader-writer lock?"],
+        )
+
+    def test_typed_ask_while_busy_is_queued_not_rejected(self):
+        sess = self._session()
+        sess._busy = True
+        sess.ask("typed?", None, "ask")
+        emits = [c.args[0] for c in sess.emit.call_args_list]
+        self.assertFalse(any(e.get("type") == "done" for e in emits))
+        self.assertEqual(len(sess._pending_asks), 1)
 
 
 class ListenAskRoutingTests(unittest.TestCase):

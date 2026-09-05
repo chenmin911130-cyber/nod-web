@@ -112,7 +112,7 @@ class SessionListenLifecycleTests(unittest.TestCase):
         sess._listen_mu = threading.RLock()
         sess._listen_starting = False
         sess._stt_restart_timer = None
-        sess._pending = None
+        sess._pending_q = __import__("collections").deque(maxlen=8)
         sess._pending_wait = (None, 0.0, None)
         sess._pending_speaker = None
         sess._meeting_flush_timer = None

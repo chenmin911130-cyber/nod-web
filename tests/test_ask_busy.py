@@ -22,16 +22,22 @@ class AskBusySeamTests(unittest.TestCase):
         sess.pipeline._cancel = threading.Event()
         return sess
 
-    def test_typed_ask_while_busy_emits_done(self):
+    def test_typed_ask_while_busy_is_queued_not_rejected(self):
+        # Issue #6: a typed interview question while busy must be queued for
+        # the next drain, not rejected with a terminal `done` that clears the
+        # UI. The empty-id `done` used to round-trip through the reducer and
+        # wipe the answer that was still being generated.
         sess = self._session(busy=True)
         sess.ask("What is the capital of China?")
         events = [c.args[0] for c in sess.emit.call_args_list if c.args]
-        self.assertTrue(
-            any(e.get("type") == "done" and e.get("ok") is False for e in events),
-            f"typed ask while busy must finish the UI; got {events}",
+        self.assertFalse(
+            any(e.get("type") == "done" for e in events),
+            f"typed ask while busy must queue, not emit a terminal done; got {events}",
         )
         sess.pipeline.process_text.assert_not_called()
         self.assertTrue(sess._busy)
+        self.assertEqual(len(sess._pending_asks), 1)
+        self.assertEqual(sess._pending_asks[0][0], "What is the capital of China?")
 
     def test_typed_ask_while_idle_starts_generation(self):
         sess = self._session(busy=False)

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -1859,7 +1860,7 @@ class Session:
         # the busy flag has to be claimed atomically or two generations start
         # for one question and both get billed.
         self._busy_lock = threading.Lock()
-        self._pending: tuple[str, str | None] | None = None
+        self._pending_q: collections.deque[tuple[str, str | None]] = collections.deque(maxlen=8)
         self._pending_asks: list[tuple[str, str, Any]] = []
         self._pending_wait: tuple[str | None, float, str | None] = (None, 0.0, None)
         self._meeting_flush_timer: threading.Timer | None = None
@@ -2184,7 +2185,7 @@ class Session:
             self.save_keys(msg.get("deepseek_key", ""), msg.get("assemblyai_key", ""))
         elif mtype == "clear":
             self.cancel_generate()
-            self._pending = None
+            self._pending_q.clear()
             self.emit({"type": "status", "text": "Cleared"})
         elif mtype == "cancel_generate":
             self.cancel_generate()
@@ -2226,6 +2227,7 @@ class Session:
         """Cancel the in-flight LLM stream without stopping STT."""
         self.pipeline.abort_stream()
         self._pending_asks = []
+        self._pending_q.clear()
         self._release_busy()
 
     def set_translate_to(self, lang: str) -> None:
@@ -2328,7 +2330,7 @@ class Session:
         """
         self._paused = False
         self._listen_wanted = False
-        self._pending = None
+        self._pending_q.clear()
         self._cancel_stt_restart_timer()
         with self._listen_lock():
             lst = self._listener
@@ -2529,7 +2531,7 @@ class Session:
                     self.cfg.setdefault("stt", {})["speakers_expected"] = n
             except (TypeError, ValueError):
                 pass
-        self._pending = None
+        self._pending_q.clear()
         self._pending_asks = []
         # 丢弃 hold 住的半句会议内容（不 flush）：模式切换后 emit 的 question 事件
         # 会被前端路由到新 workspace（如 translate 下变成垃圾翻译对）
@@ -2804,7 +2806,7 @@ class Session:
     def _stop_listening(self) -> None:
         self._listen_accum_sec = 0.0  # session over; reset the accumulated quota
         self._last_pcm_at = 0.0  # zero-PCM guard must not carry into the next session
-        self._pending = None
+        self._pending_q.clear()
         self._cancel_stt_restart_timer()
         with self._listen_lock():
             lst = self._listener
@@ -3054,6 +3056,10 @@ class Session:
         if mode == "ask" and (body.startswith("Write structured notes") or llm_text.lstrip().startswith("[NOD_NOTES")):
             mode = "notes"
         if not self._claim_busy():
+            if mode == "ask" and self._workspace == "interview":
+                self._pending_asks.append((user_text, mode, files))
+                self.emit({"type": "status", "text": "Question queued · answering the previous one"})
+                return
             if mode in ("translate", "notes", "listen_ask", "file_ask"):
                 self._pending_asks.append((user_text, mode, files))
                 return
@@ -3131,7 +3137,7 @@ class Session:
         if self._workspace == "translate":
             # 不取消在途翻译：取消会让被中断的句子等 25s 超时重试（双倍 token + 字幕卡死）。
             # 新 final 照常入队，前端 pump 一次只发一条，翻译自然串行。
-            self._pending = None
+            self._pending_q.clear()
             self._pending_wait = (None, 0.0, None)
             for piece in split_code_switched(cleaned):
                 piece_heard = heard_lang_from_text(piece, heard)
@@ -3179,8 +3185,13 @@ class Session:
         self._remember_final(cleaned)
         self._maybe_follow_speech(cleaned, heard)
         if not self._claim_busy():
-            self._pending = (cleaned, lang)
+            self._pending_q.append((cleaned, lang))
+            self.emit({"type": "status", "text": "Question queued · answering the previous one"})
             return
+        self._run_interview_answer(cleaned, lang)
+
+    def _run_interview_answer(self, cleaned: str, lang: str | None) -> None:
+        heard = heard_lang_from_text(cleaned, lang)
         self.pipeline._cancel.clear()
         self._set_engine("generating")
         self._emit_phase()
@@ -3193,11 +3204,8 @@ class Session:
                 self._release_busy()
                 self._set_engine("idle")
                 self._emit_phase()
-                pending = self._pending
-                self._pending = None
-                if pending:
-                    ptxt, plang = pending
-                    self._on_final(ptxt, plang)
+                if self._pending_q and self._claim_busy():
+                    self._run_interview_answer(*self._pending_q.popleft())
                 else:
                     self._drain_pending_ask()
 
