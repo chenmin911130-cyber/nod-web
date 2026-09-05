@@ -72,7 +72,7 @@ export function nativeListenChipOrder(scene: ListenScene): ReadonlyArray<'scene'
 }
 
 export function listenChipParts(lang: Lang): { title: string; sub: string } {
-  if (lang === 'auto') return { title: IPHONE_COPY.autoDetect, sub: '' }
+  if (lang === 'auto') return { title: 'Auto', sub: '' }
   const name = TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
   return { title: name, sub: '' }
 }
@@ -82,14 +82,14 @@ export function notesChipParts(lang: Lang): { title: string; sub: string } {
 }
 
 export function listenDetectChip(lang: Lang): string {
-  if (lang === 'auto') return IPHONE_COPY.autoDetect
+  if (lang === 'auto') return 'Auto'
   return TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
 }
 
 export function notesInChip(lang: Lang): string {
-  if (lang === 'auto') return 'Notes follow speech'
+  if (lang === 'auto') return 'Notes · Auto'
   const name = TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
-  return `Notes in ${name}`
+  return `Notes · ${name}`
 }
 
 export function notesChipLabel(lang: Lang): string {
