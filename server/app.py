@@ -2496,7 +2496,7 @@ class Session:
             if self.user_id and self.usage_session_id:
                 from server.meter import save_history
 
-                save_history(self.user_id, self.usage_session_id, "transcript", piece, qev["id"])
+                save_history(self.user_id, self.usage_session_id, "transcript", piece, qev["id"], qev.get("speaker") or "")
 
     def _hold_or_emit_meeting(self, cleaned: str, lang: str | None, speaker: str | None = None) -> None:
         leftover: tuple[str, str | None, str | None] | None = None

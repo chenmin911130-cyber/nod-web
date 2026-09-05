@@ -403,7 +403,7 @@ def consume_llm(
     return bool(snap.get("ok")), snap
 
 
-def save_history(user_id: str, session_id: str | None, kind: str, text: str, qid: str = "") -> None:
+def save_history(user_id: str, session_id: str | None, kind: str, text: str, qid: str = "", speaker: str = "") -> None:
     if not session_id or not (text or "").strip():
         return
     with db_session() as db:
@@ -415,6 +415,7 @@ def save_history(user_id: str, session_id: str | None, kind: str, text: str, qid
                 kind=kind,
                 qid=qid,
                 text=text[:20000],
+                speaker=(speaker or "")[:64],
             )
         )
         row = db.get(UsageSession, session_id)
@@ -429,12 +430,19 @@ def _session_entry(db, s) -> dict:
         select(HistoryItem)
         .where(HistoryItem.session_id == s.id)
         .order_by(HistoryItem.created_at.asc())
-        .limit(80)
+        .limit(2001)
     ).scalars().all()
+    # The 80-item ceiling masked long meetings; raise to 2000 and surface the
+    # tail-drop so the client can signal "some lines were omitted".
+    truncated = len(items) > 2000
+    items = items[:2000]
     from server.history_fmt import normalize_scene, session_copy_text
 
     scene = normalize_scene(s.mode, getattr(s, "scene", "") or "")
-    item_rows = [{"kind": i.kind, "text": i.text, "at": i.created_at.isoformat() if i.created_at else None, "qid": i.qid} for i in items]
+    item_rows = [
+        {"kind": i.kind, "text": i.text, "at": i.created_at.isoformat() if i.created_at else None, "qid": i.qid, "speaker": i.speaker or ""}
+        for i in items
+    ]
     return {
         "id": s.id,
         "mode": s.mode,
@@ -446,6 +454,7 @@ def _session_entry(db, s) -> dict:
         "llm_tokens": s.llm_input_tokens + s.llm_output_tokens,
         "cost_usd": round(s.estimated_cost_usd, 4),
         "items": item_rows,
+        "items_truncated": truncated,
         "copy_text": session_copy_text(s.title, s.mode, scene, item_rows),
         "files": [],
     }

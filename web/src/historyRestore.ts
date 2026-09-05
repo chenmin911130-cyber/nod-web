@@ -91,7 +91,7 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
     if (!text) return
     const id = item.qid || `${session.id}-${i}`
     if (item.kind === 'transcript') {
-      lines.push({ id, ts: formatItemTs(item, lines.length), text, at: Date.parse(item.at || '') || Date.now() })
+      lines.push({ id, ts: formatItemTs(item, lines.length), text, at: Date.parse(item.at || '') || Date.now(), speaker: item.speaker || '' })
       originals.push({ id, text, ts: formatItemTs(item, originals.length) })
     } else if (item.kind === 'question') {
       questions.push({ id, q: text })

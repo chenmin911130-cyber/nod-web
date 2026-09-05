@@ -9,7 +9,7 @@ type PdfSession = {
   title: string
   started_at: string | null
   stt_seconds?: number
-  items: Array<{ kind: string; text: string; at?: string | null; qid?: string }>
+  items: Array<{ kind: string; text: string; at?: string | null; qid?: string; speaker?: string }>
   files?: Array<{ kind: string; name: string }>
 }
 
@@ -62,7 +62,7 @@ async function historyPdfArgs(session: PdfSession) {
     if (!text) continue
     if (item.kind === 'question' || item.kind === 'answer' || item.kind === 'listen_ask') continue
     if (item.kind === 'transcript') {
-      blocks.push({ kind: 'line', text, ts: item.at ? formatTs(item.at) : '', speaker: '' })
+      blocks.push({ kind: 'line', text, ts: item.at ? formatTs(item.at) : '', speaker: item.speaker || '' })
     } else if (item.kind === 'translate') {
       blocks.push({ kind: 'p', text })
     } else {

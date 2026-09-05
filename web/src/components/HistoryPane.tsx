@@ -11,7 +11,7 @@ import {
 import { IPHONE_COPY } from '../iphoneCopy'
 import { isNativeApp } from '../native'
 
-export type HistoryItem = { kind: string; text: string; at?: string | null; qid?: string }
+export type HistoryItem = { kind: string; text: string; at?: string | null; qid?: string; speaker?: string }
 export type HistoryFile = { kind: string; name: string; href: string }
 export type HistorySession = {
   id: string

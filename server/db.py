@@ -90,6 +90,7 @@ class HistoryItem(Base):
     kind: Mapped[str] = mapped_column(String(32))
     qid: Mapped[str] = mapped_column(String(64), default="")
     text: Mapped[str] = mapped_column(Text, default="")
+    speaker: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -198,6 +199,7 @@ def init_db() -> None:
     _add_column_if_missing("usage_sessions", "kept", "INTEGER DEFAULT 1")
     _add_column_if_missing("usage_sessions", "scene", "VARCHAR(32) DEFAULT ''")
     _add_column_if_missing("usage_sessions", "discarded_at", "TIMESTAMP")
+    _add_column_if_missing("history_items", "speaker", "VARCHAR(64) DEFAULT ''")
 
 
 @contextmanager

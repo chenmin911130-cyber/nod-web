@@ -108,6 +108,30 @@ def test_pending_older_than_24h_is_purged(meter_env):
         assert db.get(UsageSession, "fresh").discarded_at is None
 
 
+def test_save_history_with_speaker_roundtrips(meter_env):
+    from server.meter import list_history, save_history
+
+    _add_unsaved_meeting(meter_env, "s1", kept=True)
+    save_history("u1", "s1", "transcript", "hello alice", speaker="Speaker 1")
+    sessions = list_history("u1")
+    assert [row["id"] for row in sessions] == ["s1"]
+    item = sessions[0]["items"][-1]
+    assert item["text"] == "hello alice"
+    assert item["speaker"] == "Speaker 1"
+
+
+def test_list_history_flags_truncation_at_2000(meter_env):
+    from server.meter import list_history
+
+    _add_unsaved_meeting(meter_env, "s1", kept=True, with_item=False)
+    with meter_env() as db:
+        for i in range(2001):
+            db.add(HistoryItem(id=f"s1-i{i}", user_id="u1", session_id="s1", kind="transcript", text=f"line {i}"))
+    sessions = list_history("u1")
+    assert sessions[0]["items_truncated"] is True
+    assert len(sessions[0]["items"]) == 2000
+
+
 # --- Session.close routing -------------------------------------------------
 
 

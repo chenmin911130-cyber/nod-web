@@ -106,3 +106,19 @@ const groups = groupHistoryByDay([today, yesterday, older], now)
 eq(groups.map((g) => g.label).join('|'), 'Today|Yesterday|Sep 18, 2024', 'History is a day list, not a dump on the home screen')
 eq(groups[0].sessions[0].title, 'Q3 planning', 'today bucket keeps the morning session')
 eq(groups[1].sessions[0].title, 'Budget review', 'yesterday bucket stays off the home screen')
+
+const spoke: HistorySession = {
+  id: 'spk',
+  mode: 'meeting',
+  scene: 'meeting',
+  title: 't',
+  started_at: null,
+  stt_seconds: 0,
+  items: [
+    { kind: 'transcript', text: 'Hello', qid: 'a1', at: at(11, 5), speaker: 'Speaker 1' },
+    { kind: 'transcript', text: 'World', qid: 'a2', at: at(11, 6), speaker: 'Speaker 2' },
+  ],
+}
+const spokePayload = restoreFromSession(spoke)
+eq(spokePayload.lines[0].speaker || '', 'Speaker 1', 'restored line keeps its speaker')
+eq(spokePayload.lines[1].speaker || '', 'Speaker 2', 'restored line keeps speaker for the next turn')
