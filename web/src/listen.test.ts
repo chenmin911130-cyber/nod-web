@@ -13,9 +13,11 @@ eq(nodTag('NOTES', 'zh', false, 'meeting'), '[NOD_NOTES:meeting:zh]', 'notes tag
 if (!outLangRule('zh', 'summary').includes('Chinese only')) throw new Error('summary fixed lang')
 if (!outLangRule('auto', 'summary').includes('majority language')) throw new Error('summary auto follows transcript')
 
-// D (phase 1): Bilingual is dead when Notes = Auto.
-if (bilingualDisabled('auto') !== true) throw new Error('notes auto disables bilingual')
-if (bilingualDisabled('zh') !== false) throw new Error('concrete notes lang enables bilingual')
+// D (phase 1): Bilingual is dead when Notes = Auto. But an already-ON Bilingual
+// must stay toggleable OFF, so it is only disabled when it is NOT on.
+if (bilingualDisabled('auto', false) !== true) throw new Error('auto + off disables bilingual')
+if (bilingualDisabled('auto', true) !== false) throw new Error('auto + on stays toggleable')
+if (bilingualDisabled('zh', true) !== false) throw new Error('concrete notes lang enables bilingual')
 
 // B(1): capTranscript keeps the tail within a character budget, reports the drop.
 const capLines = [

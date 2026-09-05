@@ -1862,6 +1862,9 @@ export default function App() {
         window.api.send({ type: 'set_lang', language: null })
       }
       dispatch({ type: 'notes_lang', lang: 'auto' })
+      if (s.translateOn) {
+        dispatch({ type: 'translate_on', on: false })
+      }
       dispatch({
         type: 'engine',
         ev: {
@@ -2084,7 +2087,7 @@ export default function App() {
     if (cap.dropped > 0) {
       dispatch({
         type: 'engine',
-        ev: { type: 'status', text: `Notes cover ${cap.lines.length}/${s.meetingLines.length} lines (from ${cap.fromTs})` },
+        ev: { type: 'status', text: `Summary covers ${cap.lines.length}/${s.meetingLines.length} lines (from ${cap.fromTs})` },
       })
     }
     window.api.send({

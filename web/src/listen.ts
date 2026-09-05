@@ -46,9 +46,11 @@ export function nodTag(kind: 'ASK' | 'CATCH' | 'NOTES' | 'SUMMARY', outLang: Lan
 }
 
 // Bilingual captions need a concrete target language; with Notes = Auto there is
-// none, so the toggle is dead (lit but never translating). Phase 1: disable it.
-export function bilingualDisabled(notesLang: Lang): boolean {
-  return notesLang === 'auto'
+// none. Phase 1: disable it — BUT a Bilingual that is already ON must stay
+// toggleable off, so it is only disabled when it is not already on (otherwise a
+// user with notesLang=auto + a translateOn default of true gets stuck lit).
+export function bilingualDisabled(notesLang: Lang, translateOn: boolean): boolean {
+  return notesLang === 'auto' && !translateOn
 }
 
 // Keep the TAIL of a transcript within a character budget so a long meeting

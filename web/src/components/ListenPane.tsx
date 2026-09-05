@@ -861,9 +861,9 @@ export default function ListenPane(props: Props) {
             className={`listen-icon-btn listen-side-left listen-bi-btn${props.translateOn ? ' on' : ''}`}
             role="switch"
             aria-checked={props.translateOn}
-            disabled={bilingualDisabled(props.notesLang)}
+            disabled={bilingualDisabled(props.notesLang, props.translateOn)}
             title={
-              bilingualDisabled(props.notesLang)
+              bilingualDisabled(props.notesLang, props.translateOn)
                 ? 'Bilingual needs a notes language — pick one first'
                 : props.translateOn
                   ? 'Bilingual on — tap to turn off'
