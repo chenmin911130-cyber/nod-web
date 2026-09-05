@@ -114,8 +114,14 @@ export interface AppState {
     ok: boolean
     stt_seconds: number
     stt_limit: number
+    daily_stt_seconds: number
+    daily_stt_limit: number
     llm_tokens: number
     llm_limit: number
+    sessions: number
+    session_limit: number
+    daily_cost_usd: number
+    daily_cost_limit: number
     quota_disabled?: boolean
   } | null
 }

@@ -165,6 +165,26 @@ export default function AccountPage() {
                 <i style={{ width: `${pct(u.llm_tokens, u.llm_limit)}%` }} />
               </div>
             </div>
+            <div className="quota-card">
+              <span>Sessions this month</span>
+              <b>{Math.max(0, u.session_limit - u.sessions)}</b>
+              <span>
+                {u.sessions} / {u.session_limit} this month
+              </span>
+              <div className="bar">
+                <i style={{ width: `${pct(u.sessions, u.session_limit)}%` }} />
+              </div>
+            </div>
+            <div className="quota-card">
+              <span>Daily spend left</span>
+              <b>${Math.max(0, (u.daily_cost_limit || 0) - (u.daily_cost_usd || 0)).toFixed(2)}</b>
+              <span>
+                ${(u.daily_cost_usd || 0).toFixed(2)} / ${(u.daily_cost_limit || 0).toFixed(2)} today
+              </span>
+              <div className="bar">
+                <i style={{ width: `${pct(u.daily_cost_usd || 0, u.daily_cost_limit || 0)}%` }} />
+              </div>
+            </div>
             {appBuild ? (
               <div className="quota-card">
                 <span>Installed app</span>

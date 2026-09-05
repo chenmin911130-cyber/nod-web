@@ -67,6 +67,7 @@ import {
 } from './listen'
 import { buildListenPdfDoc, type ListenPdfDoc } from './pdfTemplates'
 import { applyDemoSeed, readDemoScene } from './demoSeed'
+import { quotaLimitText, type QuotaFields } from './quotaCopy'
 
 function isPendingCatchId(id: string): boolean {
   return id === '__pending__' || id.startsWith('__pending__:')
@@ -184,7 +185,7 @@ const initial: AppState = {
   speakerNames: {},
   speakerNameLocked: {},
   partialSpeaker: '',
-  quota: null as { stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; ok: boolean; quota_disabled?: boolean } | null,
+  quota: null as { stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; ok: boolean; sessions: number; session_limit: number; daily_cost_usd: number; daily_cost_limit: number; daily_stt_seconds: number; daily_stt_limit: number; quota_disabled?: boolean } | null,
 }
 
 type Action =
@@ -592,13 +593,19 @@ function reducer(state: AppState, action: Action): AppState {
               ok: ev.ok,
               stt_seconds: ev.stt_seconds,
               stt_limit: ev.stt_limit,
+              daily_stt_seconds: ev.daily_stt_seconds ?? 0,
+              daily_stt_limit: ev.daily_stt_limit ?? 0,
               llm_tokens: ev.llm_tokens,
               llm_limit: ev.llm_limit,
+              sessions: ev.sessions ?? 0,
+              session_limit: ev.session_limit ?? 0,
+              daily_cost_usd: ev.daily_cost_usd ?? 0,
+              daily_cost_limit: ev.daily_cost_limit ?? 0,
               quota_disabled: ev.quota_disabled,
             },
           }
         case 'quota_exceeded':
-          return { ...state, busy: false, status: 'Usage limit reached — open Account' }
+          return { ...state, busy: false, status: quotaLimitText(ev.reason, state.quota as unknown as QuotaFields) }
         default:
           return state
       }
