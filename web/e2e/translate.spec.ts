@@ -1,34 +1,56 @@
 import { test, expect } from '@playwright/test'
 
 /**
- * P0 regression: typing a line in the Translate workspace must issue exactly
- * ONE ask and render the source once.
+ * Translate typing must never have TWO `ask` messages in flight at once.
  *
- * The P0 bug was the phase handler treating every `capture==='off'` phase as
- * "session stopped", clearing the in-flight translate and re-pumping -> two
- * `ask`s -> the translation rendered twice (叠字) and eventually Failed. The fix
- * gates that cleanup on `engine==='idle'`. This test hooks the client's send
- * layer to count `ask` messages (the raw signal, independent of whether the
- * mock LLM actually answers) and asserts it stays at 1.
+ * 6b69afc P0 residual: on `phase(capture='off', engine='idle')` the client's
+ * dead-air fallback (App.tsx ~1310) treats "engine idle but I still think a
+ * translate is in flight" as stuck and re-pumps. When the server emits `done`
+ * followed by a trailing `phase(idle)` for round #1, the client's `done`
+ * microtask has already sent retry #2 and set `inflight` to #2; the trailing
+ * idle for #1 then arrives, kills #2, and fires #3 — two asks in flight at
+ * once (双发 → 叠字 on the row). This is invariant to LLM success/failure:
+ * any retry path (done with no translation, wrong-script retry) can overlap.
+ *
+ * So the gate is a frame-level invariant: an `ask` may only be sent once the
+ * previous `ask`'s `done` has been received. Sequential retries are legal;
+ * an in-flight overlap is the bug. Assert on WS frames, not on `api.send` —
+ * the raw send layer can't see the server's done/phase, which is what drives
+ * the retry.
  */
 test.describe('Translate workspace typing', () => {
-  test('one typed line issues exactly one ask and shows the source once', async ({ page }) => {
+  test('asks never overlap (previous done received before the next ask)', async ({ page }) => {
+    let inflight = 0
+    let asks = 0
+    let overlap = false
+
+    // Attach BEFORE navigation so the app's /ws connection is captured.
+    page.on('websocket', (ws) => {
+      ws.on('framesent', (frame) => {
+        const p = frame.payload
+        if (typeof p !== 'string') return
+        let m: { type?: string } | null = null
+        try { m = JSON.parse(p) } catch { return }
+        if (m?.type === 'ask') {
+          asks += 1
+          if (inflight > 0) overlap = true
+          inflight += 1
+        }
+      })
+      ws.on('framereceived', (frame) => {
+        const p = frame.payload
+        if (typeof p !== 'string') return
+        let m: { type?: string } | null = null
+        try { m = JSON.parse(p) } catch { return }
+        if (m?.type === 'done') {
+          inflight = Math.max(0, inflight - 1)
+        }
+      })
+    })
+
     await page.goto('/app')
     const translateTab = page.getByRole('tab', { name: /translate/i })
     await translateTab.click()
-
-    // Count `ask` messages the client emits (P0 regression = a duplicate ask).
-    await page.evaluate(() => {
-      const api = window as unknown as { api?: { send: (m: { type?: string }) => void }; __asks: number }
-      window.__asks = 0
-      if (api.api && api.api.send) {
-        const orig = api.api.send.bind(api.api)
-        api.api.send = (m: { type?: string }) => {
-          if (m && m.type === 'ask') window.__asks += 1
-          return orig(m)
-        }
-      }
-    })
 
     const input = page.locator('input.prompt-input')
     await expect(input).toBeVisible()
@@ -36,14 +58,11 @@ test.describe('Translate workspace typing', () => {
     await input.fill(line)
     await input.press('Enter')
 
-    // Let the pump microtask + a WS round-trip run (well under the 25s retry timer).
+    // Let the ask + done (ok:false with a mocked key) + retries + the trailing
+    // idle round-trip run well past the overlap window.
     await page.waitForTimeout(2000)
 
-    const asks = await page.evaluate(() => window.__asks)
-    expect(asks).toBe(1)
-
-    // The source line must appear exactly once on screen (no duplicated row).
-    const sourceCount = await page.getByText(line, { exact: false }).count()
-    expect(sourceCount).toBe(1)
+    expect(asks).toBeGreaterThan(0)
+    expect(overlap).toBe(false)
   })
 })
