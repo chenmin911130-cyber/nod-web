@@ -2186,7 +2186,10 @@ class Session:
             self.save_keys(msg.get("deepseek_key", ""), msg.get("assemblyai_key", ""))
         elif mtype == "clear":
             self.cancel_generate()
-            self._pending_q.clear()
+            self._reset_turn_state()
+            self.pipeline._qa_history = []
+            self.pipeline._last_answer = ""
+            self._recent_finals = []
             self.emit({"type": "status", "text": "Cleared"})
         elif mtype == "cancel_generate":
             self.cancel_generate()
@@ -2523,6 +2526,23 @@ class Session:
             return
         self._emit_meeting_line(cleaned, lang, speaker)
 
+    def _reset_turn_state(self) -> None:
+        """Drop turn-scoped state: queued questions, pending asks, and holds.
+
+        Used by set_workspace (a mode switch must not carry a held half-sentence
+        across workspaces) and by clear (a full session reset additionally wipes
+        QA history — that part lives in the clear handler).
+        """
+        self._pending_q.clear()
+        self._pending_asks = []
+        # 丢弃 hold 住的半句会议内容（不 flush）：模式切换后 emit 的 question 事件
+        # 会被前端路由到新 workspace（如 translate 下变成垃圾翻译对）
+        with self._meeting_lock:
+            self._cancel_meeting_timer()
+            self._cancel_interview_wait_timer()
+            self._pending_wait = (None, 0.0, None)
+            self._pending_speaker = None
+
     def set_workspace(self, mode: str, scene: Any = None, speakers_expected: Any = None) -> None:
         if mode not in ("interview", "meeting", "translate"):
             mode = "interview"
@@ -2539,15 +2559,7 @@ class Session:
                     self.cfg.setdefault("stt", {})["speakers_expected"] = n
             except (TypeError, ValueError):
                 pass
-        self._pending_q.clear()
-        self._pending_asks = []
-        # 丢弃 hold 住的半句会议内容（不 flush）：模式切换后 emit 的 question 事件
-        # 会被前端路由到新 workspace（如 translate 下变成垃圾翻译对）
-        with self._meeting_lock:
-            self._cancel_meeting_timer()
-            self._cancel_interview_wait_timer()
-            self._pending_wait = (None, 0.0, None)
-            self._pending_speaker = None
+        self._reset_turn_state()
         if mode == "translate" and prev != "translate":
             self.cancel_generate()
         if self._listener and (prev_lang != self._effective_stt_lang() or prev_url != assemblyai_ws_url(self._stt_cfg())):

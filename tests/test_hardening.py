@@ -803,6 +803,69 @@ class InterviewQueueTests(unittest.TestCase):
         self.assertIsNone(sess._busy_token)
 
 
+class ClearResetTests(unittest.TestCase):
+    """A 'clear' is a full session reset: cancel the generation, drop turn
+    state, and wipe QA history + recent finals so the same question can be
+    asked again without a duplicate rejection."""
+
+    def _session(self) -> Session:
+        sess = Session.__new__(Session)
+        sess.cfg = {"stt": {}, "ui": {}, "llm": {}}
+        sess._workspace = "interview"
+        sess._listener = object()
+        sess._manual = False
+        sess._busy = False
+        sess._busy_lock = __import__("threading").Lock()
+        sess._busy_token = None
+        sess._pending_q = deque(maxlen=8)
+        sess._pending_wait = (None, 0.0, None)
+        sess._pending_asks = []
+        sess._pending_speaker = None
+        sess._recent_finals = []
+        sess._follow_lang = None
+        sess._follow_switch_lang = None
+        sess._follow_switch_hits = 0
+        sess._last_voice_at = 0.0
+        sess._interview_wait_timer = None
+        sess._meeting_flush_timer = None
+        sess._meeting_lock = __import__("threading").Lock()
+        sess.user_id = None
+        sess.emit = mock.Mock()
+        sess.pipeline = mock.Mock()
+        sess.pipeline._qa_history = []
+        sess.pipeline._last_answer = ""
+        sess.pipeline._cancel = __import__("threading").Event()
+        sess.pipeline.process_text = mock.Mock()
+        return sess
+
+    def test_clear_resets_qa_history_and_recent_finals(self):
+        sess = self._session()
+        sess.pipeline._qa_history = [{"q": "What is CAP theorem?"}]
+        sess.pipeline._last_answer = "CAP is consistency, availability, partition tolerance."
+        sess._recent_finals = [("What is CAP theorem?", time.time())]
+        sess.dispatch({"type": "clear"})
+        self.assertEqual(sess.pipeline._qa_history, [])
+        self.assertEqual(sess.pipeline._last_answer, "")
+        self.assertEqual(sess._recent_finals, [])
+
+    def test_clear_cancels_pending_wait_timer(self):
+        sess = self._session()
+        sess._pending_wait = ("half a question", time.time(), None)
+        sess._schedule_interview_wait_flush()
+        sess.dispatch({"type": "clear"})
+        time.sleep(1.5)
+        sess.pipeline.process_text.assert_not_called()
+        self.assertIsNone(sess._interview_wait_timer)
+
+    def test_same_question_after_clear_is_not_rejected_as_duplicate(self):
+        sess = self._session()
+        sess._remember_final("What is CAP theorem?")
+        sess.dispatch({"type": "clear"})
+        sess._start_interview_answer = mock.Mock()
+        sess._on_final("What is CAP theorem?")
+        sess._start_interview_answer.assert_called_once()
+
+
 class ListenAskRoutingTests(unittest.TestCase):
     def test_listen_ask_emits_question_so_cards_can_bind(self):
         events: list[dict] = []
