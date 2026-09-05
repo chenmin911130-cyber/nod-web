@@ -6585,9 +6585,10 @@ html.nod-phone .app.iphone-v2 .listen-main {
 html.nod-phone .app.iphone-v2 .listen-controls {
   display: flex;
   align-items: stretch;
-  flex-wrap: nowrap;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  justify-content: flex-start;
   gap: 8px;
+  row-gap: 6px;
   width: 100%;
   min-height: 0;
   padding: 8px 0 10px;
@@ -6601,7 +6602,7 @@ html.nod-phone .app.iphone-v2 .listen-scene,
 html.nod-phone .app.iphone-v2 .listen-speech,
 html.nod-phone .app.iphone-v2 .listen-lang-box {
   position: relative;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   width: auto;
   min-width: 0;
   overflow: visible;
