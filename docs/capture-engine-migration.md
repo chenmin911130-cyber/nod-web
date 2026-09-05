@@ -7,7 +7,7 @@
 新会话从这里核对起（别考古）：`git -C ~/Projects/nod-web status` + `git log --oneline -6`。
 
 **已核实（本会话工具验证）**
-- `main` = `origin/main`，HEAD `8612b37`（iOS bundle 24 bump；上一提交 `153a913`）。工作区干净，仅 2 个**未跟踪** docs：`docs/Nodpilot 产品功能设计.pdf`、`docs/nodpilot-product-design.html`（遗留，勿动）。
+- `main` = `origin/main`，HEAD `5f9194b`（iOS bundle 25 bump；上一提交 `825a2db`）。工作区干净，仅 2 个**未跟踪** docs：`docs/Nodpilot 产品功能设计.pdf`、`docs/nodpilot-product-design.html`（遗留，勿动）。
 - CI 最新 run `33959368572` **success**；Railway `754bde17` **SUCCESS**；`/api/health` 200。
 - ⚠️ **线上 DB 是 SQLite `/data/nod.db`，不是 Postgres**（DATABASE_URL 未设；railway 无独立 PG 服务；SQL 用 SQLite 语法）。native app 连 `https://nodpilot.com`；`push origin/main` → CI+Railway 自动部署。
 
@@ -19,6 +19,8 @@
 - `ed47f7f` 小项收：服务端 keep 后 emit `history_kept`（客户端收到才置 kept）；手机 Don't-save 置 `markHistoryKept(false)`；pdf.ts canvas 页脚改 `N / total`；test_watch_report 用 capTranscript 语义。
 - `153a913` **#14/#20** notes 语言与翻译目标解耦：`translate_to` 不再写 `notesLang`；Meeting Notes 选择器(具体语言) dispatch `notes_lang`+`translate_to` 两个，auto 只 `notes_lang`；Translate 工作区只 `translate_to`；`bilingualDisabled` 转用 translateTo（auto notes+具体目标不禁用）；`notesLangActions`/`notesLang.test.ts`。
 - `8612b37` iOS bundle 版本 23→24，iPhone+Watch 均已装并 `device info apps` 核对 = **24**。
+- `825a2db` **pending-restore 会话归属修复**：`startListen` 清 `pendingRestoreId`（开新会即放弃恢复，不再把旧 id 误存当前会话）；`history_kept` 经 `shouldMarkKeptOnAck` 判断，恢复旧会话的 ack 不再把当前会话标成 kept；`pendingRestore.test.ts`。
+- `5f9194b` iOS bundle 24→25，iPhone+Watch 均已装并核对 = **25**。
 
 **已关 issue（本批）**：#23、#14、#20、#15、#16、#17、#18、#19、#21。
 
