@@ -45,6 +45,12 @@ export function nodTag(kind: 'ASK' | 'CATCH' | 'NOTES' | 'SUMMARY', outLang: Lan
   return `[NOD_${kind}:${outLang}${extra}]`
 }
 
+// Bilingual captions need a concrete target language; with Notes = Auto there is
+// none, so the toggle is dead (lit but never translating). Phase 1: disable it.
+export function bilingualDisabled(notesLang: Lang): boolean {
+  return notesLang === 'auto'
+}
+
 export type ListenScene = 'meeting' | 'lecture' | 'interview'
 
 export type NotesSectionId =

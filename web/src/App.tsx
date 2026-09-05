@@ -1857,7 +1857,12 @@ export default function App() {
       dispatch({ type: 'notes_lang', lang: 'auto' })
       dispatch({
         type: 'engine',
-        ev: { type: 'status', text: 'Auto · notes follow the language you speak' },
+        ev: {
+          type: 'status',
+          text: s.translateOn
+            ? 'Bilingual needs a notes language — pick one first'
+            : 'Auto · notes follow the language you speak',
+        },
       })
       return
     }

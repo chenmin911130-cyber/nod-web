@@ -3,6 +3,7 @@ import type { CatchNote, Lang, MeetingLine, PairLang } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import {
   LISTEN_SCENES,
+  bilingualDisabled,
   notesBodyText,
   parseBiLines,
   parseNotes,
@@ -806,7 +807,14 @@ export default function ListenPane(props: Props) {
             className={`listen-icon-btn listen-side-left listen-bi-btn${props.translateOn ? ' on' : ''}`}
             role="switch"
             aria-checked={props.translateOn}
-            title={props.translateOn ? 'Bilingual on — tap to turn off' : 'Bilingual off — tap to show translations'}
+            disabled={bilingualDisabled(props.notesLang)}
+            title={
+              bilingualDisabled(props.notesLang)
+                ? 'Bilingual needs a notes language — pick one first'
+                : props.translateOn
+                  ? 'Bilingual on — tap to turn off'
+                  : 'Bilingual off — tap to show translations'
+            }
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onTranslate(!props.translateOn)}
           >
