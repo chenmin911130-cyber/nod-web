@@ -1,4 +1,4 @@
-import { pdfTitleLiteral, wrap } from './pdf'
+import { ellipsize, pdfTitleLiteral, wrap } from './pdf'
 
 function ctxOf(charWidth: number): CanvasRenderingContext2D {
   return { measureText: (s: string) => ({ width: s.length * charWidth }) } as unknown as CanvasRenderingContext2D
@@ -33,3 +33,8 @@ if (pdfTitleLiteral('会议') !== '<FEFF4F1A8BAE>') throw new Error(`utf16be tit
 if (!pdfTitleLiteral('capacità').startsWith('<FEFF') || !pdfTitleLiteral('capacità').includes('00E0')) {
   throw new Error(`non-ascii title is utf16be, got ${pdfTitleLiteral('capacità')}`)
 }
+
+// ellipsize: fits -> unchanged; Latin pulls back word-by-word; CJK glyph-by-glyph.
+if (ellipsize(ctxOf(10), 'hello world', 110) !== 'hello world') throw new Error('fits unchanged')
+if (ellipsize(ctxOf(10), 'hello world', 80) !== 'hello…') throw new Error(`latin word ellipsis, got ${ellipsize(ctxOf(10), 'hello world', 80)}`)
+if (ellipsize(ctxOf(10), '你好世界', 30) !== '你好…') throw new Error(`cjk glyph ellipsis, got ${ellipsize(ctxOf(10), '你好世界', 30)}`)

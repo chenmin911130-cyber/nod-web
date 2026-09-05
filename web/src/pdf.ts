@@ -348,8 +348,7 @@ function drawHeader(
 
     ctx.font = `600 ${22 * SCALE}px ${theme.titleFont}`
     ctx.fillStyle = theme.headerText
-    const lines = wrap(ctx, title, CANVAS_W - pad * 2 - 18 * SCALE)
-    ctx.fillText(lines[0] || title, pad + 18 * SCALE, pad + 58 * SCALE)
+    ctx.fillText(ellipsize(ctx, title, CANVAS_W - pad * 2 - 18 * SCALE), pad + 18 * SCALE, pad + 58 * SCALE)
 
     const meta = (options.meta || []).filter(Boolean).join('  ·  ')
     if (meta) {
@@ -371,12 +370,21 @@ function drawHeader(
   ctx.font = `700 ${9 * SCALE}px ${theme.font}`
   ctx.fillStyle = theme.badge
   ctx.fillText(PDF_BRAND, pad, 28 * SCALE)
-  ctx.font = `600 ${11 * SCALE}px ${theme.font}`
-  ctx.fillStyle = theme.headerText
-  ctx.fillText(title, pad + 36 * SCALE, 28 * SCALE)
+  const brandW = ctx.measureText(PDF_BRAND).width
+
   ctx.font = `400 ${9 * SCALE}px ${theme.font}`
   ctx.fillStyle = theme.headerMuted
-  ctx.fillText(theme.kind, CANVAS_W - pad - ctx.measureText(theme.kind).width, 28 * SCALE)
+  const kindW = ctx.measureText(theme.kind).width
+
+  ctx.font = `600 ${11 * SCALE}px ${theme.font}`
+  ctx.fillStyle = theme.headerText
+  const titleX = pad + brandW + 12 * SCALE
+  const titleMax = CANVAS_W - pad * 2 - brandW - kindW - 24 * SCALE
+  ctx.fillText(ellipsize(ctx, title, titleMax), titleX, 28 * SCALE)
+
+  ctx.font = `400 ${9 * SCALE}px ${theme.font}`
+  ctx.fillStyle = theme.headerMuted
+  ctx.fillText(theme.kind, CANVAS_W - pad - kindW, 28 * SCALE)
 }
 
 function drawFooter(ctx: CanvasRenderingContext2D, theme: Theme, title: string, page: number) {
@@ -664,6 +672,20 @@ export function wrap(ctx: CanvasRenderingContext2D, text: string, maxWidth: numb
     if (line) out.push(line.trimEnd())
   }
   return out.length ? out : ['']
+}
+
+// Truncate a single display line with an ellipsis, never mid-word for Latin
+// (reuses wrapTokens: Latin words atomic, CJK per-glyph). Fits → unchanged.
+export function ellipsize(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
+  const t = (text || '').trim()
+  if (ctx.measureText(t).width <= maxWidth) return t
+  let candidate = ''
+  for (const atom of wrapTokens(t)) {
+    const next = candidate + atom
+    if (ctx.measureText(next + '…').width > maxWidth) break
+    candidate = next
+  }
+  return candidate.replace(/\s+$/, '') + '…'
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
