@@ -66,6 +66,7 @@ from server.security import current_user, is_local_scope, user_from_token
 
 SR = 16000
 STT_CLOUD = "assemblyai"
+VISION_MODEL = "deepseek-v4-flash-vision-exp"
 ASSEMBLYAI_WS = "wss://streaming.assemblyai.com/v3/ws"
 ASSEMBLYAI_API = "https://api.assemblyai.com"
 ASSEMBLYAI_MODEL = "universal-3-5-pro"
@@ -208,7 +209,7 @@ def load_config() -> dict[str, Any]:
             "jd": "",
             "style": "中性简洁：先给结论，再两三句说明。直接回答问题。",
         },
-        "llm": {"model": "deepseek-v4-flash-vision-exp", "max_tokens": 1600, "temperature": 0.5, "provider": "deepseek"},
+        "llm": {"model": "deepseek-v4-flash", "max_tokens": 1600, "temperature": 0.5, "provider": "deepseek"},
         "stt": {"model": STT_CLOUD, "language": None, "vocabulary": []},
         "audio": {"source": "mic"},
         "ui": {"opacity": 88, "translate_from": "auto", "translate_to": "zh"},
@@ -1130,7 +1131,7 @@ class Pipeline:
         self._keys = dict(keys)
         self.emit = emit
         self._provider = cfg["llm"].get("provider", "deepseek")
-        self._model = cfg["llm"].get("model", "deepseek-v4-flash-vision-exp")
+        self._model = cfg["llm"].get("model", "deepseek-v4-flash")
         self.client = self._make_client()
         self._qa_history: list[dict] = []
         self._last_answer = ""
@@ -1508,6 +1509,7 @@ class Pipeline:
         answer = ""
         stream_usage: tuple[int, int] | None = None
         messages = self._with_images(self._build_messages(t, mode), images)
+        model = VISION_MODEL if (images and self._provider == "deepseek") else self._model
         last_err: Exception | None = None
         for attempt in range(2):
             if seq != self._gen_seq or self._cancel.is_set():
@@ -1516,13 +1518,13 @@ class Pipeline:
             stream = None
             try:
                 kwargs: dict[str, Any] = dict(
-                    model=self._model,
+                    model=model,
                     messages=messages,
                     max_tokens=max_tokens,
                     stream=True,
                     stream_options={"include_usage": True},
                 )
-                if not str(self._model).startswith(("o1", "o3")):
+                if not str(model).startswith(("o1", "o3")):
                     kwargs["temperature"] = llm.get("temperature", 0.5)
                 if self._provider == "deepseek":
                     kwargs["extra_body"] = {"thinking": {"type": "disabled"}}

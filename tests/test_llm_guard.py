@@ -123,3 +123,35 @@ class StopListenDoesNotAbortLlmTests(unittest.TestCase):
         sess.stop_listen()
         sess.pipeline.abort_stream.assert_not_called()
         self.assertFalse(sess.pipeline._cancel.is_set())
+
+
+class ModelRoutingTests(unittest.TestCase):
+    """Text generation uses deepseek-v4-flash; only an image-bearing deepseek
+    request switches to the vision model (VISION_MODEL)."""
+
+    def _pipe_with_create(self):
+        pipe = _pipe()
+        create = mock.Mock(return_value=[_Chunk("ok")])
+        pipe.client = mock.Mock()
+        pipe.client.chat.completions.create = create
+        return pipe, create
+
+    def test_text_uses_flash(self):
+        pipe, create = self._pipe_with_create()
+        pipe.process_text("Hello", "ask")
+        self.assertEqual(create.call_args.kwargs["model"], "deepseek-v4-flash")
+
+    def test_image_uses_vision(self):
+        pipe, create = self._pipe_with_create()
+        pipe.process_text("What is in this image?", "file_ask", images=[
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,xxx"}}
+        ])
+        self.assertEqual(create.call_args.kwargs["model"], "deepseek-v4-flash-vision-exp")
+
+    def test_other_provider_keeps_own_model(self):
+        pipe, create = self._pipe_with_create()
+        pipe._provider = "openrouter"
+        pipe.process_text("Hello", "ask", images=[
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,xxx"}}
+        ])
+        self.assertEqual(create.call_args.kwargs["model"], "deepseek-v4-flash")
