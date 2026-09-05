@@ -177,14 +177,24 @@ def test_quota_global_budget_axis(meter_env):
     assert snap["reason"] == "global"
 
 
+def _open_saved_session(user_id: str, mode: str = "interview") -> str:
+    """Open a session and press Save, the way a real Meeting Stop → Save does."""
+    from server.meter import keep_usage_session, open_usage_session
+
+    sid, snap = open_usage_session(user_id, mode)
+    assert sid, snap.get("reason")
+    with mock.patch("server.r2.delete_prefix"):
+        keep_usage_session(user_id, sid)
+    return sid
+
+
 def test_quota_sessions_axis(meter_env):
-    from server.meter import can_start_session, open_usage_session
+    from server.meter import can_start_session
 
     _add_user(meter_env, plan="free")
-    # Free plan allows 60 sessions.
+    # Free plan allows 60 saved sessions.
     for _ in range(60):
-        sid, snap = open_usage_session("u1", "interview")
-        assert sid, snap.get("reason")
+        _open_saved_session("u1")
     ok, snap = can_start_session("u1")
     assert ok is False
     assert snap["reason"] == "sessions"
@@ -194,15 +204,39 @@ def test_usage_snapshot_sessions_axis(meter_env):
     """item2: the sessions limit lives in usage_snapshot, not can_start_session,
     so /api/me (usage_snapshot) reports reason='sessions'."""
 
-    from server.meter import open_usage_session, usage_snapshot
+    from server.meter import usage_snapshot
+
+    _add_user(meter_env, plan="free")
+    for _ in range(60):
+        _open_saved_session("u1")
+    snap = usage_snapshot("u1")
+    assert snap["ok"] is False
+    assert snap["reason"] == "sessions"
+
+
+def test_unsaved_sessions_do_not_count_toward_session_cap(meter_env):
+    """Product decision 2026-09-05: the monthly session cap counts only sessions
+    the user pressed Save on. Every Listen inserts a UsageSession(kept=False);
+    a tester who opens Listen 60 times without saving must not be locked out,
+    and History (kept=True only) must agree with the number on Account.
+    stt_seconds still sums every row — money caps are untouched."""
+
+    from server.meter import can_start_session, consume_stt, open_usage_session, usage_snapshot
 
     _add_user(meter_env, plan="free")
     for _ in range(60):
         sid, snap = open_usage_session("u1", "interview")
         assert sid, snap.get("reason")
+        consume_stt("u1", 5.0, sid)
     snap = usage_snapshot("u1")
-    assert snap["ok"] is False
-    assert snap["reason"] == "sessions"
+    assert snap["sessions"] == 0
+    assert snap["stt_seconds"] == pytest.approx(300.0)
+    assert snap["ok"] is True
+    ok, _ = can_start_session("u1")
+    assert ok is True
+
+    _open_saved_session("u1")
+    assert usage_snapshot("u1")["sessions"] == 1
 
 
 def test_quota_exceeded_logs_reason(meter_env, caplog):
@@ -221,14 +255,14 @@ def test_quota_exceeded_logs_reason(meter_env, caplog):
 
 
 def test_discard_keeps_quota_counting(meter_env):
-    """item4: discarding (Don't save) must not erase the session from the monthly
-    cap — UsageSession is marked discarded_at, and usage_snapshot still sums it;
-    list_history just stops returning it."""
+    """item4: deleting a saved session from History must not erase it from the
+    monthly cap — UsageSession is marked discarded_at, and usage_snapshot still
+    sums it; list_history just stops returning it."""
 
-    from server.meter import consume_stt, discard_usage_session, list_history, open_usage_session, usage_snapshot
+    from server.meter import consume_stt, discard_usage_session, list_history, usage_snapshot
 
     _add_user(meter_env)
-    sid, _ = open_usage_session("u1", "interview")
+    sid = _open_saved_session("u1")
     consume_stt("u1", 120.0, sid)
     before = usage_snapshot("u1")
     assert before["stt_seconds"] == pytest.approx(120.0)

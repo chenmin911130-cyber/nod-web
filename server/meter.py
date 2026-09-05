@@ -87,11 +87,18 @@ def usage_snapshot(user_id: str) -> dict:
             ).scalar()
             or 0
         )
+        # Monthly session cap counts only sessions the user pressed Save on
+        # (kept=True). Every Listen inserts a kept=False row, so counting all
+        # rows locked testers out at 60 while History showed a handful — and
+        # gave them nothing to delete. A saved session later removed from
+        # History (kept=True + discarded_at) still counts, so "Save then
+        # delete" can't erode the cap. stt_seconds above sums every row.
         sessions = (
             db.execute(
                 select(func.count()).select_from(UsageSession).where(
                     UsageSession.user_id == user_id,
                     UsageSession.started_at >= start,
+                    UsageSession.kept.is_(True),
                 )
             ).scalar()
             or 0
