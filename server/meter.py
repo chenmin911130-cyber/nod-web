@@ -113,6 +113,8 @@ def usage_snapshot(user_id: str) -> dict:
                 ok, reason = False, "daily_stt"
             if ok and tokens >= plan["llm_tokens"]:
                 ok, reason = False, "llm"
+            if ok and sessions >= plan["sessions"]:
+                ok, reason = False, "sessions"
             if daily_cost >= plan["daily_cost_usd"]:
                 ok, reason = False, "daily"
             if global_cost >= GLOBAL_DAILY_BUDGET_USD:
@@ -148,15 +150,7 @@ def has_recording_consent(user_id: str) -> bool:
 
 def can_start_session(user_id: str) -> tuple[bool, dict]:
     snap = usage_snapshot(user_id)
-    if not snap.get("ok"):
-        return False, snap
-    if QUOTA_DISABLED:
-        return True, snap
-    if snap["sessions"] >= snap["session_limit"]:
-        snap["ok"] = False
-        snap["reason"] = "sessions"
-        return False, snap
-    return True, snap
+    return bool(snap.get("ok")), snap
 
 
 def open_usage_session(user_id: str, mode: str, scene: str = "") -> tuple[str | None, dict]:
