@@ -1,4 +1,4 @@
-import { LISTEN_SCENES, bilingualDisabled, capTranscript, nodTag, notesBodyText, notesPrompt, outLangRule, sceneLabel } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, bilingualDisabled, capTranscript, nodTag, notesBodyText, notesPrompt, outLangRule, sceneLabel, speakersExpected } from './listen'
 
 function eq<T>(got: T, want: T, label?: string) {
   if (JSON.stringify(got) !== JSON.stringify(want)) {
@@ -35,6 +35,14 @@ if (capBoundary.dropped !== 1 || capBoundary.fromTs !== '0:05' || capBoundary.li
 }
 const cappedNotes = notesPrompt('meeting', capTrailing.lines, 'zh', false, {}, { dropped: capTrailing.dropped, fromTs: capTrailing.fromTs })
 if (!cappedNotes.includes('Transcript is truncated') || !cappedNotes.includes('first 2')) throw new Error('notes prompt shows truncation notice')
+
+// C: meeting speaker count drives max_speakers; only meeting is overridable.
+eq(speakersExpected('meeting'), 2, 'meeting default 2')
+eq(speakersExpected('meeting', 4), 4, 'meeting override 4')
+eq(speakersExpected('meeting', 6), 6, 'meeting override 6')
+eq(speakersExpected('lecture'), 4, 'lecture stays 4')
+eq(speakersExpected('interview', 6), 2, 'interview ignores override')
+eq(MEETING_SPEAKER_OPTIONS.map((o) => o.count).join(','), '2,4,6', 'bucket counts')
 
 eq(sceneLabel('interview'), 'Live Q&A')
 eq(LISTEN_SCENES.find((s) => s.id === 'interview')?.label, 'Live Q&A')

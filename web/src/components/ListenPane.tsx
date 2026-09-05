@@ -3,6 +3,7 @@ import type { CatchNote, Lang, MeetingLine, PairLang } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import {
   LISTEN_SCENES,
+  MEETING_SPEAKER_OPTIONS,
   bilingualDisabled,
   notesBodyText,
   parseBiLines,
@@ -11,6 +12,7 @@ import {
   sceneLabel,
   visibleSections,
   type ListenScene,
+  type MeetingSpeakerId,
   type NotesSectionId,
 } from '../listen'
 import { IPHONE_COPY, listenChipParts, nativeListenChipOrder, notesChipParts, showLineTranslation } from '../iphoneCopy'
@@ -43,6 +45,8 @@ interface Props {
   onSpeechLang: (lang: Lang) => void
   onTranslate: (on: boolean) => void
   onTranslateTo: (lang: Lang) => void
+  meetingSpeakersId: MeetingSpeakerId
+  onMeetingSpeakers: (id: MeetingSpeakerId) => void
   onSummary: () => void
   onAsk: (text: string, files?: import('../attach').AttachPayload[]) => void
   elapsedMs?: number
@@ -250,6 +254,56 @@ function LangSelect({
             >
               <b>{lang.tag}</b>
               <span>{lang.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MeetingSpeakersSelect({
+  value,
+  onChange,
+}: {
+  value: MeetingSpeakerId
+  onChange: (id: MeetingSpeakerId) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const boxRef = useDismiss(open, () => setOpen(false))
+  const current = MEETING_SPEAKER_OPTIONS.find((o) => o.id === value)
+
+  return (
+    <div className={`listen-lang-box${open ? ' open' : ''}`} ref={boxRef}>
+      <button
+        type="button"
+        className={`listen-lang-pair-btn${open ? ' on' : ''}`}
+        title={`Number of speakers · ${current?.label ?? '2 people'}`}
+        aria-label="Number of speakers"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="listen-lang-tag">{current ? current.label.replace(' people', '') : '2'}</span>
+        <Chevron />
+      </button>
+      {open && (
+        <div className="listen-lang-menu" role="listbox">
+          {MEETING_SPEAKER_OPTIONS.map((o) => (
+            <button
+              key={o.id}
+              type="button"
+              role="option"
+              aria-selected={o.id === value}
+              className={o.id === value ? 'on' : ''}
+              onClick={() => {
+                onChange(o.id)
+                setOpen(false)
+              }}
+            >
+              <b>{o.count}</b>
+              <span>{o.label}</span>
             </button>
           ))}
         </div>
@@ -848,6 +902,9 @@ export default function ListenPane(props: Props) {
         ) : !props.qa ? (
           <>
             <SceneSelect scene={props.scene} onScene={props.onScene} />
+            {props.scene === 'meeting' && (
+              <MeetingSpeakersSelect value={props.meetingSpeakersId} onChange={props.onMeetingSpeakers} />
+            )}
             <div className="listen-lang-pair" title="Speech to notes language">
               <SpeechLangSelect
                 value={props.speechLang}

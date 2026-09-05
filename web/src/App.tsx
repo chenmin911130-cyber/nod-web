@@ -51,14 +51,19 @@ import {
   nodTag,
   outLangRule,
   capTranscript,
+  MEETING_SPEAKER_OPTIONS,
   exportNoteSections,
   parseNotes,
   promoteLectureSpeakers,
   promoteMeetingSpeakers,
   resolveSpeakerName,
   speakersExpected,
+  meetingSpeakerCount,
+  meetingSpeakerId,
+  setMeetingSpeaker,
   sectionTitle,
   type ListenScene,
+  type MeetingSpeakerId,
 } from './listen'
 import { buildListenPdfDoc, type ListenPdfDoc } from './pdfTemplates'
 import { applyDemoSeed, readDemoScene } from './demoSeed'
@@ -963,6 +968,7 @@ export default function App() {
     || (Boolean(state.currentQ) && state.currentQ !== PLACEHOLDER)
   )
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [meetingSpeakersId, setMeetingSpeakersId] = useState<MeetingSpeakerId>(() => meetingSpeakerId())
   const [moreOpen, setMoreOpen] = useState(false)
   const restoreHistory = useCallback((session: HistorySession) => {
     const s = stateRef.current
@@ -978,7 +984,7 @@ export default function App() {
       type: 'set_workspace',
       mode: payload.mode,
       scene: payload.scene,
-      speakers_expected: speakersExpected(payload.scene),
+      speakers_expected: speakersExpected(payload.scene, meetingSpeakerCount()),
     })
     dispatch({ type: 'restore_session', ...payload })
     markHistoryKept(true)
@@ -1259,7 +1265,7 @@ export default function App() {
       api.send({ type: 'set_translate_from', language: s.translateFrom === 'auto' ? null : s.translateFrom })
       api.send({ type: 'set_translate_to', lang: s.translateTo })
       const scene = s.workspaceMode === 'interview' ? 'interview' : s.listenScene
-      api.send({ type: 'set_workspace', mode: s.workspaceMode, scene, speakers_expected: speakersExpected(scene) })
+      api.send({ type: 'set_workspace', mode: s.workspaceMode, scene, speakers_expected: speakersExpected(scene, meetingSpeakerCount()) })
       if (s.workspaceMode !== 'translate') {
         api.send({ type: 'set_lang', language: s.lang === 'auto' ? null : s.lang })
       }
@@ -1707,7 +1713,7 @@ export default function App() {
     } else {
       window.api.send({ type: 'set_lang', language: s.lang === 'auto' ? null : s.lang })
     }
-    window.api.send({ type: 'set_workspace', mode, scene: nextScene, speakers_expected: speakersExpected(nextScene) })
+    window.api.send({ type: 'set_workspace', mode, scene: nextScene, speakers_expected: speakersExpected(nextScene, meetingSpeakerCount()) })
     dispatch({ type: 'workspace', mode })
     setComposeOpen(false)
     setRailHover(false)
@@ -1888,6 +1894,19 @@ export default function App() {
       },
     })
     queueMicrotask(() => pumpTranslateRef.current())
+  }, [])
+
+  const handleMeetingSpeakers = useCallback((id: MeetingSpeakerId) => {
+    setMeetingSpeaker(id)
+    setMeetingSpeakersId(id)
+    const s = stateRef.current
+    const scene = s.workspaceMode === 'interview' ? 'interview' : s.listenScene
+    const count = MEETING_SPEAKER_OPTIONS.find((o) => o.id === id)?.count ?? 2
+    window.api.send({ type: 'set_workspace', mode: s.workspaceMode, scene, speakers_expected: speakersExpected(scene, count) })
+    dispatch({
+      type: 'engine',
+      ev: { type: 'status', text: 'Switching the number of speakers reconnects for a few seconds.' },
+    })
   }, [])
 
   const askTranslate = useCallback((text: string, pairId?: string) => {
@@ -2784,7 +2803,7 @@ export default function App() {
               dispatch({ type: 'listen_scene', scene })
               if (scene === 'interview') handleMode('interview', 'interview')
               else if (s.workspaceMode !== 'meeting') handleMode('meeting', scene)
-              else window.api.send({ type: 'set_workspace', mode: 'meeting', scene, speakers_expected: speakersExpected(scene) })
+              else window.api.send({ type: 'set_workspace', mode: 'meeting', scene, speakers_expected: speakersExpected(scene, meetingSpeakerCount()) })
             }}
             onTranslate={(on) => {
               if (on === state.translateOn) return
@@ -2793,6 +2812,8 @@ export default function App() {
               if (on) queueMicrotask(() => pumpTranslateRef.current())
             }}
             onTranslateTo={handleTranslateTo}
+            meetingSpeakersId={meetingSpeakersId}
+            onMeetingSpeakers={handleMeetingSpeakers}
             onSummary={handleSummary}
             onAsk={handleListenAsk}
             elapsedMs={state.meetingElapsedMs}

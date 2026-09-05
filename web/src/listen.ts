@@ -222,7 +222,37 @@ export function visibleSections(scene: ListenScene, doc: NotesDoc): Array<{ id: 
     .map((section) => ({ ...section, title: sectionTitle(scene, section.id) }))
 }
 
-export function speakersExpected(scene: ListenScene): number {
+export const MEETING_SPEAKER_OPTIONS = [
+  { id: '2', label: '2 people', count: 2 },
+  { id: '3-4', label: '3-4 people', count: 4 },
+  { id: '5+', label: '5+ people', count: 6 },
+] as const
+export type MeetingSpeakerId = (typeof MEETING_SPEAKER_OPTIONS)[number]['id']
+const MEETING_SPEAKER_KEY = 'nod_meeting_speakers'
+
+export function meetingSpeakerId(): MeetingSpeakerId {
+  try {
+    const raw = localStorage.getItem(MEETING_SPEAKER_KEY) as MeetingSpeakerId | null
+    return MEETING_SPEAKER_OPTIONS.some((o) => o.id === raw) ? (raw as MeetingSpeakerId) : '2'
+  } catch {
+    return '2'
+  }
+}
+
+export function meetingSpeakerCount(): number {
+  return MEETING_SPEAKER_OPTIONS.find((o) => o.id === meetingSpeakerId())?.count ?? 2
+}
+
+export function setMeetingSpeaker(id: MeetingSpeakerId): void {
+  try {
+    localStorage.setItem(MEETING_SPEAKER_KEY, id)
+  } catch {
+    /* private mode / quota */
+  }
+}
+
+export function speakersExpected(scene: ListenScene, count?: number): number {
+  if (scene === 'meeting') return count ?? 2
   return scene === 'lecture' ? 4 : 2
 }
 
