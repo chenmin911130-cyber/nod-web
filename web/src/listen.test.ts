@@ -1,4 +1,5 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, bilingualDisabled, capTranscript, nodTag, notesBodyText, notesPrompt, outLangRule, sceneChipLabel, sceneLabel, sceneSectionOrder, speakersExpected } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, bilingualDisabled, capTranscript, nodTag, notesBodyText, notesPrompt, outLangRule, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, speakersExpected } from './listen'
+import type { MeetingLine } from './types'
 
 function eq<T>(got: T, want: T, label?: string) {
   if (JSON.stringify(got) !== JSON.stringify(want)) {
@@ -55,6 +56,25 @@ eq(sceneLabel('lecture'), 'Lecture')
 // item1: the lecture section order is defined once (SCENE_SECTIONS), the single
 // source every renderer (Live pane / PDF / copy-Share) reads.
 eq(sceneSectionOrder('lecture'), ['summary', 'keyPoints', 'importantDetails', 'revisionNotes', 'followUps'], 'lecture section order is SCENE_SECTIONS')
+
+// item5: promoteLectureSpeakers direct tests + a rank-hold hysteresis.
+const mkLine = (id: string, speaker: string): MeetingLine => ({ id, ts: '0:00', text: 'x', speaker })
+const lines = (A: number, B: number, a = 'A', b = 'B'): MeetingLine[] => {
+  const out: MeetingLine[] = []
+  for (let i = 0; i < A; i++) out.push(mkLine(`a${i}`, a))
+  for (let i = 0; i < B; i++) out.push(mkLine(`b${i}`, b))
+  return out
+}
+// (a) fewer than 3 usable lines keeps names as-is.
+eq(promoteLectureSpeakers(lines(2, 0), {}, {}), {}, 'fewer than 3 lines keeps labels')
+// (b) A 5, B 2 → A=Lecturer, B=Audience.
+eq(promoteLectureSpeakers(lines(5, 2), {}, {}), { A: 'Lecturer', B: 'Audience' }, 'most lines become Lecturer')
+// (c) A already Lecturer, A 4 / B 5 → hold A (within 80% of the top).
+eq(promoteLectureSpeakers(lines(4, 5), { A: 'Lecturer', B: 'Audience' }, {}), { A: 'Lecturer', B: 'Audience' }, 'hold current Lecturer within 80% of the top')
+// (d) A 4 / B 6 → B clears 80% (4 < 4.8) so the tag switches.
+eq(promoteLectureSpeakers(lines(4, 6), { A: 'Lecturer', B: 'Audience' }, {}), { A: 'Audience', B: 'Lecturer' }, 'switch when the leader clears 80%')
+// (e) locked[A] keeps A's name even when it would be re-ranked.
+eq(promoteLectureSpeakers(lines(5, 2), { A: 'Lecturer' }, { A: true }), { A: 'Lecturer', B: 'Audience' }, 'locked speaker keeps its label')
 
 const zhNotes = notesPrompt(
   'meeting',

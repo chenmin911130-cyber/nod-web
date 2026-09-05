@@ -341,6 +341,13 @@ export function promoteLectureSpeakers(
   }
   const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
   if (!ranked.length || ranked[0][1] < 3) return names
+  // Hysteresis: if the current (unlocked) Lecturer is still within 80% of the
+  // top count, hold the labels instead of flipping the tag on a shift/tie —
+  // otherwise the tag bounces between two ids through a Q&A-dense stretch.
+  const currentLecturer = Object.keys(names).find((id) => names[id] === 'Lecturer' && !locked[id])
+  if (currentLecturer != null && (counts.get(currentLecturer) || 0) >= ranked[0][1] * 0.8) {
+    return names
+  }
   const next = { ...names }
   ranked.forEach(([id], i) => {
     if (!locked[id]) next[id] = speakerLabel('lecture', i)
