@@ -659,9 +659,10 @@ class InterviewWaitFlushTests(unittest.TestCase):
         self.assertIn("When we deploy the new service", text)
         self.assertIn("what is Kubernetes", text)
 
-    def test_lead_in_alone_flushes_after_timer(self):
-        # Existing flush behaviour is unchanged: an isolated lead-in that never
-        # gets its continuation is still sent once the timer fires.
+    def test_lead_in_alone_flushes_nothing_after_timer(self):
+        # A held lead-in ("For PostgreSQL,") that never gets its continuation is
+        # NOT sent as an answer: it carries no question word, so the flush
+        # re-runs guard and drops it instead of billing a token on a fragment.
         sess = self._session()
         sess._on_final("For PostgreSQL,", "en")
         time.sleep(1.5)
@@ -669,7 +670,23 @@ class InterviewWaitFlushTests(unittest.TestCase):
             if sess.pipeline.process_text.called:
                 break
             time.sleep(0.02)
+        sess.pipeline.process_text.assert_not_called()
         self.assertEqual(sess._pending_wait, (None, 0.0, None))
+        emits = [c.args[0] for c in sess.emit.call_args_list if c.args]
+        self.assertEqual(emits[-1]["type"], "partial")
+        self.assertEqual(emits[-1]["text"], "")
+
+    def test_truncated_question_alone_still_flushes(self):
+        # A truncated question that DOES carry a question word ("how do I roll
+        # back a") is still answered when the wait window closes — only a
+        # dropped sentence start is suppressed; wait-but-question is kept.
+        sess = self._session()
+        sess._on_final("how do I roll back a", "en")
+        time.sleep(1.5)
+        for _ in range(40):
+            if sess.pipeline.process_text.called:
+                break
+            time.sleep(0.02)
         sess.pipeline.process_text.assert_called_once()
 
     def test_flush_and_final_do_not_double_start(self):
@@ -882,6 +899,31 @@ class InterviewQueueTests(unittest.TestCase):
         sess._release_busy(tok)
         self.assertFalse(sess._busy)
         self.assertIsNone(sess._busy_token)
+
+    def test_queue_cleared_between_check_and_pop_releases_busy(self):
+        # _pending_q.clear() can run on another thread between the non-empty
+        # check and popleft() in work()'s finally. The IndexError must release
+        # the token we just claimed, not leave busy stuck forever (every future
+        # voice question would only get "Question queued").
+        sess = self._session()
+
+        class _PopBomb:
+            def __bool__(self):
+                return True
+
+            def popleft(self):
+                raise IndexError("queue cleared between check and pop")
+
+        sess._pending_q = _PopBomb()
+        sess._drain_pending_ask = mock.Mock()
+        sess._start_interview_answer("What is a mutex?", "en")
+        for _ in range(60):
+            if not sess._busy:
+                break
+            time.sleep(0.02)
+        self.assertFalse(sess._busy, "busy leaked after a mid-pop clear")
+        self.assertIsNone(sess._busy_token)
+        sess._drain_pending_ask.assert_called_once()
 
 
 class ClearResetTests(unittest.TestCase):

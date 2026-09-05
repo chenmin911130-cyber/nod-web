@@ -734,6 +734,17 @@ def _looks_like_lead_in(text: str) -> bool:
     return trailing and _guard_units(t) < 16
 
 
+def _has_question_word(text: str) -> bool:
+    """True when the text carries a recognized question cue (what/how/when/…).
+
+    Used by the interview-wait flush to split a dropped sentence start (no
+    question word, e.g. ``"For PostgreSQL,"``) from a truncated question that
+    is worth answering (e.g. ``"how do I roll back a"``).
+    """
+    low = (text or "").lower()
+    return any(w in low for w in GUARD_Q_WORDS)
+
+
 _TRANSIENT_LLM = (
     "timeout", "timed out", "connection", "network", "temporarily",
     "503", "502", "429", "overloaded", "reset", "unavailable",
@@ -2476,8 +2487,20 @@ class Session:
         with self._interview_lock:
             ptxt, _pts, plang = self._pending_wait
             self._pending_wait = (None, 0.0, None)
-        if ptxt and self._workspace == "interview":
-            self._start_interview_answer(ptxt, plang)
+        if not (ptxt and self._workspace == "interview"):
+            return
+        recent_qs = [h["q"] for h in self.pipeline._qa_history]
+        verdict = guard_question(ptxt, recent_qs, self.pipeline._last_answer)
+        # A held lead-in that never got its continuation must not be sent as an
+        # answer. guard says "wait" (it might join the next piece), but if it
+        # carries no question word it was never a question — only a dropped
+        # sentence start ("For PostgreSQL,"), not something to bill a token on.
+        if verdict == "reject" or (
+            verdict == "wait" and _looks_like_lead_in(ptxt) and not _has_question_word(ptxt)
+        ):
+            self.emit({"type": "partial", "text": ""})
+            return
+        self._start_interview_answer(ptxt, plang)
 
     def _flush_meeting_hold(self) -> None:
         with self._meeting_lock:
@@ -3256,8 +3279,15 @@ class Session:
                     self._release_busy(tok)
                     self._set_engine("idle")
                     self._emit_phase()
-                    if self._pending_q and self._claim_busy():
-                        self._run_interview_answer(*self._pending_q.popleft())
+                    nxt = None
+                    tok2 = self._claim_busy() if self._pending_q else None
+                    if tok2:
+                        try:
+                            nxt = self._pending_q.popleft()
+                        except IndexError:
+                            self._release_busy(tok2)
+                    if nxt:
+                        self._run_interview_answer(*nxt)
                     else:
                         self._drain_pending_ask()
 
