@@ -45,12 +45,29 @@ export function nodTag(kind: 'ASK' | 'CATCH' | 'NOTES' | 'SUMMARY', outLang: Lan
   return `[NOD_${kind}:${outLang}${extra}]`
 }
 
-// Bilingual captions need a concrete target language; with Notes = Auto there is
-// none. Phase 1: disable it — BUT a Bilingual that is already ON must stay
-// toggleable off, so it is only disabled when it is not already on (otherwise a
-// user with notesLang=auto + a translateOn default of true gets stuck lit).
-export function bilingualDisabled(notesLang: Lang, translateOn: boolean): boolean {
-  return notesLang === 'auto' && !translateOn
+// Bilingual output needs a concrete translation target. With the notes language
+// and the translate target now decoupled, an auto notes language still has a
+// concrete translateTo, so the toggle stays enabled and the target comes from
+// translateTo. Only a missing target disables it.
+export function bilingualDisabled(notesLang: Lang, translateOn: boolean, translateTo?: PairLang): boolean {
+  if (notesLang !== 'auto') return false
+  if (translateTo) return false
+  return !translateOn
+}
+
+// The notes/translate language selector drives decoupled state. In the Meeting /
+// Lecture notes dropdown, picking a concrete language sets BOTH the notes
+// language and the translation target (the one control old that behavior);
+// picking "auto" sets only the notes language. In the Translate workspace,
+// changing the target affects only translateTo — never the notes language.
+export type LangDispatch =
+  | { type: 'translate_to'; lang: PairLang }
+  | { type: 'notes_lang'; lang: Lang }
+
+export function notesLangActions(workspaceMode: string, lang: Lang): LangDispatch[] {
+  if (lang === 'auto') return [{ type: 'notes_lang', lang: 'auto' }]
+  if (workspaceMode !== 'translate') return [{ type: 'translate_to', lang }, { type: 'notes_lang', lang }]
+  return [{ type: 'translate_to', lang }]
 }
 
 // Keep the TAIL of a transcript within a character budget so a long meeting

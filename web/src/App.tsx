@@ -51,6 +51,7 @@ import {
   nodTag,
   outLangRule,
   capTranscript,
+  notesLangActions,
   MEETING_SPEAKER_OPTIONS,
   exportNoteSections,
   parseNotes,
@@ -170,7 +171,7 @@ const initial: AppState = {
   translatePairs: [],
   translateFrom: storedPair?.from ?? 'auto',
   translateTo: storedPair?.to ?? 'en',
-  notesLang: readStoredNotesLang() ?? storedPair?.to ?? 'en',
+  notesLang: readStoredNotesLang() ?? 'auto',
   heardLang: null,
   translateAskId: '',
   translateBindId: '',
@@ -738,7 +739,9 @@ function reducer(state: AppState, action: Action): AppState {
     case 'translate_from':
       return { ...state, translateFrom: action.lang }
     case 'translate_to':
-      return { ...state, translateTo: action.lang, notesLang: action.lang }
+      // Decoupled: changing the translation target must NOT rewrite the notes
+      // language. The Meeting notes selector dispatches notes_lang separately.
+      return { ...state, translateTo: action.lang }
     case 'notes_lang':
       return { ...state, notesLang: action.lang }
     case 'mark_action': {
@@ -1889,39 +1892,35 @@ export default function App() {
       if (s.lang === 'auto') {
         window.api.send({ type: 'set_lang', language: null })
       }
+      // Auto notes only: the translation target stays put (decoupled from notes).
       dispatch({ type: 'notes_lang', lang: 'auto' })
-      if (s.translateOn) {
-        dispatch({ type: 'translate_on', on: false })
-      }
       dispatch({
         type: 'engine',
-        ev: {
-          type: 'status',
-          text: s.translateOn
-            ? 'Bilingual needs a notes language — pick one first'
-            : 'Auto · notes follow the language you speak',
-        },
+        ev: { type: 'status', text: 'Auto · notes follow the language you speak' },
       })
       return
     }
-    if (lang === s.translateTo && s.notesLang === lang) return
-    persistNotesLang(lang)
+    // Specific language. In the Meeting / Lecture notes dropdown the one control
+    // drives both the notes language and the translation target; in the Translate
+    // workspace it changes only the target.
+    const meeting = s.workspaceMode !== 'translate'
+    if (lang === s.translateTo && (meeting ? s.notesLang === lang : true)) return
     persistTranslatePair(s.translateFrom, lang)
+    if (meeting) persistNotesLang(lang)
     const stuck = inflightTranslate.current
     window.api.send({ type: 'cancel_generate' })
     window.api.send({ type: 'set_translate_to', lang })
     releaseTranslateGate(stuck)
-    dispatch({ type: 'translate_to', lang })
+    for (const action of notesLangActions(s.workspaceMode, lang)) dispatch(action as never)
     dispatch({
       type: 'engine',
       ev: {
         type: 'status',
-        text:
-          s.workspaceMode === 'translate'
-            ? s.translateFrom !== 'auto' && s.translateFrom === lang
-              ? `Translate to ${targetName(lang)} · same as From`
-              : `Translate to ${targetName(lang)}`
-            : `Notes language · ${targetName(lang)}`,
+        text: meeting
+          ? `Notes language · ${targetName(lang)}`
+          : s.translateFrom !== 'auto' && s.translateFrom === lang
+            ? `Translate to ${targetName(lang)} · same as From`
+            : `Translate to ${targetName(lang)}`,
       },
     })
     queueMicrotask(() => pumpTranslateRef.current())
@@ -2005,7 +2004,7 @@ export default function App() {
   const pumpTranslate = useCallback(() => {
     const s = stateRef.current
     if (inflightTranslate.current) return
-    if (s.workspaceMode === 'meeting' && s.translateOn && s.notesLang !== 'auto') {
+    if (s.workspaceMode === 'meeting' && s.translateOn) {
       // 最新的未翻译行优先（实时字幕语义：先出当前句子，停顿期间回填旧行）
       for (let i = s.meetingLines.length - 1; i >= 0; i--) {
         const line = s.meetingLines[i]
