@@ -69,6 +69,18 @@ export function sessionShouldOpenSavePrompt(input: {
   return input.workspaceMode === 'meeting' && !input.kept && !input.paused
 }
 
+/**
+ * Whether a history_kept ack should flip the CURRENT session's kept flag.
+ *
+ * A keep of a *restored* (previously disconnected) session by id resolves to
+ * that OLD session, not the live one — its ack must not mark the live session
+ * kept, or the live session's own Save prompt on Stop is suppressed.
+ */
+export function shouldMarkKeptOnAck(ackId: string | null | undefined, restoredKeepId: string | null): boolean {
+  if (restoredKeepId && ackId === restoredKeepId) return false
+  return true
+}
+
 /** Save commits the draft to History. Content is always kept; recording is optional. */
 export function sessionSaveKeep(opts: { audio?: boolean } = {}): { content: true; audio: boolean } {
   return { content: true, audio: opts.audio !== false }

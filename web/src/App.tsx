@@ -6,7 +6,7 @@ import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
-import { restoreFromSession, sessionShouldOfferSave, sessionShouldOpenSavePrompt } from './historyRestore'
+import { restoreFromSession, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
 import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
@@ -917,6 +917,7 @@ export default function App() {
   }
   const pendingNewAfterSave = useRef(false)
   const pendingRestoreId = useRef<string | null>(null)
+  const lastRestoredKeepId = useRef<string | null>(null)
   const offerSaveAfterMeetingStopRef = useRef<() => void>(() => undefined)
   const watchAutoNotes = useRef(false)
   const autoReport = useRef(false)
@@ -932,7 +933,11 @@ export default function App() {
   const startListen = (opts?: { fromWatch?: boolean }) => {
     if (!opts?.fromWatch) takePhoneMic()
     listenWanted.current = true
+    // Starting a fresh listen abandons any pending recovery of a previously
+    // disconnected meeting session — its prompt is dropped and the server
+    // purges the pending row after 24h rather than letting it shadow this one.
     setSavePrompt(false)
+    pendingRestoreId.current = null
     if (!watchAutoNotes.current && !autoReport.current) {
       clearWatchReport()
       setWatchReportOpen(false)
@@ -1322,9 +1327,15 @@ export default function App() {
         }
       }
       if (e.type === 'history_kept') {
-        // Server confirmed the save; only then flip the kept flag (the keep may
-        // be a restored session by id, not the live usage id).
-        markHistoryKept(true)
+        // Server confirmed a keep. Only flip the kept flag when the ack is NOT
+        // for the restored session we just saved by id — that ack belongs to the
+        // OLD half-session, not the live one, so it must not mark the current
+        // session kept (which would suppress its own Save prompt on Stop).
+        if (shouldMarkKeptOnAck(e.id, lastRestoredKeepId.current)) {
+          markHistoryKept(true)
+        } else {
+          lastRestoredKeepId.current = null
+        }
       }
       const translateAskBefore = stateRef.current.translateAskId
       dispatch({ type: 'engine', ev: e })
@@ -2679,7 +2690,9 @@ export default function App() {
           setSavePrompt(false)
           const restoredId = pendingRestoreId.current
           pendingRestoreId.current = null
-          // markHistoryKept(true) happens on the server's history_kept ack.
+          // Remember the restored id so a matching history_kept ack (for the OLD
+          // half-session) does not mark the live session kept.
+          lastRestoredKeepId.current = restoredId
           if (restoredId) {
             window.api.send({ type: 'keep_history', id: restoredId, content: opts.content, audio: opts.audio })
             return
