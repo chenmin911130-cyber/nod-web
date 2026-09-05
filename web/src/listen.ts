@@ -453,24 +453,6 @@ export function isAskPrompt(text: string): boolean {
   return (text || '').trim().startsWith('[NOD_ASK')
 }
 
-export function catchupPrompt(
-  lines: MeetingLine[],
-  question = '',
-  outLang: Lang = 'zh',
-  bilingual = false,
-  names: Record<string, string> = {},
-): string {
-  const body = transcriptBlock(lines, bilingual, names)
-  const ask = question.trim()
-  return (
-    `${nodTag('CATCH', outLang, bilingual)}\n` +
-    outLangRule(outLang, 'catch-up', bilingual) +
-    'Catch the listener up on ONLY this recent stretch. Listening is still going. Do not recap the whole session.\n' +
-    (ask ? `Listener question: ${ask}\n` : '') +
-    `Recent transcript (~2 minutes):\n${body || '(empty)'}`
-  )
-}
-
 export function notesPrompt(
   scene: ListenScene,
   lines: MeetingLine[],

@@ -1,7 +1,6 @@
 import { sameSpokenLine } from './iphoneCopy'
 import type { CatchNote } from './types'
 import {
-  emptyNotes,
   sectionTitle,
   type ListenScene,
   type NotesDoc,
@@ -53,22 +52,6 @@ export function formatActionItem(row: { text: string; owner?: string }): string 
   const text = row.text.trim()
   const owner = (row.owner || '').trim()
   return owner ? `${owner} \u2192 ${text}` : text
-}
-
-export function liveInsightCards(notes: NotesDoc = emptyNotes()): Array<{
-  kind: 'keyPoint' | 'actionItem'
-  title: string
-  text: string
-}> {
-  const cards: Array<{ kind: 'keyPoint' | 'actionItem'; title: string; text: string }> = []
-  const points = notes.keyPoints.map((item) => item.trim()).filter(Boolean)
-  const point = points[points.length - 1]
-  if (point) cards.push({ kind: 'keyPoint', title: 'Key Point', text: point })
-  const action = notes.actionItems[notes.actionItems.length - 1]
-  if (action?.text.trim()) {
-    cards.push({ kind: 'actionItem', title: 'Action Item', text: formatActionItem(action) })
-  }
-  return cards
 }
 
 export function iphoneSummaryHeading(scene: ListenScene, id: NotesSectionId): string {

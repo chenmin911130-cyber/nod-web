@@ -4,7 +4,6 @@ import {
   formatActionItem,
   iphoneSummaryHeading,
   liveHeardLines,
-  liveInsightCards,
   liveNotesLine,
   liveStageMode,
   summaryPlainText,
@@ -113,19 +112,6 @@ eq(
 )
 
 eq(formatActionItem({ text: 'Confirm marketing budget tomorrow.', owner: 'Sarah' }), 'Sarah \u2192 Confirm marketing budget tomorrow.', 'owner sits in front of the action')
-eq(liveInsightCards(emptyNotes()), [], 'no invented insights before notes exist')
-eq(
-  liveInsightCards({
-    ...emptyNotes(),
-    keyPoints: ['Launch date needs confirmation before Friday.'],
-    actionItems: [{ text: 'Confirm marketing budget tomorrow.', owner: 'Sarah' }],
-  }),
-  [
-    { kind: 'keyPoint', title: 'Key Point', text: 'Launch date needs confirmation before Friday.' },
-    { kind: 'actionItem', title: 'Action Item', text: 'Sarah \u2192 Confirm marketing budget tomorrow.' },
-  ],
-  'Live cards reuse the latest notes, they do not guess',
-)
 
 eq(iphoneSummaryHeading('meeting', 'summary'), 'Summary', 'Summary page uses the shared section title')
 eq(iphoneSummaryHeading('meeting', 'keyPoints'), 'Key Points', 'points use the shared section title')

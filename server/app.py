@@ -1311,7 +1311,7 @@ class Pipeline:
         return text
 
     def _is_internal(self, question: str, mode: str) -> bool:
-        if mode in ("translate", "catchup", "notes", "listen_ask"):
+        if mode in ("translate", "notes", "listen_ask"):
             return True
         t = (question or "").lstrip()
         return t.startswith(("[NOD_TRANSLATE", "[NOD_CATCH", "[NOD_ASK", "[NOD_NOTES", "Translate to "))
@@ -1375,20 +1375,6 @@ class Pipeline:
                         "Use the transcript when it helps. If it is empty or silent on the topic, say so, then answer from general knowledge if the question allows it.\n"
                         "Do not invent quotes, names, numbers, or decisions that were not said.\n"
                         "4-10 short sentences or bullets. No preamble."
-                        + out_rule
-                    ),
-                },
-                {"role": "user", "content": question},
-            ]
-        if mode == "catchup" or question.startswith("Catch the listener up"):
-            return [
-                {
-                    "role": "system",
-                    "content": (
-                        "You help someone who missed the last minute or two of a live conversation.\n"
-                        "Cover ONLY the recent stretch they pasted. Listening is still going — do not write a full-session recap.\n"
-                        "6-10 short sentences or bullets. Name decisions, numbers, and owners only if they were said.\n"
-                        "If they asked a question, answer it from this stretch first."
                         + out_rule
                     ),
                 },
@@ -1515,7 +1501,7 @@ class Pipeline:
         max_tokens = int(llm.get("max_tokens") or 800)
         if mode in ("ask", "file_ask"):
             max_tokens = max(max_tokens, 1600)
-        elif mode in ("notes", "catchup", "listen_ask"):
+        elif mode in ("notes", "listen_ask"):
             max_tokens = max(max_tokens, 1600)
         elif mode == "translate":
             max_tokens = max(max_tokens, 800)
@@ -1613,7 +1599,7 @@ class Pipeline:
             self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
             return
         self._last_answer = answer[-400:]
-        if mode not in ("translate", "summary", "catchup", "notes", "listen_ask"):
+        if mode not in ("translate", "notes", "listen_ask"):
             self._qa_history.append({"qid": qid, "q": self._strip_nod_tag(t), "a": answer})
             self._qa_history = self._qa_history[-6:]
         if self.user_id:
@@ -3060,14 +3046,12 @@ class Session:
             body = body[nl + 1:].strip() if nl >= 0 else body
         if mode == "ask" and body.startswith("Translate to "):
             mode = "translate"
-        if mode == "ask" and (body.startswith("Catch the listener up") or llm_text.lstrip().startswith("[NOD_CATCH")):
-            mode = "catchup"
         if mode == "ask" and (body.startswith("Listener question:") or llm_text.lstrip().startswith("[NOD_ASK")):
             mode = "listen_ask"
         if mode == "ask" and (body.startswith("Write structured notes") or llm_text.lstrip().startswith("[NOD_NOTES")):
             mode = "notes"
         if not self._claim_busy():
-            if mode in ("translate", "catchup", "notes", "listen_ask", "file_ask"):
+            if mode in ("translate", "notes", "listen_ask", "file_ask"):
                 self._pending_asks.append((user_text, mode, files))
                 return
             self.emit({"type": "status", "text": "Still working, please wait"})
