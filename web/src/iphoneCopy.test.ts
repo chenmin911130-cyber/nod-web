@@ -21,6 +21,7 @@ import {
   translateSourceTag,
   translateTargetChip,
   translateToChip,
+  speakersChipParts,
 } from './iphoneCopy'
 
 function eq<T>(got: T, want: T, label: string) {
@@ -51,8 +52,11 @@ eq(listenClock(8000), '00:08', 'Listen clock is mm:ss')
 eq(listenShowsRecClock('listen'), true, 'Meeting / Lecture keep the recording clock')
 eq(listenShowsRecClock('translate'), false, 'Translate is not a recording')
 eq(listenShowsRecClock('interview'), false, 'Live Q&A is not a recording')
-eq(nativeListenChipOrder()[0], 'scene', 'Meeting sits on the far left')
-eq(nativeListenChipOrder().join(','), 'scene,speech,notes', 'native chips are Meeting, speech, notes')
+eq(nativeListenChipOrder('meeting')[0], 'scene', 'Meeting sits on the far left')
+eq(nativeListenChipOrder('meeting').join(','), 'scene,speakers,speech,notes', 'meeting chips add the people-count chip')
+eq(nativeListenChipOrder('lecture').join(','), 'scene,speech,notes', 'lecture has no people-count chip')
+eq(speakersChipParts('2').title, '2 people', 'speakers chip labels 2 people')
+eq(speakersChipParts('3-4').title, '3-4 people', 'speakers chip labels 3-4')
 eq(IPHONE_COPY.liveTab, 'Live', 'Live is the stage tab')
 eq(IPHONE_COPY.transcriptTab, 'Transcript', 'Transcript keeps the words')
 eq(IPHONE_COPY.summaryTab, 'Summary', 'Summary is the notes tab')

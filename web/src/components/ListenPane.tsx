@@ -15,7 +15,7 @@ import {
   type MeetingSpeakerId,
   type NotesSectionId,
 } from '../listen'
-import { IPHONE_COPY, listenChipParts, nativeListenChipOrder, notesChipParts, showLineTranslation } from '../iphoneCopy'
+import { IPHONE_COPY, listenChipParts, nativeListenChipOrder, notesChipParts, showLineTranslation, speakersChipParts } from '../iphoneCopy'
 import { usePhoneChrome } from '../phoneChrome'
 import { iphoneSummaryHeading, liveHeardLines, liveNotesLine, liveStageMode, summaryPlainText } from '../liveView'
 
@@ -272,6 +272,7 @@ function MeetingSpeakersSelect({
   const [open, setOpen] = useState(false)
   const boxRef = useDismiss(open, () => setOpen(false))
   const current = MEETING_SPEAKER_OPTIONS.find((o) => o.id === value)
+  const phone = usePhoneChrome()
 
   return (
     <div className={`listen-lang-box${open ? ' open' : ''}`} ref={boxRef}>
@@ -285,8 +286,17 @@ function MeetingSpeakersSelect({
         onPointerDown={(e) => e.stopPropagation()}
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="listen-lang-tag">{current ? current.label.replace(' people', '') : '2'}</span>
-        <Chevron />
+        {phone ? <ChipPeople /> : null}
+        {phone ? (
+          <span className="iphone-chip-copy">
+            <b>{speakersChipParts(value).title}</b>
+          </span>
+        ) : (
+          <>
+            <span className="listen-lang-tag">{current ? current.label.replace(' people', '') : '2'}</span>
+            <Chevron />
+          </>
+        )}
       </button>
       {open && (
         <div className="listen-lang-menu" role="listbox">
@@ -877,9 +887,12 @@ export default function ListenPane(props: Props) {
         )}
         {phone ? (
           <>
-            {nativeListenChipOrder().map((chip) => {
+            {nativeListenChipOrder(props.scene).map((chip) => {
               if (chip === 'scene') {
                 return <SceneSelect key="scene" scene={props.scene} onScene={props.onScene} />
+              }
+              if (chip === 'speakers') {
+                return <MeetingSpeakersSelect key="speakers" value={props.meetingSpeakersId} onChange={props.onMeetingSpeakers} />
               }
               if (chip === 'speech') {
                 return (

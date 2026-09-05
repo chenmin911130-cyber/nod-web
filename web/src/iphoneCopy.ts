@@ -1,5 +1,6 @@
 import type { Lang, PairLang } from './types'
 import { TRANSLATE_LANGS } from './types'
+import { MEETING_SPEAKER_OPTIONS, type ListenScene, type MeetingSpeakerId } from './listen'
 
 export const IPHONE_COPY = {
   listenTab: 'Listen',
@@ -66,8 +67,13 @@ export const IPHONE_COPY = {
   hearAnything: 'Hear anything',
 } as const
 
-export function nativeListenChipOrder(): ReadonlyArray<'scene' | 'speech' | 'notes'> {
-  return ['scene', 'speech', 'notes']
+export function nativeListenChipOrder(scene: ListenScene): ReadonlyArray<'scene' | 'speakers' | 'speech' | 'notes'> {
+  return scene === 'meeting' ? ['scene', 'speakers', 'speech', 'notes'] : ['scene', 'speech', 'notes']
+}
+
+export function speakersChipParts(id: MeetingSpeakerId): { title: string; sub: string } {
+  const opt = MEETING_SPEAKER_OPTIONS.find((o) => o.id === id)
+  return { title: opt?.label ?? '2 people', sub: '' }
 }
 
 export function listenChipParts(lang: Lang): { title: string; sub: string } {
