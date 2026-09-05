@@ -1860,6 +1860,7 @@ class Session:
         # the busy flag has to be claimed atomically or two generations start
         # for one question and both get billed.
         self._busy_lock = threading.Lock()
+        self._busy_token: object | None = None
         self._pending_q: collections.deque[tuple[str, str | None]] = collections.deque(maxlen=8)
         self._pending_asks: list[tuple[str, str, Any]] = []
         self._pending_wait: tuple[str | None, float, str | None] = (None, 0.0, None)
@@ -2212,23 +2213,30 @@ class Session:
         self.emit({"type": "keys_status", "has_llm": st["has_llm"], "has_stt": st["has_stt"]})
         self.emit({"type": "status", "text": "API keys saved — ready to go"})
 
-    def _claim_busy(self) -> bool:
+    def _claim_busy(self) -> object | None:
         with self._busy_lock:
             if self._busy:
-                return False
+                return None
             self._busy = True
-            return True
+            self._busy_token = object()
+            return self._busy_token
 
-    def _release_busy(self) -> None:
+    def _release_busy(self, token: object | None) -> None:
         with self._busy_lock:
-            self._busy = False
+            if self._busy_token is token:
+                self._busy = False
+                self._busy_token = None
 
     def cancel_generate(self) -> None:
         """Cancel the in-flight LLM stream without stopping STT."""
         self.pipeline.abort_stream()
         self._pending_asks = []
         self._pending_q.clear()
-        self._release_busy()
+        with self._busy_lock:
+            self._busy = False
+            self._busy_token = None
+        self._set_engine("idle")
+        self._emit_phase()
 
     def set_translate_to(self, lang: str) -> None:
         self.cfg.setdefault("ui", {})["translate_to"] = _normalize_translate_to(lang)
@@ -3005,17 +3013,19 @@ class Session:
             self._set_engine("idle")
             self._emit_phase()
             return
-        if not self._claim_busy():
+        tok = self._claim_busy()
+        if not tok:
             return
         self.pipeline._cancel.clear()
         self._set_engine("generating")
         try:
             self.pipeline.process_text(cleaned, "ask", heard)
         finally:
-            self._release_busy()
-            self._set_engine("idle")
-            self._emit_phase()
-            self._drain_pending_ask()
+            if self._busy_token is tok:
+                self._release_busy(tok)
+                self._set_engine("idle")
+                self._emit_phase()
+                self._drain_pending_ask()
 
     def _drain_pending_ask(self) -> None:
         # Summarize/translate queued while busy must run after the current
@@ -3055,7 +3065,8 @@ class Session:
             mode = "listen_ask"
         if mode == "ask" and (body.startswith("Write structured notes") or llm_text.lstrip().startswith("[NOD_NOTES")):
             mode = "notes"
-        if not self._claim_busy():
+        tok = self._claim_busy()
+        if not tok:
             if mode == "ask" and self._workspace == "interview":
                 self._pending_asks.append((user_text, mode, files))
                 self.emit({"type": "status", "text": "Question queued · answering the previous one"})
@@ -3074,10 +3085,11 @@ class Session:
             try:
                 self.pipeline.process_text(llm_text, mode, images=images, display_text=display)
             finally:
-                self._release_busy()
-                self._set_engine("idle")
-                self._emit_phase()
-                self._drain_pending_ask()
+                if self._busy_token is tok:
+                    self._release_busy(tok)
+                    self._set_engine("idle")
+                    self._emit_phase()
+                    self._drain_pending_ask()
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -3184,7 +3196,8 @@ class Session:
         heard = heard_lang_from_text(cleaned, lang)
         self._remember_final(cleaned)
         self._maybe_follow_speech(cleaned, heard)
-        if not self._claim_busy():
+        tok = self._claim_busy()
+        if not tok:
             self._pending_q.append((cleaned, lang))
             self.emit({"type": "status", "text": "Question queued · answering the previous one"})
             return
@@ -3192,6 +3205,7 @@ class Session:
 
     def _run_interview_answer(self, cleaned: str, lang: str | None) -> None:
         heard = heard_lang_from_text(cleaned, lang)
+        tok = self._busy_token
         self.pipeline._cancel.clear()
         self._set_engine("generating")
         self._emit_phase()
@@ -3201,13 +3215,14 @@ class Session:
             try:
                 self.pipeline.process_text(cleaned, "ask", heard)
             finally:
-                self._release_busy()
-                self._set_engine("idle")
-                self._emit_phase()
-                if self._pending_q and self._claim_busy():
-                    self._run_interview_answer(*self._pending_q.popleft())
-                else:
-                    self._drain_pending_ask()
+                if self._busy_token is tok:
+                    self._release_busy(tok)
+                    self._set_engine("idle")
+                    self._emit_phase()
+                    if self._pending_q and self._claim_busy():
+                        self._run_interview_answer(*self._pending_q.popleft())
+                    else:
+                        self._drain_pending_ask()
 
         threading.Thread(target=work, daemon=True).start()
 

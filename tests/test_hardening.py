@@ -541,6 +541,7 @@ class InterviewWaitFlushTests(unittest.TestCase):
         sess._manual = False
         sess._busy = False
         sess._busy_lock = __import__("threading").Lock()
+        sess._busy_token = None
         sess._pending_q = deque(maxlen=8)
         sess._pending_wait = (None, 0.0, None)
         sess._pending_asks = []
@@ -668,6 +669,7 @@ class InterviewQueueTests(unittest.TestCase):
         sess._manual = False
         sess._busy = False
         sess._busy_lock = __import__("threading").Lock()
+        sess._busy_token = None
         sess._pending_q = deque(maxlen=8)
         sess._pending_wait = (None, 0.0, None)
         sess._pending_asks = []
@@ -748,6 +750,57 @@ class InterviewQueueTests(unittest.TestCase):
         emits = [c.args[0] for c in sess.emit.call_args_list]
         self.assertFalse(any(e.get("type") == "done" for e in emits))
         self.assertEqual(len(sess._pending_asks), 1)
+
+    def test_cancel_then_new_ask_old_thread_does_not_release_busy(self):
+        # Issue #2/#5: cancel steals the token, so the OLD work() thread's
+        # finally must not release the NEW generation's busy or emit a phase.
+        threading = __import__("threading")
+        sess = self._session()
+        calls: list[str] = []
+        gate1, gate2 = threading.Event(), threading.Event()
+
+        def fake_pt(text, mode, *a):
+            calls.append(text)
+            (gate1 if len(calls) == 1 else gate2).wait()
+
+        sess.pipeline.process_text = fake_pt
+        sess._start_interview_answer("What is a mutex?", "en")
+        for _ in range(40):
+            if len(calls) >= 1:
+                break
+            time.sleep(0.02)
+        sess.cancel_generate()
+        sess._start_interview_answer("How does a semaphore differ?", "en")
+        for _ in range(40):
+            if len(calls) >= 2:
+                break
+            time.sleep(0.02)
+        before = len(sess.emit.call_args_list)
+        gate1.set()  # release the OLD question's thread
+        for _ in range(40):
+            time.sleep(0.02)
+        self.assertTrue(sess._busy, "new generation's busy was clobbered by the stale thread")
+        phases_after = [
+            c.args[0]
+            for c in sess.emit.call_args_list[before:]
+            if c.args and c.args[0].get("type") == "phase"
+        ]
+        self.assertFalse(
+            any(p.get("engine") == "idle" for p in phases_after),
+            f"stale thread emitted an idle phase over the new generation: {phases_after}",
+        )
+        gate2.set()
+
+    def test_release_busy_ignores_stale_token(self):
+        sess = self._session()
+        tok = sess._claim_busy()
+        self.assertIsNotNone(tok)
+        sess.cancel_generate()
+        # The old token is stale now: releasing with it must not throw and must
+        # leave busy as cancel left it (False, no token).
+        sess._release_busy(tok)
+        self.assertFalse(sess._busy)
+        self.assertIsNone(sess._busy_token)
 
 
 class ListenAskRoutingTests(unittest.TestCase):

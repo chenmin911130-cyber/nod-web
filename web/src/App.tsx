@@ -16,6 +16,7 @@ import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
 import { canSwitchWorkspace, sessionListening } from './iphoneCopy'
 import { looksLikeTarget, matchesLockedFrom, translateAskIdAfterDone, translateDoneBelongsToAsk, translateShouldPassthrough } from './translateGate'
+import { doneAffectsInterview } from './interviewDone'
 import AnswerPane from './components/AnswerPane'
 import ListenPane from './components/ListenPane'
 import TranslatePane from './components/TranslatePane'
@@ -532,6 +533,9 @@ function reducer(state: AppState, action: Action): AppState {
           return { ...state, translatePairs, translateAskId, catchNotes, catchAskId, notesRaw, notesAskId, meetingLines }
         }
         case 'done': {
+          if (state.workspaceMode === 'interview' && !doneAffectsInterview(state.turns, ev.id)) {
+            return state
+          }
           const waitingAsk = state.catchNotes.some((note) => isPendingCatchId(note.id))
           let turns = state.turns
           if (state.workspaceMode === 'interview' && ev.ok === false && ev.id && turns.length) {
