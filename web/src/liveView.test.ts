@@ -127,8 +127,8 @@ eq(
   'Live cards reuse the latest notes, they do not guess',
 )
 
-eq(iphoneSummaryHeading('meeting', 'summary'), 'Meeting Summary', 'Summary page leads with Meeting Summary')
-eq(iphoneSummaryHeading('meeting', 'keyPoints'), 'Key Takeaways', 'points become Key Takeaways')
+eq(iphoneSummaryHeading('meeting', 'summary'), 'Summary', 'Summary page uses the shared section title')
+eq(iphoneSummaryHeading('meeting', 'keyPoints'), 'Key Points', 'points use the shared section title')
 eq(iphoneSummaryHeading('lecture', 'summary'), 'Lecture overview', 'lecture keeps its own heading')
 
 eq(
@@ -143,17 +143,17 @@ eq(
     },
   }),
   [
-    'Meeting Summary',
+    'Summary',
     'Tuesday is the tentative launch date.',
     '',
-    'Key Takeaways',
-    '\u2022 Marketing starts Monday',
+    'Key Points',
+    '• Marketing starts Monday',
     '',
     'Action Items',
-    '\u2022 David \u2192 Finish QA',
+    '• David → Finish QA',
     '',
     'Decisions',
-    '\u2022 Target Tuesday',
+    '• Target Tuesday',
   ].join('\n'),
   'Copy/Share uses the structured Summary, not raw JSON',
 )

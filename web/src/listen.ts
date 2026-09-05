@@ -122,7 +122,7 @@ const SCENE_SECTIONS: Record<ListenScene, NotesSectionId[]> = {
 
 export const SECTION_TITLE: Record<NotesSectionId, string> = {
   summary: 'Summary',
-  takeaways: 'Q&A / Key Takeaways',
+  takeaways: 'Q&A Takeaways',
   keyPoints: 'Key Points',
   decisions: 'Decisions',
   actionItems: 'Action Items',

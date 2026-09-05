@@ -907,7 +907,7 @@ export default function ListenPane(props: Props) {
   )
 
   const tabs = !props.qa ? (
-        <div className="listen-mobile-tabs" role="tablist" aria-label={phone ? 'Live, transcript, or summary' : 'Live or notes'}>
+        <div className="listen-mobile-tabs" role="tablist" aria-label={phone ? 'Live, transcript, or notes' : 'Live or notes'}>
           <button
             type="button"
             role="tab"

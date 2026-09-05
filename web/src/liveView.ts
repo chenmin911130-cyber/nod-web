@@ -72,9 +72,8 @@ export function liveInsightCards(notes: NotesDoc = emptyNotes()): Array<{
 }
 
 export function iphoneSummaryHeading(scene: ListenScene, id: NotesSectionId): string {
-  if (scene === 'lecture') return sectionTitle(scene, id)
-  if (id === 'summary') return 'Meeting Summary'
-  if (id === 'keyPoints') return 'Key Takeaways'
+  // One heading source: SECTION_TITLE (lecture keeps its own override inside
+  // sectionTitle). No scene-specific renames here.
   return sectionTitle(scene, id)
 }
 

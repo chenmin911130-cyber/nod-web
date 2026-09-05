@@ -57,7 +57,7 @@ eq(nativeListenChipOrder('meeting').join(','), 'scene,speech,notes', 'meeting ch
 eq(nativeListenChipOrder('lecture').join(','), 'scene,speech,notes', 'lecture chips are the same three')
 eq(IPHONE_COPY.liveTab, 'Live', 'Live is the stage tab')
 eq(IPHONE_COPY.transcriptTab, 'Transcript', 'Transcript keeps the words')
-eq(IPHONE_COPY.summaryTab, 'Summary', 'Summary is the notes tab')
+eq(IPHONE_COPY.summaryTab, 'Notes', 'Notes is the notes tab')
 eq(IPHONE_COPY.listeningNowLabel, 'Listening now', 'Live content says Listening now')
 eq(IPHONE_COPY.keyPoint, 'Key Point', 'Summary still names Key Point')
 eq(IPHONE_COPY.actionItem, 'Action Item', 'Summary still names Action Item')
