@@ -15,6 +15,12 @@
 1. **item 1 · 客户端 `phase(off, idle)` 修复** —— 排在真机测试 ① 之后。根因/时序/修法在 **GitHub issue #11**（OPEN）。落地时删掉帧级翻译重叠 gate 的 `test.fail` 行（d22a6c1 里标 expected-fail 的那行）。
 2. 重连排查（零 PCM 时间戳对部署时间）—— **不在交接顺序里，暂不开**，留到以后。
 
+**Meeting 审查（09-05，新，已建 issue #12–#16）**
+- **#12** `lang.py` 拉丁句尾丢空格 —— **已修已测未推**（服务端，随下次 `push origin main`/Railway 部署走）。
+- **#15 / #16** `pdf.ts` 拉丁词不中断 + `/Title` UTF-16BE 乱码 —— **已修已测未推**（web 侧，按规则随 build 20，与 item 1 一起）。
+- **#14** 笔记语言耦合（`translate_to` 连带改 `notesLang`）—— **待你确认根因**（12:16 会话 History 的 `OUTPUT LANGUAGE (hard rule): … Italian only`）+ 定产品规则后再改。
+- **#13** 按说话人拆 turn（改动重，属设计改动）—— 单独立项，排序另定，不与 ① 抢。
+
 **教训入口（动手上文工作前必读）**
 - `.cursor/skills/self-improve/errors.md` —— e2e 本地绿 CI 红、`phase(off,idle)` 兜底 vs `done` 重试、`think` 被当 Phone Stop、手表 UI 翻面、只装手表原生没 `cap:sync` 等
 - `nod-web` skill —— 零 PCM 守卫、终态 stop 非 paused、静音放置坑
