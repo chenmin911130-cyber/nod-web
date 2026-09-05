@@ -367,7 +367,7 @@ def _stt_prompt(cfg: dict[str, Any]) -> str:
     if lang:
         name = _LANG_NAMES.get(lang, lang)
         if scene == "lecture":
-            base = f"{name} lecture."
+            base = f"{name} lecture. One lecturer speaks most of the time; the audience asks short questions."
         elif scene == "interview":
             base = f"{name} job interview. Interviewer and candidate take turns."
         elif scene == "meeting":
@@ -378,7 +378,7 @@ def _stt_prompt(cfg: dict[str, Any]) -> str:
         else:
             base = f"{name} conversation."
     elif scene == "lecture":
-        base = "Mandarin, English, and Japanese lecture. People switch languages mid-sentence."
+        base = "Mandarin, English, and Japanese lecture. One lecturer speaks most of the time; the audience asks short questions. People switch languages mid-sentence."
     elif scene == "interview":
         base = "Mandarin, English, and Japanese job interview. Interviewer and candidate take turns."
     else:

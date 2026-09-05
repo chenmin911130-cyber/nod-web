@@ -219,6 +219,14 @@ class QuotaSettingsTests(unittest.TestCase):
         self.assertIn("Recent names and topic", prompt)
         self.assertIn("Nodpilot", prompt)
 
+    def test_lecture_stt_prompt_has_speaker_structure(self):
+        # Specified language: the lecture prompt names the one-lecturer shape.
+        self.assertIn("lecturer speaks most", _stt_prompt({"stt": {"listen_scene": "lecture", "language": "zh"}}))
+        # Auto language: lecture keeps the speaker structure AND the code-switch line.
+        auto = _stt_prompt({"stt": {"listen_scene": "lecture"}})
+        self.assertIn("lecturer speaks most", auto)
+        self.assertIn("switch languages", auto)
+
     def test_recording_stays_record_after_translate(self):
         sess = Session.__new__(Session)
         sess._manual = True
