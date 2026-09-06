@@ -20,12 +20,6 @@ import { test, expect } from '@playwright/test'
  */
 test.describe('Translate workspace typing', () => {
   test('asks never overlap (previous done received before the next ask)', async ({ page }) => {
-    // Known-red until issue #11 item (1) lands (App.tsx phase(off,idle)
-    // fallback re-fires an in-flight ask). test.fail() keeps CI green while
-    // still running the gate; once the client fix is in, this test passes and
-    // Playwright fails on the stale annotation — delete this line then.
-    test.fail(true, 'issue #11 (1): phase(off,idle) tail kills the in-flight retry and re-asks; remove when the client fix lands')
-
     let inflight = 0
     let asks = 0
     let overlap = false
