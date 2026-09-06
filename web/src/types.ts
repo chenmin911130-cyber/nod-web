@@ -50,6 +50,10 @@ export interface MeetingLine {
   at?: number
   translation?: string
   speaker?: string
+  /** Set when translation gave up after the retry budget; pump skips it. */
+  translateFailed?: boolean
+  /** STT language tag for this turn (from the question event), for passthrough. */
+  lang?: PairLang
 }
 
 export interface TranslatePair {

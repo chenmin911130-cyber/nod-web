@@ -15,7 +15,8 @@ import SavePrompt from './components/SavePrompt'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
 import { canSwitchWorkspace, sessionListening } from './iphoneCopy'
-import { looksLikeTarget, matchesLockedFrom, routeTranslateChunk, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough } from './translateGate'
+import { looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough } from './translateGate'
+import { nextMeetingLineToTranslate } from './meetingTranslate'
 import { doneAffectsInterview } from './interviewDone'
 import AnswerPane from './components/AnswerPane'
 import ListenPane from './components/ListenPane'
@@ -422,6 +423,7 @@ function reducer(state: AppState, action: Action): AppState {
               text,
               at: Date.now(),
               speaker: ev.speaker,
+              lang: heard ?? undefined,
             }]
             if (scene === 'lecture') {
               speakerNames = promoteLectureSpeakers(meetingLines, speakerNames, state.speakerNameLocked)
@@ -778,7 +780,7 @@ function reducer(state: AppState, action: Action): AppState {
       // meeting 模式下 passthrough（原文已是目标语言）也要写进 transcript 行，
       // 否则该行翻译永远空白且被 askedTranslate 标记后不再重试
       const meetingLines = state.meetingLines.map((ln) =>
-        ln.id === action.id ? { ...ln, translation: action.translation } : ln,
+        ln.id === action.id ? { ...ln, translation: action.translation, translateFailed: false } : ln,
       )
       return { ...state, translatePairs, meetingLines, translateBindId: '', busy: false }
     }
@@ -788,7 +790,7 @@ function reducer(state: AppState, action: Action): AppState {
         p.id === action.id ? { ...p, translation: '', failed: false } : p,
       )
       const meetingLines = state.meetingLines.map((ln) =>
-        ln.id === action.id ? { ...ln, translation: '' } : ln,
+        ln.id === action.id ? { ...ln, translation: '', translateFailed: false } : ln,
       )
       return {
         ...state,
@@ -819,7 +821,16 @@ function reducer(state: AppState, action: Action): AppState {
       const translatePairs = state.translatePairs.map((p) =>
         p.id === action.id ? { ...p, failed: true } : p,
       )
-      return { ...state, translatePairs, translateBindId: state.translateBindId === action.id ? '' : state.translateBindId }
+      // A meeting line that gave up is marked so pump skips it (no resend loop).
+      const meetingLines = state.meetingLines.map((ln) =>
+        ln.id === action.id ? { ...ln, translateFailed: true } : ln,
+      )
+      return {
+        ...state,
+        translatePairs,
+        meetingLines,
+        translateBindId: state.translateBindId === action.id ? '' : state.translateBindId,
+      }
     }
     default:
       return state
@@ -858,21 +869,6 @@ function wrongScriptForTarget(text: string, to: PairLang): boolean {
   if (to === 'zh') return han === 0
   if (to === 'ja') return han + kana === 0
   return (han + kana + hangul) / chars.length >= 0.5
-}
-
-function parseHeardLang(raw: string | undefined, text: string): PairLang | null {
-  if (raw && TRANSLATE_LANGS.some((l) => l.id === raw)) return raw as PairLang
-  const t = normOriginal(text)
-  if (!t) return null
-  if (/[\u3040-\u30FF]/.test(t)) return 'ja'
-  if (/\p{Script=Han}/u.test(t)) return 'zh'
-  if (/[¿¡ñ]|cómo|está/i.test(t)) return 'es'
-  if (/[çœæ]|pourquoi|bonjour|\bça\b/i.test(t)) return 'fr'
-  if (/[äöüß]|nicht\b|wie geht/i.test(t)) return 'de'
-  if (/perché|ciao\b|grazie|più/i.test(t)) return 'it'
-  if (/[ãõ]|você|não|olá/i.test(t)) return 'pt'
-  if (/[A-Za-z]/.test(t)) return 'en'
-  return null
 }
 
 function langTag(lang: PairLang): string {
@@ -1403,10 +1399,10 @@ export default function App() {
             dispatch({ type: 'clear_translation', id })
             dispatch({ type: 'release_translate' })
           } else {
-            // Only a translate-pair row can be marked failed; a meeting line
-            // that fails translation stays pending for the next pump.
-            if (row) dispatch({ type: 'fail_translate', id })
-            else askedTranslate.current.delete(id)
+            // fail: for a translate row it marks failed; for a meeting line it
+            // marks translateFailed so pump will not re-send it in a loop. Don't
+            // delete asked either — the give-up flag is what stops the re-pick.
+            dispatch({ type: 'fail_translate', id })
             dispatch({ type: 'release_translate' })
           }
         }
@@ -1964,7 +1960,13 @@ export default function App() {
     // translation, so never passthrough typed input. Only a spoken pair (which
     // carries the STT from-tag) may passthrough.
     const typed = String(pairId || '').startsWith('typed-')
-    const sameLang = !typed && translateShouldPassthrough(text, s.translateTo, pair?.from)
+    // A meeting line has no translate pair, so its STT lang tag must be passed
+    // through — otherwise fromTag is always undefined and every English line in
+    // an English-target + Bilingual meeting hits the model. Typed pairs keep the
+    // no-passthrough rule.
+    const fromTag =
+      s.workspaceMode === 'meeting' ? s.meetingLines.find((ln) => ln.id === id)?.lang : pair?.from
+    const sameLang = !typed && translateShouldPassthrough(text, s.translateTo, fromTag)
     if (sameLang) {
       askedTranslate.current.add(id)
       translateRetries.current.delete(id)
@@ -2006,13 +2008,12 @@ export default function App() {
     const s = stateRef.current
     if (inflightTranslate.current) return
     if (s.workspaceMode === 'meeting' && s.translateOn) {
-      // 最新的未翻译行优先（实时字幕语义：先出当前句子，停顿期间回填旧行）
-      for (let i = s.meetingLines.length - 1; i >= 0; i--) {
-        const line = s.meetingLines[i]
-        if (!line.translation && !askedTranslate.current.has(line.id)) {
-          askTranslate(line.text, line.id)
-          return
-        }
+      // 最新的未翻译、未放弃、未被 asked 的行优先（实时字幕语义：先出当前句子，
+      // 停顿期间回填旧行）。translateFailed 行被跳过，避免对坏模型的重发死循环。
+      const next = nextMeetingLineToTranslate(s.meetingLines, askedTranslate.current)
+      if (next) {
+        askTranslate(next.text, next.id)
+        return
       }
       return
     }

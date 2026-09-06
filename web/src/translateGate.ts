@@ -1,4 +1,5 @@
 import type { PairLang } from './types'
+import { TRANSLATE_LANGS } from './types'
 
 function compact(text: string): string {
   return (text || '').trim().replace(/\s+/g, ' ')
@@ -110,4 +111,24 @@ export function translateDoneDecision(args: {
   if (args.translated && !args.ok) return args.retries <= 2 ? 'retry' : 'fail'
   if (args.translated) return 'accept'
   return args.retries <= 2 ? 'retry' : 'fail'
+}
+
+/**
+ * Best-guess the spoken language of a turn from the STT tag, falling back to
+ * the text's script/word markers when the tag is absent or unknown. Used to
+ * stamp a meeting line with `lang` so passthrough can trust the STT tag.
+ */
+export function parseHeardLang(raw: string | undefined, text: string): PairLang | null {
+  if (raw && TRANSLATE_LANGS.some((l) => l.id === raw)) return raw as PairLang
+  const t = compact(text)
+  if (!t) return null
+  if (/[\u3040-\u30FF]/.test(t)) return 'ja'
+  if (/\p{Script=Han}/u.test(t)) return 'zh'
+  if (/[¿¡ñ]|cómo|está/i.test(t)) return 'es'
+  if (/[çœæ]|pourquoi|bonjour|\bça\b/i.test(t)) return 'fr'
+  if (/[äöüß]|nicht\b|wie geht/i.test(t)) return 'de'
+  if (/perché|ciao\b|grazie|più/i.test(t)) return 'it'
+  if (/[ãõ]|você|não|olá/i.test(t)) return 'pt'
+  if (/[A-Za-z]/.test(t)) return 'en'
+  return null
 }
