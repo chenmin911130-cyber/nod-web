@@ -4,6 +4,7 @@ import {
   routeTranslateChunk,
   translateAskIdAfterDone,
   translateDoneBelongsToAsk,
+  translateDoneDecision,
   translateShouldPassthrough,
 } from './translateGate'
 
@@ -92,5 +93,16 @@ eq(routeTranslateChunk('meeting', true, false, true), 'drop', 'meeting workspace
 eq(routeTranslateChunk('meeting', false, true, true), 'drop', 'meeting workspace with translateOn off drops')
 eq(routeTranslateChunk('interview', true, true, true), 'drop', 'interview workspace never routes a translate chunk')
 eq(routeTranslateChunk('translate', true, false, false), 'drop', 'translate workspace with no container drops')
+
+// translateDoneDecision: only a matching `done` (or the timeout) decides the
+// outcome; the old phase(off, idle) fallback is gone.
+eq(translateDoneDecision({ ok: true, translated: true, wrongScript: false, retries: 1 }), 'accept', 'ok + translation -> accept')
+eq(translateDoneDecision({ ok: true, translated: false, wrongScript: false, retries: 1 }), 'retry', 'ok + empty -> retry within budget')
+eq(translateDoneDecision({ ok: true, translated: false, wrongScript: false, retries: 3 }), 'fail', 'ok + empty exhausted -> fail')
+eq(translateDoneDecision({ ok: false, translated: true, wrongScript: false, retries: 1 }), 'retry', 'ok:false + partial -> retry')
+eq(translateDoneDecision({ ok: false, translated: true, wrongScript: false, retries: 3 }), 'fail', 'ok:false + partial exhausted -> fail')
+eq(translateDoneDecision({ ok: false, translated: false, wrongScript: false, retries: 1 }), 'retry', 'ok:false + empty -> retry')
+eq(translateDoneDecision({ ok: true, translated: true, wrongScript: true, retries: 1 }), 'retry', 'wrongScript -> retry within budget')
+eq(translateDoneDecision({ ok: true, translated: true, wrongScript: true, retries: 3 }), 'accept', 'wrongScript exhausted -> accept (keep what we got)')
 
 console.log('translateGate ok')

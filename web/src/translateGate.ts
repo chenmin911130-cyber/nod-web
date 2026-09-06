@@ -85,3 +85,24 @@ export function routeTranslateChunk(
   if (workspaceMode === 'meeting' && translateOn) return hasMeetingLines ? 'meeting' : 'drop'
   return 'drop'
 }
+
+export type TranslateDoneDecision = 'accept' | 'retry' | 'fail'
+
+/**
+ * What a matching LLM `done` means for the row being translated. `retries` is
+ * the count for THIS attempt (1-based). A wrong-script result is retried within
+ * budget but never failed — on give-up we keep what we got. A genuine `ok:false`
+ * with a partial translation counts as one failure too, so a broken stream
+ * doesn't silently pass as complete.
+ */
+export function translateDoneDecision(args: {
+  ok: boolean
+  translated: boolean
+  wrongScript: boolean
+  retries: number
+}): TranslateDoneDecision {
+  if (args.wrongScript) return args.retries <= 2 ? 'retry' : 'accept'
+  if (args.translated && !args.ok) return args.retries <= 2 ? 'retry' : 'fail'
+  if (args.translated) return 'accept'
+  return args.retries <= 2 ? 'retry' : 'fail'
+}

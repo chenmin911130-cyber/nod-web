@@ -15,7 +15,7 @@ import SavePrompt from './components/SavePrompt'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
 import { canSwitchWorkspace, sessionListening } from './iphoneCopy'
-import { looksLikeTarget, matchesLockedFrom, routeTranslateChunk, translateAskIdAfterDone, translateDoneBelongsToAsk, translateShouldPassthrough } from './translateGate'
+import { looksLikeTarget, matchesLockedFrom, routeTranslateChunk, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough } from './translateGate'
 import { doneAffectsInterview } from './interviewDone'
 import AnswerPane from './components/AnswerPane'
 import ListenPane from './components/ListenPane'
@@ -1259,6 +1259,30 @@ export default function App() {
     inflightTranslate.current = null
   }
 
+  // (Re)arm the 25s translate timeout. Called on every chunk of the current
+  // ask so a slow-but-alive stream doesn't time out mid-answer; and on the
+  // timeout path we cancel the server generation first so the retry below
+  // doesn't queue a duplicate behind a still-running stream.
+  const armTranslateTimeout = (id: string | null) => {
+    clearTranslateTimer()
+    if (!id) return
+    translateTimer.current = window.setTimeout(() => {
+      if (inflightTranslate.current !== id) return
+      window.api.send({ type: 'cancel_generate' })
+      inflightTranslate.current = null
+      const n = (translateRetries.current.get(id) || 0) + 1
+      translateRetries.current.set(id, n)
+      if (n <= 2) askedTranslate.current.delete(id)
+      else dispatch({ type: 'fail_translate', id })
+      dispatch({ type: 'release_translate' })
+      dispatch({
+        type: 'engine',
+        ev: { type: 'status', text: n <= 2 ? 'Translation timed out — retrying' : 'Translation timed out' },
+      })
+      pumpTranslateRef.current()
+    }, 25000)
+  }
+
   // 发起新的生成（摘要/笔记/提问）前，取消在途翻译并清掉半截译文。
   // 否则旧翻译的 chunk 会按 translateBindId / '__pending__' 路由进新内容里（卡片/笔记被污染）。
   const killInflightTranslation = useCallback(() => {
@@ -1291,6 +1315,11 @@ export default function App() {
         if (listenWanted.current) {
           queueMicrotask(() => api.send({ type: 'start_listen' }))
         }
+      }
+      // Every chunk of the current translate ask re-arms the 25s timeout, so a
+      // slow-but-alive stream doesn't time out mid-answer and double-fire.
+      if (e.type === 'chunk' && e.id && e.id === stateRef.current.translateAskId && inflightTranslate.current) {
+        armTranslateTimeout(inflightTranslate.current)
       }
       if (shouldReleaseListen(e)) {
         listenWanted.current = false
@@ -1342,25 +1371,6 @@ export default function App() {
           queueMicrotask(() => pumpTranslateRef.current())
         }
       }
-      if (e.type === 'phase' && e.capture === 'off' && e.engine === 'idle') {
-        const stuck = inflightTranslate.current
-        // Live captions also emit idle. That must not abort an in-flight
-        // translation — it is why rows flipped to Failed while still listening.
-        if (stuck && !listenWanted.current) {
-          const row = stateRef.current.translatePairs.find((p) => p.id === stuck)
-          if (!row || !(row.translation || '').trim()) {
-            clearTranslateTimer()
-            inflightTranslate.current = null
-            const n = (translateRetries.current.get(stuck) || 0) + 1
-            translateRetries.current.set(stuck, n)
-            if (n <= 2) askedTranslate.current.delete(stuck)
-            else if (stateRef.current.workspaceMode === 'translate') dispatch({ type: 'fail_translate', id: stuck })
-            dispatch({ type: 'clear_translation', id: stuck })
-            dispatch({ type: 'release_translate' })
-            queueMicrotask(() => pumpTranslateRef.current())
-          }
-        }
-      }
       // Only LLM `done` releases the translate gate. STT `error` events must not
       // drop an in-flight translation — that is what made "ask again" hang.
       if (e.type !== 'done') return
@@ -1373,27 +1383,31 @@ export default function App() {
       inflightTranslate.current = null
       queueMicrotask(() => {
         if (id) {
-          const row = stateRef.current.translatePairs.find((p) => p.id === id)
-          const line = stateRef.current.meetingLines.find((ln) => ln.id === id)
-          const translated = (row?.translation || line?.translation || '').trim()
-          if (translated && wrongScriptForTarget(translated, stateRef.current.translateTo)) {
-            // Model ignored the target (e.g. Chinese for an EN target).
-            // Redo the line within the normal retry budget; past it, keep
-            // what we got rather than marking the row failed.
-            const n = (translateRetries.current.get(id) || 0) + 1
-            translateRetries.current.set(id, n)
-            if (n <= 2) {
-              askedTranslate.current.delete(id)
-              dispatch({ type: 'clear_translation', id })
-            }
+          const s = stateRef.current
+          const row = s.translatePairs.find((p) => p.id === id)
+          const line = s.meetingLines.find((ln) => ln.id === id)
+          const translated = ((s.workspaceMode === 'translate' ? row?.translation : line?.translation) || '').trim()
+          const retries = (translateRetries.current.get(id) || 0) + 1
+          const outcome = translateDoneDecision({
+            ok: e.ok,
+            translated: Boolean(translated),
+            wrongScript: Boolean(translated) && wrongScriptForTarget(translated, s.translateTo),
+            retries,
+          })
+          if (outcome === 'accept') {
+            if (translated) translateRetries.current.delete(id)
             dispatch({ type: 'release_translate' })
-          } else if (translated) {
+          } else if (outcome === 'retry') {
+            translateRetries.current.set(id, retries)
+            askedTranslate.current.delete(id)
+            dispatch({ type: 'clear_translation', id })
             dispatch({ type: 'release_translate' })
-          } else if (row && !translated) {
-            const n = (translateRetries.current.get(id) || 0) + 1
-            translateRetries.current.set(id, n)
-            if (n <= 2) askedTranslate.current.delete(id)
-            else dispatch({ type: 'fail_translate', id })
+          } else {
+            // Only a translate-pair row can be marked failed; a meeting line
+            // that fails translation stays pending for the next pump.
+            if (row) dispatch({ type: 'fail_translate', id })
+            else askedTranslate.current.delete(id)
+            dispatch({ type: 'release_translate' })
           }
         }
         pumpTranslateRef.current()
@@ -1953,6 +1967,7 @@ export default function App() {
     const sameLang = !typed && translateShouldPassthrough(text, s.translateTo, pair?.from)
     if (sameLang) {
       askedTranslate.current.add(id)
+      translateRetries.current.delete(id)
       dispatch({ type: 'fill_translate', id, translation: text, passthrough: true })
       queueMicrotask(() => pumpTranslateRef.current())
       return
@@ -1984,21 +1999,7 @@ export default function App() {
       files: translateFiles.current.get(id),
     })
     translateFiles.current.delete(id)
-    clearTranslateTimer()
-    translateTimer.current = window.setTimeout(() => {
-      if (inflightTranslate.current !== id) return
-      inflightTranslate.current = null
-      const n = (translateRetries.current.get(id) || 0) + 1
-      translateRetries.current.set(id, n)
-      if (n <= 2) askedTranslate.current.delete(id)
-      else dispatch({ type: 'fail_translate', id })
-      dispatch({ type: 'release_translate' })
-      dispatch({
-        type: 'engine',
-        ev: { type: 'status', text: n <= 2 ? 'Translation timed out — retrying' : 'Translation timed out' },
-      })
-      pumpTranslateRef.current()
-    }, 25000)
+    armTranslateTimeout(id)
   }, [])
 
   const pumpTranslate = useCallback(() => {
