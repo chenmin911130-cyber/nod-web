@@ -54,6 +54,8 @@ export interface MeetingLine {
   translateFailed?: boolean
   /** STT language tag for this turn (from the question event), for passthrough. */
   lang?: PairLang
+  /** Bumped by a line_update extend; gates stale translate chunks/dones. */
+  rev?: number
 }
 
 export interface TranslatePair {
@@ -102,6 +104,7 @@ export interface AppState {
   heardLang: PairLang | null
   translateAskId: string
   translateBindId: string
+  translateBindRev: number
   listenScene: 'meeting' | 'lecture' | 'interview'
   translateOn: boolean
   catchNotes: CatchNote[]
@@ -137,6 +140,7 @@ export type EngineEvent =
   | { type: 'status'; text: string }
   | { type: 'partial'; text: string; language?: string; speaker?: string }
   | { type: 'question'; id: string; text: string; language?: string; speaker?: string }
+  | { type: 'line_update'; id: string; text: string; language?: string; speaker?: string; rev: number }
   | { type: 'chunk'; id: string; text: string }
   | { type: 'done'; id: string; stt: number; llm: number; ok: boolean }
   | { type: 'error'; text: string }
