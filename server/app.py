@@ -8,6 +8,7 @@ import collections
 import json
 import logging
 import os
+import hashlib
 import queue
 import re
 import tempfile
@@ -51,6 +52,7 @@ from server.lang import (
     matches_locked_speech,
     split_code_switched,
 )
+from server.meeting_lines import decide as meeting_decide, join_meeting_text
 from server.logging_setup import backup_now, setup_logging
 from server.settings import (
     AUTH_DISABLED,
@@ -505,6 +507,12 @@ def _pcm_has_voice(pcm: bytes) -> bool:
         if peak > 800:
             return True
     return False
+
+
+def _translate_line_id(question: str) -> str | None:
+    """Extract the line/target id from a translate prompt ``[NOD_TRANSLATE:<id>]``."""
+    m = re.match(r"\[NOD_TRANSLATE:([^\]]+)\]", (question or "").strip())
+    return m.group(1) if m else None
 
 
 def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
@@ -1654,7 +1662,7 @@ class Pipeline:
         internal: bool,
         stream_usage: tuple[int, int] | None = None,
     ) -> None:
-        from server.meter import consume_llm, save_history
+        from server.meter import consume_llm, save_history, update_history_text
 
         inp, out = resolve_llm_usage(stream_usage, t, answer)
         ok, snap = consume_llm(self.user_id, self.usage_session_id, inp, out)
@@ -1662,7 +1670,17 @@ class Pipeline:
         kind_q = "transcript" if mode == "translate" else "question"
         if not internal:
             save_history(self.user_id, self.usage_session_id, kind_q, self._strip_nod_tag(t), qid)
-        save_history(self.user_id, self.usage_session_id, "answer" if mode == "ask" else mode, answer, qid)
+        if mode == "translate":
+            # A meeting-line translation keyed to its line id: the source was
+            # already saved at emit, and a re-translation overwrites the stale
+            # row instead of stacking half-sentence translations (issue #29).
+            line_id = _translate_line_id(t)
+            if line_id:
+                update_history_text(self.user_id, self.usage_session_id, line_id, answer, kind="translate")
+            else:
+                save_history(self.user_id, self.usage_session_id, "answer" if mode == "ask" else mode, answer, qid)
+        else:
+            save_history(self.user_id, self.usage_session_id, "answer" if mode == "ask" else mode, answer, qid)
         if mode in ("ask", "notes"):
             try:
                 from server.meter import write_session_notes
@@ -1792,11 +1810,27 @@ class CloudListener:
                 cleaned = text.strip()
                 if cleaned and cleaned != self._last_final:
                     self._last_final = cleaned
-                    threading.Thread(target=self.on_final, args=(cleaned, lang, speaker), daemon=True).start()
+                    self._turn_order += 1
+                    words = data.get("words") or []
+                    first_w = words[0] if words else {}
+                    last_w = words[-1] if words else {}
+                    # Turn meta for the meeting continuation decision (issue #29).
+                    meta: dict[str, Any] = {
+                        "first_word_ms": (first_w or {}).get("start"),
+                        "last_word_ms": (last_w or {}).get("end"),
+                        "turn_order": self._turn_order,
+                        "n_words": len(words),
+                    }
+                    # Run on_final on the listener's (single) message thread so the
+                    # meeting enqueue order matches AssemblyAI's turn order — a
+                    # per-final thread could enqueue a later turn before an earlier
+                    # one, breaking the continuation decision (issue #29). _on_final
+                    # itself is non-blocking (LLM work is threaded), so this never
+                    # stalls the websocket reader.
+                    self.on_final(cleaned, lang, speaker, meta)
                 if os.environ.get("NOD_STT_TRACE") == "1":
                     # Instrument turn boundaries for the "English line every 10s /
                     # half-sentence cut" investigation (issue #22). Logging only.
-                    self._turn_order += 1
                     words = data.get("words") or []
                     word_speakers: dict[str, int] = {}
                     for w in words:
@@ -1807,7 +1841,7 @@ class CloudListener:
                     last_w = words[-1] if words else {}
                     logging.getLogger("nod").info(
                         "stt turn_order=%s end_of_turn_confidence=%s words=%s first_word_ms=%s last_word_ms=%s "
-                        "language_code=%s speakers=%s text=%s",
+                        "language_code=%s speakers=%s text_len=%s text_sha=%s",
                         self._turn_order,
                         data.get("end_of_turn_confidence"),
                         len(words),
@@ -1815,7 +1849,8 @@ class CloudListener:
                         (last_w or {}).get("end"),
                         data.get("language_code") or lang,
                         word_speakers,
-                        (cleaned or text)[:40],
+                        len(cleaned or text),
+                        hashlib.sha1((cleaned or text).encode("utf-8", "ignore")).hexdigest()[:8],
                     )
             elif speechy and self.on_partial:
                 self.on_partial(text, lang, speaker)
@@ -1897,6 +1932,13 @@ class Session:
         self._interview_wait_timer: threading.Timer | None = None
         self._meeting_lock = threading.Lock()
         self._interview_lock = threading.Lock()
+        # Meeting "incomplete-sentence continuation" (issue #29): the currently-open
+        # transcript line that a later final may extend.
+        self._open_line: dict[str, Any] | None = None
+        self._meeting_gen = 0
+        self._meeting_finals: queue.Queue[tuple[int, int, str, str | None, str | None, dict[str, Any] | None]] = queue.Queue()
+        self._meeting_worker_started = False
+        self._final_seq = 0
         self._follow_lang: str | None = None
         self._follow_switch_lang: str | None = None
         self._follow_switch_hits = 0
@@ -2458,7 +2500,7 @@ class Session:
         self.emit({"type": "status", "text": f"Speech recognition · following {_LANG_NAMES.get(lang, lang)}"})
 
     def _cancel_meeting_timer(self) -> None:
-        timer = self._meeting_flush_timer
+        timer = getattr(self, "_meeting_flush_timer", None)
         self._meeting_flush_timer = None
         if timer:
             try:
@@ -2503,18 +2545,19 @@ class Session:
         self._start_interview_answer(ptxt, plang)
 
     def _flush_meeting_hold(self) -> None:
-        with self._meeting_lock:
+        with getattr(self, "_meeting_lock", threading.Lock()):
             self._cancel_meeting_timer()
-            ptxt, _pts, plang = self._pending_wait
-            speaker = self._pending_speaker
+            ptxt, _pts, plang = getattr(self, "_pending_wait", (None, 0.0, None))
+            speaker = getattr(self, "_pending_speaker", None)
             self._pending_wait = (None, 0.0, None)
             self._pending_speaker = None
-            workspace = self._workspace
+            workspace = getattr(self, "_workspace", "")
         if ptxt and workspace == "meeting":
             self._emit_meeting_line(ptxt, plang, speaker)
 
     def _emit_meeting_line(self, cleaned: str, lang: str | None, speaker: str | None = None) -> None:
         heard = heard_lang_from_text(cleaned, lang)
+        last_piece: dict[str, Any] | None = None
         for piece in split_code_switched(cleaned):
             piece_heard = heard_lang_from_text(piece, heard)
             self._maybe_follow_speech(piece, piece_heard)
@@ -2529,10 +2572,93 @@ class Session:
                 from server.meter import save_history
 
                 save_history(self.user_id, self.usage_session_id, "transcript", piece, qev["id"], qev.get("speaker") or "")
+            last_piece = {"id": qev["id"], "text": piece, "speaker": speaker, "lang": piece_heard or lang}
+        # Only the LAST piece of a code-switched turn may be extended by the next final.
+        with self._meeting_lock:
+            self._open_line = dict(last_piece) if last_piece else None
+            if self._open_line is not None:
+                self._open_line["opened_at"] = time.time()
+                self._open_line["last_final_at"] = time.time()
+                self._open_line["last_word_ms"] = None
+                self._open_line["n_words"] = 0
+                self._open_line["rev"] = 0
 
-    def _hold_or_emit_meeting(self, cleaned: str, lang: str | None, speaker: str | None = None) -> None:
+    def _enqueue_meeting_final(self, cleaned: str, lang: str | None, speaker: str | None, meta: dict[str, Any] | None) -> None:
+        gen = self._meeting_gen
+        if meta and meta.get("turn_order"):
+            turn = meta["turn_order"]
+        else:
+            self._final_seq += 1
+            turn = self._final_seq
+        self._meeting_finals.put((gen, turn, cleaned, lang, speaker, dict(meta or {})))
+        self._ensure_meeting_worker()
+
+    def _ensure_meeting_worker(self) -> None:
+        with self._meeting_lock:
+            if self._meeting_worker_started:
+                return
+            self._meeting_worker_started = True
+        threading.Thread(target=self._meeting_worker_loop, daemon=True).start()
+
+    def _stop_meeting_worker(self) -> None:
+        # Send a drain sentinel: the worker flushes buffered stragglers then exits.
+        # Guarded so a Session.__new__ test session (no meeting attrs) never crashes.
+        q = getattr(self, "_meeting_finals", None)
+        if q is None:
+            return
+        with getattr(self, "_meeting_lock", threading.Lock()):
+            self._meeting_worker_started = False
+        q.put(self._drain_item())
+
+    def _drain_item(self) -> tuple[int, int, str, str | None, str | None, dict[str, Any]]:
+        return (getattr(self, "_meeting_gen", 0), 10 ** 9, "", None, None, {"__drain__": True})
+
+    def _meeting_worker_loop(self) -> None:
+        buffer: dict[int, tuple[int, str, str | None, str | None, dict[str, Any]]] = {}
+        while True:
+            item = self._meeting_finals.get()
+            if item is None:
+                self._flush_meeting_buffer(buffer)
+                return
+            gen, turn, cleaned, lang, speaker, meta = item
+            if meta and meta.get("__drain__"):
+                self._flush_meeting_buffer(buffer)
+                return
+            if gen != self._meeting_gen:
+                buffer.clear()
+                continue
+            buffer[turn] = (gen, cleaned, lang, speaker, meta)
+            # Recompute the contiguous run from the LOWEST buffered turn on every
+            # dequeue, so a late arrival (its thread was slow) never overtakes an
+            # earlier one; a gap (turn N held for N-1) keeps later turns waiting.
+            expected = min(buffer)
+            while expected in buffer:
+                _g, c, l, s, m = buffer.pop(expected)
+                try:
+                    self._hold_or_emit_meeting(c, l, s, m)
+                except Exception:
+                    logging.getLogger("nod").exception("meeting final handler failed")
+                expected += 1
+
+    def _flush_meeting_buffer(self, buffer: dict[int, tuple[int, str, str | None, str | None, dict[str, Any]]]) -> None:
+        for turn in sorted(buffer):
+            _g, c, l, s, m = buffer[turn]
+            if _g != self._meeting_gen:
+                continue
+            try:
+                self._hold_or_emit_meeting(c, l, s, m)
+            except Exception:
+                logging.getLogger("nod").exception("meeting final handler failed")
+
+    def _close_open_line(self) -> None:
+        if hasattr(self, "_open_line"):
+            self._open_line = None
+
+    def _hold_or_emit_meeting(self, cleaned: str, lang: str | None, speaker: str | None = None, meta: dict[str, Any] | None = None) -> None:
+        meta = meta or {}
         leftover: tuple[str, str | None, str | None] | None = None
         hold_now = False
+        emit_update: tuple[str, str, str | None, str | None, int] | None = None
         with self._meeting_lock:
             ptxt, pts, plang = self._pending_wait
             now = time.time()
@@ -2557,6 +2683,32 @@ class Session:
                 hold_now = True
             else:
                 self._cancel_meeting_timer()
+                nxt_open: dict[str, Any] = {
+                    "text": cleaned,
+                    "speaker": speaker,
+                    "lang": lang,
+                    "first_word_ms": meta.get("first_word_ms"),
+                    "last_word_ms": meta.get("last_word_ms"),
+                    "n_words": meta.get("n_words") or 0,
+                }
+                decision = meeting_decide(self._open_line, nxt_open, now)
+                if decision == "extend" and self._open_line:
+                    prev = self._open_line
+                    merged = join_meeting_text(prev["text"], cleaned)
+                    rev = prev.get("rev", 0) + 1
+                    n_words = (prev.get("n_words") or 0) + (meta.get("n_words") or 0)
+                    self._open_line = {
+                        "id": prev["id"],
+                        "text": merged,
+                        "speaker": prev.get("speaker"),
+                        "lang": prev.get("lang"),
+                        "opened_at": prev.get("opened_at"),
+                        "last_final_at": now,
+                        "last_word_ms": meta.get("last_word_ms"),
+                        "n_words": n_words,
+                        "rev": rev,
+                    }
+                    emit_update = (prev["id"], merged, prev.get("lang"), prev.get("speaker"), rev)
         if leftover:
             self._emit_meeting_line(leftover[0], leftover[1], leftover[2])
         if hold_now:
@@ -2566,6 +2718,22 @@ class Session:
             if speaker:
                 ev["speaker"] = speaker
             self.emit(ev)
+            return
+        if emit_update:
+            line_id, merged, plang, pspeaker, rev = emit_update
+            heard = heard_lang_from_text(merged, plang)
+            self._remember_final(merged)
+            self._maybe_follow_speech(merged, heard)
+            ev: dict[str, Any] = {"type": "line_update", "id": line_id, "text": merged, "rev": rev}
+            if heard:
+                ev["language"] = heard
+            if pspeaker:
+                ev["speaker"] = pspeaker
+            self.emit(ev)
+            if self.user_id and self.usage_session_id:
+                from server.meter import update_history_text
+
+                update_history_text(self.user_id, self.usage_session_id, line_id, merged, pspeaker or "")
             return
         self._emit_meeting_line(cleaned, lang, speaker)
 
@@ -2580,11 +2748,14 @@ class Session:
         self._pending_asks = []
         # 丢弃 hold 住的半句会议内容（不 flush）：模式切换后 emit 的 question 事件
         # 会被前端路由到新 workspace（如 translate 下变成垃圾翻译对）
-        with self._meeting_lock:
+        with getattr(self, "_meeting_lock", threading.Lock()):
             self._cancel_meeting_timer()
             self._cancel_interview_wait_timer()
             self._pending_wait = (None, 0.0, None)
             self._pending_speaker = None
+            self._open_line = None
+            self._meeting_gen = getattr(self, "_meeting_gen", 0) + 1
+        self._stop_meeting_worker()
 
     def set_workspace(self, mode: str, scene: Any = None, speakers_expected: Any = None) -> None:
         if mode not in ("interview", "meeting", "translate"):
@@ -2681,6 +2852,11 @@ class Session:
                 lst = self._listener
                 self._listener = None
             self._stop_listener(lst)
+        # Flush any held half-sentence and close the open meeting line so the
+        # first final after Resume starts a fresh line (issue #29).
+        self._flush_meeting_hold()
+        self._close_open_line()
+        self._stop_meeting_worker()
         self._emit_phase()
         self.emit({"type": "status", "text": "Listening paused"})
 
@@ -2880,6 +3056,10 @@ class Session:
             self._flush_interview_wait()
         else:
             self._flush_meeting_hold()
+        # Close the open meeting line and drain queued finals so no half-sentence
+        # survives into the next session (issue #29).
+        self._close_open_line()
+        self._stop_meeting_worker()
         self._emit_phase()
         self.emit({"type": "status", "text": STATUS_READY})
         self._flush_cloud_archive(final=False)
@@ -3173,7 +3353,7 @@ class Session:
             ev["speaker"] = speaker
         self.emit(ev)
 
-    def _on_final(self, text: str, lang: str | None = None, speaker: str | None = None) -> None:
+    def _on_final(self, text: str, lang: str | None = None, speaker: str | None = None, meta: dict[str, Any] | None = None) -> None:
         if text:
             self._mark_voice()
         recent = [t for t, _ in self._recent_finals[-3:]]
@@ -3218,7 +3398,7 @@ class Session:
                 self.emit(ev)
             return
         if self._workspace == "meeting":
-            self._hold_or_emit_meeting(cleaned, lang, speaker)
+            self._enqueue_meeting_final(cleaned, lang, speaker, meta)
             return
         recent_qs = [h["q"] for h in self.pipeline._qa_history]
         with self._interview_lock:
