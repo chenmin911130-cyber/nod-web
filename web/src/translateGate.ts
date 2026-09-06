@@ -97,9 +97,10 @@ export type TranslateDoneDecision = 'accept' | 'retry' | 'fail'
 /**
  * What a matching LLM `done` means for the row being translated. `retries` is
  * the count for THIS attempt (1-based). A wrong-script result is retried within
- * budget but never failed — on give-up we keep what we got. A genuine `ok:false`
- * with a partial translation counts as one failure too, so a broken stream
- * doesn't silently pass as complete.
+ * budget and then marked failed, so a wrong-language output shows its give-up
+ * state rather than passing off a mis-translation. A genuine `ok:false` with a
+ * partial translation counts as one failure too, so a broken stream doesn't
+ * silently pass as complete.
  */
 export function translateDoneDecision(args: {
   ok: boolean
@@ -107,7 +108,7 @@ export function translateDoneDecision(args: {
   wrongScript: boolean
   retries: number
 }): TranslateDoneDecision {
-  if (args.wrongScript) return args.retries <= 2 ? 'retry' : 'accept'
+  if (args.wrongScript) return args.retries <= 2 ? 'retry' : 'fail'
   if (args.translated && !args.ok) return args.retries <= 2 ? 'retry' : 'fail'
   if (args.translated) return 'accept'
   return args.retries <= 2 ? 'retry' : 'fail'
@@ -124,10 +125,30 @@ export function isTranslateChunk(translateAskId: string, evId?: string): boolean
   return Boolean(translateAskId) && Boolean(evId) && evId === translateAskId
 }
 
+/** Shared Latin word/script markers (used by both parseHeardLang and wrongScriptForTarget). */
+const ES_LANG_MARK = /[¿¡ñ]|cómo|está/i
+const FR_LANG_MARK = /[çœæ]|pourquoi|bonjour|\bça\b/i
+const DE_LANG_MARK = /[äöüß]|nicht\b|wie geht/i
+const IT_LANG_MARK = /perché|ciao\b|grazie|più/i
+const PT_LANG_MARK = /[ãõ]|você|não|olá/i
+
+/**
+ * The raw STT language tag, trusted ONLY when it is a known translate language.
+ * This is what stamps a meeting line's `lang` and a translate pair's `from` — a
+ * glyph guess (parseHeardLang) must never be written into them, because a
+ * Latin-script line (es/fr/de/it/pt) is glyph-indistinguishable from English,
+ * so a guessed `en` would make passthrough treat "already English" and skip the
+ * model (the #25 P1-1 hold-over: a Spanish line in an English target meeting).
+ */
+export function sttTag(raw: string | undefined): PairLang | undefined {
+  return raw && TRANSLATE_LANGS.some((l) => l.id === raw) ? (raw as PairLang) : undefined
+}
+
 /**
  * Best-guess the spoken language of a turn from the STT tag, falling back to
- * the text's script/word markers when the tag is absent or unknown. Used to
- * stamp a meeting line with `lang` so passthrough can trust the STT tag.
+ * the text's script/word markers when the tag is absent or unknown. Used ONLY
+ * for the heardLang / lock / matches-* heuristics — NEVER to stamp `lang`/`from`
+ * (use sttTag for that).
  */
 export function parseHeardLang(raw: string | undefined, text: string): PairLang | null {
   if (raw && TRANSLATE_LANGS.some((l) => l.id === raw)) return raw as PairLang
@@ -135,11 +156,35 @@ export function parseHeardLang(raw: string | undefined, text: string): PairLang 
   if (!t) return null
   if (/[\u3040-\u30FF]/.test(t)) return 'ja'
   if (/\p{Script=Han}/u.test(t)) return 'zh'
-  if (/[¿¡ñ]|cómo|está/i.test(t)) return 'es'
-  if (/[çœæ]|pourquoi|bonjour|\bça\b/i.test(t)) return 'fr'
-  if (/[äöüß]|nicht\b|wie geht/i.test(t)) return 'de'
-  if (/perché|ciao\b|grazie|più/i.test(t)) return 'it'
-  if (/[ãõ]|você|não|olá/i.test(t)) return 'pt'
+  if (ES_LANG_MARK.test(t)) return 'es'
+  if (FR_LANG_MARK.test(t)) return 'fr'
+  if (DE_LANG_MARK.test(t)) return 'de'
+  if (IT_LANG_MARK.test(t)) return 'it'
+  if (PT_LANG_MARK.test(t)) return 'pt'
   if (/[A-Za-z]/.test(t)) return 'en'
   return null
+}
+
+/**
+ * Script/language-level check on a translated line: catches the model answering
+ * in a blatantly wrong language so a wrong-language output is retried (and then
+ * failed) instead of accepted. CJK targets keep the pure script check (reliable).
+ * For a Latin target (en/es/fr/de/it/pt) the text is wrong-language when it
+ * carries a non-English Latin marker (the model answered in Spanish / Italian /
+ * French / German / Portuguese) or when it is majority CJK/Hangul. Fewer than 4
+ * letters is never enough to judge.
+ */
+export function wrongScriptForTarget(text: string, to: PairLang): boolean {
+  const chars = Array.from(compact(text)).filter((c) => /[\p{L}]/u.test(c))
+  if (chars.length < 4) return false
+  const han = chars.filter((c) => /\p{Script=Han}/u.test(c)).length
+  const kana = chars.filter((c) => /[\u3040-\u30FF]/.test(c)).length
+  const hangul = chars.filter((c) => /\p{Script=Hangul}/u.test(c)).length
+  if (to === 'zh') return han === 0
+  if (to === 'ja') return han + kana === 0
+  const latinWrong =
+    ES_LANG_MARK.test(compact(text)) || FR_LANG_MARK.test(compact(text)) || DE_LANG_MARK.test(compact(text)) ||
+    IT_LANG_MARK.test(compact(text)) || PT_LANG_MARK.test(compact(text))
+  if (latinWrong) return true
+  return (han + kana + hangul) / chars.length >= 0.5
 }

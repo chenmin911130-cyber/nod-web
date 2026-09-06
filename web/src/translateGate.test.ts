@@ -3,10 +3,12 @@ import {
   looksLikeTarget,
   matchesLockedFrom,
   routeTranslateChunk,
+  sttTag,
   translateAskIdAfterDone,
   translateDoneBelongsToAsk,
   translateDoneDecision,
   translateShouldPassthrough,
+  wrongScriptForTarget,
 } from './translateGate'
 
 function eq<T>(got: T, want: T, label: string) {
@@ -65,6 +67,23 @@ eq(translateShouldPassthrough('Hello there', 'en', undefined), false, 'no STT ta
 eq(translateShouldPassthrough('Bonjour, comment allez-vous', 'fr', 'fr'), true, 'French tagged fr with a fr target passes through')
 eq(translateShouldPassthrough('Bonjour, comment allez-vous', 'fr', undefined), false, 'French with no tag -> LLM (Auto must not glyph-guess a Latin language)')
 
+// sttTag: a guessed glyph language must never be written into lang/from — only a
+// raw STT tag that is a known translate language is trusted.
+eq(sttTag('en'), 'en', 'a known STT tag is trusted')
+eq(sttTag('es'), 'es', 'a Latin STT tag is trusted')
+eq(sttTag('xx'), undefined, 'an unknown tag is dropped')
+eq(sttTag(undefined), undefined, 'no tag is dropped')
+eq(sttTag('zh'), 'zh', 'a CJK STT tag is trusted')
+eq(translateShouldPassthrough('Quiero comer algo antes de la reunion', 'en', sttTag(undefined)), false, 'a Spanish line under an en target with no STT tag goes to the LLM')
+eq(translateShouldPassthrough('Let us move on', 'en', 'en'), true, 'an en-tagged English line under an en target passes through')
+
+// wrongScriptForTarget (moved here from App.tsx): a Latin target flags a model
+// output that carries a non-English Latin marker, or is majority CJK/Hangul.
+eq(wrongScriptForTarget('Dobbiamo finire il lavoro entro domani perché', 'en'), true, 'Italian output for an en target is wrong-language')
+eq(wrongScriptForTarget('We should finish by tomorrow', 'en'), false, 'English output for an en target is fine')
+eq(wrongScriptForTarget('我们明天完成', 'en'), true, 'Chinese output for an en target is wrong-language (unchanged)')
+eq(wrongScriptForTarget('明天', 'en'), false, 'too few chars is never judged wrong-language')
+
 // matchesLockedFrom: a Latin lock is already constrained to that Latin
 // language, so a guessed / STT 'en' tag (a short or ambiguous turn) must not
 // veto it; only a genuinely different script (CJK) or a distinct non-en tag does.
@@ -108,7 +127,7 @@ eq(translateDoneDecision({ ok: false, translated: true, wrongScript: false, retr
 eq(translateDoneDecision({ ok: false, translated: true, wrongScript: false, retries: 3 }), 'fail', 'ok:false + partial exhausted -> fail')
 eq(translateDoneDecision({ ok: false, translated: false, wrongScript: false, retries: 1 }), 'retry', 'ok:false + empty -> retry')
 eq(translateDoneDecision({ ok: true, translated: true, wrongScript: true, retries: 1 }), 'retry', 'wrongScript -> retry within budget')
-eq(translateDoneDecision({ ok: true, translated: true, wrongScript: true, retries: 3 }), 'accept', 'wrongScript exhausted -> accept (keep what we got)')
+eq(translateDoneDecision({ ok: true, translated: true, wrongScript: true, retries: 3 }), 'fail', 'wrongScript exhausted -> fail (a wrong-language output gives up, not accept)')
 
 // isTranslateChunk: a chunk can only join the translate stream when it carries
 // the id stamped on the translate `question`. With no translateAskId (e.g.

@@ -15,7 +15,7 @@ import SavePrompt from './components/SavePrompt'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
 import { canSwitchWorkspace, sessionListening } from './iphoneCopy'
-import { isTranslateChunk, looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough } from './translateGate'
+import { isTranslateChunk, looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, sttTag, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough, wrongScriptForTarget } from './translateGate'
 import { nextMeetingLineToTranslate } from './meetingTranslate'
 import { doneAffectsInterview } from './interviewDone'
 import AnswerPane from './components/AnswerPane'
@@ -423,7 +423,7 @@ function reducer(state: AppState, action: Action): AppState {
               text,
               at: Date.now(),
               speaker: ev.speaker,
-              lang: heard ?? undefined,
+              lang: sttTag(ev.language),
             }]
             if (scene === 'lecture') {
               speakerNames = promoteLectureSpeakers(meetingLines, speakerNames, state.speakerNameLocked)
@@ -468,7 +468,7 @@ function reducer(state: AppState, action: Action): AppState {
               original: text,
               translation: '',
               to: state.translateTo,
-              from: state.translateFrom !== 'auto' ? state.translateFrom : (heard ?? undefined),
+              from: state.translateFrom !== 'auto' ? state.translateFrom : sttTag(ev.language),
             }]
             return { ...state, translatePairs, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
           }
@@ -850,19 +850,7 @@ function hasSpeechContent(text: string): boolean {
   return /[A-Za-z0-9\u00C0-\u024F\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]/u.test(normOriginal(text))
 }
 
-// Script-level check only (no word markers): catches the model answering in a
-// blatantly wrong language (e.g. Chinese for an EN target) without flagging
-// accented proper nouns in otherwise-correct output.
-function wrongScriptForTarget(text: string, to: PairLang): boolean {
-  const chars = Array.from(normOriginal(text)).filter((c) => /[\p{L}]/u.test(c))
-  if (chars.length < 4) return false
-  const han = chars.filter((c) => /\p{Script=Han}/u.test(c)).length
-  const kana = chars.filter((c) => /[\u3040-\u30FF]/.test(c)).length
-  const hangul = chars.filter((c) => /\p{Script=Hangul}/u.test(c)).length
-  if (to === 'zh') return han === 0
-  if (to === 'ja') return han + kana === 0
-  return (han + kana + hangul) / chars.length >= 0.5
-}
+// Script/language check for a translated line lives in translateGate.ts now.
 
 function langTag(lang: PairLang): string {
   return TRANSLATE_LANGS.find((l) => l.id === lang)?.tag ?? lang.toUpperCase()
