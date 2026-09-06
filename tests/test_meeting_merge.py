@@ -25,7 +25,16 @@ from unittest import mock
 
 from server import app as app_mod
 from server.app import CloudListener, Session
-from server.meeting_lines import decide, ends_sentence, gap_ms, join_meeting_text
+from server.meeting_lines import (
+    decide,
+    decide_full,
+    ends_sentence,
+    false_period,
+    gap_ms,
+    join_meeting_text,
+    last_sentence_index,
+    tail_meta,
+)
 
 
 class _Clock:
@@ -542,6 +551,173 @@ class MeetingWorkerOrderTests(unittest.TestCase):
         sess._enqueue_meeting_final("second segment here", "B", "B", {"turn_order": 2, "n_words": 3})
         _wait_for(sess, "question", 2)
         self.assertEqual(len(_events(sess, "question")), 2, "both finals accumulate in the transcript")
+
+
+class SentenceEndSplitTests(unittest.TestCase):
+    """Round 3 (#33): sentence-boundary wrapping, the false period, boundary-word
+    dedup, the caps-as-fallback, and split tail meta."""
+
+    def _drive_hold(self, sess: Session, text, lang=None, speaker=None, meta=None):
+        sess._hold_or_emit_meeting(text, lang, speaker, meta or {})
+
+    # ---- pure decide / join -------------------------------
+
+    def test_last_sentence_index_ignores_decimal_and_abbreviation(self):
+        self.assertIsNone(last_sentence_index("The value is 1.5 for now"))
+        self.assertIsNone(last_sentence_index("Use e.g. this"))
+        # A real period after an abbreviation still counts.
+        self.assertEqual(last_sentence_index("Use e.g. this. Next"), 14)
+
+    def test_false_period_classifies_function_word_but_not_pronoun(self):
+        self.assertTrue(false_period("…changing me into."))
+        self.assertTrue(false_period("allowing you to stop.") is False)
+        self.assertFalse(false_period("…finished video."))  # 'video' is a noun
+        self.assertFalse(false_period("no period here"))  # no trailing '.'
+
+    def test_join_strips_false_period_and_recases(self):
+        # §1.3: a bogus '.' after a function word is dropped and the continuation's
+        # first letter is lowercased ("A" → "a"), so "...me into." + "A Western…"
+        # renders as "...me into a Western…".
+        out = join_meeting_text("it keeps changing me into.", "A Western cowboy", gap_ms=242.0)
+        self.assertEqual(out, "it keeps changing me into a Western cowboy")
+        # "I" keeps its capital; a genuine acronym ("NASA") keeps its caps.
+        self.assertEqual(join_meeting_text("I was just", "I really think so", gap_ms=200.0), "I was just I really think so")
+        self.assertEqual(join_meeting_text("it was just", "NASA announced a plan", gap_ms=200.0), "it was just NASA announced a plan")
+
+    def test_join_dedups_boundary_word(self):
+        # §1.4: turn 8 ends "know exactly", turn 9 starts "exactly where" → the
+        # repeated boundary word is dropped when the gap is small.
+        out = join_meeting_text("share it on your socials and know exactly", "exactly where you post", gap_ms=400.0)
+        self.assertEqual(out, "share it on your socials and know exactly where you post")
+        self.assertEqual(out.count("exactly"), 1)
+        # A large gap (over 500ms) does NOT dedup.
+        self.assertEqual(
+            join_meeting_text("know exactly", "exactly where", gap_ms=600.0),
+            "know exactly exactly where",
+        )
+
+    def test_false_period_decides_extend_but_pronoun_is_new(self):
+        fp_prev = {"id": "q1", "text": "…changing me into.", "speaker": "A",
+                   "opened_at": 0.0, "last_final_at": 0.0, "last_word_ms": 1000, "n_words": 4, "rev": 0}
+        fp_nxt = {"text": "A Western cowboy. Now more", "speaker": "A",
+                  "first_word_ms": 1242, "last_word_ms": 2000, "n_words": 5}
+        self.assertEqual(decide(fp_prev, fp_nxt, 0.0), "extend")
+        self.assertEqual(decide_full(fp_prev, fp_nxt, 0.0), ("extend", "false_period"))
+        # "...allowing you." — a pronoun can legally close a sentence → NEW.
+        you_prev = {"id": "q2", "text": "…allowing you.", "speaker": "A",
+                    "opened_at": 0.0, "last_final_at": 0.0, "last_word_ms": 1000, "n_words": 3, "rev": 0}
+        you_nxt = {"text": "To do things", "speaker": "A",
+                   "first_word_ms": 1242, "last_word_ms": 2000, "n_words": 4}
+        self.assertEqual(decide(you_prev, you_nxt, 0.0), "new")
+        self.assertEqual(decide_full(you_prev, you_nxt, 0.0), ("new", "ends_sentence"))
+
+    def test_true_sentence_end_is_new_despite_tiny_gap(self):
+        # §0 "finished video." → next sentence, word gap 81ms. The gap does NOT
+        # participate in sentence-end judgement — a real sentence end is always new.
+        prev = {"id": "q1", "text": "this is the finished video.", "speaker": "A",
+                "opened_at": 0.0, "last_final_at": 0.0, "last_word_ms": 1000, "n_words": 5, "rev": 0}
+        nxt = {"text": "Next up we move on", "speaker": "A",
+               "first_word_ms": 1081, "last_word_ms": 1800, "n_words": 6}
+        self.assertEqual(decide(prev, nxt, 0.0), "new")
+        self.assertEqual(decide_full(prev, nxt, 0.0), ("new", "ends_sentence"))
+
+    def test_caps_hardcut_only_when_no_sentence_end(self):
+        # §1.2: prev+nxt both without any sentence end AND chars > 900 → hard cut.
+        prev = {"id": "q1", "text": "word " * 110, "speaker": "A",
+                "opened_at": 0.0, "last_final_at": 0.0, "last_word_ms": 1000, "n_words": 110, "rev": 0}
+        nxt = {"text": "word " * 110, "speaker": "A",
+               "first_word_ms": 1200, "last_word_ms": 2000, "n_words": 110}
+        self.assertGreater(len(prev["text"]) + len(nxt["text"]), 900)
+        self.assertEqual(decide(prev, nxt, 0.0), "new")
+        self.assertEqual(decide_full(prev, nxt, 0.0), ("new", "chars"))
+        # Same size, but the next turn closes on a sentence end → still extend.
+        nxt2 = dict(nxt)
+        nxt2["text"] = "word " * 108 + "finished here. more"
+        self.assertEqual(decide(prev, nxt2, 0.0), "extend")
+        self.assertEqual(decide_full(prev, nxt2, 0.0), ("extend", "split"))
+
+    def test_tail_meta_first_word_in_range(self):
+        # §2 item 6: the split tail's interpolated first_word_ms lies inside the
+        # turn's [first, last]; turn_order is dropped.
+        text = "exactly where you post your weekly updates on all your social media channels. Also, make sure to stay"
+        split_at = last_sentence_index(text)
+        self.assertIsNotNone(split_at)
+        tm = tail_meta({"first_word_ms": 30400, "last_word_ms": 43000, "n_words": 20, "turn_order": 9}, text, split_at)
+        self.assertTrue(30400 <= tm["first_word_ms"] <= 43000, f"tail first_word_ms {tm['first_word_ms']}")
+        self.assertEqual(tm["last_word_ms"], 43000)
+        self.assertGreater(tm["n_words"], 0)
+        self.assertNotIn("turn_order", tm)
+
+    # ---- session-level split -------------------------------
+
+    def test_split_at_last_sentence_end_opens_tail(self):
+        # §0 row 3: turn 8 (open, internal period) + turn 9 carrying a sentence end
+        # → one line_update (prev closed at "…social media channels.") + a new
+        # question (the tail), with the boundary word "exactly" appearing once.
+        sess = _session()
+        clk = _Clock()
+        turn8 = ("you should share a brief update. covering all your product news across "
+                 "every one of your social media channels and know exactly")
+        turn9 = "exactly where you post your weekly updates on all your social media channels. Also, make sure to stay"
+        with mock.patch("server.app.time.time", clk):
+            self._drive_hold(sess, turn8, speaker="A",
+                             meta={"first_word_ms": 5000, "last_word_ms": 30000, "n_words": 30})
+            clk.advance(10)
+            self._drive_hold(sess, turn9, speaker="A",
+                             meta={"first_word_ms": 30400, "last_word_ms": 43000, "n_words": 20})
+        ups = _events(sess, "line_update")
+        qs = _events(sess, "question")
+        self.assertEqual(len(ups), 1)
+        self.assertEqual(len(qs), 2, "turn 8 line + the split tail line")
+        # The absorbed line was closed at the sentence end, and the tail is a NEW
+        # line (not smeared into the merged line).
+        self.assertTrue(ups[0]["text"].endswith("social media channels."))
+        self.assertNotIn("Also, make sure to stay", ups[0]["text"])
+        self.assertEqual(ups[0]["text"].count("exactly"), 1, "boundary word deduped")
+        # The tail became the new open line (same speaker, open, rev reset).
+        self.assertEqual(qs[1]["text"], "Also, make sure to stay")
+        self.assertEqual(qs[1]["speaker"], "A")
+        self.assertEqual(sess._open_line["text"], "Also, make sure to stay")
+        self.assertNotIn("closed", sess._open_line)
+        self.assertEqual(sess._open_line["speaker"], "A")
+
+    def test_tail_extends_via_word_gap_on_next_final(self):
+        # §2 item 6: after the split the tail is the open line; the next final
+        # compares a word-level gap against it and extends.
+        sess = _session()
+        clk = _Clock()
+        turn8 = ("you should share a brief update. covering all your product news across "
+                 "every one of your social media channels and know exactly")
+        turn9 = "exactly where you post your weekly updates on all your social media channels. Also, make sure to stay"
+        with mock.patch("server.app.time.time", clk):
+            self._drive_hold(sess, turn8, speaker="A",
+                             meta={"first_word_ms": 5000, "last_word_ms": 30000, "n_words": 30})
+            clk.advance(10)
+            self._drive_hold(sess, turn9, speaker="A",
+                             meta={"first_word_ms": 30400, "last_word_ms": 43000, "n_words": 20})
+            self.assertEqual(sess._open_line["text"], "Also, make sure to stay")
+            self.assertEqual(sess._open_line["last_word_ms"], 43000)
+            clk.advance(10)
+            self._drive_hold(sess, "until the end of the video", speaker="A",
+                             meta={"first_word_ms": 43400, "last_word_ms": 45000, "n_words": 6})
+        self.assertEqual(len(_events(sess, "line_update")), 2, "tail extended via a word-level gap")
+        self.assertEqual(sess._open_line["text"], "Also, make sure to stay until the end of the video")
+
+    def test_no_sentence_end_merges_wholesale_stays_open(self):
+        # §2 item 4: an incoming turn with NO sentence end is merged wholesale and
+        # the line stays open (no split, no closed flag).
+        sess = _session()
+        clk = _Clock()
+        with mock.patch("server.app.time.time", clk):
+            self._drive_hold(sess, "first part without any stop", speaker="A",
+                             meta={"first_word_ms": 1000, "last_word_ms": 5000, "n_words": 6})
+            clk.advance(10)
+            self._drive_hold(sess, "second part still one thought", speaker="A",
+                             meta={"first_word_ms": 5200, "last_word_ms": 9000, "n_words": 8})
+        self.assertEqual(len(_events(sess, "question")), 1)
+        self.assertEqual(len(_events(sess, "line_update")), 1)
+        self.assertEqual(sess._open_line["text"], "first part without any stop second part still one thought")
+        self.assertNotIn("closed", sess._open_line, "merged line stays open")
 
 
 if __name__ == "__main__":
