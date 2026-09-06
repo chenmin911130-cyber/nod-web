@@ -47,7 +47,7 @@ export function historySessionMatches(
   return hay.includes(q)
 }
 
-/** Meeting / Lecture can save after Stop. Pause, live listen, and empty sessions do not. */
+/** Meeting / Lecture can save after Stop. Pause, live listen, empty, saved, and discarded sessions do not. */
 export function sessionShouldOfferSave(input: {
   workspaceMode: string
   ended: boolean
@@ -55,12 +55,14 @@ export function sessionShouldOfferSave(input: {
   hasContent: boolean
   listening?: boolean
   paused?: boolean
+  disposition?: 'undecided' | 'saving' | 'saved' | 'discarded'
 }): boolean {
-  if (input.workspaceMode !== 'meeting' || input.kept || !input.hasContent || input.listening || input.paused) return false
+  const disposition = input.disposition ?? (input.kept ? 'saved' : 'undecided')
+  if (input.workspaceMode !== 'meeting' || disposition !== 'undecided' || !input.hasContent || input.listening || input.paused) return false
   return input.ended || !input.listening
 }
 
-/** Engine save_prompt only opens the Meeting / Lecture dialog, never after Keep or Pause. */
+/** Engine save_prompt never opens a blocking dialog. Pause / Interview / already-kept still must not. */
 export function sessionShouldOpenSavePrompt(input: {
   workspaceMode: string
   kept: boolean

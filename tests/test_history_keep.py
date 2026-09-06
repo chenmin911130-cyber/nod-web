@@ -102,3 +102,19 @@ class HistoryKeepTests(unittest.TestCase):
             sess.stop_listen()
         types = [c.args[0]["type"] for c in sess.emit.call_args_list]
         self.assertNotIn("save_prompt", types)
+
+    def test_keep_history_without_session_emits_failed(self):
+        sess = self._session()
+        sess.usage_session_id = None
+        sess.keep_history()
+        types = [c.args[0]["type"] for c in sess.emit.call_args_list]
+        self.assertIn("history_keep_failed", types)
+        self.assertNotIn("history_kept", types)
+
+    def test_keep_history_error_emits_failed(self):
+        sess = self._session()
+        with mock.patch("server.meter.keep_usage_session", side_effect=RuntimeError("disk")):
+            sess.keep_history()
+        types = [c.args[0]["type"] for c in sess.emit.call_args_list]
+        self.assertIn("history_keep_failed", types)
+        self.assertNotIn("history_kept", types)

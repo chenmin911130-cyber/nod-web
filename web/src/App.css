@@ -92,6 +92,8 @@ html.nod-phone .app.iphone-v2.hist-open > .titlebar,
 html.nod-web .app.hist-open > .titlebar,
 html.nod-phone .app.iphone-v2.hist-open .iphone-actions,
 html.nod-web .app.hist-open .iphone-actions,
+html.nod-phone .app.iphone-v2.hist-open .save-banner,
+html.nod-web .app.hist-open .save-banner,
 html.nod-phone .app.iphone-v2.hist-open > .workspace,
 html.nod-web .app.hist-open > .workspace,
 html.nod-phone .app.iphone-v2.hist-open > .status-toast,
@@ -5935,6 +5937,49 @@ a.tb-menu-action {
   border: 1px solid #31506d;
   background: transparent;
   color: #d7e6f5;
+}
+
+.save-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 4px 4px;
+}
+
+.save-banner span {
+  flex: 1;
+  color: #91a6bf;
+  font-size: 14px;
+}
+
+.save-banner-keep,
+.save-banner-discard {
+  min-height: 36px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.save-banner-keep {
+  flex: 1;
+  border: 0;
+  background: #22d3ee;
+  color: #04202a;
+  font-weight: 650;
+}
+
+.save-banner-discard {
+  border: 0;
+  background: transparent;
+  color: #91a6bf;
+  padding: 0 10px;
+}
+
+html.nod-phone .app.iphone-v2 .save-banner-keep {
+  background: #00d2ff;
+  color: #05070a;
 }
 
 @media (max-width: 760px) {

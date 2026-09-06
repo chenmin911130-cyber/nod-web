@@ -2,6 +2,44 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-07 · 旧 history_kept 被当成当前会话的确认
+- 我以为：`intendedId === liveId` 就表示这条 ack 属于正在保存的当前会话；`keepAfterNotes` 只在同一场 Notes 结束时发送，clear 会自然打断。
+- 实际：只要正在等待的对象是当前 live，另一场会话的 `history_kept` 也会取消超时并触发 New/Start；`keepAfterNotes` 不带会话代次，`doClear` 不清它，清空后仍可能对服务端当时的当前会话发 keep。
+- 规则：先严格匹配 ack 所属会话再改状态或执行后续；延迟 keep 必须带 liveId+generation，清空或换代后作废。
+- 涉及：`keepAckMatchesTarget` · `keepAfterNotes` · `doClear`
+
+## 2026-09-07 · Save 收尾在 history_kept 之前就清空
+- 我以为：发出 `keep_history` 后就可以清空界面；等待中的 New session / Start 会在 `onKeep` 或 `keepAfterNotes` 里跑完。
+- 实际：`history_kept` 只把该会话标成 saved，不执行等待中的新会话操作；从 New session 提示里点 Save 会在 ack 前显示 “Saved · new session”；`saving` 没有失败或超时退出，会卡住重试。
+- 规则：New session / Start 只在对应会话的 `history_kept` 之后执行；keep 失败或超时必须退回 undecided、保留内容并允许重试。等 Notes 的保存也走同一条 ack 路径。
+- 涉及：`App.tsx` `history_kept` · `keepAfterNotes` · `onKeep` · `sessionSave.applyKeepFailed`
+
+## 2026-09-06 · #22 关了，NOD_STT_TRACE 一天没打开
+
+- 我以为：#22 关闭评论写了「Instrumented … Deployed … Next: run a real meeting with NOD_STT_TRACE=1」，就等于诊断已就位，下次出断句问题看日志即可。
+- 实际：Railway 生产变量里根本没有 `NOD_STT_TRACE`（`list-variables` 37 个变量核对），部署后 0 条 `stt turn_order=` 日志。用户再报断句时（5094.JPG）只能靠截图 + 代码推断，turn 级证据为零。
+- 规则：加「env 门控日志」的单子，验收项必须包含「线上变量已设置 + 日志里已看到第一条」，否则 issue 不许关；依赖该开关的后续排查前先 `list-variables` 确认开关在。
+- 涉及：`CloudListener._on_message` `NOD_STT_TRACE` · Railway `nod-web` variables · #22
+
+## 2026-09-06 · 查「翻译 Failed」花了 20 分钟，日志放在最后才看
+
+- 我以为：手机上出 Failed 要先从代码里推路径，再本地复现，最后才想到看线上日志；且不知道 Railway MCP 已登录可直接读日志（errors.md 里记的是 CLI token 失效）。
+- 实际：Railway MCP `get-logs` 两分钟就给出关键事实（无 error、无 quota、3 次背靠背 200），把前面十几分钟的猜测（模型名、quota、LLM 报错）全部一次排除。另外浪费在：4 次沙箱审批往返、后台服务被 shell 结束时杀掉两次、模拟消息时序做了两遍。
+- 规则：用户报「手机上出现 X」时，第一步先拉 Railway 日志（MCP `plugin-railway-railway.get-logs`，按时间段 + 过滤 `nod.live`）确定服务端有没有报错，再决定要不要读代码/复现。需要 `.env`/全权限的命令合并成一条一次审批；后台服务用 `block_until_ms: 0` 起，不要放 `&`。排查超过 10 分钟没有新事实就先向用户报中间结论。
+- 涉及：Railway MCP `get-logs` · `server/live.py` 每分钟计数 · `App.tsx` 翻译重试三处
+
+## 2026-09-06 · Listen 设计稿遗漏会话操作菜单
+
+- 我以为：将开始按钮旁的更多入口弱化后，只说明录音和聊天布局就足够。
+- 实际：设计稿与方案没有承接现有更多菜单中的 Export PDF、Save、History、New session，用户补充截图指出遗漏。
+- 规则：重排页面前先核对已有入口及其功能；每个入口都要明确新位置与状态，不能随视觉简化而遗漏。
+- 涉及：Listen 录音前后设计方案 · 会话操作菜单
+
+### 2026-09-06 补充：概念稿不能代替功能盘点
+
+- 核对当前代码后确认：Listen 的 Ask 回答落在 Notes；输入框录音前没有按录音状态禁用，但并非录音预设指令；Save 只面向 Meeting/Lecture，录音及暂停期间不可用；Meeting 人数没有 Auto；Translate 已有播放、自动朗读、音色和 Retry。
+- 规则：后续执行单区分已有能力、纯布局调整和新增交互；不能将图中新增能力或启用状态当成现有实现，也不能在未核对代码时省略已有操作。
+
 ## 2026-09-05 · 给 Hermes 的清库单写成 Postgres
 
 - 我以为：nodpilot 生产库是 Railway Postgres（看到 `docs/adr/0002-postgres-for-write-model.md` 的文件名就当已落地）。
@@ -57,3 +95,10 @@ Newest first. Read before Watch / listen / Translate / phone-sync work.
 - 实际：这些有的有用（不发残留 Meeting、释放手机麦），但都不是跳回主界面的根因。根因是 `think` → `listening=false`。
 - 规则：用户说「还是不行」时，先复现手机发出的状态，禁止再叠一层闩锁碰运气。
 - 涉及：`WatchPhoneSession.swift` · `web/src/watch.ts`
+
+## 2026-09-06 · Translate 控制条要了一个不会走的计时器
+
+- 我以为：#26 执行单里把 `listenShowsRecClock('translate')` 翻成 true，Translate 底部就有 mm:ss。
+- 实际：那个时钟是 `meetingElapsedMs`，只在 `workspaceMode === 'meeting'` 起跑（`App.tsx` 的 meeting_clock effect）。Translate 里永远 00:00。Hermes 按单照做，真机上才发现。
+- 规则：执行单里让某个 UI 显示一个值之前，先查这个值的数据源在哪个模式下才被写；只翻开关不接数据源的项不许进单。
+- 涉及：`iphoneCopy.ts listenShowsRecClock` · `App.tsx meetingElapsedMs` · `IphoneActions.tsx`

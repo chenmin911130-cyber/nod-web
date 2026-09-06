@@ -24,6 +24,7 @@ const EVENT_TYPES = new Set([
   'quota_exceeded',
   'save_prompt',
   'history_kept',
+  'history_keep_failed',
 ])
 
 function asText(v: unknown): string {

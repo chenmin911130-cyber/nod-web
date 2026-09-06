@@ -2902,16 +2902,21 @@ class Session:
     def keep_history(self, content: Any = True, audio: Any = True, session_id: str | None = None) -> None:
         sid = session_id if session_id is not None else self.usage_session_id
         if not self.user_id or not sid:
+            self.emit({"type": "history_keep_failed", "id": sid or "", "text": "Couldn't save this session."})
             return
         keep_content = content is not False
         keep_audio = audio is not False
         if not keep_content and not keep_audio:
             self.discard_history(session_id=sid)
             return
-        self._flush_cloud_archive(final=False)
-        from server.meter import keep_usage_session
+        try:
+            self._flush_cloud_archive(final=False)
+            from server.meter import keep_usage_session
 
-        keep_usage_session(self.user_id, sid, keep_content=keep_content, keep_audio=keep_audio)
+            keep_usage_session(self.user_id, sid, keep_content=keep_content, keep_audio=keep_audio)
+        except Exception:
+            self.emit({"type": "history_keep_failed", "id": sid, "text": "Couldn't save this session."})
+            return
         parts = [name for on, name in ((keep_content, "session"), (keep_audio, "recording")) if on]
         self.emit({"type": "status", "text": "Saved to History · " + " and ".join(parts)})
         # Acknowledge so the client flips its kept flag only after the server

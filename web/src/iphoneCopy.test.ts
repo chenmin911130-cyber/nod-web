@@ -33,7 +33,10 @@ eq(IPHONE_COPY.startListening, 'Start Listening', 'Listen ready CTA is Start Lis
 eq(IPHONE_COPY.startTranslate, 'Start voice translation', 'Translate ready CTA is Start voice translation')
 eq(IPHONE_COPY.recordingStatus, 'Listening', 'live status is Listening')
 eq(IPHONE_COPY.more, 'More', 'PDF/Save/History live in More')
-eq(IPHONE_COPY.saveTitle, 'Save to History?', 'Stop asks save only')
+eq(IPHONE_COPY.saveTitle, 'Save to History?', 'leave / Save asks once')
+eq(IPHONE_COPY.saveBanner, 'Save to History', 'Stop shows a non-blocking Save entry')
+eq(IPHONE_COPY.saveFailed, "Couldn't save. Try again.", 'failed keep leaves Save retryable')
+eq(IPHONE_COPY.saveRestoreTitle, 'Restore this session?', 'reconnect names the old session')
 eq(IPHONE_COPY.keepRecording, 'Keep recording', 'Save can keep the WAV')
 eq(
   IPHONE_COPY.keepRecordingHelp.includes('30 days'),

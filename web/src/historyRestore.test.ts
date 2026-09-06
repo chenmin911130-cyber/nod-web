@@ -71,9 +71,15 @@ if (sessionShouldOfferSave({ workspaceMode: 'interview', ended: true, kept: fals
 if (sessionShouldOfferSave({ workspaceMode: 'meeting', ended: true, kept: false, hasContent: false })) {
   throw new Error('empty session must not offer Save')
 }
+if (sessionShouldOfferSave({ workspaceMode: 'meeting', ended: true, kept: false, hasContent: true, disposition: 'discarded' })) {
+  throw new Error('Don\'t save must not offer Save again')
+}
+if (sessionShouldOfferSave({ workspaceMode: 'meeting', ended: true, kept: false, hasContent: true, disposition: 'saving' })) {
+  throw new Error('saving must not offer Save again')
+}
 
 if (!sessionShouldOpenSavePrompt({ workspaceMode: 'meeting', kept: false })) {
-  throw new Error('Meeting save_prompt must open Save')
+  throw new Error('Meeting remains eligible after Stop (banner, not a blocking dialog)')
 }
 if (sessionShouldOpenSavePrompt({ workspaceMode: 'meeting', kept: false, paused: true })) {
   throw new Error('Pause must not open Save / Don\'t save')
@@ -140,3 +146,5 @@ const timed: HistorySession = {
 const timedPayload = restoreFromSession(timed)
 eq(timedPayload.lines[0].ts, '00:03', 'first line is seconds after start')
 eq(timedPayload.lines[1].ts, '01:05', 'second line is mm:ss after start')
+
+console.log('historyRestore.test.ts ok')
