@@ -91,6 +91,10 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
   const mode = modeOf(session)
   const items = session.items || []
   const lines: MeetingLine[] = []
+  // transcript qid -> index into `lines`, so a meeting-line translation can be
+  // hung on its source line (issue #31 §3.2) instead of a sequential pairs slot.
+  const lineByQid = new Map<string, number>()
+  const matchedTranslations: Array<{ qid: string; text: string }> = []
   const answers = new Map<string, string>()
   const questions: Array<{ id: string; q: string }> = []
   const notes: string[] = []
@@ -103,7 +107,9 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
     if (!text) return
     const id = item.qid || `${session.id}-${i}`
     if (item.kind === 'transcript') {
+      const idx = lines.length
       lines.push({ id, ts: formatItemTs(item, session.started_at, lines.length), text, at: Date.parse(item.at || '') || Date.now(), speaker: item.speaker || '' })
+      lineByQid.set(id, idx)
       originals.push({ id, text, ts: formatItemTs(item, session.started_at, originals.length) })
     } else if (item.kind === 'question') {
       questions.push({ id, q: text })
@@ -114,9 +120,25 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
     } else if (item.kind === 'summary') {
       summaries.push(text)
     } else if (item.kind === 'translate') {
-      translations.push(text)
+      // A meeting/lecture translation whose qid matches a transcript line hangs
+      // on that line. Translate-mode rows (and unmatched/legacy rows) keep the
+      // sequential pairing that feeds TranslatePairs.
+      if (mode !== 'translate' && item.qid && lineByQid.has(item.qid)) {
+        matchedTranslations.push({ qid: item.qid, text })
+      } else {
+        translations.push(text)
+      }
     }
   })
+
+  // Hang matched translations on their lines (applied after the loop in case a
+  // translate row precedes its transcript row).
+  for (const { qid, text } of matchedTranslations) {
+    const idx = lineByQid.get(qid)
+    if (idx !== undefined) {
+      lines[idx] = { ...lines[idx], translation: text }
+    }
+  }
 
   const turns: Turn[] = questions.map((q, i) => ({
     id: q.id,

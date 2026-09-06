@@ -472,12 +472,14 @@ function reducer(state: AppState, action: Action): AppState {
         }
         case 'line_update': {
           // A continuation of the open meeting line: replace its text, bump rev,
-          // and clear the stale translation. Unknown ids are ignored so a stale
-          // event after clear / workspace switch never recreates a line.
+          // clear the stale translation, and clear the LIVE partial (the merged
+          // line is no longer a half-sentence being transcribed). Unknown ids are
+          // ignored so a stale event after clear / workspace switch never
+          // recreates a line.
           if (state.workspaceMode !== 'meeting') return state
           const meetingLines = applyLineUpdate(state.meetingLines, ev.id, ev.text, ev.language, ev.speaker, ev.rev)
           const currentQ = state.currentQId === ev.id ? ev.text : state.currentQ
-          return { ...state, meetingLines, currentQ }
+          return { ...state, meetingLines, currentQ, partial: '', partialSpeaker: '' }
         }
         case 'chunk': {
           let translatePairs = state.translatePairs

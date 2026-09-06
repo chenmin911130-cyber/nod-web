@@ -53,23 +53,38 @@ def join_meeting_text(left: str, right: str) -> str:
     return f"{a} {b}".strip()
 
 
-def gap_ms(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -> tuple[float, bool] | None:
-    """(gap in ms, whether it is word-level) between the open line and the new turn.
+def gap_ms(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -> tuple[float, str] | None:
+    """(gap in ms, source) between the open line and the new turn.
 
-    Prefer word-level ``first_word_ms - last_word_ms``; when either is missing or
-    negative (a pause ends the AssemblyAI session and resets the ms clock), fall
-    back to wall-clock ``now - last_final_at``.
+    ``source`` is ``"word"`` (word-level ``first_word_ms - last_word_ms``, the
+    true silence), or ``"est"`` (estimated: word-level missing on the PREVIOUS
+    line but the NEXT turn carries its own span, so we subtract the next turn's
+    duration from the wall-clock delta — the wall-clock delta is silence PLUS the
+    next turn's length, because a final arrives at turn END). ``None`` when
+    neither is usable, which the caller treats as a ``new`` line.
+
+    The old wall-clock-only fallback (``now - last_final_at``) was wrong: it
+    always read as silence + next-turn-length, so continuous speech always
+    exceeded the threshold. We now only trust it after subtracting the next
+    turn's own span.
     """
     if not prev_open:
         return None
     fw = (nxt or {}).get("first_word_ms")
     lw = prev_open.get("last_word_ms")
     if fw is not None and lw is not None and fw >= lw:
-        return float(fw - lw), True
-    delta = now - (prev_open.get("last_final_at") or now)
-    if delta < 0:
-        return None
-    return float(delta * 1000.0), False
+        return float(fw - lw), "word"
+    # Word-level unavailable on the previous line. If the NEXT turn carries its
+    # own span, estimate the silence by removing that span from the wall-clock
+    # gap between the previous final and now.
+    nf = (nxt or {}).get("first_word_ms")
+    nl = (nxt or {}).get("last_word_ms")
+    if nf is not None and nl is not None and nl >= nf:
+        delta = now - (prev_open.get("last_final_at") or now)
+        if delta < 0:
+            return None
+        return float(delta * 1000.0 - (nl - nf)), "est"
+    return None
 
 
 def decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -> str:
@@ -87,10 +102,11 @@ def decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) ->
     gap = gap_ms(prev_open, nxt, now)
     if gap is None:
         return "new"
-    gap_ms_val, word_based = gap
-    if word_based and gap_ms_val > 2500:
-        return "new"
-    if not word_based and gap_ms_val > 3000:
+    gap_ms_val, _word_based = gap
+    # Both word-level and estimated gaps share the 2.5s threshold. The old
+    # separate 3s wall-clock bail is gone: with the next-turn duration removed,
+    # an estimated gap is comparable to a word-level one.
+    if gap_ms_val > 2500:
         return "new"
 
     p = prev_open.get("speaker")
@@ -104,7 +120,11 @@ def decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) ->
         if not (starts_lower_latin(txt) or (is_cjk(txt) and gap_ms_val <= 1000)):
             return "new"
 
-    if now - (prev_open.get("opened_at") or now) > 12:
+    # 12s cap measured on the PREVIOUS line's own age (last_final_at - opened_at),
+    # NOT against the live clock. A turn that takes ~10s no longer trips the cap
+    # just because `now` moved; only a genuinely old open line is cut.
+    open_age = (prev_open.get("last_final_at") or prev_open.get("opened_at") or now) - (prev_open.get("opened_at") or now)
+    if open_age > 12:
         return "new"
     if len(prev_open.get("text", "")) + len(nxt.get("text", "")) > 480:
         return "new"

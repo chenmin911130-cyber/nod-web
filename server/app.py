@@ -52,7 +52,7 @@ from server.lang import (
     matches_locked_speech,
     split_code_switched,
 )
-from server.meeting_lines import decide as meeting_decide, join_meeting_text
+from server.meeting_lines import decide as meeting_decide, gap_ms as meeting_gap_ms, join_meeting_text
 from server.logging_setup import backup_now, setup_logging
 from server.settings import (
     AUTH_DISABLED,
@@ -493,6 +493,21 @@ def _meeting_should_hold(text: str) -> bool:
         return False
     # Only glue tiny cut-offs. Longer fragments go to the transcript immediately.
     return len(t) < 8
+
+
+def _merge_meeting_meta(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
+    """Merge two turn metas from a held fragment + its continuation: the merged
+    line starts at the earlier first_word_ms, ends at the later last_word_ms, and
+    its n_words is the sum. Missing ms fields stay None."""
+    a = a or {}
+    b = b or {}
+    fw = [v for v in (a.get("first_word_ms"), b.get("first_word_ms")) if v is not None]
+    lw = [v for v in (a.get("last_word_ms"), b.get("last_word_ms")) if v is not None]
+    return {
+        "first_word_ms": min(fw) if fw else None,
+        "last_word_ms": max(lw) if lw else None,
+        "n_words": (a.get("n_words") or 0) + (b.get("n_words") or 0),
+    }
 
 
 def _pcm_has_voice(pcm: bytes) -> bool:
@@ -1868,6 +1883,16 @@ class CloudListener:
             if self.on_error:
                 self.on_error(err)
             self._notify_drop(err)
+        elif kind == "SpeakerRevision":
+            # Speaker reassignment is a #13 concern (turn-level merge); record the
+            # revision only for trace (issue #31 §2.5). Never logs text.
+            if os.environ.get("NOD_STT_TRACE") == "1":
+                turns = data.get("turns") or []
+                logging.getLogger("nod").info(
+                    "stt speaker_revision turns=%s labels=%s",
+                    len(turns),
+                    len(data.get("labels") or {}),
+                )
 
     def _on_ws_error(self, _ws, error) -> None:
         self._fail.append(str(error))
@@ -1938,6 +1963,8 @@ class Session:
         self._meeting_gen = 0
         self._meeting_finals: queue.Queue[tuple[int, int, str, str | None, str | None, dict[str, Any] | None]] = queue.Queue()
         self._meeting_worker_started = False
+        self._meeting_worker_thread: threading.Thread | None = None
+        self._pending_meta: dict[str, Any] | None = None
         self._final_seq = 0
         self._follow_lang: str | None = None
         self._follow_switch_lang: str | None = None
@@ -2429,6 +2456,10 @@ class Session:
             self._flush_interview_wait()
         else:
             self._flush_meeting_hold()
+            # Drain queued finals (they may re-open _open_line), then close it so
+            # the next listener starts a fresh line (issue #31 P1-c).
+            self._stop_meeting_worker(wait=True)
+            self._close_open_line()
         self.emit({"type": "listen_taken", "text": LISTEN_TAKEN_MSG})
         self._emit_phase()
         self.emit({"type": "status", "text": LISTEN_TAKEN_MSG})
@@ -2549,13 +2580,23 @@ class Session:
             self._cancel_meeting_timer()
             ptxt, _pts, plang = getattr(self, "_pending_wait", (None, 0.0, None))
             speaker = getattr(self, "_pending_speaker", None)
+            pmeta = getattr(self, "_pending_meta", None) or {}
             self._pending_wait = (None, 0.0, None)
             self._pending_speaker = None
+            self._pending_meta = None
             workspace = getattr(self, "_workspace", "")
         if ptxt and workspace == "meeting":
-            self._emit_meeting_line(ptxt, plang, speaker)
+            # Re-queue the held fragment through the worker so it takes the
+            # `decide` path like any other final (issue #31 P1-a). It must not be
+            # re-held, so mark it; and it gets a FRESH turn id (the original was
+            # already dequeued) by dropping its old turn_order.
+            m = dict(pmeta)
+            m.pop("turn_order", None)
+            m["__flushed__"] = True
+            self._enqueue_meeting_final(ptxt, plang, speaker, m)
 
-    def _emit_meeting_line(self, cleaned: str, lang: str | None, speaker: str | None = None) -> None:
+    def _emit_meeting_line(self, cleaned: str, lang: str | None, speaker: str | None = None, meta: dict[str, Any] | None = None) -> None:
+        meta = meta or {}
         heard = heard_lang_from_text(cleaned, lang)
         last_piece: dict[str, Any] | None = None
         for piece in split_code_switched(cleaned):
@@ -2574,13 +2615,15 @@ class Session:
                 save_history(self.user_id, self.usage_session_id, "transcript", piece, qev["id"], qev.get("speaker") or "")
             last_piece = {"id": qev["id"], "text": piece, "speaker": speaker, "lang": piece_heard or lang}
         # Only the LAST piece of a code-switched turn may be extended by the next final.
+        # Word-level timestamps come from the turn meta so the continuation decision
+        # has a real first/last word (issue #31 root cause 1).
         with self._meeting_lock:
             self._open_line = dict(last_piece) if last_piece else None
             if self._open_line is not None:
                 self._open_line["opened_at"] = time.time()
                 self._open_line["last_final_at"] = time.time()
-                self._open_line["last_word_ms"] = None
-                self._open_line["n_words"] = 0
+                self._open_line["last_word_ms"] = meta.get("last_word_ms")
+                self._open_line["n_words"] = meta.get("n_words") or 0
                 self._open_line["rev"] = 0
 
     def _enqueue_meeting_final(self, cleaned: str, lang: str | None, speaker: str | None, meta: dict[str, Any] | None) -> None:
@@ -2598,9 +2641,11 @@ class Session:
             if self._meeting_worker_started:
                 return
             self._meeting_worker_started = True
-        threading.Thread(target=self._meeting_worker_loop, daemon=True).start()
+        t = threading.Thread(target=self._meeting_worker_loop, daemon=True)
+        self._meeting_worker_thread = t
+        t.start()
 
-    def _stop_meeting_worker(self) -> None:
+    def _stop_meeting_worker(self, wait: bool = False) -> None:
         # Tell the worker to flush + exit ONLY if one is actually running. If no
         # worker has been started yet (e.g. the very first set_workspace on a fresh
         # connection), putting a drain sentinel would be consumed by the NEXT
@@ -2615,6 +2660,13 @@ class Session:
             self._meeting_worker_started = False
         if was_started:
             q.put(self._drain_item())
+            # pause / stop / listen_taken MUST wait for the worker to drain the
+            # queued finals (they may call _hold_or_emit_meeting and re-open
+            # _open_line) BEFORE closing the open line (issue #31 P1-c).
+            if wait:
+                t = getattr(self, "_meeting_worker_thread", None)
+                if t is not None:
+                    t.join(timeout=1.0)
 
     def _drain_item(self) -> tuple[int, int, str, str | None, str | None, dict[str, Any]]:
         return (getattr(self, "_meeting_gen", 0), 10 ** 9, "", None, None, {"__drain__": True})
@@ -2664,30 +2716,44 @@ class Session:
                 logging.getLogger("nod").exception("meeting final handler failed")
 
     def _close_open_line(self) -> None:
-        if hasattr(self, "_open_line"):
+        with getattr(self, "_meeting_lock", threading.Lock()):
             self._open_line = None
 
     def _hold_or_emit_meeting(self, cleaned: str, lang: str | None, speaker: str | None = None, meta: dict[str, Any] | None = None) -> None:
         meta = meta or {}
-        leftover: tuple[str, str | None, str | None] | None = None
+        leftover: tuple[str, str | None, str | None, dict[str, Any]] | None = None
         hold_now = False
         emit_update: tuple[str, str, str | None, str | None, int] | None = None
         with self._meeting_lock:
             ptxt, pts, plang = self._pending_wait
+            pmeta = getattr(self, "_pending_meta", None) or {}
             now = time.time()
-            if ptxt and now - pts < 2.8 and _same_speech_script(ptxt, cleaned):
+            # A __flushed__ fragment was already held and is now being re-decided;
+            # it must NOT re-merge with a new pending wait or be held again.
+            is_flush = bool(meta.get("__flushed__"))
+            if ptxt and not is_flush and now - pts < 2.8 and _same_speech_script(ptxt, cleaned):
                 cleaned = _join_speech_frags(ptxt, cleaned)
                 lang = plang or lang
                 speaker = self._pending_speaker or speaker
+                meta = _merge_meeting_meta(pmeta, meta)
                 self._pending_wait = (None, 0.0, None)
                 self._pending_speaker = None
+                self._pending_meta = None
             elif ptxt:
-                leftover = (ptxt, plang, self._pending_speaker)
+                # A held fragment that didn't merge (different script, or a final
+                # arrived before the timer fired). With round-2 (P1-a) held
+                # fragments are re-queued by the timer via __flushed__, so this
+                # branch is rarer than before, but it is STILL reachable for a
+                # cross-script continuation inside the 1.0s hold window — emit the
+                # held fragment as its own line rather than dropping it.
+                leftover = (ptxt, plang, self._pending_speaker, pmeta)
                 self._pending_wait = (None, 0.0, None)
                 self._pending_speaker = None
-            if _meeting_should_hold(cleaned):
+                self._pending_meta = None
+            if _meeting_should_hold(cleaned) and not is_flush:
                 self._pending_wait = (cleaned, now, lang)
                 self._pending_speaker = speaker
+                self._pending_meta = meta
                 self._cancel_meeting_timer()
                 timer = threading.Timer(1.0, self._flush_meeting_hold)
                 timer.daemon = True
@@ -2705,6 +2771,7 @@ class Session:
                     "n_words": meta.get("n_words") or 0,
                 }
                 decision = meeting_decide(self._open_line, nxt_open, now)
+                self._trace_meeting_decision(self._open_line, nxt_open, decision, now, cleaned, meta.get("turn_order"))
                 if decision == "extend" and self._open_line:
                     prev = self._open_line
                     merged = join_meeting_text(prev["text"], cleaned)
@@ -2723,7 +2790,7 @@ class Session:
                     }
                     emit_update = (prev["id"], merged, prev.get("lang"), prev.get("speaker"), rev)
         if leftover:
-            self._emit_meeting_line(leftover[0], leftover[1], leftover[2])
+            self._emit_meeting_line(leftover[0], leftover[1], leftover[2], leftover[3])
         if hold_now:
             ev: dict[str, Any] = {"type": "partial", "text": cleaned}
             if lang:
@@ -2748,7 +2815,35 @@ class Session:
 
                 update_history_text(self.user_id, self.usage_session_id, line_id, merged, pspeaker or "")
             return
-        self._emit_meeting_line(cleaned, lang, speaker)
+        self._emit_meeting_line(cleaned, lang, speaker, meta)
+
+    def _trace_meeting_decision(self, prev: dict[str, Any] | None, nxt: dict[str, Any], decision: str, now: float, text: str, turn_order: int | None = None) -> None:
+        """Shas the meeting continuation decision for the ``NOD_STT_TRACE`` line.
+
+        Logs only the decision diagnostics + text length/hash — never the text
+        itself (issue #31 §2.6). Runs inside the worker where the decision is made.
+        """
+        if os.environ.get("NOD_STT_TRACE") != "1":
+            return
+        gap = meeting_gap_ms(prev, nxt, now)
+        gap_ms_val = f"{gap[0]:.0f}" if gap else "none"
+        gap_src = gap[1] if gap else "none"
+        opened_at = prev.get("opened_at") if prev else None
+        last_final_at = prev.get("last_final_at") if prev else None
+        open_age_ms = "-" if (opened_at is None or last_final_at is None) else f"{(last_final_at - opened_at) * 1000:.0f}"
+        logging.getLogger("nod").info(
+            "meeting_decision turn_order=%s decision=%s gap_ms=%s gap_src=%s open_age_ms=%s "
+            "speaker_prev=%s speaker_next=%s text_len=%s text_sha=%s",
+            turn_order,
+            decision,
+            gap_ms_val,
+            gap_src,
+            open_age_ms,
+            prev.get("speaker") if prev else None,
+            nxt.get("speaker"),
+            len(text),
+            hashlib.sha1(text.encode("utf-8", "ignore")).hexdigest()[:8],
+        )
 
     def _reset_turn_state(self) -> None:
         """Drop turn-scoped state: queued questions, pending asks, and holds.
@@ -2865,11 +2960,12 @@ class Session:
                 lst = self._listener
                 self._listener = None
             self._stop_listener(lst)
-        # Flush any held half-sentence and close the open meeting line so the
-        # first final after Resume starts a fresh line (issue #29).
+        # Flush any held half-sentence, drain the worker (its queued finals may
+        # re-open _open_line via _hold_or_emit_meeting), THEN close the open line
+        # so the first final after Resume starts a fresh line (issue #29/#31 P1-c).
         self._flush_meeting_hold()
+        self._stop_meeting_worker(wait=True)
         self._close_open_line()
-        self._stop_meeting_worker()
         self._emit_phase()
         self.emit({"type": "status", "text": "Listening paused"})
 
@@ -3070,9 +3166,10 @@ class Session:
         else:
             self._flush_meeting_hold()
         # Close the open meeting line and drain queued finals so no half-sentence
-        # survives into the next session (issue #29).
+        # survives into the next session (issue #29). Drain FIRST (queued finals
+        # may re-open _open_line), then close (issue #31 P1-c).
+        self._stop_meeting_worker(wait=True)
         self._close_open_line()
-        self._stop_meeting_worker()
         self._emit_phase()
         self.emit({"type": "status", "text": STATUS_READY})
         self._flush_cloud_archive(final=False)

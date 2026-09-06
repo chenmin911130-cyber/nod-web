@@ -1,19 +1,46 @@
-"""Meeting "incomplete-sentence continuation" (issue #29).
+"""Meeting "incomplete-sentence continuation" (issue #29, round 2 — issue #31).
 
 AssemblyAI forces a turn boundary after a short pause, so one spoken sentence can
 arrive as two finals and get transcribed + translated as two half-sentence rows.
-These tests drive the decision logic and the Session meeting path (new vs extend)
-and the worker's turn-order reordering.
+These tests drive the decision logic and the Session meeting path (new vs extend),
+the worker's turn-order reordering, and the round-2 fixes (#31): meta reaches the
+open line, the wall-clock fallback is replaced by a next-turn-duration estimate,
+the 12s cap is measured on the previous line's own age, held fragments flush
+through the worker, and pause/stop drain the worker before closing the open line.
+
+Round-2 rule: every integration case that drives TWO finals patches ``time.time``
+so they are >= 5s apart ("no back-to-back calls"), so a fake-green extend (which
+only ever extended because the two calls were milliseconds apart) can't pass.
 """
 
+import json
+import logging
+import os
+import queue
+import threading
 import time
 import unittest
 from collections import deque
 from unittest import mock
 
 from server import app as app_mod
-from server.app import Session
+from server.app import CloudListener, Session
 from server.meeting_lines import decide, ends_sentence, gap_ms, join_meeting_text
+
+
+class _Clock:
+    """A controllable ``time.time``: every call inside a turn returns the same
+    instant, and ``advance`` moves it for the next turn (a real turn takes ~10s,
+    not milliseconds)."""
+
+    def __init__(self) -> None:
+        self.t = 100000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, seconds: float) -> None:
+        self.t += seconds
 
 
 class _Emitter:
@@ -40,13 +67,15 @@ def _session(**overrides) -> Session:
     sess._pending_asks = []
     sess._pending_wait = (None, 0.0, None)
     sess._pending_speaker = None
-    sess._meeting_lock = __import__("threading").Lock()
-    sess._interview_lock = __import__("threading").Lock()
+    sess._meeting_lock = threading.Lock()
+    sess._interview_lock = threading.Lock()
     sess._meeting_flush_timer = None
+    sess._meeting_worker_thread = None
+    sess._pending_meta = None
     sess._interview_wait_timer = None
     sess._open_line = None
     sess._meeting_gen = 0
-    sess._meeting_finals = __import__("queue").Queue()
+    sess._meeting_finals = queue.Queue()
     sess._meeting_worker_started = False
     sess._final_seq = 0
     sess._recent_finals = []
@@ -75,6 +104,17 @@ def _session(**overrides) -> Session:
 
 def _events(sess: Session, type_: str) -> list[dict]:
     return [e for e in sess.emit.events if e["type"] == type_]
+
+
+def _wait_for(sess: Session, type_: str, count: int, timeout: float = 2.0) -> None:
+    """Block until at least ``count`` events of ``type_`` have been emitted (the
+    meeting worker runs on a daemon thread)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if len(_events(sess, type_)) >= count:
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"timed out waiting for {count} '{type_}' events")
 
 
 class DecideTests(unittest.TestCase):
@@ -134,6 +174,37 @@ class DecideTests(unittest.TestCase):
         nxt = {"text": "significant features", "speaker": "A", "first_word_ms": 6000, "n_words": 2}
         self.assertEqual(decide(prev, nxt, 0.0), "new")
 
+    def test_word_gap_3000ms_is_new(self):
+        # Round-2 rule: BOTH word and estimated gaps share the 2.5s threshold.
+        prev = {"id": "q1", "text": "So one", "speaker": "A", "opened_at": 0.0, "last_final_at": 0.0, "last_word_ms": 2000, "n_words": 2, "rev": 0}
+        nxt = {"text": "features", "speaker": "A", "first_word_ms": 5000, "n_words": 2}
+        self.assertEqual(decide(prev, nxt, 0.0), "new")
+
+    def test_est_gap_small_extends_and_large_is_new(self):
+        # All word-level missing on prev, but the next turn carries its own span.
+        # (now - last_final_at)=1.5s, next-turn duration 1.0s -> est 0.5s -> extend.
+        prev = {"id": "q1", "text": "So one", "speaker": "A", "opened_at": 0.0, "last_final_at": 10.0, "last_word_ms": None, "n_words": 2, "rev": 0}
+        nxt = {"text": "features now", "speaker": "A", "first_word_ms": 5000, "last_word_ms": 6000, "n_words": 2}
+        self.assertEqual(decide(prev, nxt, 11.5), "extend")
+        # Longer wall-clock delta (5s) minus 1s duration = 4s -> new.
+        self.assertEqual(decide(prev, nxt, 15.0), "new")
+
+    def test_open_age_on_prev_side_not_live_clock(self):
+        # A 10s turn must NOT trip the cap just because 'now' moved: the age is
+        # measured from last_final_at (kept at the last extend), not now.
+        prev = {
+            "id": "q1",
+            "text": "features here now",
+            "speaker": "A",
+            "opened_at": 1000.0,
+            "last_final_at": 1001.0,  # line opened at 1000, last final at 1001 -> age 1s
+            "last_word_ms": 200,
+            "n_words": 3,
+            "rev": 0,
+        }
+        nxt = {"text": "more words follow now", "speaker": "A", "first_word_ms": 300, "n_words": 4}
+        self.assertEqual(decide(prev, nxt, 12000.0), "extend")
+
     def test_join_never_drops_right(self):
         self.assertEqual(
             join_meeting_text("中文内容", "English part"),
@@ -142,13 +213,18 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(join_meeting_text("中文内容", "继续内容"), "中文内容继续内容")
         self.assertEqual(join_meeting_text("Hello", "world"), "Hello world")
 
-    def test_gap_ms_prefers_word_and_falls_back_to_wall(self):
+    def test_gap_ms_word_est_none(self):
         prev = {"id": "q1", "text": "x", "speaker": "A", "opened_at": 0.0, "last_final_at": 10.0, "last_word_ms": 100, "n_words": 1, "rev": 0}
         nxt = {"text": "y", "speaker": "A", "first_word_ms": 200, "n_words": 1}
-        self.assertEqual(gap_ms(prev, nxt, 12.0), (100.0, True))
-        # no word info -> wall clock
-        nxt2 = {"text": "y", "speaker": "A", "first_word_ms": None, "n_words": 1}
-        self.assertEqual(gap_ms(prev, nxt2, 12.5), (2500.0, False))
+        self.assertEqual(gap_ms(prev, nxt, 12.0), (100.0, "word"))
+        # Word-level unavailable on prev, but the NEXT turn carries its own span:
+        # wall-clock delta (2.5s) minus the next-turn duration (1s) => est 1.5s.
+        prev2 = {"id": "q1", "text": "x", "speaker": "A", "opened_at": 0.0, "last_final_at": 10.0, "last_word_ms": None, "n_words": 1, "rev": 0}
+        nxt2 = {"text": "y", "speaker": "A", "first_word_ms": 5000, "last_word_ms": 6000, "n_words": 1}
+        self.assertEqual(gap_ms(prev2, nxt2, 12.5), (1500.0, "est"))
+        # Neither side has word levels -> None (caller decides a NEW line).
+        nxt3 = {"text": "y", "speaker": "A", "first_word_ms": None, "last_word_ms": None, "n_words": 1}
+        self.assertIsNone(gap_ms(prev2, nxt3, 12.5))
 
 
 class MeetingEmitTests(unittest.TestCase):
@@ -166,15 +242,26 @@ class MeetingEmitTests(unittest.TestCase):
         self.assertEqual(sess._open_line["speaker"], "A")
 
     def test_extend_emits_line_update_and_updates_history(self):
+        # Two finals are >= 10s apart (a real turn duration); BOTH carry word-level
+        # meta so the continuation is a genuine word-level extend, not a fake-green
+        # extend from two calls being milliseconds apart.
         sess = _session(user_id="u1", usage_session_id="s1")
+        clk = _Clock()
         with mock.patch("server.meter.update_history_text") as upd, mock.patch("server.meter.save_history"):
-            self._drive_hold(sess, "prioritizing P, performance availability work. So one of the significant", speaker="A")
-            self._drive_hold(
-                sess,
-                "features of this particular recent outage last week was, is that the Redis server apparently",
-                speaker="A",
-                meta={"first_word_ms": 55200, "last_word_ms": 60000, "n_words": 10},
-            )
+            with mock.patch("server.app.time.time", clk):
+                self._drive_hold(
+                    sess,
+                    "prioritizing P, performance availability work. So one of the significant",
+                    speaker="A",
+                    meta={"first_word_ms": 54000, "last_word_ms": 55000, "n_words": 8},
+                )
+                clk.advance(10)
+                self._drive_hold(
+                    sess,
+                    "features of this particular recent outage last week was, is that the Redis server apparently",
+                    speaker="A",
+                    meta={"first_word_ms": 55200, "last_word_ms": 60000, "n_words": 10},
+                )
         qs = _events(sess, "question")
         ups = _events(sess, "line_update")
         self.assertEqual(len(qs), 1)
@@ -188,13 +275,19 @@ class MeetingEmitTests(unittest.TestCase):
 
     def test_sentence_end_closes_line_next_is_new(self):
         sess = _session()
-        self._drive_hold(sess, "Let me finish this thought.", speaker="A")
-        self._drive_hold(sess, "Next part.", speaker="A")
+        clk = _Clock()
+        with mock.patch("server.app.time.time", clk):
+            self._drive_hold(sess, "Let me finish this thought.", speaker="A")
+            clk.advance(10)
+            self._drive_hold(sess, "Next part.", speaker="A")
         qs = _events(sess, "question")
         self.assertEqual(len(qs), 2)  # two separate lines
         self.assertEqual(len(_events(sess, "line_update")), 0)
 
-    def test_tiny_fragment_is_held_then_flushed(self):
+    def test_tiny_fragment_is_held_then_flushed_through_worker(self):
+        # Round-2 P1-a: the flush re-queues the held fragment to the worker, it
+        # does NOT emit directly. So the timer callback never produces a question
+        # by itself; the worker's decide path does.
         sess = _session()
         self._drive_hold(sess, "So one", speaker="A")
         p = _events(sess, "partial")
@@ -202,10 +295,210 @@ class MeetingEmitTests(unittest.TestCase):
         self.assertEqual(len(_events(sess, "question")), 0)
         # open line is still None until the held fragment is flushed
         self.assertIsNone(sess._open_line)
-        # flush after the timer
-        sess._flush_meeting_hold()
+        sess._flush_meeting_hold()  # re-queues to the worker
+        _wait_for(sess, "question", 1)
         self.assertEqual(len(_events(sess, "question")), 1)
         self.assertIsNotNone(sess._open_line)
+
+    def test_section1_pair_extends_with_real_turn_gap(self):
+        # Issue #31 §1: turn1 '...feels like one message, but' (10s duration) then
+        # turn2 10s later, real silence 0.4s -> ONE line + ONE line_update.
+        sess = _session()
+        clk = _Clock()
+        with mock.patch("server.app.time.time", clk):
+            self._drive_hold(sess, "it feels like one message, but", speaker="A",
+                             meta={"first_word_ms": 23500, "last_word_ms": 33000, "n_words": 30})
+            clk.advance(10)
+            self._drive_hold(sess, "Under the hood it is a real worker chain", speaker="A",
+                             meta={"first_word_ms": 33400, "last_word_ms": 43000, "n_words": 34})
+        qs = _events(sess, "question")
+        ups = _events(sess, "line_update")
+        self.assertEqual(len(qs), 1)
+        self.assertEqual(len(ups), 1)
+        self.assertEqual(ups[0]["id"], qs[0]["id"])
+        self.assertTrue("real worker chain" in ups[0]["text"])
+        self.assertEqual(ups[0]["rev"], 1)
+        self.assertEqual(sess._open_line["rev"], 1)
+
+    def test_three_segment_chain_bumps_rev_twice(self):
+        # Three ~10s turns, all one speaker, small word gaps -> ONE line, rev 2.
+        sess = _session()
+        clk = _Clock()
+        with mock.patch("server.app.time.time", clk):
+            self._drive_hold(sess, "segment one of the chain", speaker="A",
+                             meta={"first_word_ms": 1000, "last_word_ms": 5000, "n_words": 8})
+            clk.advance(10)
+            self._drive_hold(sess, "segment two of the chain", speaker="A",
+                             meta={"first_word_ms": 5400, "last_word_ms": 9000, "n_words": 9})
+            clk.advance(10)
+            self._drive_hold(sess, "segment three of the chain", speaker="A",
+                             meta={"first_word_ms": 9400, "last_word_ms": 13000, "n_words": 10})
+        qs = _events(sess, "question")
+        ups = _events(sess, "line_update")
+        self.assertEqual(len(qs), 1)
+        self.assertEqual(len(ups), 2)
+        self.assertEqual(ups[-1]["rev"], 2)
+        self.assertEqual(sess._open_line["rev"], 2)
+
+    def test_est_gap_extend_when_word_level_missing(self):
+        # Word-level missing on prev, next turn has its own 8s span, wall-clock
+        # delta 8.4s -> est silence 0.4s -> extend.
+        sess = _session()
+        clk = _Clock()
+        with mock.patch("server.app.time.time", clk):
+            self._drive_hold(sess, "first part of a longer line", speaker="A")
+            clk.advance(8.4)
+            self._drive_hold(sess, "second part continues the line", speaker="A",
+                             meta={"first_word_ms": 8000, "last_word_ms": 16000, "n_words": 12})
+        self.assertEqual(len(_events(sess, "line_update")), 1)
+        self.assertEqual(sess._open_line["rev"], 1)
+
+    def test_no_ms_anywhere_starts_new(self):
+        sess = _session()
+        clk = _Clock()
+        with mock.patch("server.app.time.time", clk):
+            self._drive_hold(sess, "first part of a longer line", speaker="A")
+            clk.advance(10)
+            self._drive_hold(sess, "second part with no timestamps anywhere", speaker="A")
+        self.assertEqual(len(_events(sess, "question")), 2)
+        self.assertEqual(len(_events(sess, "line_update")), 0)
+
+    def test_hold_goes_through_worker_not_direct(self):
+        # A tiny continuation is held; on flush the worker decides and EXTENDS
+        # (line_update), proving the flush did not emit a question directly.
+        sess = _session()
+        clk = _Clock()
+        with mock.patch("server.app.time.time", clk):
+            self._drive_hold(sess, "open any software, and follow", speaker="A",
+                             meta={"first_word_ms": 1000, "last_word_ms": 6000, "n_words": 8})
+            clk.advance(1)
+            self._drive_hold(sess, "but", speaker="A",
+                             meta={"first_word_ms": 6400, "last_word_ms": 6800, "n_words": 1})
+        self.assertEqual(len(_events(sess, "question")), 1, "held fragment not emitted yet")
+        with mock.patch("server.app.time.time", clk):
+            sess._flush_meeting_hold()
+        _wait_for(sess, "line_update", 1)
+        self.assertEqual(len(_events(sess, "line_update")), 1, "held fragment extends via worker")
+        self.assertEqual(len(_events(sess, "question")), 1, "flush never emitted a question directly")
+        self.assertEqual(sess._open_line["rev"], 1)
+
+    def test_held_fragment_merges_with_next_final_and_meta(self):
+        # Issue #31 §2.1: a held tiny fragment that joins the next final before the
+        # timer fires produces a MERGED meta (earlier first_word_ms, later
+        # last_word_ms, n_words summed) on the extended line.
+        sess = _session()
+        clk = _Clock()
+        with mock.patch("server.app.time.time", clk):
+            self._drive_hold(sess, "open any software and then", speaker="A",
+                             meta={"first_word_ms": 1000, "last_word_ms": 6000, "n_words": 7})
+            clk.advance(0.5)
+            # "but" is tiny (<8 chars) and gets HELD (pending wait, timer running).
+            self._drive_hold(sess, "but", speaker="A",
+                             meta={"first_word_ms": 6400, "last_word_ms": 6800, "n_words": 1})
+            self.assertEqual(sess._pending_wait[0], "but", "tiny fragment is held")
+            clk.advance(0.5)
+            # A new final arrives before the 1.0s timer fires -> MERGES with "but".
+            self._drive_hold(sess, "and then feature sets", speaker="A",
+                             meta={"first_word_ms": 6900, "last_word_ms": 7200, "n_words": 3})
+        self.assertEqual(len(_events(sess, "question")), 1)
+        self.assertEqual(len(_events(sess, "line_update")), 1)
+        self.assertIn("but and then feature sets", _events(sess, "line_update")[0]["text"])
+        self.assertEqual(sess._open_line["rev"], 1)
+        # Merged meta: earlier first (6400), later last (7200), n_words summed.
+        self.assertEqual(sess._open_line["last_word_ms"], 7200)
+        self.assertEqual(sess._open_line["n_words"], 7 + 1 + 3)
+
+    def test_pause_drains_buffered_final_before_closing(self):
+        # P1-c: a final still buffered in the worker must be drained (emitted)
+        # BEFORE the open line is closed, so the line is None after.
+        sess = _session(_listener=mock.Mock(), _manual=False)
+        sess._stop_listener = lambda lst: None
+        clk = _Clock()
+        with mock.patch("server.app.time.time", clk):
+            sess._enqueue_meeting_final("first line of the meeting", "A", "A",
+                                        {"turn_order": 1, "first_word_ms": 1000, "last_word_ms": 5000, "n_words": 6})
+            _wait_for(sess, "question", 1)
+            clk.advance(5)
+            # A second final is still buffered; pause must DRAIN it (emit a
+            # line_update extending the open line) BEFORE closing the line.
+            sess._enqueue_meeting_final("second line continues the thought", "A", "A",
+                                        {"turn_order": 2, "first_word_ms": 5400, "last_word_ms": 9000, "n_words": 7})
+            sess.pause_listen()
+        # Both finals were processed (the drain happened): line_update for turn2.
+        self.assertEqual(len(_events(sess, "question")), 1)
+        self.assertEqual(len(_events(sess, "line_update")), 1, "buffered final was drained")
+        # AND THEN the open line was closed. If the drain had reopened it AFTER
+        # the close, open_line would NOT be None (the P1-c bug).
+        self.assertIsNone(sess._open_line, "open line closed after drain")
+        # After resume, the next final is a NEW line (open line was cleared).
+        clk.advance(5)
+        self._drive_hold(sess, "line after resume", speaker="A",
+                         meta={"first_word_ms": 10000, "last_word_ms": 14000, "n_words": 4})
+        _wait_for(sess, "question", 2)
+        self.assertEqual(len(_events(sess, "question")), 2, "resume starts a fresh line")
+
+    def test_speaker_revision_traces_only(self):
+        listener = CloudListener.__new__(CloudListener)
+        records: list[logging.LogRecord] = []
+        handler = logging.Handler()
+        handler.emit = records.append  # type: ignore[assignment]
+        logger = logging.getLogger("nod")
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        try:
+            with mock.patch.dict(os.environ, {"NOD_STT_TRACE": "1"}, clear=False):
+                listener._on_message(None, json.dumps({"type": "SpeakerRevision", "turns": [{"turn_number": 1}], "labels": {"A": 1}}))
+            self.assertTrue(
+                any("stt speaker_revision turns=1 labels=1" in (r.getMessage() or "") for r in records),
+                "trace on: a speaker_revision line is logged",
+            )
+        finally:
+            logger.removeHandler(handler)
+        # Without trace it produces nothing — no events either (listener has no emit).
+        records2: list[logging.LogRecord] = []
+        handler2 = logging.Handler()
+        handler2.emit = records2.append  # type: ignore[assignment]
+        logger.addHandler(handler2)
+        try:
+            with mock.patch.dict(os.environ, {"NOD_STT_TRACE": ""}, clear=False):
+                listener._on_message(None, json.dumps({"type": "SpeakerRevision", "turns": [{"turn_number": 1}]}))
+            self.assertNotIn("stt speaker_revision", "\n".join((r.getMessage() or "") for r in records2))
+        finally:
+            logger.removeHandler(handler2)
+            logger.setLevel(logging.WARNING)
+
+
+    def test_meeting_decision_trace_fields(self):
+        # Issue #31 §2.6: the worker-side trace logs the decision diagnostics
+        # (gap_ms / gap_src / decision / open_age_ms / speaker_prev / speaker_next)
+        # plus text length + hash — never the text itself.
+        sess = _session()
+        records: list[logging.LogRecord] = []
+        handler = logging.Handler()
+        handler.emit = records.append  # type: ignore[assignment]
+        logger = logging.getLogger("nod")
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        try:
+            with mock.patch.dict(os.environ, {"NOD_STT_TRACE": "1"}, clear=False):
+                clk = _Clock()
+                with mock.patch("server.app.time.time", clk):
+                    self._drive_hold(sess, "first part of a longer line", speaker="A")
+                    clk.advance(8.4)
+                    self._drive_hold(sess, "second part continues the line", speaker="A",
+                                     meta={"first_word_ms": 8000, "last_word_ms": 16000, "n_words": 12})
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(logging.WARNING)
+        joined = "\n".join((r.getMessage() or "") for r in records)
+        self.assertIn("decision=extend", joined)
+        self.assertIn("gap_src=est", joined)
+        self.assertIn("gap_ms=", joined)
+        self.assertIn("open_age_ms=", joined)
+        self.assertIn("speaker_prev=", joined)
+        self.assertIn("speaker_next=", joined)
+        self.assertIn("text_len=", joined)
+        self.assertIn("text_sha=", joined)
 
 
 class MeetingWorkerOrderTests(unittest.TestCase):
@@ -215,10 +508,7 @@ class MeetingWorkerOrderTests(unittest.TestCase):
         sess = _session()
         sess._enqueue_meeting_final("third segment here", "A", "A", {"turn_order": 3, "first_word_ms": 300, "n_words": 3})
         sess._enqueue_meeting_final("fourth segment here", "B", "B", {"turn_order": 4, "first_word_ms": 400, "n_words": 3})
-        for _ in range(200):
-            if len(_events(sess, "question")) >= 2:
-                break
-            time.sleep(0.01)
+        _wait_for(sess, "question", 2)
         qs = _events(sess, "question")
         self.assertEqual(len(qs), 2)
         self.assertEqual(qs[0]["text"], "third segment here")
@@ -242,19 +532,15 @@ class MeetingWorkerOrderTests(unittest.TestCase):
         # calls _reset_turn_state -> _stop_meeting_worker BEFORE any worker has
         # started. Putting a drain sentinel then would be consumed by the worker's
         # first get() and make it exit immediately, with the "started" flag still
-        # true -> later finals queue but never reach the transcript (only the live
-        # partial shows). The fix: no drain when nothing is running, and the worker
-        # clears the flag on exit.
+        # true -> later finals queue but never reach the transcript. The fix: no
+        # drain when nothing is running, and the worker clears the flag on exit.
         sess = _session()
-        sess._reset_turn_state()  # connect -> sync meeting mode
+        sess._reset_turn_state()
         self.assertEqual(sess._meeting_finals.qsize(), 0, "no drain sentinel before a worker exists")
         # Consecutive real finals must all land (worker processes every one).
         sess._enqueue_meeting_final("first segment here", "A", "A", {"turn_order": 1, "n_words": 3})
         sess._enqueue_meeting_final("second segment here", "B", "B", {"turn_order": 2, "n_words": 3})
-        for _ in range(200):
-            if len(_events(sess, "question")) >= 2:
-                break
-            time.sleep(0.01)
+        _wait_for(sess, "question", 2)
         self.assertEqual(len(_events(sess, "question")), 2, "both finals accumulate in the transcript")
 
 

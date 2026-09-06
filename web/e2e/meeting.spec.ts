@@ -68,4 +68,34 @@ test.describe('Meeting translation continuation', () => {
     await expect(page.locator('.listen-line .listen-tr').first()).toHaveText('significant features')
     await expect(page.locator('.listen-line')).toHaveCount(1)
   })
+
+  test('a line_update clears the live partial (no half-sentence row lingers)', async ({ page }) => {
+    let ws: WebSocketRoute | undefined
+    await page.routeWebSocket(/\/ws$/, (route) => {
+      ws = route
+    })
+
+    await page.goto('/app')
+    await expect.poll(() => ws !== undefined, { timeout: 5000 }).toBe(true)
+    expect(ws).toBeTruthy()
+    const send = (msg: Record<string, unknown>) => ws!.send(JSON.stringify(msg))
+
+    // 1. A finalized meeting line arrives.
+    send({ type: 'phase', capture: 'off', engine: 'idle' })
+    send({ type: 'question', id: 'm1', text: 'So one of the significant' })
+    await expect(page.locator('.listen-line')).toHaveCount(1)
+    await expect(page.locator('.listen-line .listen-orig').first()).toHaveText('So one of the significant')
+
+    // 2. The SAME thought is still being transcribed: a live partial appears.
+    send({ type: 'partial', text: 'So one of the significant' })
+    await expect(page.locator('.listen-line.live')).toHaveCount(1)
+    await expect(page.locator('.listen-line.live .listen-orig')).toHaveText('So one of the significant')
+
+    // 3. The turn is continued (line_update): the merge finalizes the line and
+    // the live partial must be cleared — no lingering half-sentence row.
+    send({ type: 'line_update', id: 'm1', text: 'So one of the significant features', rev: 1 })
+    await expect(page.locator('.listen-line')).toHaveCount(1)
+    await expect(page.locator('.listen-line.live')).toHaveCount(0)
+    await expect(page.locator('.listen-line .listen-orig').first()).toHaveText('So one of the significant features')
+  })
 })
