@@ -14,7 +14,7 @@ import { meetingRailIsPaused } from './meetingPause'
 import SavePrompt from './components/SavePrompt'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
-import { canSwitchWorkspace, sessionListening } from './iphoneCopy'
+import { canSwitchWorkspace, sameSpokenLine, sessionListening } from './iphoneCopy'
 import { isTranslateChunk, looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, sttTag, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough, wrongScriptForTarget } from './translateGate'
 import { meetingLinesAfterTargetChange, nextMeetingLineToTranslate } from './meetingTranslate'
 import { applyLineUpdate, applyLineTranslationRev, staleTranslateDone } from './meetingLines'
@@ -2453,7 +2453,10 @@ export default function App() {
         for (const ln of lines) {
           const who = resolveSpeakerName(s.speakerNames, ln.speaker)
           blocks.push({ kind: 'line', text: ln.text, ts: ln.ts, speaker: who })
-          if (s.translateOn && ln.translation) {
+          // Same-language passthrough: the translation equals the source, so a
+          // second row would print it twice. (Fallback path of the export; the
+          // template path dedups in pdfTemplates.sectionChunks.)
+          if (s.translateOn && ln.translation && !sameSpokenLine(ln.text, ln.translation)) {
             blocks.push({ kind: 'line', text: ln.translation, ts: '', speaker: '' })
           }
         }

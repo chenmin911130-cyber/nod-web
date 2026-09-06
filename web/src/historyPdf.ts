@@ -45,6 +45,7 @@ async function historyPdfArgs(session: PdfSession) {
   const answers = new Map<string, string>()
   const questions: Array<{ id: string; text: string }> = []
   const transcriptByQid = new Map<string, string>()
+  const transcriptTexts = new Set<string>()
 
   items.forEach((item, idx) => {
     const text = (item.text || '').trim()
@@ -52,7 +53,10 @@ async function historyPdfArgs(session: PdfSession) {
     const id = item.qid || `${session.id}-${idx}`
     if (item.kind === 'answer' || item.kind === 'listen_ask') answers.set(id, text)
     if (item.kind === 'question') questions.push({ id, text })
-    if (item.kind === 'transcript') transcriptByQid.set(id, text)
+    if (item.kind === 'transcript') {
+      transcriptByQid.set(id, text)
+      transcriptTexts.add(text)
+    }
   })
 
   questions.forEach((q, idx) => {
@@ -70,10 +74,15 @@ async function historyPdfArgs(session: PdfSession) {
     } else if (item.kind === 'translate') {
       // A translation identical to its transcript line (same qid, same text) is a
       // same-language passthrough — printing a second paragraph would duplicate
-      // the transcript line. (Only reachable once translations carry the line's
-      // qid; before that, a translate item has its own id and is left as-is.)
+      // the transcript line. New rows carry the line's qid; OLD rows used a
+      // different id, so fall back to a text match (identical text to SOME
+      // transcript line is only ever a passthrough — a real translation into a
+      // different language never equals its source). Genuine repeated spoken
+      // lines stay as their own transcript rows; only the duplicated row is dropped.
       const orig = transcriptByQid.get(id)
-      if (orig && sameSpokenLine(orig, text)) return
+      const dupByQid = orig && sameSpokenLine(orig, text)
+      const dupByText = !dupByQid && [...transcriptTexts].some((t) => sameSpokenLine(t, text))
+      if (dupByQid || dupByText) return
       blocks.push({ kind: 'p', text })
     } else {
       blocks.push({ kind: 'h2', text: item.kind })
