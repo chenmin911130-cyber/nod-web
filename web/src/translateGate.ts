@@ -73,3 +73,15 @@ export function translateDoneBelongsToAsk(askId: string, doneId?: string): boole
 export function translateAskIdAfterDone(askId: string, doneId?: string): string {
   return translateDoneBelongsToAsk(askId, doneId) ? '' : askId
 }
+
+/** Where a translate LLM chunk should land, given the current workspace. */
+export function routeTranslateChunk(
+  workspaceMode: string,
+  translateOn: boolean,
+  hasMeetingLines: boolean,
+  hasPairs: boolean,
+): 'meeting' | 'pairs' | 'drop' {
+  if (workspaceMode === 'translate') return hasPairs ? 'pairs' : 'drop'
+  if (workspaceMode === 'meeting' && translateOn) return hasMeetingLines ? 'meeting' : 'drop'
+  return 'drop'
+}

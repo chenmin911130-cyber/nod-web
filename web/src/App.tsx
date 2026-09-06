@@ -15,7 +15,7 @@ import SavePrompt from './components/SavePrompt'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
 import { canSwitchWorkspace, sessionListening } from './iphoneCopy'
-import { looksLikeTarget, matchesLockedFrom, translateAskIdAfterDone, translateDoneBelongsToAsk, translateShouldPassthrough } from './translateGate'
+import { looksLikeTarget, matchesLockedFrom, routeTranslateChunk, translateAskIdAfterDone, translateDoneBelongsToAsk, translateShouldPassthrough } from './translateGate'
 import { doneAffectsInterview } from './interviewDone'
 import AnswerPane from './components/AnswerPane'
 import ListenPane from './components/ListenPane'
@@ -514,10 +514,15 @@ function reducer(state: AppState, action: Action): AppState {
             translateAskId = ev.id
           }
           const translateChunk = Boolean(translateAskId) && ev.id === translateAskId
-          if (translateChunk && state.translateOn && meetingLines.length) {
-            meetingLines = applyLineTranslation(meetingLines, state.translateBindId, ev.text ?? '')
-          } else if (translateChunk && state.translatePairs.length) {
-            translatePairs = applyTranslateChunk(translatePairs, state.translateBindId, ev.text ?? '')
+          if (translateChunk) {
+            const route = routeTranslateChunk(
+              state.workspaceMode,
+              state.translateOn,
+              meetingLines.length > 0,
+              translatePairs.length > 0,
+            )
+            if (route === 'meeting') meetingLines = applyLineTranslation(meetingLines, state.translateBindId, ev.text ?? '')
+            else if (route === 'pairs') translatePairs = applyTranslateChunk(translatePairs, state.translateBindId, ev.text ?? '')
           }
           if (state.workspaceMode === 'interview' && state.turns.length) {
             const byId = ev.id ? state.turns.findIndex((t) => t.id === ev.id) : -1

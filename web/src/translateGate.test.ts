@@ -1,6 +1,7 @@
 import {
   looksLikeTarget,
   matchesLockedFrom,
+  routeTranslateChunk,
   translateAskIdAfterDone,
   translateDoneBelongsToAsk,
   translateShouldPassthrough,
@@ -82,5 +83,14 @@ eq(
   true,
   'Italian lock: a plain English line still passes (the lock is about script, not word-guess)',
 )
+
+// routeTranslateChunk: a translate LLM chunk lands only in the current
+// workspace's container, never in a stale meeting/lecture line list.
+eq(routeTranslateChunk('translate', true, true, true), 'pairs', 'translate workspace writes pairs, not stale meeting lines')
+eq(routeTranslateChunk('meeting', true, true, true), 'meeting', 'meeting workspace with translateOn writes meeting lines')
+eq(routeTranslateChunk('meeting', true, false, true), 'drop', 'meeting workspace with no meeting lines drops')
+eq(routeTranslateChunk('meeting', false, true, true), 'drop', 'meeting workspace with translateOn off drops')
+eq(routeTranslateChunk('interview', true, true, true), 'drop', 'interview workspace never routes a translate chunk')
+eq(routeTranslateChunk('translate', true, false, false), 'drop', 'translate workspace with no container drops')
 
 console.log('translateGate ok')
