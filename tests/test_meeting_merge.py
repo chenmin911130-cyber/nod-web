@@ -565,6 +565,9 @@ class SentenceEndSplitTests(unittest.TestCase):
     def test_last_sentence_index_ignores_decimal_and_abbreviation(self):
         self.assertIsNone(last_sentence_index("The value is 1.5 for now"))
         self.assertIsNone(last_sentence_index("Use e.g. this"))
+        # A single-capital initial ("J. Doe") is NOT a sentence end.
+        self.assertIsNone(last_sentence_index("He met J. Doe last"))
+        self.assertIsNone(last_sentence_index("A. Smith wrote the note"))
         # A real period after an abbreviation still counts.
         self.assertEqual(last_sentence_index("Use e.g. this. Next"), 14)
 
@@ -580,9 +583,11 @@ class SentenceEndSplitTests(unittest.TestCase):
         # renders as "...me into a Western…".
         out = join_meeting_text("it keeps changing me into.", "A Western cowboy", gap_ms=242.0)
         self.assertEqual(out, "it keeps changing me into a Western cowboy")
-        # "I" keeps its capital; a genuine acronym ("NASA") keeps its caps.
-        self.assertEqual(join_meeting_text("I was just", "I really think so", gap_ms=200.0), "I was just I really think so")
-        self.assertEqual(join_meeting_text("it was just", "NASA announced a plan", gap_ms=200.0), "it was just NASA announced a plan")
+        # The pronoun "I" keeps its capital; a genuine acronym ("NASA") keeps its
+        # caps. BOTH lefts end in a FALSE period, so this really exercises
+        # _lower_first_char (a plain non-false-period left would not).
+        self.assertEqual(join_meeting_text("it was just.", "I really think so", gap_ms=200.0), "it was just I really think so")
+        self.assertEqual(join_meeting_text("it was just.", "NASA announced a plan", gap_ms=200.0), "it was just NASA announced a plan")
 
     def test_join_dedups_boundary_word(self):
         # §1.4: turn 8 ends "know exactly", turn 9 starts "exactly where" → the

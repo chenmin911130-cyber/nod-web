@@ -77,14 +77,16 @@ def _is_real_sentence_end(text: str, match: re.Match) -> bool:
         return True
     if ch in "!?":
         return True
-    # Latin '.': reject a decimal ("1.5") and an abbreviation ("e.g.", "Mr.").
+    # Latin '.': reject a decimal ("1.5"), an abbreviation ("e.g.", "Mr."), and
+    # a single-capital initial ("J. Doe").
     idx = match.start()
     if idx > 0 and text[idx - 1].isdigit():
         return False
-    token = _token_before(text, idx).casefold()
+    raw_token = _token_before(text, idx)
+    token = raw_token.casefold()
     if token in _ABBR_TOKENS:
         return False
-    if token and len(token) == 1 and token.isupper():
+    if raw_token and len(raw_token) == 1 and raw_token.isupper():
         return False
     return True
 
@@ -137,7 +139,11 @@ def _lower_first_char(text: str) -> str:
     if not m:
         return text
     word = m.group(1)
-    if word in _I_WORDS or (word.isupper() and len(word) > 1):
+    # The pronoun "I"/"I'm"/... keeps its capital even as a continuation; a
+    # genuine acronym (>=2 uppercase letters, e.g. "NASA") keeps its caps. The
+    # I-words are matched case-insensitively (STT may carry them lowercased),
+    # while the acronym check looks at the ORIGINAL casing.
+    if word.casefold() in _I_WORDS or (word.isupper() and len(word) > 1):
         return text
     first = next((i for i, c in enumerate(text) if c.isalpha()), None)
     if first is None:
