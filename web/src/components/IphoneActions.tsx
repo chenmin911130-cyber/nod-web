@@ -130,7 +130,6 @@ export default function IphoneActions({
                 <>
                   <i className={`iphone-dot ${tone}`} />
                   {IPHONE_COPY.recordingStatus}
-                  <span className="iphone-clock">{clock}</span>
                   <StatusWave live />
                 </>
               ) : recClock ? (
