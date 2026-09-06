@@ -7,8 +7,11 @@ import type { WebSocketRoute } from 'playwright'
  * caught the bridge whitelist gap: a `line_update` frame must REACH the reducer
  * and merge the open line's text — not be dropped, and not create a second row.
  *
- * The app boots into the meeting workspace, so no real STT/LLM is needed — we
- * only push server events into the client.
+ * Scope: this spec proves the bridge now forwards `line_update` and the reducer
+ * merges it. The REV-GATING of a late translation (stale-rev chunk dropped,
+ * stale done → clear + re-ask) is covered by the pure-function unit tests in
+ * meetingLines.test.ts (applyLineTranslationRev / staleTranslateDone) — it needs
+ * a real translate ask binding, which the mocked WS here does not establish.
  */
 test.describe('Meeting continuation', () => {
   test('a line_update merges the open line instead of a second row', async ({ page }) => {
@@ -21,7 +24,6 @@ test.describe('Meeting continuation', () => {
     })
 
     await page.goto('/app')
-    // Wait until the mock WS is wired up (the app connects on boot).
     await expect.poll(() => ws !== undefined, { timeout: 5000 }).toBe(true)
     expect(ws).toBeTruthy()
     const send = (m: Record<string, unknown>) => ws!.send(JSON.stringify(m))
@@ -33,14 +35,9 @@ test.describe('Meeting continuation', () => {
     await expect(page.locator('.listen-line .listen-orig').first()).toHaveText('So one of the significant')
 
     // The continuation arrives: it must MERGE into the same row (rev bumped) and
-    // replace the text, not create a second row and not leave a stale translation.
+    // replace the text, not create a second row.
     send({ type: 'line_update', id: 'm1', text: 'So one of the significant features', rev: 1 })
     await expect(page.locator('.listen-line')).toHaveCount(1)
     await expect(page.locator('.listen-line .listen-orig').first()).toHaveText('So one of the significant features')
-
-    // A stale-rev translation chunk must not land on the extended line.
-    send({ type: 'chunk', id: 'm1', text: 'stale half-sentence' })
-    await page.waitForTimeout(250)
-    await expect(page.locator('.listen-line .listen-tr').first()).toHaveCount(0)
   })
 })

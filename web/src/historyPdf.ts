@@ -36,7 +36,7 @@ function formatTs(at: string): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-async function historyPdfArgs(session: PdfSession) {
+export async function historyPdfArgs(session: PdfSession) {
   const scene = sceneOf(session)
   const mode = modeOf(session)
   const title = session.title || `${scene} session`
@@ -45,7 +45,6 @@ async function historyPdfArgs(session: PdfSession) {
   const answers = new Map<string, string>()
   const questions: Array<{ id: string; text: string }> = []
   const transcriptByQid = new Map<string, string>()
-  const transcriptTexts = new Set<string>()
 
   items.forEach((item, idx) => {
     const text = (item.text || '').trim()
@@ -53,10 +52,7 @@ async function historyPdfArgs(session: PdfSession) {
     const id = item.qid || `${session.id}-${idx}`
     if (item.kind === 'answer' || item.kind === 'listen_ask') answers.set(id, text)
     if (item.kind === 'question') questions.push({ id, text })
-    if (item.kind === 'transcript') {
-      transcriptByQid.set(id, text)
-      transcriptTexts.add(text)
-    }
+    if (item.kind === 'transcript') transcriptByQid.set(id, text)
   })
 
   questions.forEach((q, idx) => {
@@ -64,6 +60,7 @@ async function historyPdfArgs(session: PdfSession) {
     blocks.push({ kind: 'p', text: answers.get(q.id) || [...answers.values()][idx] || '—' })
   })
 
+  let lastTranscriptText = ''
   items.forEach((item, idx) => {
     const text = (item.text || '').trim()
     if (!text) return
@@ -71,18 +68,22 @@ async function historyPdfArgs(session: PdfSession) {
     if (item.kind === 'question' || item.kind === 'answer' || item.kind === 'listen_ask') return
     if (item.kind === 'transcript') {
       blocks.push({ kind: 'line', text, ts: item.at ? formatTs(item.at) : '', speaker: item.speaker || '' })
+      lastTranscriptText = text
     } else if (item.kind === 'translate') {
-      // A translation identical to its transcript line (same qid, same text) is a
-      // same-language passthrough — printing a second paragraph would duplicate
-      // the transcript line. New rows carry the line's qid; OLD rows used a
-      // different id, so fall back to a text match (identical text to SOME
-      // transcript line is only ever a passthrough — a real translation into a
-      // different language never equals its source). Genuine repeated spoken
-      // lines stay as their own transcript rows; only the duplicated row is dropped.
+      // A translation identical to its transcript line is a same-language
+      // passthrough (print the source once). Matching must NEVER be global:
+      //  - a row with a known line id (new format) compares only to THAT line;
+      //  - a LEGACY row (different id) compares only to the transcript line it
+      //    immediately follows — a real cross-language translation never equals
+      //    its source, so a match on the adjacent line is a passthrough, while a
+      //    later line with the same text is NOT evidence (that would delete a
+      //    genuine translation, e.g. 你好→"Hello" when someone later says "Hello").
       const orig = transcriptByQid.get(id)
-      const dupByQid = orig && sameSpokenLine(orig, text)
-      const dupByText = !dupByQid && [...transcriptTexts].some((t) => sameSpokenLine(t, text))
-      if (dupByQid || dupByText) return
+      if (orig) {
+        if (sameSpokenLine(orig, text)) return
+      } else if (lastTranscriptText && sameSpokenLine(lastTranscriptText, text)) {
+        return
+      }
       blocks.push({ kind: 'p', text })
     } else {
       blocks.push({ kind: 'h2', text: item.kind })
