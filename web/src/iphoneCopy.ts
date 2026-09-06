@@ -141,7 +141,7 @@ export function recClock(ms: number): string {
 }
 
 export function listenShowsRecClock(variant: 'listen' | 'translate' | 'interview'): boolean {
-  return variant === 'listen' || variant === 'translate'
+  return variant === 'listen'
 }
 
 export function listenClock(ms: number): string {

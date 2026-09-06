@@ -50,8 +50,8 @@
 位置：phone 上 `actions` 从顶部 `iphone-stack` 移到 **`tr-sheet` 与 `iphone-tr-prompt` 之间**，紧贴输入框上方。键盘弹出（`html.nod-native.kb-open`）时随输入框一起上移；若空间不够，ready 态的大按钮可在 kb-open 时收起，listening 态的控制条必须始终可见。
 
 - **Ready**：单个全宽青色按钮，麦克风图标 + 新键 `startTranslate: 'Start voice translation'`。**删掉旁边的 `MoreButton`（`iphone-more-sq`）**——这是共用组件，Listen 的 ready 行也会同时失去它，由 §1 的顶部 `…` 承接。
-- **Listening**：紧凑控制条：红点 + `Listening` + `mm:ss` 时钟 + `StatusWave` + `Pause` + `Stop`。`listenShowsRecClock('translate')` 改为 `true`。现有 UI 是时钟和波形 XOR——**不要**改成全局 additive。Listen 保持 Listening + 红点 + 时钟、无波形；Interview 保持只有波形；仅 Translate 时钟与波形并存。
-- **Paused**：`Paused mm:ss` + `Resume`（麦克风图标，用 `IPHONE_COPY.resume` 而不是现在的 `startListening`）+ `Stop`。**删掉行内 `MoreButton`（`iphone-more-inline`）**。
+- **Listening**：紧凑控制条：红点 + `Listening` + `StatusWave` + `Pause` + `Stop`。不显示时钟（会话时长对 Translate 无意义，且 `meetingElapsedMs` 只在 Meeting 起跑）。现有 UI 是时钟和波形 XOR——**不要**改成全局 additive。Listen 保持 Listening + 红点 + 时钟、无波形；Interview 保持只有波形。
+- **Paused**：`Paused` + `Resume`（麦克风图标，用 `IPHONE_COPY.resume` 而不是现在的 `startListening`）+ `Stop`。不显示时钟。**删掉行内 `MoreButton`（`iphone-more-inline`）**。
 - `Stop` 文案保持 `Stop`，不用图里的 `End`。
 
 ## 5. 双语卡片（`NativeTranslateCard`）
@@ -105,7 +105,7 @@
 - [ ] 方向卡：Auto-detect → Chinese，中间是静态箭头；说一句英文后箭头变可点，点后变 Chinese → English。
 - [ ] 锁定 English → Chinese 时中间可点交换。
 - [ ] 空态：图标 + `Ready to translate` + 引导句；下方一个青色 `Start voice translation`，旁边没有 `…`。
-- [ ] 开始后：控制条显示 Listening · 时钟 · 波形 · Pause · Stop；暂停后 Paused · Resume · Stop，无行内 `…`。
+- [ ] 开始后：控制条显示 Listening · 波形 · Pause · Stop；暂停后 Paused · Resume · Stop，无行内 `…`。
 - [ ] 说话时先出 live 卡（原文增长 / `Listening…`），定稿后译文位 `Translating…`，期间控制条仍是 Listening。
 - [ ] 卡片：`English · 09:42` / 原文灰 / 译文白 / 复制 + 播放；播放能出声。
 - [ ] 断网或重试耗尽出现 `Failed` + Retry，Retry 可用。
