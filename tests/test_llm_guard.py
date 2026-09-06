@@ -151,7 +151,8 @@ class ModelRoutingTests(unittest.TestCase):
     def test_other_provider_keeps_own_model(self):
         pipe, create = self._pipe_with_create()
         pipe._provider = "openrouter"
+        pipe._model = "openai/gpt-4o"
         pipe.process_text("Hello", "ask", images=[
             {"type": "image_url", "image_url": {"url": "data:image/png;base64,xxx"}}
         ])
-        self.assertEqual(create.call_args.kwargs["model"], "deepseek-v4-flash")
+        self.assertEqual(create.call_args.kwargs["model"], "openai/gpt-4o")

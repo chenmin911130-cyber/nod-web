@@ -34,10 +34,13 @@
 **已关 issue（本批）**：#23、#14、#20、#15、#16、#17、#18、#19、#21。
 
 **待办 issue（按优先级）**
-- **#11 item1** 客户端 `phase(off,idle)` 修复（改 App.tsx ~1326 兜底，别碰；排在真机测试①后，落地删 `test.fail` 行）。
-- **#13** 按说话人拆 turn（设计改动，等 #22 trace 数据，已关 #22 服务端）。
+- **#11** 已修：客户端 `phase(off,idle)` 兜底删除（`6d5b141` + `90e8b0c`）。
+- **#25** 代码已修（passthrough 只信原始 STT 标签；会议行放弃不重打 + wrong-language 超预算失败），待真机关闭。
+- **#13** 按说话人拆 turn（设计改动，未动）。
+- **#24** 本 commit 关闭（ModelRoutingTests openrouter 断言收紧）。
 
 **剩真机验收（未列入本批）**：3=Pause/Resume 真暂停、4=手表跟随 capture、5=手表 Stop→Save 保护、手机麦→手表不开麦（双麦）、翻译到英文说拉丁语应出翻译。
+- bundle 30/31/32 待验：会议行放弃不重打、passthrough、Live 无 JSON。
 
 **教训入口（动手前必读）**：`.cursor/skills/self-improve/errors.md`（e2e 本地绿 CI 红、History-vs-cap、SQLite-not-PG）+ `nod-web` skill（零 PCM、终态 stop、静音坑）+ 本文件下方 L1–L5 记录。
 
