@@ -56,9 +56,13 @@ eq(
 )
 eq(
   translateShouldPassthrough('Quiero comer algo antes de la reunion', 'en', undefined),
-  true,
-  'no STT tag falls back to the glyph check (Spanish looks like English)',
+  false,
+  'Spanish->en with no STT tag (Auto) must go to the LLM, not pass through',
 )
+eq(translateShouldPassthrough('Hello there', 'en', 'en'), true, 'English tagged en with an en target passes through')
+eq(translateShouldPassthrough('Hello there', 'en', undefined), false, 'no STT tag -> LLM even for a Latin target')
+eq(translateShouldPassthrough('Bonjour, comment allez-vous', 'fr', 'fr'), true, 'French tagged fr with a fr target passes through')
+eq(translateShouldPassthrough('Bonjour, comment allez-vous', 'fr', undefined), false, 'French with no tag -> LLM (Auto must not glyph-guess a Latin language)')
 
 // matchesLockedFrom: a Latin lock is already constrained to that Latin
 // language, so a guessed / STT 'en' tag (a short or ambiguous turn) must not

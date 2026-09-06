@@ -32,16 +32,21 @@ export function looksLikeTarget(text: string, to: PairLang): boolean {
  */
 const LATIN_TARGETS = new Set<PairLang>(['es', 'fr', 'de', 'it', 'pt'])
 
+/** Latin-script targets (incl. 'en') are glyph-indistinguishable from each other. */
+const LATIN_SCRIPT_TARGETS = new Set<PairLang>(['en', 'es', 'fr', 'de', 'it', 'pt'])
+
 /**
- * Skip the LLM only when the text itself is already the target language.
+ * Skip the LLM only when the text is already the target language.
  * STT's from-tag must not decide this — mixed EN+zh is often tagged zh.
- * EXCEPT when translating INTO English: Latin scripts all look like English, so
- * an AssemblyAI Latin from-tag (es/fr/de/it/pt) means the source is genuinely
- * that language and must go to the LLM, not passthrough.
+ * A Latin target cannot be told from another Latin script by glyphs, so only a
+ * matching STT from-tag proves the text is already the target; no tag (Auto) or
+ * a mismatched tag goes to the model (the system prompt returns as-is when it
+ * is already the target). Costs one small call for a user who speaks the target
+ * in Auto mode, but never drops a Spanish/Italian/French/German/Portuguese line.
  */
 export function translateShouldPassthrough(text: string, to: PairLang, fromTag?: PairLang): boolean {
-  if (to === 'en' && fromTag && LATIN_TARGETS.has(fromTag)) return false
-  return looksLikeTarget(text, to)
+  if (LATIN_SCRIPT_TARGETS.has(to)) return Boolean(fromTag) && fromTag === to
+  return looksLikeTarget(text, to) // zh/ja: script check is reliable
 }
 
 /**
