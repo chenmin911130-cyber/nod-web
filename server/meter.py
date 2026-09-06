@@ -439,6 +439,42 @@ def save_history(user_id: str, session_id: str | None, kind: str, text: str, qid
                 row.title = preview
 
 
+def update_history_text(user_id: str, session_id: str | None, qid: str, text: str, kind: str = "transcript", speaker: str = "") -> None:
+    """Update an existing history row (same user/session/kind/qid), or insert one.
+
+    Used by the meeting continuation path so an extended line's transcript text is
+    replaced in place (not doubled), and so a re-translated line overwrites its
+    stale translation instead of stacking a second row (issue #29).
+    """
+    if not session_id or not qid or not (text or "").strip():
+        return
+    with db_session() as db:
+        row = db.execute(
+            select(HistoryItem).where(
+                HistoryItem.user_id == user_id,
+                HistoryItem.session_id == session_id,
+                HistoryItem.kind == kind,
+                HistoryItem.qid == qid,
+            )
+        ).scalars().first()
+        if row:
+            row.text = text[:20000]
+            if speaker:
+                row.speaker = (speaker or "")[:64]
+            return
+        db.add(
+            HistoryItem(
+                id=new_id(),
+                user_id=user_id,
+                session_id=session_id,
+                kind=kind,
+                qid=qid,
+                text=text[:20000],
+                speaker=(speaker or "")[:64],
+            )
+        )
+
+
 def _session_entry(db, s) -> dict:
     items = db.execute(
         select(HistoryItem)

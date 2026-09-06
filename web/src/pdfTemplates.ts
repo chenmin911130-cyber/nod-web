@@ -1,4 +1,5 @@
 import { sceneSectionOrder } from './listen'
+import { sameSpokenLine } from './iphoneCopy'
 
 export type ListenPdfTheme = 'meeting' | 'lecture'
 
@@ -310,7 +311,11 @@ export function sectionChunks(doc: ListenPdfDoc): string[] {
     chunks.push(heading)
     for (const line of doc.transcript) {
       const aud = /audience/i.test(line.speaker) ? ' aud' : ''
-      chunks.push(`<div class="line"><span class="ts">${escapeHtml(line.ts)}</span><span class="spk${aud}">${escapeHtml(line.speaker)}</span><span>${textHtml(line.text)}${line.translation ? `<span class="tr"><br />${textHtml(line.translation)}</span>` : ''}</span></div>`)
+      // Same-language passthrough: the "translation" equals the source, so a
+      // separate row would print the text twice. Show it once, source only.
+      const tr = line.translation || ''
+      const showTr = Boolean(tr) && !sameSpokenLine(line.text, tr)
+      chunks.push(`<div class="line"><span class="ts">${escapeHtml(line.ts)}</span><span class="spk${aud}">${escapeHtml(line.speaker)}</span><span>${textHtml(line.text)}${showTr ? `<span class="tr"><br />${textHtml(tr)}</span>` : ''}</span></div>`)
     }
   }
   return chunks

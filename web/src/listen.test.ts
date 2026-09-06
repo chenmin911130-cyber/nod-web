@@ -1,4 +1,4 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, nodTag, notesBodyText, notesPrompt, outLangRule, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, speakersExpected } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, nodTag, notesBodyText, notesPrompt, outLangRule, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, speakersExpected, transcriptBlock } from './listen'
 import type { MeetingLine } from './types'
 
 function eq<T>(got: T, want: T, label?: string) {
@@ -95,3 +95,31 @@ if (zhNotes.includes(':bi]')) throw new Error('NOTES tag stays single-language')
 
 eq(notesBodyText('We ship Friday.\n>> 我们周五发。'), '我们周五发。', 'old bilingual notes keep the notes-language line')
 eq(notesBodyText('我们周五发。'), '我们周五发。', 'single-language notes stay as written')
+
+// Same-language passthrough dedup: a translation identical to its source (after
+// whitespace normalization) is not a real translation — feed it once, source only.
+{
+  const tb = transcriptBlock(
+    [
+      { id: '1', ts: '0:01', text: 'The host introduces the tutorial.', translation: 'The host introduces the tutorial.' },
+      { id: '3', ts: '0:12', text: 'We ship Friday.', translation: '我们周五发。' },
+    ],
+    true,
+  )
+  const lines = tb.split('\n').map((l) => l.trim())
+  const sourceOnce = lines.filter((l) => l.includes('The host introduces the tutorial.')).length
+  if (sourceOnce !== 1) throw new Error(`same-language passthrough shows the source once, got ${sourceOnce}`)
+  if (!lines.includes('我们周五发。')) throw new Error('a genuinely different translation still gets its own row')
+}
+{
+  // Whitespace-only difference between source and translation -> still one copy.
+  const tb = transcriptBlock([{ id: '1', ts: '0:01', text: 'We ship Friday.', translation: 'We ship   Friday.' }], true)
+  if (tb.split('\n').filter((l) => l.includes('We ship Friday.')).length !== 1) {
+    throw new Error('whitespace difference is normalized and shown once')
+  }
+}
+{
+  // Bilingual off: transcriptBlock never includes a translation column.
+  const tb = transcriptBlock([{ id: '1', ts: '0:01', text: 'We ship Friday.', translation: '我们周五发。' }], false)
+  if (tb.includes('我们周五发。')) throw new Error('bilingual off never adds the translation rows')
+}

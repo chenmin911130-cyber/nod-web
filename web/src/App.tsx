@@ -14,9 +14,10 @@ import { meetingRailIsPaused } from './meetingPause'
 import SavePrompt from './components/SavePrompt'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
-import { canSwitchWorkspace, sessionListening } from './iphoneCopy'
+import { canSwitchWorkspace, sameSpokenLine, sessionListening } from './iphoneCopy'
 import { isTranslateChunk, looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, sttTag, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough, wrongScriptForTarget } from './translateGate'
 import { meetingLinesAfterTargetChange, nextMeetingLineToTranslate } from './meetingTranslate'
+import { applyLineUpdate, applyLineTranslationRev, staleTranslateDone } from './meetingLines'
 import { doneAffectsInterview } from './interviewDone'
 import AnswerPane from './components/AnswerPane'
 import ListenPane from './components/ListenPane'
@@ -176,6 +177,7 @@ const initial: AppState = {
   heardLang: null,
   translateAskId: '',
   translateBindId: '',
+  translateBindRev: 0,
   listenScene: 'meeting' as ListenScene,
   translateOn: true,
   catchNotes: [],
@@ -211,7 +213,7 @@ type Action =
   | { type: 'meeting_clock'; startedAt: number | null; elapsedMs: number }
   | { type: 'meeting_ended' }
   | { type: 'seed_translate'; text: string; id: string }
-  | { type: 'bind_translate'; id: string }
+  | { type: 'bind_translate'; id: string; rev?: number }
   | { type: 'release_translate' }
   | { type: 'fill_translate'; id: string; translation: string; passthrough?: boolean }
   | { type: 'clear_translation'; id: string }
@@ -266,16 +268,6 @@ function isTranslatePrompt(text: string): boolean {
 function translateBindFromPrompt(text: string): string {
   const m = /^\[NOD_TRANSLATE:([^\]]+)\]/.exec(text)
   return m?.[1] ?? ''
-}
-
-function applyLineTranslation(lines: MeetingLine[], bindId: string, chunk: string): MeetingLine[] {
-  if (!lines.length || !chunk) return lines
-  let idx = bindId ? lines.findIndex((line) => line.id === bindId) : -1
-  if (idx < 0) idx = lines.findIndex((line) => !line.translation)
-  if (idx < 0) return lines
-  const next = lines.slice()
-  next[idx] = { ...next[idx], translation: (next[idx].translation || '') + chunk }
-  return next
 }
 
 function applyTranslateChunk(pairs: TranslatePair[], bindId: string, chunk: string): TranslatePair[] {
@@ -478,6 +470,15 @@ function reducer(state: AppState, action: Action): AppState {
           else turns.push({ id: qid, q: text, a: '' })
           return { ...state, turns, currentQ: text, currentQId: qid, partial: '', busy: true, heardLang: heard ?? state.heardLang }
         }
+        case 'line_update': {
+          // A continuation of the open meeting line: replace its text, bump rev,
+          // and clear the stale translation. Unknown ids are ignored so a stale
+          // event after clear / workspace switch never recreates a line.
+          if (state.workspaceMode !== 'meeting') return state
+          const meetingLines = applyLineUpdate(state.meetingLines, ev.id, ev.text, ev.language, ev.speaker, ev.rev)
+          const currentQ = state.currentQId === ev.id ? ev.text : state.currentQ
+          return { ...state, meetingLines, currentQ }
+        }
         case 'chunk': {
           let translatePairs = state.translatePairs
           let translateAskId = state.translateAskId
@@ -516,7 +517,7 @@ function reducer(state: AppState, action: Action): AppState {
               meetingLines.length > 0,
               translatePairs.length > 0,
             )
-            if (route === 'meeting') meetingLines = applyLineTranslation(meetingLines, state.translateBindId, ev.text ?? '')
+            if (route === 'meeting') meetingLines = applyLineTranslationRev(meetingLines, state.translateBindId, state.translateBindRev, ev.text ?? '')
             else if (route === 'pairs') translatePairs = applyTranslateChunk(translatePairs, state.translateBindId, ev.text ?? '')
           }
           if (state.workspaceMode === 'interview' && state.turns.length) {
@@ -770,9 +771,9 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, translatePairs, currentQ: action.text, translateBindId: action.id }
     }
     case 'bind_translate':
-      return { ...state, translateBindId: action.id }
+      return { ...state, translateBindId: action.id, translateBindRev: action.rev ?? 0 }
     case 'release_translate':
-      return { ...state, translateBindId: '', busy: false }
+      return { ...state, translateBindId: '', translateBindRev: 0, busy: false }
     case 'fill_translate': {
       const translatePairs = state.translatePairs.map((p) =>
         p.id === action.id
@@ -1344,6 +1345,13 @@ export default function App() {
           queueMicrotask(() => pumpTranslateRef.current())
         }
       }
+      if (e.type === 'line_update' && stateRef.current.workspaceMode === 'meeting') {
+        // The source changed (extended); the old translation for this line is now
+        // stale. Clear its ask/retry and let pump re-pick it under the new rev.
+        askedTranslate.current.delete(e.id)
+        translateRetries.current.delete(e.id)
+        queueMicrotask(() => pumpTranslateRef.current())
+      }
       if (e.type === 'question' && stateRef.current.workspaceMode === 'translate') {
         const text = e.text ?? ''
         const s = stateRef.current
@@ -1370,8 +1378,22 @@ export default function App() {
       queueMicrotask(() => {
         if (id) {
           const s = stateRef.current
-          const row = s.translatePairs.find((p) => p.id === id)
           const line = s.meetingLines.find((ln) => ln.id === id)
+          // A meeting line that was extended after this translation was asked has
+          // a bumped rev: the done (and its streamed translation) is stale. Clear
+          // the half-sentence result and re-ask for the extended line. Do NOT
+          // cancel_generate (that would leave the stream waiting 25s) and do NOT
+          // count a retry — the source legitimately changed, not the model.
+          const stale = s.workspaceMode === 'meeting' && staleTranslateDone(id, s.translateBindRev, line)
+          if (stale) {
+            askedTranslate.current.delete(id)
+            translateRetries.current.delete(id)
+            dispatch({ type: 'clear_translation', id })
+            dispatch({ type: 'release_translate' })
+            pumpTranslateRef.current()
+            return
+          }
+          const row = s.translatePairs.find((p) => p.id === id)
           const translated = ((s.workspaceMode === 'translate' ? row?.translation : line?.translation) || '').trim()
           const retries = (translateRetries.current.get(id) || 0) + 1
           const outcome = translateDoneDecision({
@@ -1996,7 +2018,7 @@ export default function App() {
     const sourceLine = sourceHint ? `Source language: ${targetName(sourceHint)}.\n` : ''
     inflightTranslate.current = id
     askedTranslate.current.add(id)
-    dispatch({ type: 'bind_translate', id })
+    dispatch({ type: 'bind_translate', id, rev: s.workspaceMode === 'meeting' ? (s.meetingLines.find((ln) => ln.id === id)?.rev ?? 0) : 0 })
     window.api.send({
       type: 'ask',
       mode: 'translate',
@@ -2431,7 +2453,10 @@ export default function App() {
         for (const ln of lines) {
           const who = resolveSpeakerName(s.speakerNames, ln.speaker)
           blocks.push({ kind: 'line', text: ln.text, ts: ln.ts, speaker: who })
-          if (s.translateOn && ln.translation) {
+          // Same-language passthrough: the translation equals the source, so a
+          // second row would print it twice. (Fallback path of the export; the
+          // template path dedups in pdfTemplates.sectionChunks.)
+          if (s.translateOn && ln.translation && !sameSpokenLine(ln.text, ln.translation)) {
             blocks.push({ kind: 'line', text: ln.translation, ts: '', speaker: '' })
           }
         }

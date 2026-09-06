@@ -14,6 +14,7 @@ const EVENT_TYPES = new Set([
   'status',
   'partial',
   'question',
+  'line_update',
   'chunk',
   'done',
   'error',
@@ -62,6 +63,17 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
       const id = asText(o.id)
       if (!id) return null
       return { ...o, type, id, text: asText(o.text) } as EngineEvent
+    }
+    case 'line_update': {
+      const id = asText(o.id)
+      if (!id) return null
+      const rev = typeof o.rev === 'number' ? o.rev : 0
+      const language = asText(o.language)
+      const speaker = asText(o.speaker)
+      const ev: EngineEvent = { type: 'line_update', id, text: asText(o.text), rev }
+      if (language) ev.language = language
+      if (speaker) ev.speaker = speaker
+      return ev
     }
     case 'done': {
       const id = asText(o.id)
