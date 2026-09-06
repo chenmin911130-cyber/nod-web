@@ -702,6 +702,7 @@ interface LineRowProps {
   live: boolean
   last: boolean
   translateOn: boolean
+  translateFailed: boolean
   busy: boolean
   onRename: (id: string, name: string) => void
   onOpen?: () => void
@@ -719,6 +720,10 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
     native: p.actions,
     pending: p.busy,
   })
+  // A line whose translation gave up shows a failed badge instead of a blank /
+  // ellipsis row. (showLineTranslation returns false for an empty translation,
+  // so this is separate from showTr; switching the target re-arms it.)
+  const showFailed = p.translateFailed && p.translateOn
   return (
     <div className={`listen-line${p.live ? ' live' : ''}${p.actions ? ' iphone-tr-line' : ''}`} onClick={p.onOpen}>
       <div className="listen-ts">
@@ -730,6 +735,7 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
         {showTr && (
           <div className="listen-tr">{p.translation || (p.busy ? '…' : '')}</div>
         )}
+        {showFailed && <div className="listen-tr failed">Translation failed</div>}
         {p.actions ? <IphoneLineActions text={p.text} /> : null}
       </div>
     </div>
@@ -1040,6 +1046,7 @@ export default function ListenPane(props: Props) {
                       live={props.listening && i === props.lines.length - 1 && !props.partial}
                       last={(i === props.lines.length - 1 && !props.partial) || openedLine === line.id}
                       translateOn={props.translateOn}
+                      translateFailed={line.translateFailed || false}
                       onOpen={() => setOpenedLine(line.id)}
                       busy={props.busy}
                       onRename={props.onRenameSpeaker}

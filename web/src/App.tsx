@@ -16,7 +16,7 @@ import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
 import { canSwitchWorkspace, sessionListening } from './iphoneCopy'
 import { isTranslateChunk, looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, sttTag, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough, wrongScriptForTarget } from './translateGate'
-import { nextMeetingLineToTranslate } from './meetingTranslate'
+import { meetingLinesAfterTargetChange, nextMeetingLineToTranslate } from './meetingTranslate'
 import { doneAffectsInterview } from './interviewDone'
 import AnswerPane from './components/AnswerPane'
 import ListenPane from './components/ListenPane'
@@ -719,10 +719,19 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, notesAskId: '__pending__', notesRaw: '', busy: true, status: 'Writing notes…', translateBindId: '', translateAskId: '' }
     case 'translate_from':
       return { ...state, translateFrom: action.lang }
-    case 'translate_to':
+    case 'translate_to': {
       // Decoupled: changing the translation target must NOT rewrite the notes
       // language. The Meeting notes selector dispatches notes_lang separately.
-      return { ...state, translateTo: action.lang }
+      if (action.lang === state.translateTo) return { ...state, translateTo: action.lang }
+      // A meeting line that gave up (translateFailed) becomes retryable under a
+      // new target — reset the give-up flag. Its translation stays empty; the
+      // caller clears the asked/retry refs so pump re-picks these lines.
+      return {
+        ...state,
+        translateTo: action.lang,
+        meetingLines: meetingLinesAfterTargetChange(state.meetingLines, state.translateTo, action.lang),
+      }
+    }
     case 'notes_lang':
       return { ...state, notesLang: action.lang }
     case 'mark_action': {
@@ -1662,6 +1671,12 @@ export default function App() {
       window.api.send({ type: 'cancel_generate' })
       window.api.send({ type: 'set_translate_to', lang: next.to })
       releaseTranslateGate(stuck)
+      // Target changed (from↔to swap): re-arm give-up meeting lines the same
+      // way the target dropdown does.
+      for (const ln of s.meetingLines.filter((ln) => ln.translateFailed)) {
+        askedTranslate.current.delete(ln.id)
+        translateRetries.current.delete(ln.id)
+      }
       dispatch({ type: 'translate_to', lang: next.to })
       queueMicrotask(() => pumpTranslateRef.current())
     }
@@ -1902,6 +1917,13 @@ export default function App() {
     window.api.send({ type: 'cancel_generate' })
     window.api.send({ type: 'set_translate_to', lang })
     releaseTranslateGate(stuck)
+    // A meeting line that gave up (translateFailed) becomes eligible again under
+    // the new target — clear its give-up refs so pump re-picks it (the reducer
+    // resets the flag on translate_to).
+    for (const ln of s.meetingLines.filter((ln) => ln.translateFailed)) {
+      askedTranslate.current.delete(ln.id)
+      translateRetries.current.delete(ln.id)
+    }
     for (const action of notesLangActions(s.workspaceMode, lang)) dispatch(action as never)
     dispatch({
       type: 'engine',

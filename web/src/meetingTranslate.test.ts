@@ -1,4 +1,4 @@
-import { nextMeetingLineToTranslate } from './meetingTranslate'
+import { meetingLinesAfterTargetChange, nextMeetingLineToTranslate } from './meetingTranslate'
 import { parseHeardLang } from './translateGate'
 import type { MeetingLine } from './types'
 
@@ -28,6 +28,15 @@ eq(nextMeetingLineToTranslate(lines, new Set(['a', 'b', 'c']))?.id, undefined, '
 const withFailedNewest: MeetingLine[] = [base('z', { translateFailed: true, text: 'gave up' }), base('y', { text: 'ok' })]
 eq(nextMeetingLineToTranslate(withFailedNewest, new Set())?.id, 'y', 'a translateFailed line is skipped even when it is the newest')
 eq(nextMeetingLineToTranslate([base('only', { translateFailed: true })], asked)?.id, undefined, 'a lone translateFailed line is not re-selected')
+
+// meetingLinesAfterTargetChange: a line that gave up (translateFailed) becomes
+// retryable when the translation target changes — the give-up flag resets (its
+// translation stays empty); a same-target change leaves the lines untouched.
+const goneUp = base('x', { translateFailed: true, translation: '' })
+const goneUpAfter = meetingLinesAfterTargetChange([goneUp], 'en', 'zh')
+eq(goneUpAfter[0].translateFailed, false, 'target change resets translateFailed')
+eq(goneUpAfter[0].translation, '', 'translation stays empty on target-change reset')
+eq(meetingLinesAfterTargetChange([goneUp], 'en', 'en')[0].translateFailed, true, 'same target leaves a give-up line alone')
 
 // parseHeardLang: the STT tag must be trusted (this is what stamps meeting
 // line.lang so passthrough can use it).

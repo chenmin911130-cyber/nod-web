@@ -5180,6 +5180,10 @@ a.tb-menu-action {
   margin-top: 3px;
 }
 
+.listen-tr.failed {
+  color: #f87171;
+}
+
 .listen-main.tr-off .listen-tr {
   display: none;
 }
