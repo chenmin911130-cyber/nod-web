@@ -2601,44 +2601,57 @@ class Session:
         threading.Thread(target=self._meeting_worker_loop, daemon=True).start()
 
     def _stop_meeting_worker(self) -> None:
-        # Send a drain sentinel: the worker flushes buffered stragglers then exits.
-        # Guarded so a Session.__new__ test session (no meeting attrs) never crashes.
+        # Tell the worker to flush + exit ONLY if one is actually running. If no
+        # worker has been started yet (e.g. the very first set_workspace on a fresh
+        # connection), putting a drain sentinel would be consumed by the NEXT
+        # worker's first get() and make it exit immediately — leaving the "started"
+        # flag true and every later final queued but never processed (transcript
+        # shows only the live partial, never the settled line).
         q = getattr(self, "_meeting_finals", None)
         if q is None:
             return
         with getattr(self, "_meeting_lock", threading.Lock()):
+            was_started = self._meeting_worker_started
             self._meeting_worker_started = False
-        q.put(self._drain_item())
+        if was_started:
+            q.put(self._drain_item())
 
     def _drain_item(self) -> tuple[int, int, str, str | None, str | None, dict[str, Any]]:
         return (getattr(self, "_meeting_gen", 0), 10 ** 9, "", None, None, {"__drain__": True})
 
     def _meeting_worker_loop(self) -> None:
         buffer: dict[int, tuple[int, str, str | None, str | None, dict[str, Any]]] = {}
-        while True:
-            item = self._meeting_finals.get()
-            if item is None:
-                self._flush_meeting_buffer(buffer)
-                return
-            gen, turn, cleaned, lang, speaker, meta = item
-            if meta and meta.get("__drain__"):
-                self._flush_meeting_buffer(buffer)
-                return
-            if gen != self._meeting_gen:
-                buffer.clear()
-                continue
-            buffer[turn] = (gen, cleaned, lang, speaker, meta)
-            # Recompute the contiguous run from the LOWEST buffered turn on every
-            # dequeue, so a late arrival (its thread was slow) never overtakes an
-            # earlier one; a gap (turn N held for N-1) keeps later turns waiting.
-            expected = min(buffer)
-            while expected in buffer:
-                _g, c, l, s, m = buffer.pop(expected)
-                try:
-                    self._hold_or_emit_meeting(c, l, s, m)
-                except Exception:
-                    logging.getLogger("nod").exception("meeting final handler failed")
-                expected += 1
+        try:
+            while True:
+                item = self._meeting_finals.get()
+                if item is None:
+                    self._flush_meeting_buffer(buffer)
+                    return
+                gen, turn, cleaned, lang, speaker, meta = item
+                if meta and meta.get("__drain__"):
+                    self._flush_meeting_buffer(buffer)
+                    return
+                if gen != self._meeting_gen:
+                    buffer.clear()
+                    continue
+                buffer[turn] = (gen, cleaned, lang, speaker, meta)
+                # Recompute the contiguous run from the LOWEST buffered turn on every
+                # dequeue, so a late arrival (its thread was slow) never overtakes an
+                # earlier one; a gap (turn N held for N-1) keeps later turns waiting.
+                expected = min(buffer)
+                while expected in buffer:
+                    _g, c, l, s, m = buffer.pop(expected)
+                    try:
+                        self._hold_or_emit_meeting(c, l, s, m)
+                    except Exception:
+                        logging.getLogger("nod").exception("meeting final handler failed")
+                    expected += 1
+        finally:
+            # An exiting worker must clear the started flag so the next final can
+            # spin a fresh one; otherwise after a drain/first-reset every later
+            # final is queued but never processed.
+            with getattr(self, "_meeting_lock", threading.Lock()):
+                self._meeting_worker_started = False
 
     def _flush_meeting_buffer(self, buffer: dict[int, tuple[int, str, str | None, str | None, dict[str, Any]]]) -> None:
         for turn in sorted(buffer):

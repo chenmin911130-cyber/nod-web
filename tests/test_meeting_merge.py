@@ -237,6 +237,26 @@ class MeetingWorkerOrderTests(unittest.TestCase):
         sess._flush_meeting_buffer(fresh_buf)
         self.assertEqual(len(_events(sess, "question")), 1)
 
+    def test_first_reset_does_not_poison_worker_and_finals_accumulate(self):
+        # Regression: the very first set_workspace (connect syncs meeting mode)
+        # calls _reset_turn_state -> _stop_meeting_worker BEFORE any worker has
+        # started. Putting a drain sentinel then would be consumed by the worker's
+        # first get() and make it exit immediately, with the "started" flag still
+        # true -> later finals queue but never reach the transcript (only the live
+        # partial shows). The fix: no drain when nothing is running, and the worker
+        # clears the flag on exit.
+        sess = _session()
+        sess._reset_turn_state()  # connect -> sync meeting mode
+        self.assertEqual(sess._meeting_finals.qsize(), 0, "no drain sentinel before a worker exists")
+        # Consecutive real finals must all land (worker processes every one).
+        sess._enqueue_meeting_final("first segment here", "A", "A", {"turn_order": 1, "n_words": 3})
+        sess._enqueue_meeting_final("second segment here", "B", "B", {"turn_order": 2, "n_words": 3})
+        for _ in range(200):
+            if len(_events(sess, "question")) >= 2:
+                break
+            time.sleep(0.01)
+        self.assertEqual(len(_events(sess, "question")), 2, "both finals accumulate in the transcript")
+
 
 if __name__ == "__main__":
     unittest.main()
