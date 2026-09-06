@@ -125,12 +125,19 @@ export function isTranslateChunk(translateAskId: string, evId?: string): boolean
   return Boolean(translateAskId) && Boolean(evId) && evId === translateAskId
 }
 
-/** Shared Latin word/script markers (used by both parseHeardLang and wrongScriptForTarget). */
-const ES_LANG_MARK = /[¿¡ñ]|cómo|está/i
-const FR_LANG_MARK = /[çœæ]|pourquoi|bonjour|\bça\b/i
-const DE_LANG_MARK = /[äöüß]|nicht\b|wie geht/i
-const IT_LANG_MARK = /perché|ciao\b|grazie|più/i
-const PT_LANG_MARK = /[ãõ]|você|não|olá/i
+/**
+ * Shared Latin word/script markers per language. Used by parseHeardLang to name
+ * a Latin turn, and by wrongScriptForTarget to detect a translated line in a
+ * *different* Latin language — so the key is the language the marker names, and
+ * a target's own markers must not flag correct output as wrong-language.
+ */
+const LATIN_MARKS: Record<'es' | 'fr' | 'de' | 'it' | 'pt', RegExp> = {
+  es: /[¿¡ñ]|cómo|está/i,
+  fr: /[çœæ]|pourquoi|bonjour|\bça\b/i,
+  de: /[äöüß]|nicht\b|wie geht/i,
+  it: /perché|ciao\b|grazie|più/i,
+  pt: /[ãõ]|você|não|olá/i,
+}
 
 /**
  * The raw STT language tag, trusted ONLY when it is a known translate language.
@@ -156,11 +163,11 @@ export function parseHeardLang(raw: string | undefined, text: string): PairLang 
   if (!t) return null
   if (/[\u3040-\u30FF]/.test(t)) return 'ja'
   if (/\p{Script=Han}/u.test(t)) return 'zh'
-  if (ES_LANG_MARK.test(t)) return 'es'
-  if (FR_LANG_MARK.test(t)) return 'fr'
-  if (DE_LANG_MARK.test(t)) return 'de'
-  if (IT_LANG_MARK.test(t)) return 'it'
-  if (PT_LANG_MARK.test(t)) return 'pt'
+  if (LATIN_MARKS.es.test(t)) return 'es'
+  if (LATIN_MARKS.fr.test(t)) return 'fr'
+  if (LATIN_MARKS.de.test(t)) return 'de'
+  if (LATIN_MARKS.it.test(t)) return 'it'
+  if (LATIN_MARKS.pt.test(t)) return 'pt'
   if (/[A-Za-z]/.test(t)) return 'en'
   return null
 }
@@ -170,9 +177,11 @@ export function parseHeardLang(raw: string | undefined, text: string): PairLang 
  * in a blatantly wrong language so a wrong-language output is retried (and then
  * failed) instead of accepted. CJK targets keep the pure script check (reliable).
  * For a Latin target (en/es/fr/de/it/pt) the text is wrong-language when it
- * carries a non-English Latin marker (the model answered in Spanish / Italian /
- * French / German / Portuguese) or when it is majority CJK/Hangul. Fewer than 4
- * letters is never enough to judge.
+ * carries a marker for a *different* Latin language (the model answered in
+ * Spanish / Italian / French / German / Portuguese other than the target) or
+ * when it is majority CJK/Hangul. A target's own markers never flag correct
+ * output — e.g. a Spanish target receiving Spanish is fine. Fewer than 4 letters
+ * is never enough to judge.
  */
 export function wrongScriptForTarget(text: string, to: PairLang): boolean {
   const chars = Array.from(compact(text)).filter((c) => /[\p{L}]/u.test(c))
@@ -182,9 +191,7 @@ export function wrongScriptForTarget(text: string, to: PairLang): boolean {
   const hangul = chars.filter((c) => /\p{Script=Hangul}/u.test(c)).length
   if (to === 'zh') return han === 0
   if (to === 'ja') return han + kana === 0
-  const latinWrong =
-    ES_LANG_MARK.test(compact(text)) || FR_LANG_MARK.test(compact(text)) || DE_LANG_MARK.test(compact(text)) ||
-    IT_LANG_MARK.test(compact(text)) || PT_LANG_MARK.test(compact(text))
+  const latinWrong = Object.entries(LATIN_MARKS).some(([lang, re]) => lang !== to && re.test(compact(text)))
   if (latinWrong) return true
   return (han + kana + hangul) / chars.length >= 0.5
 }

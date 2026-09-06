@@ -78,11 +78,16 @@ eq(translateShouldPassthrough('Quiero comer algo antes de la reunion', 'en', stt
 eq(translateShouldPassthrough('Let us move on', 'en', 'en'), true, 'an en-tagged English line under an en target passes through')
 
 // wrongScriptForTarget (moved here from App.tsx): a Latin target flags a model
-// output that carries a non-English Latin marker, or is majority CJK/Hangul.
+// output that carries a marker for a *different* Latin language, or is majority
+// CJK/Hangul. A target's own markers never flag correct output.
 eq(wrongScriptForTarget('Dobbiamo finire il lavoro entro domani perché', 'en'), true, 'Italian output for an en target is wrong-language')
 eq(wrongScriptForTarget('We should finish by tomorrow', 'en'), false, 'English output for an en target is fine')
 eq(wrongScriptForTarget('我们明天完成', 'en'), true, 'Chinese output for an en target is wrong-language (unchanged)')
 eq(wrongScriptForTarget('明天', 'en'), false, 'too few chars is never judged wrong-language')
+eq(wrongScriptForTarget('¿Cómo está usted?', 'es'), false, 'Spanish output for an es target is fine (own markers ignored)')
+eq(wrongScriptForTarget('Wie geht es dir, nicht wahr?', 'de'), false, 'German output for a de target is fine (own markers ignored)')
+eq(wrongScriptForTarget('Não posso ir hoje', 'pt'), false, 'Portuguese output for a pt target is fine (own markers ignored)')
+eq(wrongScriptForTarget('Dobbiamo finire il lavoro perché', 'es'), true, 'Italian output for an es target is still wrong-language')
 
 // matchesLockedFrom: a Latin lock is already constrained to that Latin
 // language, so a guessed / STT 'en' tag (a short or ambiguous turn) must not
