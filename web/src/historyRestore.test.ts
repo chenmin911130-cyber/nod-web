@@ -140,3 +140,43 @@ const timed: HistorySession = {
 const timedPayload = restoreFromSession(timed)
 eq(timedPayload.lines[0].ts, '00:03', 'first line is seconds after start')
 eq(timedPayload.lines[1].ts, '01:05', 'second line is mm:ss after start')
+
+// A MEETING session restores a translation onto its source line by qid (issue #31
+// §3.2): transcript(qid=m1) + translate(qid=m1) -> lines[0].translation is set,
+// and the translation is NOT duplicated into a sequential pair.
+const meeting: HistorySession = {
+  id: 'm1s',
+  mode: 'meeting',
+  scene: 'meeting',
+  title: 't',
+  started_at: null,
+  stt_seconds: 0,
+  items: [
+    { kind: 'transcript', text: 'So one of the significant', qid: 'm1', at: at(11, 5) },
+    { kind: 'translate', text: '所以其中重要', qid: 'm1', at: at(11, 5, 1) },
+  ],
+}
+const mPay = restoreFromSession(meeting)
+eq(mPay.lines.length.toString(), '1', 'one meeting line restored')
+eq(mPay.lines[0].translation || '', '所以其中重要', 'meeting line carries its qid-attached translation')
+eq(mPay.pairs.length.toString(), '1', 'pairs fallback keeps the source row')
+eq(mPay.pairs[0].translation, '', 'the qid-matched translation is not duplicated into pairs')
+
+// A translate row with NO matching transcript qid (legacy) still falls back to the
+// sequential pairing that feeds TranslatePairs.
+const legacy: HistorySession = {
+  id: 'lg',
+  mode: 'meeting',
+  scene: 'meeting',
+  title: 't',
+  started_at: null,
+  stt_seconds: 0,
+  items: [
+    { kind: 'transcript', text: 'Hello world', at: at(11, 5) },
+    { kind: 'translate', text: '你好世界', at: at(11, 5, 1) },
+  ],
+}
+const lgPay = restoreFromSession(legacy)
+eq(lgPay.pairs.length.toString(), '1', 'unmatched translate falls back to sequential pairs')
+eq(lgPay.pairs[0].translation, '你好世界', 'legacy no-qid pair keeps its translation')
+eq(lgPay.lines[0].translation || '', '', 'no qid match -> line translation stays empty')
