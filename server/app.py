@@ -52,7 +52,14 @@ from server.lang import (
     matches_locked_speech,
     split_code_switched,
 )
-from server.meeting_lines import decide as meeting_decide, gap_ms as meeting_gap_ms, join_meeting_text
+from server.meeting_lines import (
+    decide as meeting_decide,
+    decide_full as meeting_decide_full,
+    gap_ms as meeting_gap_ms,
+    join_meeting_text,
+    last_sentence_index as meeting_last_sentence_index,
+    tail_meta as meeting_tail_meta,
+)
 from server.logging_setup import backup_now, setup_logging
 from server.settings import (
     AUTH_DISABLED,
@@ -2724,6 +2731,7 @@ class Session:
         leftover: tuple[str, str | None, str | None, dict[str, Any]] | None = None
         hold_now = False
         emit_update: tuple[str, str, str | None, str | None, int] | None = None
+        tail_ctx: tuple[str, str | None, str | None, dict[str, Any]] | None = None
         with self._meeting_lock:
             ptxt, pts, plang = self._pending_wait
             pmeta = getattr(self, "_pending_meta", None) or {}
@@ -2770,25 +2778,63 @@ class Session:
                     "last_word_ms": meta.get("last_word_ms"),
                     "n_words": meta.get("n_words") or 0,
                 }
-                decision = meeting_decide(self._open_line, nxt_open, now)
-                self._trace_meeting_decision(self._open_line, nxt_open, decision, now, cleaned, meta.get("turn_order"))
-                if decision == "extend" and self._open_line:
-                    prev = self._open_line
-                    merged = join_meeting_text(prev["text"], cleaned)
-                    rev = prev.get("rev", 0) + 1
-                    n_words = (prev.get("n_words") or 0) + (meta.get("n_words") or 0)
-                    self._open_line = {
-                        "id": prev["id"],
-                        "text": merged,
-                        "speaker": prev.get("speaker"),
-                        "lang": prev.get("lang"),
-                        "opened_at": prev.get("opened_at"),
-                        "last_final_at": now,
-                        "last_word_ms": meta.get("last_word_ms"),
-                        "n_words": n_words,
-                        "rev": rev,
-                    }
-                    emit_update = (prev["id"], merged, prev.get("lang"), prev.get("speaker"), rev)
+                # Round 3 (#33): decide returns (decision, reason); the reason is
+                # logged with the split info when §1.1 closes the line at a
+                # sentence end.
+                decision, reason = meeting_decide_full(self._open_line, nxt_open, now)
+                decide_prev = self._open_line
+                # §1.1: does the incoming turn carry a sentence end to close on?
+                split_at = meeting_last_sentence_index(cleaned) if (decision == "extend" and decide_prev) else None
+                tail = cleaned[split_at:].strip() if split_at else ""
+                self._trace_meeting_decision(
+                    decide_prev, nxt_open, decision, reason, now, cleaned,
+                    meta.get("turn_order"), split_at=split_at, tail_len=len(tail) if split_at is not None else None,
+                )
+                if decision == "extend" and decide_prev:
+                    prev = decide_prev
+                    gap = meeting_gap_ms(prev, nxt_open, now)
+                    gap_ms_val = gap[0] if gap else None
+                    if split_at is not None and split_at > 0:
+                        # §1.1: absorb only up to the LAST sentence end; the rest
+                        # opens a NEW line. The absorbed line now ends with a
+                        # sentence end, so it is closed (decide naturally news).
+                        head = cleaned[:split_at]
+                        rev = prev.get("rev", 0) + 1
+                        head_n_words = round((meta.get("n_words") or 0) * split_at / len(cleaned)) if len(cleaned) else 0
+                        merged = join_meeting_text(prev["text"], head, gap_ms=gap_ms_val)
+                        self._open_line = {
+                            "id": prev["id"],
+                            "text": merged,
+                            "speaker": prev.get("speaker"),
+                            "lang": prev.get("lang"),
+                            "opened_at": prev.get("opened_at"),
+                            "last_final_at": now,
+                            "last_word_ms": prev.get("last_word_ms"),
+                            "n_words": (prev.get("n_words") or 0) + head_n_words,
+                            "rev": rev,
+                            "closed": True,
+                        }
+                        emit_update = (prev["id"], merged, prev.get("lang"), prev.get("speaker"), rev)
+                        if tail:
+                            tail_ctx = (tail, lang, speaker, meeting_tail_meta(meta, cleaned, split_at))
+                    else:
+                        # No sentence end in the incoming turn: merge it wholesale
+                        # and keep the line OPEN for the next final.
+                        merged = join_meeting_text(prev["text"], cleaned, gap_ms=gap_ms_val)
+                        rev = prev.get("rev", 0) + 1
+                        n_words = (prev.get("n_words") or 0) + (meta.get("n_words") or 0)
+                        self._open_line = {
+                            "id": prev["id"],
+                            "text": merged,
+                            "speaker": prev.get("speaker"),
+                            "lang": prev.get("lang"),
+                            "opened_at": prev.get("opened_at"),
+                            "last_final_at": now,
+                            "last_word_ms": meta.get("last_word_ms"),
+                            "n_words": n_words,
+                            "rev": rev,
+                        }
+                        emit_update = (prev["id"], merged, prev.get("lang"), prev.get("speaker"), rev)
         if leftover:
             self._emit_meeting_line(leftover[0], leftover[1], leftover[2], leftover[3])
         if hold_now:
@@ -2814,14 +2860,20 @@ class Session:
                 from server.meter import update_history_text
 
                 update_history_text(self.user_id, self.usage_session_id, line_id, merged, pspeaker or "")
+            if tail_ctx:
+                # §1.1 split: the absorbed line was closed above; the remainder
+                # opens a NEW line (and becomes the new open line), emitted AFTER
+                # the line_update so the client never sees them out of order.
+                self._emit_meeting_line(tail_ctx[0], tail_ctx[1], tail_ctx[2], tail_ctx[3])
             return
         self._emit_meeting_line(cleaned, lang, speaker, meta)
 
-    def _trace_meeting_decision(self, prev: dict[str, Any] | None, nxt: dict[str, Any], decision: str, now: float, text: str, turn_order: int | None = None) -> None:
+    def _trace_meeting_decision(self, prev: dict[str, Any] | None, nxt: dict[str, Any], decision: str, reason: str, now: float, text: str, turn_order: int | None = None, split_at: int | None = None, tail_len: int | None = None) -> None:
         """Shas the meeting continuation decision for the ``NOD_STT_TRACE`` line.
 
         Logs only the decision diagnostics + text length/hash — never the text
-        itself (issue #31 §2.6). Runs inside the worker where the decision is made.
+        itself (issue #31 §2.6, #33 §1.5 adds ``reason`` and the split info).
+        Runs inside the worker where the decision is made.
         """
         if os.environ.get("NOD_STT_TRACE") != "1":
             return
@@ -2831,11 +2883,13 @@ class Session:
         opened_at = prev.get("opened_at") if prev else None
         last_final_at = prev.get("last_final_at") if prev else None
         open_age_ms = "-" if (opened_at is None or last_final_at is None) else f"{(last_final_at - opened_at) * 1000:.0f}"
+        split_suffix = f" split_at={split_at} tail_len={tail_len}" if split_at is not None else ""
         logging.getLogger("nod").info(
-            "meeting_decision turn_order=%s decision=%s gap_ms=%s gap_src=%s open_age_ms=%s "
-            "speaker_prev=%s speaker_next=%s text_len=%s text_sha=%s",
+            "meeting_decision turn_order=%s decision=%s reason=%s gap_ms=%s gap_src=%s open_age_ms=%s "
+            "speaker_prev=%s speaker_next=%s text_len=%s text_sha=%s%s",
             turn_order,
             decision,
+            reason,
             gap_ms_val,
             gap_src,
             open_age_ms,
@@ -2843,6 +2897,7 @@ class Session:
             nxt.get("speaker"),
             len(text),
             hashlib.sha1(text.encode("utf-8", "ignore")).hexdigest()[:8],
+            split_suffix,
         )
 
     def _reset_turn_state(self) -> None:
