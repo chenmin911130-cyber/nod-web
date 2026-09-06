@@ -46,6 +46,9 @@ export function liveNotesLine(input: {
   if (!last) return ''
   const notes = (last.translation || '').replace(/\s+/g, ' ').trim()
   if (!notes || sameSpokenLine(last.text, notes)) return ''
+  // If structured Notes JSON leaked into a line's translation, don't show it as
+  // the live notes line.
+  if (/^[\[{]/.test(notes) || notes.includes('"summary"')) return ''
   return notes
 }
 

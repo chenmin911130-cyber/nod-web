@@ -114,6 +114,17 @@ export function translateDoneDecision(args: {
 }
 
 /**
+ * A chunk belongs to the translate stream only when it carries the id the
+ * server stamped on the translate `question` frame. We must NOT "adopt" any
+ * unclaimed chunk (e.g. a Notes stream that isn't tagged `[NOD_TRANSLATE`) as a
+ * translate chunk — that is how Notes JSON landed in a meeting line's
+ * translation. The server always sends the `question` before its chunks.
+ */
+export function isTranslateChunk(translateAskId: string, evId?: string): boolean {
+  return Boolean(translateAskId) && Boolean(evId) && evId === translateAskId
+}
+
+/**
  * Best-guess the spoken language of a turn from the STT tag, falling back to
  * the text's script/word markers when the tag is absent or unknown. Used to
  * stamp a meeting line with `lang` so passthrough can trust the STT tag.

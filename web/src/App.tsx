@@ -15,7 +15,7 @@ import SavePrompt from './components/SavePrompt'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
 import { canSwitchWorkspace, sessionListening } from './iphoneCopy'
-import { looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough } from './translateGate'
+import { isTranslateChunk, looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough } from './translateGate'
 import { nextMeetingLineToTranslate } from './meetingTranslate'
 import { doneAffectsInterview } from './interviewDone'
 import AnswerPane from './components/AnswerPane'
@@ -508,14 +508,7 @@ function reducer(state: AppState, action: Action): AppState {
             notesRaw += ev.text ?? ''
             notesAskId = ev.id || notesAskId
           }
-          const foreignAsk = Boolean(ev.id) && (
-            ev.id === state.notesAskId
-            || catchNotes.some((note) => note.id === ev.id)
-          )
-          if (!translateAskId && state.translateBindId && ev.id && !foreignAsk) {
-            translateAskId = ev.id
-          }
-          const translateChunk = Boolean(translateAskId) && ev.id === translateAskId
+          const translateChunk = isTranslateChunk(translateAskId, ev.id)
           if (translateChunk) {
             const route = routeTranslateChunk(
               state.workspaceMode,

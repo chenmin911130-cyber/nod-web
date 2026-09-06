@@ -110,6 +110,42 @@ eq(
   '',
   'Live is not a translator — no pending dots while notes language is still coming',
 )
+eq(
+  liveNotesLine({
+    lines: [{ text: 'On finalise la date avant vendredi.', translation: '{ "summary": "On finalise la date avant vendredi.", "keyPoints": [] }' }],
+    partial: '',
+    translateOn: true,
+  }),
+  '',
+  'Notes JSON leaked into a line translation is not shown as the live notes line',
+)
+eq(
+  liveNotesLine({
+    lines: [{ text: 'On finalise la date avant vendredi.', translation: '[{"summary":"x"}]' }],
+    partial: '',
+    translateOn: true,
+  }),
+  '',
+  'a JSON array starting with [ is also hidden',
+)
+eq(
+  liveNotesLine({
+    lines: [{ text: '今天讲了 GPU 的浮点运算。', translation: '今天讲了 GPU 的浮点运算。' }],
+    partial: '',
+    translateOn: true,
+  }),
+  '',
+  'a same-language detected turn still hides the notes line',
+)
+eq(
+  liveNotesLine({
+    lines: [{ text: '今天讲了 GPU 的浮点运算。', translation: '笔记本：今天讲了 GPU 的浮点运算。' }],
+    partial: '',
+    translateOn: true,
+  }),
+  '笔记本：今天讲了 GPU 的浮点运算。',
+  'a real translation still shows',
+)
 
 eq(formatActionItem({ text: 'Confirm marketing budget tomorrow.', owner: 'Sarah' }), 'Sarah \u2192 Confirm marketing budget tomorrow.', 'owner sits in front of the action')
 

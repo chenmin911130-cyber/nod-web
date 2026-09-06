@@ -1,4 +1,5 @@
 import {
+  isTranslateChunk,
   looksLikeTarget,
   matchesLockedFrom,
   routeTranslateChunk,
@@ -108,5 +109,14 @@ eq(translateDoneDecision({ ok: false, translated: true, wrongScript: false, retr
 eq(translateDoneDecision({ ok: false, translated: false, wrongScript: false, retries: 1 }), 'retry', 'ok:false + empty -> retry')
 eq(translateDoneDecision({ ok: true, translated: true, wrongScript: true, retries: 1 }), 'retry', 'wrongScript -> retry within budget')
 eq(translateDoneDecision({ ok: true, translated: true, wrongScript: true, retries: 3 }), 'accept', 'wrongScript exhausted -> accept (keep what we got)')
+
+// isTranslateChunk: a chunk can only join the translate stream when it carries
+// the id stamped on the translate `question`. With no translateAskId (e.g.
+// during a Notes stream), NO chunk may be adopted as a translate chunk — that
+// was how Notes JSON landed in a meeting line's translation.
+eq(isTranslateChunk('', 'N'), false, 'no translateAskId -> never a translate chunk')
+eq(isTranslateChunk('', 'T'), false, 'empty translateAskId adopts nothing')
+eq(isTranslateChunk('T', 'T'), true, 'the stamped translate id belongs to the stream')
+eq(isTranslateChunk('T', 'N'), false, 'a foreign id (Notes) is not a translate chunk')
 
 console.log('translateGate ok')
