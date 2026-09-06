@@ -34,7 +34,8 @@ export const IPHONE_COPY = {
   autoDetect: 'Auto Detect',
   emptyLive: 'Start listening. What was said stays here.',
   emptyNotes: 'Start listening',
-  emptyTranslate: 'Speak any language.',
+  emptyTranslateTitle: 'Ready to translate',
+  emptyTranslateSub: 'Tap the mic below to speak, or type to translate.',
   histTitle: 'History',
   histDone: 'Done',
   histSearch: 'Search',
@@ -62,7 +63,9 @@ export const IPHONE_COPY = {
   notesSheetHelp: 'Notes are written in this language only',
   enhance: 'More accurate',
   confirmStatus: 'Confirming before translate',
-  hearAnything: 'Hear anything',
+  autoDetectFrom: 'Auto-detect',
+  startTranslate: 'Start voice translation',
+  copyTranslation: 'Copy translation',
 } as const
 
 export function nativeListenChipOrder(scene: ListenScene): ReadonlyArray<'scene' | 'speech' | 'notes'> {
@@ -105,7 +108,7 @@ export function translateTargetChip(lang: PairLang): string {
 }
 
 export function translateFromChip(lang: Lang): string {
-  if (lang === 'auto') return IPHONE_COPY.hearAnything
+  if (lang === 'auto') return IPHONE_COPY.autoDetectFrom
   return TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
 }
 
@@ -118,6 +121,17 @@ export function translateSourceTag(input: { from?: string; locked?: string; hear
   return TRANSLATE_LANGS.find((item) => item.id === raw)?.tag || 'EN'
 }
 
+export function translateSourceName(input: { from?: string; locked?: string; heard?: string | null }): string {
+  const raw = input.from || (input.locked && input.locked !== 'auto' ? input.locked : '') || input.heard || ''
+  if (!raw || raw === 'auto') return ''
+  return TRANSLATE_LANGS.find((item) => item.id === raw)?.name || ''
+}
+
+export function translateSwapAffordance(input: { from: string; heardFrom?: string | null }): 'arrow' | 'swap' {
+  if (input.from === 'auto' && !input.heardFrom) return 'arrow'
+  return 'swap'
+}
+
 export function recClock(ms: number): string {
   const sec = Math.max(0, Math.floor(ms / 1000))
   const h = String(Math.floor(sec / 3600)).padStart(2, '0')
@@ -127,7 +141,7 @@ export function recClock(ms: number): string {
 }
 
 export function listenShowsRecClock(variant: 'listen' | 'translate' | 'interview'): boolean {
-  return variant === 'listen'
+  return variant === 'listen' || variant === 'translate'
 }
 
 export function listenClock(ms: number): string {

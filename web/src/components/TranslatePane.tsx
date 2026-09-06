@@ -7,7 +7,7 @@ import PromptAttach from './PromptAttach'
 import EmptyState from './EmptyState'
 import { ttsAutoShouldConfirm, type TtsMode, type TtsVoice } from '../tts'
 import { usePhoneChrome } from '../phoneChrome'
-import { IPHONE_COPY, translateFromChip, translateSourceTag, translateToChip } from '../iphoneCopy'
+import { IPHONE_COPY, translateFromChip, translateSourceName, translateSwapAffordance, translateToChip } from '../iphoneCopy'
 
 interface Props {
   pairs: TranslatePair[]
@@ -55,19 +55,22 @@ function Sparkle() {
   )
 }
 
-function EarIcon() {
+function BilingualIcon() {
   return (
-    <svg className="iphone-tr-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M8.2 2.4c-2 0-3.6 1.6-3.6 4.2v1.8c0 1.2.5 2 .9 2.6.3.4.5.9.3 1.4-.2.6-.8 1-1.5 1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M8.2 2.4c1.7 0 3.2 1.3 3.2 3.4v2.2c0 1.5-.6 2.4-1.2 3-.5.5-.8 1.1-.6 1.7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    <svg className="iphone-tr-empty-icon" width="56" height="56" viewBox="0 0 56 56" aria-hidden="true">
+      <rect x="4" y="10" width="30" height="30" rx="8" fill="#1c1c1e" stroke="#3a4550" strokeWidth="1.5" />
+      <text x="19" y="31" textAnchor="middle" fill="#f4f8fc" fontSize="16" fontWeight="700" fontFamily="ui-sans-serif, system-ui, sans-serif">A</text>
+      <rect x="22" y="16" width="30" height="30" rx="8" fill="#10161c" stroke="#00d2ff" strokeWidth="1.5" />
+      <text x="37" y="37" textAnchor="middle" fill="#00d2ff" fontSize="15" fontWeight="700" fontFamily="ui-sans-serif, system-ui, sans-serif">文</text>
     </svg>
   )
 }
 
-function ArrowIcon() {
+function CopyIcon() {
   return (
-    <svg className="iphone-tr-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M3 8h9.2M8.8 4.4 13 8l-4.2 3.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="5.2" y="5.2" width="7.4" height="8.2" rx="1.4" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M3.4 10.6V3.8A1.4 1.4 0 0 1 4.8 2.4h5.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   )
 }
@@ -75,7 +78,7 @@ function ArrowIcon() {
 function NativeTranslateCard({
   ts,
   source,
-  sourceTag,
+  sourceName,
   target,
   targetPending = false,
   targetFailed = false,
@@ -89,7 +92,7 @@ function NativeTranslateCard({
 }: {
   ts: string
   source: string
-  sourceTag: string
+  sourceName: string
   target: string
   targetPending?: boolean
   targetFailed?: boolean
@@ -101,15 +104,11 @@ function NativeTranslateCard({
   onStop?: () => void
   onRetry?: () => void
 }) {
-  const sourceBody = (
-    <span className="tr-text">
-      {source}
-      {sourceTag ? <span className="tr-lang-chip">{sourceTag}</span> : null}
-    </span>
-  )
+  const meta = sourceName ? `${sourceName} · ${ts}` : ts
+  const sourceBody = <span className="tr-text">{source}</span>
   return (
     <div className={`tr-pair iphone-tr-card${ts === 'live' ? ' live' : ''}`}>
-      <span className="meet-ts">{ts}</span>
+      <div className="iphone-tr-meta">{meta}</div>
       <div className="iphone-tr-source">
         {onCopyOriginal ? (
           <button type="button" className="tr-copy-hit" onClick={onCopyOriginal} title="Copy original">
@@ -119,36 +118,35 @@ function NativeTranslateCard({
           sourceBody
         )}
       </div>
-      {spoken ? (
-        <button
-          type="button"
-          className={`tr-speak${speaking ? ' stop' : ''}`}
-          onClick={() => (speaking ? onStop?.() : onSpeak?.())}
-          title={speaking ? 'Stop' : 'Play'}
-          aria-label={speaking ? 'Stop speech' : 'Play translation'}
-        >
-          {speaking ? <LineStopIcon /> : <LinePlayIcon />}
-        </button>
-      ) : (
-        <span className="iphone-tr-play-slot" aria-hidden="true" />
-      )}
       <div className={`iphone-tr-target${targetPending ? ' pending' : ''}${targetFailed ? ' failed' : ''}`}>
-        {onCopyTranslation ? (
-          <button
-            type="button"
-            className="tr-copy-hit"
-            onClick={onCopyTranslation}
-            title={targetPending ? undefined : 'Copy translation'}
-            disabled={targetPending}
-          >
-            <span className="tr-text">{target}</span>
-          </button>
-        ) : (
-          <span className="tr-text">{target}</span>
-        )}
+        <span className="tr-text">{target}</span>
         {targetFailed && onRetry ? (
           <button type="button" className="tr-retry" onClick={onRetry}>
             Retry
+          </button>
+        ) : null}
+      </div>
+      <div className="iphone-tr-actions">
+        {onCopyTranslation && !targetPending && !targetFailed ? (
+          <button
+            type="button"
+            className="iphone-tr-copy"
+            onClick={onCopyTranslation}
+            title={IPHONE_COPY.copyTranslation}
+            aria-label={IPHONE_COPY.copyTranslation}
+          >
+            <CopyIcon />
+          </button>
+        ) : null}
+        {spoken ? (
+          <button
+            type="button"
+            className={`tr-speak${speaking ? ' stop' : ''}`}
+            onClick={() => (speaking ? onStop?.() : onSpeak?.())}
+            title={speaking ? 'Stop' : 'Play'}
+            aria-label={speaking ? 'Stop speech' : 'Play translation'}
+          >
+            {speaking ? <LineStopIcon /> : <LinePlayIcon />}
           </button>
         ) : null}
       </div>
@@ -288,12 +286,66 @@ export default function TranslatePane({
 
   const empty = pairs.length === 0 && !partial
   const queued = pairs.filter((p) => !p.translation && !p.failed && p.id !== bindId).length
+  const swapKind = translateSwapAffordance({ from, heardFrom })
+  const swapTitle = from === 'auto' && heardFrom
+    ? `Lock ${translateToChip(heardFrom)} → ${translateToChip(to)} and swap`
+    : 'Swap From and To'
 
   const toolbar = (
         <div className="tr-toolbar">
-          <div className="tr-head-row">
-          <label className={`tr-col-head tr-to-head tr-from-head${native ? ' iphone-tr-chip' : ''}`}>
-            {native ? <EarIcon /> : null}
+          <div className={`tr-head-row${native ? ' iphone-tr-dir' : ''}`}>
+          {native ? (
+            <>
+              <label className="iphone-tr-dir-col">
+                <span className="iphone-tr-dir-label">From</span>
+                <select
+                  className="tr-to-select"
+                  value={from}
+                  onChange={(e) => onTranslateFrom(e.target.value as Lang)}
+                  title={
+                    heardFrom
+                      ? `Speech to recognize. Hearing ${langTag(heardFrom)}. Lock a language to ignore others.`
+                      : 'Speech to recognize. Lock English to ignore other languages — they will not appear.'
+                  }
+                  aria-label="From"
+                >
+                  <option value="auto">{IPHONE_COPY.autoDetectFrom}</option>
+                  {TRANSLATE_LANGS.map((l) => (
+                    <option key={l.id} value={l.id}>{translateFromChip(l.id)}</option>
+                  ))}
+                </select>
+              </label>
+              {swapKind === 'arrow' ? (
+                <span className="iphone-tr-dir-mid" aria-hidden="true">→</span>
+              ) : (
+                <button
+                  type="button"
+                  className="tr-swap"
+                  onClick={onSwap}
+                  title={swapTitle}
+                  aria-label="Swap From and To"
+                >
+                  ⇄
+                </button>
+              )}
+              <label className="iphone-tr-dir-col to">
+                <span className="iphone-tr-dir-label">To</span>
+                <select
+                  className="tr-to-select"
+                  value={to}
+                  onChange={(e) => onTranslateTo(e.target.value as PairLang)}
+                  title="Language of the translated captions"
+                  aria-label="To"
+                >
+                  {TRANSLATE_LANGS.map((l) => (
+                    <option key={l.id} value={l.id}>{translateToChip(l.id)}</option>
+                  ))}
+                </select>
+              </label>
+            </>
+          ) : (
+            <>
+          <label className="tr-col-head tr-to-head tr-from-head">
             <select
               className="tr-to-select"
               value={from}
@@ -305,9 +357,9 @@ export default function TranslatePane({
               }
               aria-label="From"
             >
-              <option value="auto">{native ? IPHONE_COPY.hearAnything : 'Auto · detect'}</option>
+              <option value="auto">Auto · detect</option>
               {TRANSLATE_LANGS.map((l) => (
-                <option key={l.id} value={l.id}>{native ? translateFromChip(l.id) : `${l.tag} · ${l.name}`}</option>
+                <option key={l.id} value={l.id}>{`${l.tag} · ${l.name}`}</option>
               ))}
             </select>
           </label>
@@ -320,8 +372,7 @@ export default function TranslatePane({
           >
             <SwapIcon />
           </button>
-          <label className={`tr-col-head tr-to-head${native ? ' iphone-tr-chip to' : ''}`}>
-            {native ? <ArrowIcon /> : null}
+          <label className="tr-col-head tr-to-head">
             <select
               className="tr-to-select"
               value={to}
@@ -330,10 +381,12 @@ export default function TranslatePane({
               aria-label="To"
             >
               {TRANSLATE_LANGS.map((l) => (
-                <option key={l.id} value={l.id}>{native ? translateToChip(l.id) : `${l.tag} · ${l.name}`}</option>
+                <option key={l.id} value={l.id}>{`${l.tag} · ${l.name}`}</option>
               ))}
             </select>
           </label>
+            </>
+          )}
           </div>
           <div className="tr-voice-row">
             <button
@@ -387,7 +440,7 @@ export default function TranslatePane({
                 <span>Stop</span>
               </button>
             ) : null}
-            {voiceChrome ? (
+            {!native && voiceChrome ? (
               <>
                 <span className="tr-voice-split" aria-hidden="true" />
                 {voiceChrome}
@@ -402,7 +455,6 @@ export default function TranslatePane({
     <div className="main translate-main">
       {native ? (
         <div className="iphone-stack">
-          {actions}
           {toolbar}
         </div>
       ) : toolbar}
@@ -410,9 +462,10 @@ export default function TranslatePane({
         <div className="tr-body">
           {empty ? (
             <EmptyState
-              compact
-              title={native ? IPHONE_COPY.emptyTranslate : 'Start Listen or type a line.'}
-              sub={native ? '' : 'Spoken captions show up here.'}
+              compact={!native}
+              icon={native ? <BilingualIcon /> : undefined}
+              title={native ? IPHONE_COPY.emptyTranslateTitle : 'Start Listen or type a line.'}
+              sub={native ? IPHONE_COPY.emptyTranslateSub : 'Spoken captions show up here.'}
             />
           ) : (
             <>
@@ -432,7 +485,7 @@ export default function TranslatePane({
                       key={p.id}
                       ts={p.ts}
                       source={p.original}
-                      sourceTag={translateSourceTag({ from: p.from, locked: from, heard: heardFrom })}
+                      sourceName={translateSourceName({ from: p.from, locked: from, heard: heardFrom })}
                       target={status}
                       targetPending={!p.translation}
                       targetFailed={!!p.failed}
@@ -508,7 +561,7 @@ export default function TranslatePane({
                 <NativeTranslateCard
                   ts="live"
                   source={partial}
-                  sourceTag={translateSourceTag({ locked: from, heard: heardFrom })}
+                  sourceName={translateSourceName({ locked: from, heard: heardFrom })}
                   target="Listening…"
                   targetPending
                 />
@@ -530,25 +583,28 @@ export default function TranslatePane({
       </div>
 
       {native ? (
-        <div className="iphone-tr-prompt">
-          <input
-            className="prompt-input"
-            placeholder={IPHONE_COPY.typeToTranslate}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') submit()
-            }}
-          />
-          <button
-            type="button"
-            className="iphone-tr-send"
-            onClick={submit}
-            disabled={!input.trim() && files.length === 0}
-            aria-label={IPHONE_COPY.typeToTranslate}
-          >
-            <SendIcon />
-          </button>
+        <div className="iphone-tr-dock">
+          {actions}
+          <div className="iphone-tr-prompt">
+            <input
+              className="prompt-input"
+              placeholder={IPHONE_COPY.typeToTranslate}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submit()
+              }}
+            />
+            <button
+              type="button"
+              className={`iphone-tr-send${input.trim() || files.length ? ' ready' : ''}`}
+              onClick={submit}
+              disabled={!input.trim() && files.length === 0}
+              aria-label={IPHONE_COPY.typeToTranslate}
+            >
+              <SendIcon />
+            </button>
+          </div>
         </div>
       ) : (
         <PromptAttach files={files} onChange={setFiles}>

@@ -34,24 +34,6 @@ function StatusWave({ live }: { live: boolean }) {
   )
 }
 
-function MoreDots() {
-  return (
-    <svg className="iphone-more-dots" width="18" height="6" viewBox="0 0 18 6" fill="none" aria-hidden="true">
-      <circle cx="3" cy="3" r="2" fill="currentColor" />
-      <circle cx="9" cy="3" r="2" fill="currentColor" />
-      <circle cx="15" cy="3" r="2" fill="currentColor" />
-    </svg>
-  )
-}
-
-function MoreButton({ className, onClick }: { className: string; onClick: () => void }) {
-  return (
-    <button type="button" className={className} aria-label={IPHONE_COPY.more} onClick={onClick}>
-      <MoreDots />
-    </button>
-  )
-}
-
 function PdfIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
@@ -98,7 +80,7 @@ export default function IphoneActions({
   onPause,
   onResume,
   onStop,
-  onMore,
+  onMore: _onMore,
   moreOpen,
   onCloseMore,
   onExportPdf,
@@ -138,21 +120,30 @@ export default function IphoneActions({
           <div className="iphone-start-row">
             <button type="button" className="iphone-btn primary iphone-start" onClick={onStart}>
               <MicIcon />
-              {variant === 'translate' ? IPHONE_COPY.start : IPHONE_COPY.startListening}
+              {variant === 'translate' ? IPHONE_COPY.startTranslate : IPHONE_COPY.startListening}
             </button>
-            <MoreButton className="iphone-more-sq" onClick={onMore} />
           </div>
         ) : listening ? (
           <div className="iphone-status-row">
             <span className="iphone-status rec" aria-live="polite">
-              {IPHONE_COPY.recordingStatus}
-              {recClock ? (
+              {variant === 'translate' ? (
                 <>
+                  <i className={`iphone-dot ${tone}`} />
+                  {IPHONE_COPY.recordingStatus}
+                  <span className="iphone-clock">{clock}</span>
+                  <StatusWave live />
+                </>
+              ) : recClock ? (
+                <>
+                  {IPHONE_COPY.recordingStatus}
                   <i className={`iphone-dot ${tone}`} />
                   <span className="iphone-clock">{clock}</span>
                 </>
               ) : (
-                <StatusWave live />
+                <>
+                  {IPHONE_COPY.recordingStatus}
+                  <StatusWave live />
+                </>
               )}
             </span>
             <button type="button" className="iphone-pill" onClick={onPause}>
@@ -171,10 +162,9 @@ export default function IphoneActions({
               {IPHONE_COPY.pausedStatus}
               {recClock ? <> {clock}</> : null}
             </span>
-            <MoreButton className="iphone-more-inline" onClick={onMore} />
             <button type="button" className="iphone-cta" onClick={onResume}>
               <MicIcon />
-              {IPHONE_COPY.startListening}
+              {variant === 'translate' ? IPHONE_COPY.resume : IPHONE_COPY.startListening}
             </button>
             <button type="button" className="iphone-pill stop" onClick={onStop}>
               <StopIcon />

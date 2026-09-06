@@ -5,6 +5,8 @@ import { logout } from '../auth'
 import { PRODUCT_NAME } from '../brand'
 import { isNativeApp, nativeGo, readNativeAppBuild } from '../native'
 import { usePhoneChrome } from '../phoneChrome'
+import { IPHONE_COPY } from '../iphoneCopy'
+import { ttsAutoShouldConfirm, type TtsMode, type TtsVoice } from '../tts'
 import OpacityBar from './OpacityBar'
 import PetTimer from './PetTimer'
 
@@ -26,6 +28,10 @@ export interface TitleIconsProps {
   onMenuOpen?: () => void
   onOpenHistory?: () => void
   onMore?: () => void
+  ttsMode?: TtsMode
+  ttsVoice?: TtsVoice
+  onTtsMode?: (mode: TtsMode) => void
+  onTtsVoice?: (voice: TtsVoice) => void
 }
 
 interface Props {
@@ -51,6 +57,10 @@ interface Props {
   onFullScreen: () => void
   onOpenHistory?: () => void
   onMore?: () => void
+  ttsMode?: TtsMode
+  ttsVoice?: TtsVoice
+  onTtsMode?: (mode: TtsMode) => void
+  onTtsVoice?: (voice: TtsVoice) => void
 }
 
 const MODES: Array<{ id: WorkspaceMode; label: string }> = [
@@ -140,6 +150,16 @@ function SourceOffIcon() {
   )
 }
 
+function SessionMoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.7" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.7" fill="currentColor" />
+      <circle cx="19" cy="12" r="1.7" fill="currentColor" />
+    </svg>
+  )
+}
+
 function SettingsIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -150,11 +170,23 @@ function SettingsIcon() {
 }
 
 export function TitleIcons(props: TitleIconsProps) {
-  const { mode, source, opacity, pinned, systemMuted, micMuted, stealth } = props
+  const { mode, source, opacity, pinned, systemMuted, micMuted, stealth, ttsMode, ttsVoice } = props
   const phone = usePhoneChrome()
   const [menuOpen, setMenuOpen] = useState(false)
+  const [autoAsk, setAutoAsk] = useState(false)
   const [appVer, setAppVer] = useState('')
   const menuRef = useRef<HTMLDivElement>(null)
+
+  const requestTtsMode = (next: TtsMode) => {
+    if (!props.onTtsMode) return
+    if (ttsMode && ttsAutoShouldConfirm(ttsMode, next)) {
+      setMenuOpen(false)
+      setAutoAsk(true)
+      return
+    }
+    setAutoAsk(false)
+    props.onTtsMode(next)
+  }
 
   useEffect(() => {
     void readNativeAppBuild().then(setAppVer)
@@ -174,6 +206,7 @@ export function TitleIcons(props: TitleIconsProps) {
   }, [mode])
 
   return (
+    <>
     <div className="tb-icons">
       {isWeb ? (
         <button
@@ -270,30 +303,34 @@ export function TitleIcons(props: TitleIconsProps) {
                 </button>
               </>
             )}
-            {phone && (
+            {phone && mode === 'translate' && props.onTtsMode && props.onTtsVoice ? (
               <>
                 <button
                   type="button"
-                  className="tb-menu-action"
-                  onClick={() => {
-                    setMenuOpen(false)
-                    props.onOpenHistory?.()
-                  }}
+                  className={`tb-menu-action${ttsMode === 'live' ? ' on' : ''}`}
+                  aria-pressed={ttsMode === 'live'}
+                  onClick={() => requestTtsMode(ttsMode === 'live' ? 'tap' : 'live')}
                 >
-                  History
+                  Read aloud · Auto
                 </button>
                 <button
                   type="button"
-                  className="tb-menu-action"
-                  onClick={() => {
-                    setMenuOpen(false)
-                    props.onMore?.()
-                  }}
+                  className={`tb-menu-action${ttsVoice === 'female' ? ' on' : ''}`}
+                  aria-pressed={ttsVoice === 'female'}
+                  onClick={() => props.onTtsVoice?.('female')}
                 >
-                  More
+                  Voice · Female
+                </button>
+                <button
+                  type="button"
+                  className={`tb-menu-action${ttsVoice === 'male' ? ' on' : ''}`}
+                  aria-pressed={ttsVoice === 'male'}
+                  onClick={() => props.onTtsVoice?.('male')}
+                >
+                  Voice · Male
                 </button>
               </>
-            )}
+            ) : null}
             {isWeb && (
               <>
                 <div className="tb-menu-action tb-version">
@@ -317,6 +354,35 @@ export function TitleIcons(props: TitleIconsProps) {
         )}
       </div>
     </div>
+    {autoAsk ? (
+      <div className="consent-mask" onClick={() => setAutoAsk(false)}>
+        <div
+          className="consent-card confirm-card"
+          role="dialog"
+          aria-labelledby="tts-auto-title"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h2 id="tts-auto-title">Turn on Auto play?</h2>
+          <p>Each new translation will play out loud. You can switch back to Tap anytime.</p>
+          <div className="confirm-actions">
+            <button className="confirm-keep" type="button" onClick={() => setAutoAsk(false)} autoFocus>
+              Keep Tap
+            </button>
+            <button
+              className="confirm-go"
+              type="button"
+              onClick={() => {
+                setAutoAsk(false)
+                props.onTtsMode?.('live')
+              }}
+            >
+              Turn on Auto
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null}
+    </>
   )
 }
 
@@ -358,6 +424,18 @@ export default function TitleBar(props: Props) {
 
       <div className="titlebar-right no-drag">
         {!phone && <PetTimer listening={Boolean(props.listening)} />}
+        {phone ? (
+          /* Gear = long-term settings. … = this session (PDF / Save / History / New). */
+          <button
+            type="button"
+            className="tb-icon tb-session"
+            onClick={() => props.onMore?.()}
+            title={IPHONE_COPY.more}
+            aria-label={IPHONE_COPY.more}
+          >
+            <SessionMoreIcon />
+          </button>
+        ) : null}
         {(mode !== 'translate' || phone) && (
           <TitleIcons
             mode={mode}
@@ -376,6 +454,10 @@ export default function TitleBar(props: Props) {
             onFullScreen={props.onFullScreen}
             onOpenHistory={props.onOpenHistory}
             onMore={props.onMore}
+            ttsMode={props.ttsMode}
+            ttsVoice={props.ttsVoice}
+            onTtsMode={props.onTtsMode}
+            onTtsVoice={props.onTtsVoice}
           />
         )}
 
