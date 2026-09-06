@@ -19,6 +19,13 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
     private let targetSampleRate: Double = 16_000
     private var converter: AVAudioConverter?
     private let listenNotificationId = "nod.listening"
+    // #35: iOS only keeps an app alive in the background (UIBackgroundModes: audio)
+    // while audio is actually PLAYING. The mic tap only records — it never plays —
+    // so a lock-screen suspends the process/WKWebView and PCM stops reaching the
+    // server (→ 25s zero-PCM → "No microphone audio …"). A looping SILENT clip
+    // (all-zero PCM) keeps the session genuinely in the playing state, so the app
+    // and the JS stays alive and the tap keeps firing. Inaudible by construction.
+    private var silentPlayer: AVAudioPlayer?
 
     @objc func start(_ call: CAPPluginCall) {
         if running {
@@ -136,6 +143,7 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
 
         try engine.start()
         running = true
+        startSilentLoop()
     }
 
     private func emitPcm(_ buffer: AVAudioPCMBuffer, outputFormat: AVAudioFormat) {
@@ -167,12 +175,60 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func teardown() {
         running = false
+        stopSilentLoop()
         engine.inputNode.removeTap(onBus: 0)
         if engine.isRunning {
             engine.stop()
         }
         converter = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+    }
+
+    // MARK: - Background keep-alive (issue #35)
+
+    /// A 1-second, 16-bit mono, all-zero WAV. Played in a loop at full volume it is
+    /// inaudible (every sample is 0) but keeps the AVAudioSession truly "playing",
+    /// which is what lets iOS keep the app + WKWebView running while locked.
+    private static func silentWav(sampleRate: Int = 8000, seconds: Double = 1.0) -> Data? {
+        let dataSize = Int(seconds * Double(sampleRate)) * 2  // 16-bit mono
+        func le32(_ v: UInt32) -> Data { withUnsafeBytes(of: v.littleEndian) { Data($0) } }
+        func le16(_ v: UInt16) -> Data { withUnsafeBytes(of: v.littleEndian) { Data($0) } }
+        var d = Data()
+        d.append(Data("RIFF".utf8))
+        d.append(le32(UInt32(36 + dataSize)))
+        d.append(Data("WAVE".utf8))
+        d.append(Data("fmt ".utf8))
+        d.append(le32(16))                                  // PCM fmt chunk size
+        d.append(le16(1))                                   // audio format = PCM
+        d.append(le16(1))                                   // channels = mono
+        d.append(le32(UInt32(sampleRate)))                  // sample rate
+        d.append(le32(UInt32(sampleRate * 2)))              // byte rate
+        d.append(le16(2))                                   // block align
+        d.append(le16(16))                                  // bits per sample
+        d.append(Data("data".utf8))
+        d.append(le32(UInt32(dataSize)))
+        d.append(Data(count: dataSize))                     // silence
+        return d
+    }
+
+    private func startSilentLoop() {
+        guard silentPlayer == nil else { return }
+        guard let wav = Self.silentWav() else { return }
+        do {
+            let player = try AVAudioPlayer(data: wav)
+            player.numberOfLoops = -1
+            player.volume = 1.0  // content is all-zero, so this is inaudible
+            player.prepareToPlay()
+            player.play()
+            silentPlayer = player
+        } catch {
+            silentPlayer = nil
+        }
+    }
+
+    private func stopSilentLoop() {
+        silentPlayer?.stop()
+        silentPlayer = nil
     }
 
     private func showListeningNotification() {
