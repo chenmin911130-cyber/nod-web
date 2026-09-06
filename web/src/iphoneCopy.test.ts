@@ -18,7 +18,9 @@ import {
   showLineTranslation,
   showLiveTranslation,
   translateFromChip,
+  translateSourceName,
   translateSourceTag,
+  translateSwapAffordance,
   translateTargetChip,
   translateToChip,
 } from './iphoneCopy'
@@ -28,7 +30,7 @@ function eq<T>(got: T, want: T, label: string) {
 }
 
 eq(IPHONE_COPY.startListening, 'Start Listening', 'Listen ready CTA is Start Listening')
-eq(IPHONE_COPY.start, 'Start', 'Translate ready CTA is Start')
+eq(IPHONE_COPY.startTranslate, 'Start voice translation', 'Translate ready CTA is Start voice translation')
 eq(IPHONE_COPY.recordingStatus, 'Listening', 'live status is Listening')
 eq(IPHONE_COPY.more, 'More', 'PDF/Save/History live in More')
 eq(IPHONE_COPY.saveTitle, 'Save to History?', 'Stop asks save only')
@@ -51,7 +53,7 @@ eq(notesChipLabel('en').includes('纪要'), false, 'notes chip stays English')
 eq(notesInChip('zh').includes('中文'), false, 'notes chip uses the English language name')
 eq(listenClock(8000), '00:08', 'Listen clock is mm:ss')
 eq(listenShowsRecClock('listen'), true, 'Meeting / Lecture keep the recording clock')
-eq(listenShowsRecClock('translate'), false, 'Translate is not a recording')
+eq(listenShowsRecClock('translate'), true, 'Translate shows the recording clock with the waveform')
 eq(listenShowsRecClock('interview'), false, 'Live Q&A is not a recording')
 eq(nativeListenChipOrder('meeting').join(','), 'scene,speech,notes', 'meeting chips are Meeting, speech, notes')
 eq(nativeListenChipOrder('lecture').join(','), 'scene,speech,notes', 'lecture chips are the same three')
@@ -62,14 +64,24 @@ eq(IPHONE_COPY.listeningNowLabel, 'Listening now', 'Live content says Listening 
 eq(IPHONE_COPY.keyPoint, 'Key Point', 'Summary still names Key Point')
 eq(IPHONE_COPY.actionItem, 'Action Item', 'Summary still names Action Item')
 eq(translateTargetChip('en'), '→ English', 'Translate target follows notes')
-eq(translateFromChip('auto'), 'Hear anything', 'Translate from starts unlocked')
+eq(translateFromChip('auto'), 'Auto-detect', 'Translate from starts unlocked')
 eq(translateFromChip('zh'), 'Chinese', 'pinned From uses the language name')
 eq(translateToChip('en'), 'English', 'Translate to chip is the language only')
-eq(IPHONE_COPY.emptyTranslate, 'Speak any language.', 'Translate empty stays Speak any language')
+eq(IPHONE_COPY.emptyTranslateTitle, 'Ready to translate', 'Translate empty title is Ready to translate')
+eq(IPHONE_COPY.emptyTranslateSub, 'Tap the mic below to speak, or type to translate.', 'Translate empty sub points at mic and typing')
+eq(IPHONE_COPY.autoDetectFrom, 'Auto-detect', 'From chip auto label is Auto-detect')
+eq(IPHONE_COPY.copyTranslation, 'Copy translation', 'card copy control names the translation')
 eq(translateSourceTag({ from: 'en' }), 'EN', 'card badge uses the heard language')
 eq(translateSourceTag({ locked: 'zh', heard: 'en' }), 'CH', 'locked From wins the badge')
 eq(translateSourceTag({ heard: 'ja' }), 'JA', 'auto From falls back to what was heard')
 eq(translateSourceTag({}), 'EN', 'unknown source still shows EN')
+eq(translateSourceName({ from: 'en' }), 'English', 'phone card meta uses the language name')
+eq(translateSourceName({ locked: 'zh', heard: 'en' }), 'Chinese', 'locked From wins the phone card name')
+eq(translateSourceName({ heard: 'ja' }), 'Japanese', 'auto From names what was heard')
+eq(translateSourceName({}), '', 'unidentified auto From omits the language name')
+eq(translateSwapAffordance({ from: 'auto', heardFrom: null }), 'arrow', 'unlocked auto From is a static arrow')
+eq(translateSwapAffordance({ from: 'auto', heardFrom: 'en' }), 'swap', 'heard language turns the arrow into swap')
+eq(translateSwapAffordance({ from: 'en', heardFrom: null }), 'swap', 'locked From can swap')
 eq(IPHONE_COPY.typeToTranslate, 'Type to translate', 'Translate prompt is Type to translate')
 eq(recClock(724000), 'REC 00:12:04', 'REC is status, not a button')
 eq(canSwitchWorkspace({ listening: false }), true, 'Ready can change mode')
@@ -127,3 +139,5 @@ const savedMore = moreMenuEnabled({ hasContent: true, canSave: false })
 eq(savedMore.pdf, true, 'saved session can still export')
 eq(savedMore.save, false, 'already saved stays gray')
 eq(savedMore.newSession, true, 'saved session can start New')
+
+console.log('iphoneCopy.test.ts ok')

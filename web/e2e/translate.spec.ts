@@ -66,3 +66,34 @@ test.describe('Translate workspace typing', () => {
     expect(overlap).toBe(false)
   })
 })
+
+test.describe('Translate phone chrome', () => {
+  test.use({ viewport: { width: 390, height: 844 } })
+
+  test('ready chrome shows Auto-detect, empty title, and start button', async ({ page }) => {
+    await page.goto('/app')
+    await page.getByRole('tab', { name: /translate/i }).click()
+    await expect(page.locator('html')).toHaveClass(/nod-phone/)
+    await expect(page.getByText('Ready to translate')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Start voice translation' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Start voice translation' })).toHaveCount(1)
+    await expect(page.locator('.iphone-more-sq')).toHaveCount(0)
+    const from = page.getByLabel('From')
+    await expect(from).toHaveValue('auto')
+    await expect(from.locator('option:checked')).toHaveText('Auto-detect')
+    const to = page.getByLabel('To')
+    await expect(to.locator('option:checked')).not.toHaveText('')
+    await expect(page.getByRole('button', { name: 'More' })).toBeVisible()
+  })
+})
+
+test.describe('Translate desktop chrome', () => {
+  test('keeps the desktop empty copy and does not use the phone start CTA', async ({ page }) => {
+    await page.goto('/app')
+    await page.getByRole('tab', { name: /translate/i }).click()
+    await expect(page.locator('body')).toContainText('Mode · Translate')
+    await expect(page.getByRole('button', { name: 'Start voice translation' })).toHaveCount(0)
+    await expect(page.locator('.tr-voice-row')).toBeVisible()
+    await expect(page.locator('.tr-swap')).toBeVisible()
+  })
+})

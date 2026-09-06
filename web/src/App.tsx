@@ -2663,6 +2663,18 @@ export default function App() {
         onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
         onOpenHistory={() => setHistoryOpen(true)}
         onMore={() => setMoreOpen(true)}
+        ttsMode={ttsMode}
+        ttsVoice={ttsVoice}
+        onTtsMode={(mode) => {
+          setTtsMode(mode)
+          writeTtsMode(mode)
+          if (mode === 'tap') stopSpeech()
+          if (mode === 'live') unlockSpeech()
+        }}
+        onTtsVoice={(voice) => {
+          setTtsVoice(voice)
+          writeTtsVoice(voice)
+        }}
         listening={listening}
         elapsedMs={
           state.workspaceMode === 'meeting' && state.meetingStartedAt != null
@@ -2771,7 +2783,7 @@ export default function App() {
               setTtsVoice(voice)
               writeTtsVoice(voice)
             }}
-            voiceChrome={(
+            voiceChrome={phone ? undefined : (
               <TitleIcons
                 mode={state.workspaceMode}
                 source={state.source}
