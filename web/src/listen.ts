@@ -1,5 +1,6 @@
 import type { Lang, MeetingLine, PairLang } from './types'
 import { TRANSLATE_LANGS } from './types'
+import { sameSpokenLine } from './iphoneCopy'
 
 function langName(lang: PairLang): string {
   return TRANSLATE_LANGS.find((item) => item.id === lang)?.name ?? 'Chinese'
@@ -407,7 +408,11 @@ export function transcriptBlock(
     .map((line) => {
       const who = resolveSpeakerName(names, line.speaker)
       const head = `${line.ts}${who ? ` ${who}` : ''}  ${line.text}`
-      return bilingual && line.translation ? `${head}\n       ${line.translation}` : head
+      const tr = line.translation || ''
+      // A translation identical to its source (same-language passthrough) is not
+      // a real translation — feed it once, in the source column only, so Notes /
+      // Ask input and the exported live PDF never repeat the same text twice.
+      return bilingual && tr && !sameSpokenLine(line.text, tr) ? `${head}\n       ${tr}` : head
     })
     .join('\n')
 }

@@ -1,6 +1,7 @@
 import { pdfDownloadName } from './pdfBrand'
 import type { PdfBlock, PdfTheme } from './pdf'
 import { modeOf, sceneOf } from './historyRestore'
+import { sameSpokenLine } from './iphoneCopy'
 
 type PdfSession = {
   id: string
@@ -43,6 +44,7 @@ async function historyPdfArgs(session: PdfSession) {
   const blocks: PdfBlock[] = [{ kind: 'h1', text: title }]
   const answers = new Map<string, string>()
   const questions: Array<{ id: string; text: string }> = []
+  const transcriptByQid = new Map<string, string>()
 
   items.forEach((item, idx) => {
     const text = (item.text || '').trim()
@@ -50,6 +52,7 @@ async function historyPdfArgs(session: PdfSession) {
     const id = item.qid || `${session.id}-${idx}`
     if (item.kind === 'answer' || item.kind === 'listen_ask') answers.set(id, text)
     if (item.kind === 'question') questions.push({ id, text })
+    if (item.kind === 'transcript') transcriptByQid.set(id, text)
   })
 
   questions.forEach((q, idx) => {
@@ -57,19 +60,26 @@ async function historyPdfArgs(session: PdfSession) {
     blocks.push({ kind: 'p', text: answers.get(q.id) || [...answers.values()][idx] || '—' })
   })
 
-  for (const item of items) {
+  items.forEach((item, idx) => {
     const text = (item.text || '').trim()
-    if (!text) continue
-    if (item.kind === 'question' || item.kind === 'answer' || item.kind === 'listen_ask') continue
+    if (!text) return
+    const id = item.qid || `${session.id}-${idx}`
+    if (item.kind === 'question' || item.kind === 'answer' || item.kind === 'listen_ask') return
     if (item.kind === 'transcript') {
       blocks.push({ kind: 'line', text, ts: item.at ? formatTs(item.at) : '', speaker: item.speaker || '' })
     } else if (item.kind === 'translate') {
+      // A translation identical to its transcript line (same qid, same text) is a
+      // same-language passthrough — printing a second paragraph would duplicate
+      // the transcript line. (Only reachable once translations carry the line's
+      // qid; before that, a translate item has its own id and is left as-is.)
+      const orig = transcriptByQid.get(id)
+      if (orig && sameSpokenLine(orig, text)) return
       blocks.push({ kind: 'p', text })
     } else {
       blocks.push({ kind: 'h2', text: item.kind })
       blocks.push({ kind: 'p', text })
     }
-  }
+  })
 
   if (blocks.length === 1) {
     blocks.push({ kind: 'p', text: 'No transcript or answers saved in this session.' })
