@@ -3,6 +3,7 @@ import {
   LIVE_MIC_HOLD_MS,
   askOutcome,
   formatActionItem,
+  groupTranscript,
   iphoneSummaryHeading,
   liveFeed,
   liveStageMode,
@@ -312,4 +313,76 @@ eq(
   }),
   '[00:12] Speaker 1: Let’s finish the onboarding update by Friday.',
   'Copy stays original-only when translation is off',
+)
+
+eq(
+  groupTranscript([
+    { id: 'a', ts: '00:09', text: 'First.', speaker: '1' },
+    { id: 'b', ts: '00:20', text: 'Second.', speaker: '1' },
+  ]),
+  [
+    {
+      speaker: '1',
+      startTs: '00:09',
+      lines: [
+        { id: 'a', ts: '00:09', text: 'First.', speaker: '1' },
+        { id: 'b', ts: '00:20', text: 'Second.', speaker: '1' },
+      ],
+    },
+  ],
+  'consecutive same speaker is one group',
+)
+
+eq(
+  groupTranscript([
+    { id: 'a', ts: '00:09', text: 'Host line.', speaker: '1' },
+    { id: 'b', ts: '00:22', text: 'Guest line.', speaker: '2' },
+    { id: 'c', ts: '00:31', text: 'Host again.', speaker: '1' },
+  ]).map((g) => ({ speaker: g.speaker, startTs: g.startTs, n: g.lines.length })),
+  [
+    { speaker: '1', startTs: '00:09', n: 1 },
+    { speaker: '2', startTs: '00:22', n: 1 },
+    { speaker: '1', startTs: '00:31', n: 1 },
+  ],
+  'alternating speakers start a new group each time',
+)
+
+eq(
+  groupTranscript(
+    [{ id: 'a', ts: '00:09', text: 'Host line.', speaker: '1' }],
+    { text: 'As you can see', speaker: '1' },
+  ),
+  [
+    {
+      speaker: '1',
+      startTs: '00:09',
+      lines: [{ id: 'a', ts: '00:09', text: 'Host line.', speaker: '1' }],
+      draft: { text: 'As you can see', speaker: '1' },
+    },
+  ],
+  'draft joins the last group when the speaker matches',
+)
+
+eq(
+  groupTranscript(
+    [{ id: 'a', ts: '00:09', text: 'Host line.', speaker: '1' }],
+    { text: 'Guest drafting', speaker: '2' },
+  ).map((g) => ({ speaker: g.speaker, lines: g.lines.length, draft: g.draft?.text || '' })),
+  [
+    { speaker: '1', lines: 1, draft: '' },
+    { speaker: '2', lines: 0, draft: 'Guest drafting' },
+  ],
+  'draft of a different speaker is its own last group',
+)
+
+eq(
+  groupTranscript(
+    [
+      { id: 'a', ts: '00:05', text: 'No id.', speaker: '' },
+      { id: 'b', ts: '00:08', text: 'Still none.', speaker: undefined },
+    ],
+    { text: 'more', speaker: '' },
+  ).map((g) => ({ speaker: g.speaker, n: g.lines.length, draft: Boolean(g.draft) })),
+  [{ speaker: '', n: 2, draft: true }],
+  'empty speaker ids group together and take the draft',
 )

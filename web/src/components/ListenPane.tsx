@@ -30,7 +30,7 @@ import {
   spokenSettingsValue,
 } from '../iphoneCopy'
 import { usePhoneChrome } from '../phoneChrome'
-import { askOutcome, iphoneSummaryHeading, isCatchAskCurrent, liveFeed, liveStageMode, summaryPlainText, transcriptPlainText, type LiveFeedItem } from '../liveView'
+import { askOutcome, groupTranscript, iphoneSummaryHeading, isCatchAskCurrent, liveFeed, liveStageMode, summaryPlainText, transcriptPlainText, type LiveFeedItem } from '../liveView'
 import { useStickToBottom } from '../useStickToBottom'
 import { AnswerContent } from './AnswerContent'
 import PhoneSheet from './PhoneSheet'
@@ -542,7 +542,7 @@ function IphoneMicViz({ state }: { state: 'ready' | 'listening' }) {
 function IphoneMicStage({ listening }: { listening: boolean }) {
   return (
     <div className={`iphone-stage${listening ? ' live' : ''}`}>
-      <IphoneMicViz state="listening" />
+      <IphoneMicViz state={listening ? 'listening' : 'ready'} />
       {listening ? (
         <>
           <b>{IPHONE_COPY.listeningEmpty}</b>
@@ -930,6 +930,7 @@ interface LineRowProps {
   onRename: (id: string, name: string) => void
   onOpen?: () => void
   actions?: boolean
+  compact?: boolean
 }
 
 // A two-hour session renders thousands of these. Without memo every partial
@@ -949,19 +950,23 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
   const showFailed = p.translateFailed && p.translateOn
   if (p.actions) {
     return (
-      <div className={`listen-line iphone-tr-line${p.live ? ' live' : ''}`} onClick={p.onOpen}>
-        <div className="listen-ts">{p.ts}</div>
-        <div className="iphone-tr-ava">
-          <SpeakerAvatar speaker={p.speaker} />
-        </div>
+      <div className={`listen-line iphone-tr-line${p.compact ? ' iphone-tr-compact' : ''}${p.live ? ' live' : ''}`} onClick={p.onOpen}>
+        {p.compact ? null : (
+          <>
+            <div className="listen-ts">{p.ts}</div>
+            <div className="iphone-tr-ava">
+              <SpeakerAvatar speaker={p.speaker} />
+            </div>
+          </>
+        )}
         <div className="iphone-tr-body">
-          {p.speaker ? <SpeakerName speakerId={p.speaker} label={p.speakerLabel} onRename={p.onRename} /> : null}
+          {p.compact || !p.speaker ? null : <SpeakerName speakerId={p.speaker} label={p.speakerLabel} onRename={p.onRename} />}
           <div className="listen-orig">{p.text}</div>
           {showTr && (
             <div className="listen-tr">{p.translation || (p.busy ? '…' : '')}</div>
           )}
           {showFailed && <div className="listen-tr failed">Translation failed</div>}
-          <IphoneLineActions text={p.text} />
+          {p.compact ? null : <IphoneLineActions text={p.text} />}
         </div>
       </div>
     )
@@ -1108,7 +1113,14 @@ export default function ListenPane(props: Props) {
     busy: props.busy,
     catchAskId: props.catchAskId,
   })
-  const showQuickChips = phone && !props.qa && props.scene !== 'interview' && (props.listening || paused) && props.lines.length > 0 && !props.busy
+  const showQuickChips = phone && mobilePane !== 'transcript' && !props.qa && props.scene !== 'interview' && (props.listening || paused) && props.lines.length > 0 && !props.busy
+  const trGroups = useMemo(
+    () => groupTranscript(
+      props.lines,
+      props.ended ? null : { text: props.partial, speaker: props.partialSpeaker },
+    ),
+    [props.lines, props.partial, props.partialSpeaker, props.ended],
+  )
   const hadAskAnswer = props.catchNotes.some((note) => note.kind === 'ask' && note.text.trim())
   const hasFeed = feed.items.length > 0 || Boolean(feed.draft)
   const stackedPane = showStage ? 'stage' : !notesOpen || mobilePane === 'transcript' || mobilePane === 'live' ? 'live' : 'notes'
@@ -1473,7 +1485,7 @@ export default function ListenPane(props: Props) {
                   )}
                 </div>
               )}
-              <div className="listen-scroll" ref={leftRef}>
+              <div className={`listen-scroll${phone ? ' iphone-tr-scroll' : ''}`} ref={leftRef}>
                 {props.lines.length === 0 && !(props.partial && !props.ended) ? (
                   <div className={`listen-empty${phone ? ' iphone-tr-empty' : ''}`}>
                     {phone
@@ -1482,8 +1494,67 @@ export default function ListenPane(props: Props) {
                         ? 'Start listening. This side is the lecture stream. Notes stay closed until you ask or tap Summarize.'
                         : 'Start listening. The left side keeps what was said. Notes stay closed until you ask or tap Summarize.'}
                   </div>
+                ) : phone ? (
+                  trGroups.map((group, gi) => {
+                    const groupText = [
+                      ...group.lines.map((line) => line.text),
+                      group.draft?.text || '',
+                    ].filter(Boolean).join('\n')
+                    const lastGroup = gi === trGroups.length - 1
+                    return (
+                      <div className="iphone-tr-group" key={`${group.speaker || 'none'}-${group.startTs || 'draft'}-${gi}`}>
+                        <div className="iphone-tr-group-head">
+                          {group.speaker ? <SpeakerAvatar speaker={group.speaker} /> : <span className="iphone-tr-ava" />}
+                          {group.speaker ? (
+                            <SpeakerName
+                              speakerId={group.speaker}
+                              label={resolveSpeakerName(props.speakerNames, group.speaker)}
+                              onRename={props.onRenameSpeaker}
+                            />
+                          ) : null}
+                          {group.startTs ? <span className="iphone-tr-group-ts">{group.startTs}</span> : null}
+                          {groupText ? (
+                            <button
+                              type="button"
+                              className="iphone-tr-group-copy"
+                              onClick={() => void copyText(groupText)}
+                            >
+                              {IPHONE_COPY.copyLine}
+                            </button>
+                          ) : null}
+                        </div>
+                        {group.lines.map((line, i) => (
+                          <LineRow
+                            key={line.id || `${line.ts}-${i}`}
+                            ts={line.ts}
+                            text={line.text}
+                            translation={line.translation || ''}
+                            speaker={line.speaker || ''}
+                            speakerLabel={line.speaker ? resolveSpeakerName(props.speakerNames, line.speaker) : ''}
+                            live={props.listening && lastGroup && i === group.lines.length - 1 && !group.draft}
+                            last={(lastGroup && i === group.lines.length - 1 && !group.draft) || openedLine === line.id}
+                            translateOn={props.translateOn}
+                            translateFailed={line.translateFailed || false}
+                            onOpen={() => setOpenedLine(line.id || '')}
+                            busy={props.busy}
+                            onRename={props.onRenameSpeaker}
+                            actions
+                            compact
+                          />
+                        ))}
+                        {group.draft ? (
+                          <div className="listen-line iphone-tr-line iphone-tr-compact iphone-tr-draft">
+                            <div className="iphone-tr-body">
+                              <div className="listen-orig">{group.draft.text}</div>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    )
+                  })
                 ) : (
-                  props.lines.map((line, i) => (
+                  <>
+                  {props.lines.map((line, i) => (
                     <LineRow
                       key={line.id || `${line.ts}-${i}`}
                       ts={line.ts}
@@ -1498,27 +1569,9 @@ export default function ListenPane(props: Props) {
                       onOpen={() => setOpenedLine(line.id)}
                       busy={props.busy}
                       onRename={props.onRenameSpeaker}
-                      actions={phone}
                     />
-                  ))
-                )}
+                  ))}
                 {props.partial && !props.ended && (
-                  phone ? (
-                    <div className={`listen-line iphone-tr-line iphone-tr-draft${props.listening ? ' live' : ''}`}>
-                      <div className="listen-ts">…</div>
-                      <div className="iphone-tr-ava">
-                        <SpeakerAvatar speaker={props.partialSpeaker || ''} />
-                      </div>
-                      <div className="iphone-tr-body">
-                        {props.partialSpeaker ? (
-                          <span className="listen-spk">
-                            {resolveSpeakerName(props.speakerNames, props.partialSpeaker) || props.partialSpeaker}
-                          </span>
-                        ) : null}
-                        <div className="listen-orig">{props.partial}</div>
-                      </div>
-                    </div>
-                  ) : (
                     <div className="listen-line live">
                       <div className="listen-ts">
                         live
@@ -1530,7 +1583,8 @@ export default function ListenPane(props: Props) {
                       </div>
                       <div className="listen-orig">{props.partial}</div>
                     </div>
-                  )
+                )}
+                  </>
                 )}
               </div>
               {phone && stick.hasNew ? (
