@@ -70,6 +70,18 @@ eq(fresh.pendingAfterSave, 'none', 'empty book has no pending leave')
 }
 
 {
+  const book = setPendingAfterSave(beginSave(fresh, 'live-out'), 'delete')
+  const { action } = applyKeepAck(book, 'live-out', 'live-out', book.generation)
+  eq(action, 'delete', 'pending delete is returned on matching ack')
+}
+
+{
+  const book = setPendingAfterSave(beginSave(fresh, 'live-out'), 'delete')
+  const { action } = applyKeepAck(book, 'live-other', 'live-out', book.generation)
+  eq(action, 'none', 'mismatched ack does not return pending delete')
+}
+
+{
   const idle = applyKeepFailed(fresh, 'timeout')
   if (idle !== fresh) throw new Error('failed apply on undecided must be a no-op')
 }

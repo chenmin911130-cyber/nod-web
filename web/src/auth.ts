@@ -131,3 +131,10 @@ export async function logout(): Promise<void> {
   // keepalive lets the request finish even if the page navigates right after.
   await api('/api/auth/logout', { method: 'POST', keepalive: true }).catch(() => undefined)
 }
+
+export async function deleteAccount(): Promise<void> {
+  const out = await api<{ ok?: boolean }>('/api/account', { method: 'DELETE' })
+  if (!out || out.ok === false) {
+    throw new Error("Couldn't delete your account. Try again.")
+  }
+}
