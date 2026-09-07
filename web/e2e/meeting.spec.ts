@@ -36,6 +36,12 @@ test.describe('Meeting translation continuation', () => {
     expect(ws).toBeTruthy()
     const send = (msg: Record<string, unknown>) => ws!.send(JSON.stringify(msg))
 
+    // Notes Auto follows speech and does not pump captions. Pick a concrete
+    // notes language so Bilingual is on for this continuation test.
+    await page.getByLabel('Notes language').click()
+    await page.getByRole('option', { name: /english/i }).click()
+    await expect(page.getByRole('switch', { name: /bilingual/i })).toHaveAttribute('aria-checked', 'true')
+
     // 1. A spoken meeting line arrives -> app pumps a translate ask for it.
     send({ type: 'phase', capture: 'off', engine: 'idle' })
     send({ type: 'question', id: 'm1', text: 'So one of the significant' })

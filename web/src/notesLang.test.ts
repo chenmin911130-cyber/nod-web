@@ -1,4 +1,4 @@
-import { bilingualDisabled, notesLangActions, type LangDispatch } from './listen'
+import { bilingualDisabled, notesBilingualOn, notesLangActions, type LangDispatch } from './listen'
 
 function eq(got: unknown, want: unknown, label: string) {
   if (JSON.stringify(got) !== JSON.stringify(want)) {
@@ -41,11 +41,13 @@ eq(
   'Translate target swap must not dispatch notes_lang',
 )
 
-// bilingualDisabled: auto notes + a concrete notesTranslateTo stays enabled.
-eq(bilingualDisabled('auto', false, 'en'), false, 'auto notes + concrete notesTranslateTo keeps Bilingual enabled')
-eq(bilingualDisabled('auto', true, 'en'), false, 'bilingual already on + auto notes stays enabled')
+// Notes Auto follows speech: bilingual is disabled even when notesTranslateTo exists.
+eq(bilingualDisabled('auto', false, 'en'), true, 'auto notes disables Bilingual')
+eq(bilingualDisabled('auto', true, 'en'), true, 'auto notes disables Bilingual even if the toggle was on')
 eq(bilingualDisabled('zh', false, 'en'), false, 'concrete notes language never disables Bilingual')
 eq(bilingualDisabled('auto', false, undefined), true, 'no target at all disables Bilingual')
+eq(notesBilingualOn('auto', true), false, 'Auto notes does not run bilingual captions')
+eq(notesBilingualOn('en', true), true, 'concrete notes language can run bilingual captions')
 
 // Type sanity: the dispatch union shape is stable.
 const _d: LangDispatch[] = notesLangActions('meeting', 'zh')
