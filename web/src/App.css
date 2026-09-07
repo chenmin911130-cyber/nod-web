@@ -6907,6 +6907,13 @@ html.nod-phone .app.iphone-v2 .save-banner b {
   font-weight: 650;
 }
 
+html.nod-phone .app.iphone-v2 .save-banner-detail {
+  margin: 0;
+  color: var(--nod-muted, #a4abb1);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 html.nod-phone .app.iphone-v2 .save-banner-row {
   display: flex;
   align-items: center;

@@ -1448,6 +1448,7 @@ export default function ListenPane(props: Props) {
             <p className="iphone-stage-help">{IPHONE_COPY.readyHelpCapture}</p>
           </div>
           {settingsList()}
+          {props.saveBanner}
           {props.actions}
         </div>
       ) : phone ? (

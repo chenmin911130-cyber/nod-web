@@ -6,7 +6,7 @@ import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
-import { restoreFromSession, restoreIdOfferable, restoreShouldNotAsk, applyMeetingResume, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
+import { restoreFromSession, restoreLaunchSurface, restoreOfferBody, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck, type RestoreOffer } from './historyRestore'
 import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
@@ -943,6 +943,22 @@ function engineSource(listenMic: boolean, systemMuted: boolean): AudioSource {
   return listenMic ? 'both' : 'system'
 }
 
+function loadRestoreDismissed(): string[] {
+  try {
+    return parseRestoreDismissed(window.localStorage.getItem(RESTORE_DISMISSED_KEY))
+  } catch {
+    return []
+  }
+}
+
+function storeRestoreDismissed(ids: readonly string[]) {
+  try {
+    window.localStorage.setItem(RESTORE_DISMISSED_KEY, serializeRestoreDismissed(ids))
+  } catch {
+    /* private mode / quota */
+  }
+}
+
 export default function App() {
   const phone = usePhoneChrome()
   const phoneRef = useRef(phone)
@@ -956,6 +972,13 @@ export default function App() {
   const [savePromptMode, setSavePromptMode] = useState<'discard' | 'cancel'>('discard')
   const [leaveSheetOpen, setLeaveSheetOpen] = useState(false)
   const [saveBannerOpen, setSaveBannerOpen] = useState(false)
+  const [restoreOffer, setRestoreOffer] = useState<RestoreOffer | null>(null)
+  const dismissedRestoreIds = useRef<string[]>(loadRestoreDismissed())
+  const persistRestoreDismissed = (id: string) => {
+    const next = rememberRestoreDismissed(dismissedRestoreIds.current, id)
+    dismissedRestoreIds.current = next
+    storeRestoreDismissed(next)
+  }
   const [saveBook, setSaveBook] = useState<SaveBook>(emptySaveBook)
   const saveBookRef = useRef(saveBook)
   saveBookRef.current = saveBook
@@ -1043,6 +1066,7 @@ export default function App() {
     // purges the pending row after 24h rather than letting it shadow this one.
     setSavePrompt(false)
     pendingRestoreId.current = null
+    setRestoreOffer(null)
     commitBook({ ...saveBookRef.current, offered: false })
     setSaveBannerOpen(false)
     seenRestoreIds.current.clear()
@@ -1113,6 +1137,16 @@ export default function App() {
     })
     dispatch({ type: 'restore_session', ...payload })
     markHistoryKept(true)
+    setSavePrompt(false)
+    setSaveBannerOpen(false)
+    setRestoreOffer(null)
+    pendingRestoreId.current = null
+    commitBook({
+      ...saveBookRef.current,
+      liveId: session.id,
+      status: 'saved',
+      offered: true,
+    })
     setRailDismissed(false)
     setHistoryOpen(false)
     dispatch({
@@ -1126,24 +1160,31 @@ export default function App() {
   const handleRecordRef = useRef<() => void>(() => {})
 
   // After a disconnect, a meeting session that produced content but was never
-  // saved is re-offered once. Query the server for it; if present, pop the
-  // SavePrompt and remember which session id the Save/Don't-save must target.
+  // saved is offered as a non-blocking Ready banner — never a SavePrompt modal.
   const checkPendingRestore = () => {
     void authApi<{ sessions: HistorySession[] }>('/api/account/history?pending=1')
       .then((out) => {
         const pending = (out.sessions || [])[0]
-        if (!pending) return
-        // #36 rule 4/5: never interrupt a live/paused view, never re-prompt the
-        // same pending id on a reconnect, and never ask over a session that has
-        // already had its one Save UI.
         const s = stateRef.current
-        if (restoreShouldNotAsk({ listening: listenWanted.current, paused: s.capture === 'paused', hasContent: meetingHasSaveableContent(s) })) return
-        if (!restoreIdOfferable(seenRestoreIds.current, pending.id)) return
-        if (saveOfferedRef.current) return
+        const surface = restoreLaunchSurface({
+          listening: listenWanted.current || sessionListening({ capture: s.capture }),
+          paused: s.capture === 'paused',
+          hasContent: meetingHasSaveableContent(s),
+          pendingId: pending?.id || '',
+          dismissedIds: dismissedRestoreIds.current,
+        })
+        if (surface !== 'banner' || !pending) {
+          pendingRestoreId.current = null
+          setRestoreOffer(null)
+          return
+        }
         pendingRestoreId.current = pending.id
-        commitBook(markOffered(saveBookRef.current))
-        setSavePromptMode('discard')
-        setSavePrompt(true)
+        setRestoreOffer({
+          id: pending.id,
+          title: pending.title,
+          startedAt: pending.started_at,
+          sttSeconds: pending.stt_seconds,
+        })
       })
       .catch(() => undefined)
   }
@@ -1843,6 +1884,8 @@ export default function App() {
     }
     clearKeepTimer()
     setSaveBannerOpen(false)
+    setRestoreOffer(null)
+    pendingRestoreId.current = null
     commitBook({
       ...bumpGeneration(saveBookRef.current),
       liveId: null,
@@ -3332,7 +3375,32 @@ export default function App() {
             actions={phoneActions}
             showSavedLine={phone && state.workspaceMode === 'meeting' && historyKept && meetingHasSaveableContent(state)}
             saveBanner={
-              saveBannerOpen && saveBook.status !== 'saved' ? (
+              restoreOffer ? (
+                <SaveBanner
+                  status="undecided"
+                  title={IPHONE_COPY.saveRestoreTitle}
+                  detail={restoreOfferBody(restoreOffer)}
+                  declineLabel={IPHONE_COPY.saveNo}
+                  onSave={() => {
+                    const id = pendingRestoreId.current || restoreOffer.id
+                    setRestoreOffer(null)
+                    pendingRestoreId.current = null
+                    if (!id) return
+                    persistRestoreDismissed(id)
+                    lastRestoredKeepId.current = id
+                    window.api.send({ type: 'keep_history', id, content: true, audio: true })
+                  }}
+                  onNotNow={() => {
+                    const id = pendingRestoreId.current || restoreOffer.id
+                    setRestoreOffer(null)
+                    pendingRestoreId.current = null
+                    if (!id) return
+                    persistRestoreDismissed(id)
+                    window.api.send({ type: 'discard_history', id })
+                  }}
+                  onRetry={() => undefined}
+                />
+              ) : saveBannerOpen && saveBook.status !== 'saved' ? (
                 <SaveBanner
                   status={saveBook.status}
                   onSave={() => saveLiveSession()}

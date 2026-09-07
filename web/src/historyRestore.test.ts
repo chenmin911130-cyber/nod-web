@@ -1,4 +1,4 @@
-import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce, startMeetingKind } from './historyRestore'
+import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, parseRestoreDismissed, rememberRestoreDismissed, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce, startMeetingKind } from './historyRestore'
 import type { HistorySession } from './components/HistoryPane'
 
 function at(h: number, m: number, s = 0): string {
@@ -101,6 +101,11 @@ const older = { id: 'o', title: 'Roadmap update', started_at: new Date(2024, 8, 
 eq(historyRowWhen(today.started_at, today.stt_seconds, now), 'Today, 9:41 AM • 48m', 'today row keeps day + clock + duration')
 eq(historyRowWhen(yesterday.started_at, yesterday.stt_seconds, now), 'Yesterday, 3:16 PM • 22m', 'yesterday row keeps day + clock + duration')
 eq(historyRowWhen(older.started_at, older.stt_seconds, now), 'Sep 18, 2024 • 22m', 'older row is the calendar day')
+eq(
+  restoreOfferBody({ title: 'Standup', startedAt: today.started_at, sttSeconds: today.stt_seconds }, now),
+  'Standup · Today, 9:41 AM • 48m',
+  'restore banner names the old session',
+)
 
 const groups = groupHistoryByDay([today, yesterday, older], now)
 eq(groups.map((g) => g.label).join('|'), 'Today|Yesterday|Sep 18, 2024', 'History is a day list, not a dump on the home screen')
@@ -209,6 +214,33 @@ if (!restoreShouldNotAsk({ listening: true, paused: false, hasContent: false }))
 if (!restoreShouldNotAsk({ listening: false, paused: true, hasContent: false })) throw new Error('paused suppress restore')
 if (!restoreShouldNotAsk({ listening: false, paused: false, hasContent: true })) throw new Error('page content suppress restore')
 if (restoreShouldNotAsk({ listening: false, paused: false, hasContent: false })) throw new Error('idle empty view may offer restore')
+
+const idleRestore = {
+  listening: false,
+  paused: false,
+  hasContent: false,
+  pendingId: 'pending-1',
+  dismissedIds: [] as string[],
+}
+if (restoreLaunchSurface(idleRestore) !== 'banner') throw new Error('idle Ready with pending session shows a banner, not a modal')
+if (restoreLaunchSurface({ ...idleRestore, listening: true }) !== 'none') throw new Error('listening never launches restore')
+if (restoreLaunchSurface({ ...idleRestore, paused: true }) !== 'none') throw new Error('paused never launches restore')
+if (restoreLaunchSurface({ ...idleRestore, hasContent: true }) !== 'none') throw new Error('page content never launches restore')
+if (restoreLaunchSurface({ ...idleRestore, pendingId: '' }) !== 'none') throw new Error('empty pending id never launches restore')
+if (restoreLaunchSurface({ ...idleRestore, dismissedIds: ['pending-1'] }) !== 'none') throw new Error('dismissed pending id never launches restore')
+{
+  const again = rememberRestoreDismissed(['pending-1'], 'pending-1')
+  if (restoreLaunchSurface({ ...idleRestore, dismissedIds: again }) !== 'none') {
+    throw new Error('Don\'t save must stick so the same id does not relaunch')
+  }
+}
+if (JSON.stringify(rememberRestoreDismissed([], 'p1')) !== JSON.stringify(['p1'])) throw new Error('first dismiss is recorded')
+if (JSON.stringify(rememberRestoreDismissed(['p1'], 'p1')) !== JSON.stringify(['p1'])) throw new Error('repeat dismiss does not duplicate')
+if (JSON.stringify(parseRestoreDismissed(serializeRestoreDismissed(['a', 'b']))) !== JSON.stringify(['a', 'b'])) {
+  throw new Error('dismissed ids round-trip through storage')
+}
+if (parseRestoreDismissed('not-json').length !== 0) throw new Error('corrupt storage is empty')
+if (parseRestoreDismissed(null).length !== 0) throw new Error('missing storage is empty')
 
 if (resumeResetsKept({ kept: false, hasContent: true })) throw new Error('unsaved resume must not clear kept')
 if (!resumeResetsKept({ kept: true, hasContent: true })) throw new Error('kept + content resume must reset kept')
