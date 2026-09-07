@@ -7074,22 +7074,7 @@ html.nod-phone .app.iphone-v2 .iphone-ripple {
   border-radius: 999px;
   border: 1.5px solid rgba(0, 210, 255, 0.42);
   pointer-events: none;
-  animation: iphone-ripple 2.4s ease-out infinite;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-ripple.r2 {
-  animation-delay: 0.8s;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-ripple.r3 {
-  animation-delay: 1.6s;
-  border-style: dashed;
-  opacity: 0.55;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-stage.live .iphone-ripple {
-  animation-duration: 1.5s;
-  border-color: rgba(0, 210, 255, 0.7);
+  animation: iphone-ripple 0.9s ease-out 1 forwards;
 }
 
 html.nod-phone .app.iphone-v2 .iphone-viz-core {
@@ -7102,75 +7087,13 @@ html.nod-phone .app.iphone-v2 .iphone-viz-core {
   border-radius: 999px;
   color: #fff;
   border: 1.5px solid rgba(0, 210, 255, 0.55);
-  box-shadow: 0 0 28px rgba(0, 210, 255, 0.32);
+  box-shadow: 0 0 20px rgba(0, 210, 255, 0.22);
   background: radial-gradient(circle, rgba(0, 210, 255, 0.2), transparent 70%);
-  animation: iphone-breathe 2.8s ease-in-out infinite;
+  animation: none;
 }
 
-html.nod-phone .app.iphone-v2 .iphone-stage.live .iphone-viz-core {
-  box-shadow: 0 0 40px rgba(0, 210, 255, 0.55);
-  animation-duration: 1.2s;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-wave-left,
-html.nod-phone .app.iphone-v2 .iphone-wave-right {
-  position: absolute;
-  top: 50%;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  height: 28px;
-  background: none;
-  transform: translateY(-50%);
-}
-
-html.nod-phone .app.iphone-v2 .iphone-wave-left { left: 4px; }
-
-html.nod-phone .app.iphone-v2 .iphone-wave-right {
-  right: 4px;
-  flex-direction: row-reverse;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-wave-left i,
-html.nod-phone .app.iphone-v2 .iphone-wave-right i {
-  display: block;
-  width: 3px;
-  height: 16px;
-  border-radius: 999px;
-  background: #00d2ff;
-  transform-origin: center;
-  animation: iphone-bar 1.05s ease-in-out infinite;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-wave-left i:nth-child(1),
-html.nod-phone .app.iphone-v2 .iphone-wave-right i:nth-child(1) {
-  animation-delay: 0s;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-wave-left i:nth-child(2),
-html.nod-phone .app.iphone-v2 .iphone-wave-right i:nth-child(2) {
-  animation-delay: 0.12s;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-wave-left i:nth-child(3),
-html.nod-phone .app.iphone-v2 .iphone-wave-right i:nth-child(3) {
-  animation-delay: 0.24s;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-wave-left i:nth-child(4),
-html.nod-phone .app.iphone-v2 .iphone-wave-right i:nth-child(4) {
-  animation-delay: 0.36s;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-wave-left i:nth-child(5),
-html.nod-phone .app.iphone-v2 .iphone-wave-right i:nth-child(5) {
-  animation-delay: 0.48s;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-stage.live .iphone-wave-left i,
-html.nod-phone .app.iphone-v2 .iphone-stage.live .iphone-wave-right i {
-  animation-duration: 0.7s;
+html.nod-phone .app.iphone-v2 .iphone-viz.is-listening .iphone-viz-core {
+  animation: iphone-breathe 2.4s ease-in-out infinite;
 }
 
 @keyframes iphone-ripple {
@@ -7202,8 +7125,6 @@ html.nod-phone .app.iphone-v2 .iphone-stage.live .iphone-wave-right i {
 @media (prefers-reduced-motion: reduce) {
   html.nod-phone .app.iphone-v2 .iphone-ripple,
   html.nod-phone .app.iphone-v2 .iphone-viz-core,
-  html.nod-phone .app.iphone-v2 .iphone-wave-left i,
-  html.nod-phone .app.iphone-v2 .iphone-wave-right i,
   html.nod-phone .app.iphone-v2 .iphone-dot.recording {
     animation: none;
   }
