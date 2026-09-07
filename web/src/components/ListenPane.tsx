@@ -16,7 +16,7 @@ import {
   type MeetingSpeakerId,
   type NotesSectionId,
 } from '../listen'
-import { IPHONE_COPY, listenChipParts, nativeListenChipOrder, notesChipParts, showLineTranslation } from '../iphoneCopy'
+import { IPHONE_COPY, listenChipParts, nativeListenChipOrder, notesChipParts, notesPageTitle, showLineTranslation } from '../iphoneCopy'
 import { usePhoneChrome } from '../phoneChrome'
 import { iphoneSummaryHeading, liveHeardLines, liveNotesLine, liveStageMode, summaryPlainText } from '../liveView'
 
@@ -761,6 +761,7 @@ export default function ListenPane(props: Props) {
   const notes = useMemo(() => parseNotes(props.notesRaw), [props.notesRaw])
   const sections = useMemo(() => visibleSections(props.scene, notes), [props.scene, notes])
   const lecture = props.scene === 'lecture'
+  const notesHeading = notesPageTitle(props.scene)
 
   useEffect(() => {
     setNotesW(readNotesW(props.scene))
@@ -1138,6 +1139,9 @@ export default function ListenPane(props: Props) {
                 {props.summarizing && props.busy && !sections.length && (
                   <div className="listen-empty">{lecture ? 'Writing the study sheet…' : 'Writing the summary…'}</div>
                 )}
+                {phone && notesHeading && sections.length > 0 ? (
+                  <h2 className="iphone-notes-title">{notesHeading}</h2>
+                ) : null}
                 {lecture && sections.length > 0 && (
                   <LectureStudy sections={sections} bilingual={false} />
                 )}

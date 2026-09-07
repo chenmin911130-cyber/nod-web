@@ -4,7 +4,9 @@ import {
   listenChipLabel,
   listenChipParts,
   moreMenuEnabled,
+  moreSaveRow,
   nativeListenChipOrder,
+  notesPageTitle,
   notesChipLabel,
   notesChipParts,
   listenClock,
@@ -29,10 +31,21 @@ function eq<T>(got: T, want: T, label: string) {
   if (got !== want) throw new Error(`${label}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`)
 }
 
-eq(IPHONE_COPY.startListening, 'Start Listening', 'Listen ready CTA is Start Listening')
+eq(IPHONE_COPY.startListening, 'Start listening', 'Listen ready CTA is Start listening')
 eq(IPHONE_COPY.startTranslate, 'Start voice translation', 'Translate ready CTA is Start voice translation')
-eq(IPHONE_COPY.recordingStatus, 'Listening', 'live status is Listening')
+eq(IPHONE_COPY.recordingStatus, 'Recording', 'live status is Recording')
+eq(IPHONE_COPY.stop, 'End', 'listen control stop label is End')
+eq(IPHONE_COPY.resume, 'Resume', 'paused listen control is Resume')
 eq(IPHONE_COPY.more, 'More', 'PDF/Save/History live in More')
+eq(IPHONE_COPY.moreSession, 'This session', 'More sheet names this session')
+eq(IPHONE_COPY.moreSaveHint, 'Available after recording ends', 'disabled Save explains when it unlocks')
+eq(IPHONE_COPY.moreSaved, 'Saved', 'kept Save row says Saved')
+eq(IPHONE_COPY.moreViewHistory, 'View in History', 'kept Save row points at History')
+eq(IPHONE_COPY.meetingNotes, 'Meeting notes', 'Meeting notes page title')
+eq(IPHONE_COPY.studyNotes, 'Study notes', 'Lecture notes page title')
+eq(notesPageTitle('meeting'), 'Meeting notes', 'meeting notes heading')
+eq(notesPageTitle('lecture'), 'Study notes', 'lecture notes heading')
+eq(notesPageTitle('interview'), null, 'Live Q&A has no notes page title')
 eq(IPHONE_COPY.saveTitle, 'Save to History?', 'Stop asks save only')
 eq(IPHONE_COPY.keepRecording, 'Keep recording', 'Save can keep the WAV')
 eq(
@@ -139,5 +152,22 @@ const savedMore = moreMenuEnabled({ hasContent: true, canSave: false })
 eq(savedMore.pdf, true, 'saved session can still export')
 eq(savedMore.save, false, 'already saved stays gray')
 eq(savedMore.newSession, true, 'saved session can start New')
+
+const liveSaveRow = moreSaveRow({ saved: false, canSave: false })
+eq(liveSaveRow.label, 'Save', 'recording Save row stays Save')
+eq(liveSaveRow.hint, 'Available after recording ends', 'recording Save row shows the after-end hint')
+eq(liveSaveRow.trailing, '', 'recording Save row has no History trail')
+eq(liveSaveRow.disabled, true, 'recording Save row stays disabled')
+
+const readySaveRow = moreSaveRow({ saved: false, canSave: true })
+eq(readySaveRow.label, 'Save', 'ended Save row stays Save')
+eq(readySaveRow.hint, '', 'ended Save row has no hint')
+eq(readySaveRow.disabled, false, 'ended Save row is enabled')
+
+const keptSaveRow = moreSaveRow({ saved: true, canSave: false })
+eq(keptSaveRow.label, 'Saved', 'kept Save row says Saved')
+eq(keptSaveRow.hint, '', 'kept Save row does not keep the disabled hint')
+eq(keptSaveRow.trailing, 'View in History', 'kept Save row trails View in History')
+eq(keptSaveRow.disabled, false, 'kept Save row stays tappable')
 
 console.log('iphoneCopy.test.ts ok')

@@ -6,14 +6,15 @@ export const IPHONE_COPY = {
   listenTab: 'Listen',
   translateTab: 'Translate',
   start: 'Start',
-  startListening: 'Start Listening',
+  startListening: 'Start listening',
   more: 'More',
+  moreSession: 'This session',
   pause: 'Pause',
   resume: 'Resume',
-  stop: 'Stop',
+  stop: 'End',
   muted: 'Muted',
   readyStatus: 'Ready to listen',
-  recordingStatus: 'Listening',
+  recordingStatus: 'Recording',
   listeningNow: 'Listening...',
   listeningNowLabel: 'Listening now',
   keyPoint: 'Key Point',
@@ -50,9 +51,14 @@ export const IPHONE_COPY = {
   typeToTranslate: 'Type to translate',
   morePdf: 'Export PDF',
   moreSave: 'Save',
+  moreSaveHint: 'Available after recording ends',
+  moreSaved: 'Saved',
+  moreViewHistory: 'View in History',
   moreHistory: 'History',
   moreNew: 'New session',
   moreCancel: 'Cancel',
+  meetingNotes: 'Meeting notes',
+  studyNotes: 'Study notes',
   saveTitle: 'Save to History?',
   saveBody: 'Keep this meeting so you can reopen it later.',
   saveYes: 'Save',
@@ -205,4 +211,32 @@ export function moreMenuEnabled(input: { hasContent: boolean; canSave: boolean }
     history: true,
     newSession: input.hasContent,
   }
+}
+
+export function moreSaveRow(input: { saved: boolean; canSave: boolean }): {
+  label: string
+  hint: string
+  trailing: string
+  disabled: boolean
+} {
+  if (input.saved) {
+    return {
+      label: IPHONE_COPY.moreSaved,
+      hint: '',
+      trailing: IPHONE_COPY.moreViewHistory,
+      disabled: false,
+    }
+  }
+  return {
+    label: IPHONE_COPY.moreSave,
+    hint: input.canSave ? '' : IPHONE_COPY.moreSaveHint,
+    trailing: '',
+    disabled: !input.canSave,
+  }
+}
+
+export function notesPageTitle(scene: ListenScene): string | null {
+  if (scene === 'interview') return null
+  if (scene === 'lecture') return IPHONE_COPY.studyNotes
+  return IPHONE_COPY.meetingNotes
 }
