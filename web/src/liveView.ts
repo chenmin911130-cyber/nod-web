@@ -184,3 +184,50 @@ export function transcriptPlainText(input: {
     })
     .join('\n')
 }
+
+export type TranscriptGroupLine = {
+  id?: string
+  ts: string
+  text: string
+  speaker?: string
+  translation?: string
+  translateFailed?: boolean
+}
+
+export type TranscriptGroup = {
+  speaker: string
+  startTs: string
+  lines: TranscriptGroupLine[]
+  draft?: { text: string; speaker: string }
+}
+
+function speakerKey(speaker?: string): string {
+  return (speaker || '').trim()
+}
+
+export function groupTranscript(
+  lines: TranscriptGroupLine[],
+  partial?: { text?: string; speaker?: string } | null,
+): TranscriptGroup[] {
+  const groups: TranscriptGroup[] = []
+  for (const line of lines) {
+    const speaker = speakerKey(line.speaker)
+    const last = groups[groups.length - 1]
+    if (last && last.speaker === speaker && !last.draft) {
+      last.lines.push(line)
+    } else {
+      groups.push({ speaker, startTs: line.ts || '', lines: [line] })
+    }
+  }
+  const draftText = (partial?.text || '').trim()
+  if (!draftText) return groups
+  const speaker = speakerKey(partial?.speaker)
+  const last = groups[groups.length - 1]
+  const draft = { text: draftText, speaker }
+  if (last && last.speaker === speaker) {
+    last.draft = draft
+    return groups
+  }
+  groups.push({ speaker, startTs: '', lines: [], draft })
+  return groups
+}
