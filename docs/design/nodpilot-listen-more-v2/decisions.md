@@ -46,7 +46,18 @@
 
 行为（串行）：① 续录 + Ended 条 → ② Save 条 + 状态机 → ③ 录音中 New session → ⑤ 设置门控 → ④ Live 内 Ask。行为线与视觉线可并行开工；④ 需等 C。
 
-## 其他
+## D6 · History 恢复后再 Start = 续同一场（同 D1）
+
+- History 打开已保存会话后，页面是 **Ended**（不是正在录）：时钟显示恢复会话的时长（优先最后一行 `ts`，否则 `stt_seconds`），`Saved to History` 可以留着。
+- 再点 `Start listening` 走与 D1 相同的 `meeting_resume`：时钟接着走、旧段落保留、`historyKept` 清掉（Saved 行消失），End 后再次出 Save 条并覆盖同一条历史。
+- **不是**「以旧内容开新场」：禁止 `restore_session` 把 `meetingEnded=false` + `meetingElapsedMs=0` 再 `meeting_clock` 从零起（那就是 00:03 控制条 + 01:05 段落 + Saved 行同时出现的截图）。
+
+路径核对（代码，2026-09-07）：
+
+- **A** End → Save → Start：`meetingEnded` + 有内容 → `meeting_resume` + `resumeResetsKept`。与截图不符，不是这张 bug。
+- **B** History 恢复 → Start：修前 `restore_session` 设 `meetingEnded=false`、`elapsedMs=0`、`meetingStartedAt=now`，Start 落到 `meeting_clock` 从 0 起，且 `markHistoryKept(true)` 未清。与截图一致。
+
+
 
 - 青色沿用现有 `#00d2ff`（品牌字标与手表侧一致）；其余 token 按 `design.md`。
 - Translate 工作区、Live Q&A（interview）内容区、桌面 web、Electron 不在范围；只改 `html.nod-phone .app.iphone-v2` 作用域。

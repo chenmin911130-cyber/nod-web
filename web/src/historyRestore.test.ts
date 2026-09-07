@@ -1,4 +1,4 @@
-import { applyMeetingResume, groupHistoryByDay, historyRowWhen, historySessionMatches, restoreFromSession, restoreIdOfferable, restoreShouldNotAsk, resumeResetsKept, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce } from './historyRestore'
+import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce, startMeetingKind } from './historyRestore'
 import type { HistorySession } from './components/HistoryPane'
 
 function at(h: number, m: number, s = 0): string {
@@ -227,4 +227,50 @@ if (resumed.meetingElapsedMs !== 90_000) throw new Error('meeting_resume must ke
 if (resumed.meetingStartedAt !== 110_000) throw new Error('meeting_resume must rewind startedAt so the clock continues')
 if (resumed.meetingLines.length !== 1 || resumed.notesRaw !== 'notes stay' || resumed.catchNotes.length !== 1) {
   throw new Error('meeting_resume must keep lines / notes / catchNotes')
+}
+
+// Path A (End → Save → Start): ended + elapsed + content → meeting_resume, kept resets.
+if (startMeetingKind({ meetingStartedAt: 1, meetingEnded: true, hasContent: true }) !== 'meeting_resume') {
+  throw new Error('path A Start must resume the same session')
+}
+if (!resumeResetsKept({ kept: true, hasContent: true })) {
+  throw new Error('path A Start must clear Saved')
+}
+
+// Path B before the fix: restore_session set ended=false, elapsed=0 → meeting_clock from zero
+// while lines still showed 01:05 and historyKept stayed true.
+if (startMeetingKind({ meetingStartedAt: Date.now(), meetingEnded: false, hasContent: true }) !== 'meeting_clock') {
+  throw new Error('old restore Start would zero the clock (the screenshot)')
+}
+
+eq(elapsedMsFromTranscriptTs('01:05').toString(), '65000', '01:05 is 65s')
+eq(restoreElapsedMs({ lines: [{ ts: '00:09' }, { ts: '01:05' }], sttSeconds: 12 }).toString(), '65000', 'last line ts wins over shorter stt_seconds')
+eq(restoreElapsedMs({ lines: [], sttSeconds: 33 }).toString(), '33000', 'stt_seconds fills in when lines have no ts')
+
+const restored = restoreFromSession({
+  id: 's-restore',
+  mode: 'meeting',
+  scene: 'meeting',
+  title: 'Host',
+  started_at: at(18, 10),
+  stt_seconds: 12,
+  items: [
+    { kind: 'transcript', text: 'Host line one', at: at(18, 10, 9) },
+    { kind: 'transcript', text: 'Host line at 01:05', at: at(18, 11, 5) },
+  ],
+})
+eq(restored.elapsedMs.toString(), '65000', 'restore elapsed follows last transcript ts from started_at')
+
+const clock = restoreSessionClock(restored.elapsedMs, 500_000)
+if (!clock.meetingEnded) throw new Error('restored session is ended until Start')
+if (clock.meetingElapsedMs !== 65_000) throw new Error('restored clock must be 01:05')
+if (startMeetingKind({
+  meetingStartedAt: clock.meetingStartedAt,
+  meetingEnded: clock.meetingEnded,
+  hasContent: restored.lines.length > 0,
+}) !== 'meeting_resume') {
+  throw new Error('path B Start after restore must meeting_resume like path A')
+}
+if (!resumeResetsKept({ kept: true, hasContent: restored.lines.length > 0 })) {
+  throw new Error('path B Start must hide Saved to History')
 }
