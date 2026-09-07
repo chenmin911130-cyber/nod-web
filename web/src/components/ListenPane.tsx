@@ -959,7 +959,7 @@ export default function ListenPane(props: Props) {
   }, [props.notesDefaultOpen, props.notesReveal])
 
   const showStage = phone && mobilePane === 'live'
-  const stick = useStickToBottom(leftRef, [props.lines.length, props.partial, !showStage])
+  const stick = useStickToBottom(leftRef, [props.lines.length, props.partial], !showStage)
 
   useEffect(() => {
     rightRef.current?.scrollTo({ top: rightRef.current.scrollHeight })
