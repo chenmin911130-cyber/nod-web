@@ -49,6 +49,7 @@ from server.lang import (
     heard_lang_from_code,
     heard_lang_from_text,
     heard_lang_from_turn,
+    listen_ask_lang,
     matches_locked_speech,
     split_code_switched,
 )
@@ -1395,8 +1396,9 @@ class Pipeline:
         return [*messages[:-1], last]
 
     def _build_messages(self, question: str, mode: str = "auto") -> list[dict]:
+        bilingual = self._bilingual_from_tag(question)
         out_lang = self._out_lang_from_tag(question)
-        out_rule = self._output_lang_rule(out_lang, self._bilingual_from_tag(question))
+        out_rule = self._output_lang_rule(out_lang, bilingual)
         question = self._strip_nod_tag(question)
         if mode == "translate" or question.startswith("Translate to "):
             # The target lives inside the user message; models sometimes drift
@@ -1427,6 +1429,19 @@ class Pipeline:
                 {"role": "user", "content": question},
             ]
         if mode == "listen_ask" or question.startswith("Listener question:"):
+            if out_lang is None and not bilingual:
+                # Tag already stripped; Auto notes has no system-level language
+                # pin (same drift the translate branch already closed).
+                lang = listen_ask_lang(
+                    question,
+                    locked=_normalize_stt_lang((self.cfg.get("stt") or {}).get("language")),
+                )
+                if lang:
+                    name = _LANG_NAMES.get(lang, lang)
+                    out_rule = (
+                        f"\nOUTPUT LANGUAGE (hard rule): Write the entire answer in {name} only. "
+                        "Do not switch language except for proper nouns and technical terms."
+                    )
             return [
                 {
                     "role": "system",

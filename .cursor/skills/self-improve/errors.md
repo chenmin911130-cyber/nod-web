@@ -2,6 +2,14 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-07 · listen_ask 输出语言把拉丁语 STT 锁当成「猜」
+
+- 我以为：`detect_question_lang(transcript)` 能覆盖八种语言；`_confident_stt_lang` 的 `en` 分支表示「确定是英文」。
+- 实际：拉丁语正则很弱（西语无 ñ 变 en；意语 `è ` 被法语先吃掉）。`en` 分支只是「≥16 个拉丁字母且无 CJK」，意语也命中。合上去会把 Speech 锁 Italian/Spanish 硬钉成 English/French，比不钉更差。服务端已有 `cfg.stt.language`。
+- 规则：定输出语言要把八种语言逐个过一遍；有 STT 锁定信号先用它；"confident" 类函数采用前先读实现，拉丁字母多不算确定英文。
+- 涉及：`server/lang.py` `listen_ask_lang` / `_confident_stt_lang` / `detect_question_lang` · `cfg.stt.language`
+
+
 ## 2026-09-05 · 给 Hermes 的清库单写成 Postgres
 
 - 我以为：nodpilot 生产库是 Railway Postgres（看到 `docs/adr/0002-postgres-for-write-model.md` 的文件名就当已落地）。
