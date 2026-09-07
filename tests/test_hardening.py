@@ -1176,6 +1176,41 @@ class ListenAskRoutingTests(unittest.TestCase):
         sys_msg = messages[0]["content"]
         self.assertNotIn("OUTPUT LANGUAGE", sys_msg)
 
+    def test_translate_prompt_keeps_truncated_lines_and_product_names(self):
+        pipe = Pipeline.__new__(Pipeline)
+        pipe.cfg = {"llm": {}}
+        messages = pipe._build_messages(
+            "Translate to Chinese.\nSource language: English.\nTranslate only this line:\nNow it will be able to actually",
+            "translate",
+        )
+        sys_msg = messages[0]["content"]
+        self.assertIn(
+            "If the line ends mid-sentence (no terminal punctuation, or ends with a preposition / article / conjunction / auxiliary), translate only what is there and end the translation without terminal punctuation. Never complete, guess, or round off the sentence.",
+            sys_msg,
+        )
+        self.assertIn(
+            "Keep product names, brand names, and capitalized proper nouns exactly as written in the source (do not translate or transliterate them); keep their original casing.",
+            sys_msg,
+        )
+
+    def test_notes_and_listen_ask_omit_translate_truncation_rules(self):
+        pipe = Pipeline.__new__(Pipeline)
+        pipe.cfg = {"llm": {}}
+        mid = "Never complete, guess, or round off the sentence."
+        names = "do not translate or transliterate them"
+        notes = pipe._build_messages(
+            "[NOD_NOTES:auto]\nWrite structured notes for a live session\nSome bullets\n",
+            "notes",
+        )[0]["content"]
+        ask = pipe._build_messages(
+            "[NOD_ASK:auto]\nListener question: Why?\nTranscript (use when relevant):\n(empty)",
+            "listen_ask",
+        )[0]["content"]
+        self.assertNotIn(mid, notes)
+        self.assertNotIn(names, notes)
+        self.assertNotIn(mid, ask)
+        self.assertNotIn(names, ask)
+
 
 class MailerEscapeTests(unittest.TestCase):
     def test_feedback_html_is_escaped(self):

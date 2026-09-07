@@ -77,6 +77,15 @@ def test_locked_spanish_why_pins_spanish():
     assert "English only" not in sys_msg
 
 
+def test_locked_italian_empty_transcript_pins_italian():
+    sys_msg = _system(
+        "[NOD_ASK:auto]\n" + _auto_body(CHIP, "(empty)"),
+        stt_language="it",
+    )
+    assert "Italian only" in sys_msg
+    assert "English only" not in sys_msg
+
+
 def test_locked_italian_chinese_question_still_chinese():
     sys_msg = _system(
         "[NOD_ASK:auto]\n" + _auto_body(ZH_ASK, IT_TRANSCRIPT),
@@ -108,6 +117,18 @@ def test_listen_ask_lang_parse_edges():
     ) == "zh"
     assert listen_ask_lang(f"Listener question: {CHIP}\nTranscript (tail):\n(empty)") == "en"
     assert listen_ask_lang("Listener question: Why?\nTranscript (tail):\n(empty)") == "en"
+    assert listen_ask_lang(
+        "Listener question: Why?\nTranscript (tail):\n(empty)",
+        locked="it",
+    ) == "it"
+    assert listen_ask_lang(
+        f"Listener question: {CHIP}\nTranscript (tail):\n(empty)",
+        locked="it",
+    ) == "it"
+    assert listen_ask_lang(
+        f"Listener question: {ZH_ASK}\nTranscript (tail):\n(empty)",
+        locked="it",
+    ) == "zh"
     assert listen_ask_lang(
         f"Listener question: {CHIP}\nTranscript (tail):\n{IT_TRANSCRIPT}",
         locked="it",

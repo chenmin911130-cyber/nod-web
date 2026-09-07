@@ -1422,6 +1422,8 @@ class Pipeline:
                         "Lines under 'Previous lines' are context for names, topic, and source language — do not translate them.\n"
                         "Output ONLY the translation in the requested target language — no quotes, labels, notes, or preamble.\n"
                         "Preserve proper nouns, product names, and numbers. "
+                        "Keep product names, brand names, and capitalized proper nouns exactly as written in the source (do not translate or transliterate them); keep their original casing. "
+                        "If the line ends mid-sentence (no terminal punctuation, or ends with a preposition / article / conjunction / auxiliary), translate only what is there and end the translation without terminal punctuation. Never complete, guess, or round off the sentence. "
                         "If the line is already in the target language, return it unchanged. "
                         "Allowed targets: Chinese, English, Japanese, Italian, Spanish, French, German, Portuguese."
                     ),
