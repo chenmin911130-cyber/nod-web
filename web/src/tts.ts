@@ -47,11 +47,15 @@ export function speechShouldPlayOnPhone(dest: SpeechDest): boolean {
   return dest === 'phone'
 }
 
+export function defaultTtsVoice(stored: string | null): TtsVoice {
+  return stored === 'male' ? 'male' : 'female'
+}
+
 export function readTtsVoice(): TtsVoice {
   try {
-    return localStorage.getItem(VOICE_KEY) === 'male' ? 'male' : 'female'
+    return defaultTtsVoice(localStorage.getItem(VOICE_KEY))
   } catch {
-    return 'female'
+    return defaultTtsVoice(null)
   }
 }
 

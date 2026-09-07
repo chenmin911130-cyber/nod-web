@@ -1,4 +1,4 @@
-import { defaultTtsMode, listenSessionShouldAutoSpeak, nextLiveUtterances, shouldKickDrain, speechShouldPlayOnPhone, speechShouldPlayOnWatch, speechTapShouldStop, ttsAutoShouldConfirm } from './tts'
+import { defaultTtsMode, defaultTtsVoice, listenSessionShouldAutoSpeak, nextLiveUtterances, shouldKickDrain, speechShouldPlayOnPhone, speechShouldPlayOnWatch, speechTapShouldStop, ttsAutoShouldConfirm } from './tts'
 
 function eq<T>(got: T, want: T) {
   if (JSON.stringify(got) !== JSON.stringify(want)) {
@@ -10,6 +10,11 @@ eq(defaultTtsMode(true, null), 'tap')
 eq(defaultTtsMode(false, null), 'tap')
 eq(defaultTtsMode(true, 'tap'), 'tap')
 eq(defaultTtsMode(false, 'live'), 'live')
+
+eq(defaultTtsVoice(null), 'female')
+eq(defaultTtsVoice('female'), 'female')
+eq(defaultTtsVoice('male'), 'male')
+eq(defaultTtsVoice('other'), 'female')
 
 eq(nextLiveUtterances({
   live: false,
