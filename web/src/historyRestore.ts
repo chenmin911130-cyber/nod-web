@@ -134,6 +134,61 @@ export function restoreShouldNotAsk(input: { listening: boolean; paused: boolean
   return input.listening || input.paused || input.hasContent
 }
 
+export type RestoreOffer = {
+  id: string
+  title: string
+  startedAt: string | null
+  sttSeconds?: number
+}
+
+export type RestoreLaunchSurface = 'none' | 'banner'
+
+export const RESTORE_DISMISSED_KEY = 'nod.restoreDismissed'
+
+/** Opening the app never uses a blocking SavePrompt. Idle Ready may show a banner. */
+export function restoreLaunchSurface(input: {
+  listening: boolean
+  paused: boolean
+  hasContent: boolean
+  pendingId: string
+  dismissedIds: readonly string[]
+}): RestoreLaunchSurface {
+  if (!input.pendingId) return 'none'
+  if (input.dismissedIds.includes(input.pendingId)) return 'none'
+  if (restoreShouldNotAsk({
+    listening: input.listening,
+    paused: input.paused,
+    hasContent: input.hasContent,
+  })) return 'none'
+  return 'banner'
+}
+
+export function rememberRestoreDismissed(ids: readonly string[], id: string): string[] {
+  if (!id || ids.includes(id)) return [...ids]
+  return [...ids, id]
+}
+
+export function parseRestoreDismissed(raw: string | null): string[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((id): id is string => typeof id === 'string' && id.length > 0)
+  } catch {
+    return []
+  }
+}
+
+export function serializeRestoreDismissed(ids: readonly string[]): string {
+  return JSON.stringify(ids)
+}
+
+export function restoreOfferBody(offer: Pick<RestoreOffer, 'title' | 'startedAt' | 'sttSeconds'>, nowMs = Date.now()): string {
+  const title = (offer.title || 'Untitled').trim() || 'Untitled'
+  const when = historyRowWhen(offer.startedAt, offer.sttSeconds || 0, nowMs)
+  return when ? `${title} · ${when}` : title
+}
+
 export function restoreFromSession(session: HistorySession): RestorePayload {
   const scene = sceneOf(session)
   const mode = modeOf(session)

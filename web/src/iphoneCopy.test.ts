@@ -37,7 +37,8 @@ function eq<T>(got: T, want: T, label: string) {
   if (got !== want) throw new Error(`${label}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`)
 }
 
-eq(IPHONE_COPY.startListening, 'Start listening', 'Listen ready CTA is Start listening')
+eq(IPHONE_COPY.saveBannerTitle, 'Save this session?', 'End banner asks to save this session')
+eq(IPHONE_COPY.saveRestoreTitle, 'Unsaved session', 'launch banner names the old session')
 eq(IPHONE_COPY.startTranslate, 'Start voice translation', 'Translate ready CTA is Start voice translation')
 eq(IPHONE_COPY.recordingStatus, 'Recording', 'live status is Recording')
 eq(IPHONE_COPY.stop, 'End', 'listen control stop label is End')

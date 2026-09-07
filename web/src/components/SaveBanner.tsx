@@ -5,13 +5,21 @@ export default function SaveBanner({
   onSave,
   onNotNow,
   onRetry,
+  title,
+  detail,
+  declineLabel,
 }: {
   status: 'undecided' | 'saving' | 'saved' | 'failed'
   onSave: () => void
   onNotNow: () => void
   onRetry: () => void
+  title?: string
+  detail?: string
+  declineLabel?: string
 }) {
   if (status === 'saved') return null
+  const heading = title ?? IPHONE_COPY.saveBannerTitle
+  const decline = declineLabel ?? IPHONE_COPY.saveNotNow
 
   if (status === 'saving') {
     return (
@@ -22,7 +30,7 @@ export default function SaveBanner({
         </div>
         <div className="save-banner-actions">
           <button type="button" className="save-banner-notnow" disabled>
-            {IPHONE_COPY.saveNotNow}
+            {decline}
           </button>
           <button type="button" className="save-banner-save" disabled>
             {IPHONE_COPY.saveYes}
@@ -38,7 +46,7 @@ export default function SaveBanner({
         <b>{IPHONE_COPY.saveFailed}</b>
         <div className="save-banner-actions">
           <button type="button" className="save-banner-notnow" onClick={onNotNow}>
-            {IPHONE_COPY.saveNotNow}
+            {decline}
           </button>
           <button type="button" className="save-banner-save" onClick={onRetry}>
             {IPHONE_COPY.saveRetry}
@@ -50,10 +58,11 @@ export default function SaveBanner({
 
   return (
     <div className="save-banner">
-      <b>{IPHONE_COPY.saveBannerTitle}</b>
+      <b>{heading}</b>
+      {detail ? <p className="save-banner-detail">{detail}</p> : null}
       <div className="save-banner-actions">
         <button type="button" className="save-banner-notnow" onClick={onNotNow}>
-          {IPHONE_COPY.saveNotNow}
+          {decline}
         </button>
         <button type="button" className="save-banner-save" onClick={onSave}>
           {IPHONE_COPY.saveYes}
