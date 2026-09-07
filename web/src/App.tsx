@@ -1790,6 +1790,7 @@ export default function App() {
     keepAfterNotes.current = null
     keepEpochRef.current = null
     pendingLeaveSaveRef.current = false
+    skipOfferSavePromptRef.current = false
     lastLineAtRef.current = null
     setLeaveSheetOpen(false)
     if (leaveCaptureTimerRef.current) {
@@ -3079,7 +3080,8 @@ export default function App() {
         }}
         onCancel={() => {
           setSavePrompt(false)
-          commitBook(cancelCollect(saveBookRef.current))
+          pendingNewAfterSave.current = false
+          commitBook(setPendingAfterSave(cancelCollect(saveBookRef.current), 'none'))
         }}
         onDiscard={() => {
           setSavePrompt(false)
@@ -3260,7 +3262,11 @@ export default function App() {
                 <SaveBanner
                   status={saveBook.status}
                   onSave={() => saveLiveSession()}
-                  onNotNow={() => setSaveBannerOpen(false)}
+                  onNotNow={() => {
+                    setSaveBannerOpen(false)
+                    pendingNewAfterSave.current = false
+                    commitBook(setPendingAfterSave(saveBookRef.current, 'none'))
+                  }}
                   onRetry={() => saveLiveSession()}
                 />
               ) : null

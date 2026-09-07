@@ -194,4 +194,14 @@ eq(
   eq(saved.status, 'saved', 'retry ack marks saved')
 }
 
+{
+  let book = setPendingAfterSave(beginSave(fresh, 'live-notnow'), 'new')
+  book = applyKeepFailed(book, 'timeout')
+  book = setPendingAfterSave(book, 'none')
+  eq(book.pendingAfterSave, 'none', 'Not now abandons pending new')
+  book = beginSave(book, 'live-notnow')
+  const { action } = applyKeepAck(book, 'live-notnow', 'live-notnow', book.generation)
+  eq(action, 'none', 'Save after Not now does not start a new session')
+}
+
 console.log('sessionSave.test.ts ok')
