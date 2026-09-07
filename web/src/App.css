@@ -6918,6 +6918,10 @@ html.nod-phone .app.iphone-v2 .iphone-saved-check {
   min-width: 0;
 }
 
+html.nod-phone .app.iphone-v2 .listen-ask-dock {
+  flex: 0 0 auto;
+}
+
 html.nod-phone .app.iphone-v2 .save-banner {
   display: flex;
   flex-direction: column;
@@ -7053,6 +7057,26 @@ html.nod-native.kb-open .app.iphone-v2 .iphone-stage {
 }
 
 html.nod-native.kb-open .app.iphone-v2 .iphone-stack {
+  flex: 0 0 auto;
+}
+
+html.nod-native.kb-open .app.iphone-v2 .iphone-settings-row {
+  display: none;
+}
+
+html.nod-native.kb-open .app.iphone-v2 .listen-main {
+  min-height: 0;
+  height: 100%;
+}
+
+html.nod-native.kb-open .app.iphone-v2 .listen-split,
+html.nod-native.kb-open .app.iphone-v2 .iphone-live-feed-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+html.nod-native.kb-open .app.iphone-v2 .listen-ask-dock {
   flex: 0 0 auto;
 }
 
@@ -7926,6 +7950,7 @@ html.nod-phone .app.iphone-v2 .listen-prompt input {
   height: 40px;
   padding: 0;
   font-size: 16px;
+  scroll-margin: 0;
 }
 
 html.nod-phone .app.iphone-v2 .listen-prompt input::placeholder {
