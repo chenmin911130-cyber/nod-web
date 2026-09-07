@@ -1,4 +1,4 @@
-import { sameSpokenLine, showLineTranslation } from './iphoneCopy'
+import { showLineTranslation } from './iphoneCopy'
 import type { CatchNote } from './types'
 import {
   resolveSpeakerName,
@@ -21,36 +21,25 @@ export function liveStageMode(input: {
   return 'mic'
 }
 
-export function liveHeardLines(input: {
-  lines: Array<{ text: string }>
+export function liveFeed(input: {
+  lines: Array<{ id: string; ts: string; speaker?: string; text: string }>
   partial: string
-}): { headline: string; previous: string } {
-  const partial = (input.partial || '').trim()
-  const finalized = input.lines.map((line) => line.text.trim()).filter(Boolean)
-  if (partial) {
-    return { headline: partial, previous: finalized[finalized.length - 1] || '' }
-  }
-  return {
-    headline: finalized[finalized.length - 1] || '',
-    previous: finalized[finalized.length - 2] || '',
-  }
-}
-
-export function liveNotesLine(input: {
-  lines: Array<{ text: string; translation?: string }>
-  partial: string
-  translateOn: boolean
-}): string {
-  if (!input.translateOn) return ''
-  if ((input.partial || '').trim()) return ''
-  const last = [...input.lines].reverse().find((line) => line.text.trim())
-  if (!last) return ''
-  const notes = (last.translation || '').replace(/\s+/g, ' ').trim()
-  if (!notes || sameSpokenLine(last.text, notes)) return ''
-  // If structured Notes JSON leaked into a line's translation, don't show it as
-  // the live notes line.
-  if (/^[\[{]/.test(notes) || notes.includes('"summary"')) return ''
-  return notes
+  partialSpeaker?: string
+  max?: number
+}): {
+  items: Array<{ id: string; ts: string; speaker: string; text: string }>
+  draft: { speaker: string; text: string } | null
+} {
+  const max = input.max ?? 4
+  const items = input.lines.slice(-max).map((line) => ({
+    id: line.id,
+    ts: line.ts,
+    speaker: line.speaker || '',
+    text: line.text,
+  }))
+  const text = (input.partial || '').trim()
+  const draft = text ? { speaker: input.partialSpeaker || '', text } : null
+  return { items, draft }
 }
 
 export function formatActionItem(row: { text: string; owner?: string }): string {

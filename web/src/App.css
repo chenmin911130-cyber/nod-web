@@ -7284,6 +7284,119 @@ html.nod-phone .app.iphone-v2 .iphone-live-prev {
   text-align: center;
 }
 
+html.nod-phone .app.iphone-v2 .iphone-live-feed {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px max(var(--iphone-gutter), env(safe-area-inset-right)) 12px max(var(--iphone-gutter), env(safe-area-inset-left));
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--nod-line);
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-item .iphone-spk-avatar {
+  flex: 0 0 28px;
+  margin-top: 1px;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-item-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-item-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-item-meta .listen-spk {
+  display: inline;
+  margin: 0;
+  max-width: none;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-item-meta .listen-spk:hover {
+  color: var(--nod-cyan);
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-item-meta .listen-spk-input {
+  display: inline-block;
+  width: 140px;
+  margin: 0;
+  color: #fff;
+  font-size: 15px;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-item-ts {
+  color: #7a8794;
+  font-size: 13px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-item-text {
+  margin: 4px 0 0;
+  color: #f4f8fc;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-draft {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 0 4px;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-draft .iphone-status-wave {
+  margin-top: 3px;
+  margin-left: 0;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-draft-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-draft-status {
+  color: #7a8794;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-draft-text {
+  margin: 4px 0 0;
+  color: #8b969f;
+  font-size: 16px;
+  font-style: italic;
+  line-height: 1.45;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-ask-spin {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(5, 7, 10, 0.22);
+  border-top-color: #05070a;
+  border-radius: 50%;
+  animation: iphone-ask-spin 0.7s linear infinite;
+}
+
+@keyframes iphone-ask-spin {
+  to { transform: rotate(360deg); }
+}
+
 html.nod-phone .app.iphone-v2 .listen-pane:not(.listen-notes) {
   position: relative;
 }

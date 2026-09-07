@@ -29,7 +29,7 @@ import {
   spokenSettingsValue,
 } from '../iphoneCopy'
 import { usePhoneChrome } from '../phoneChrome'
-import { iphoneSummaryHeading, liveHeardLines, liveNotesLine, liveStageMode, summaryPlainText, transcriptPlainText } from '../liveView'
+import { iphoneSummaryHeading, liveFeed, liveStageMode, summaryPlainText, transcriptPlainText } from '../liveView'
 import { useStickToBottom } from '../useStickToBottom'
 import PhoneSheet from './PhoneSheet'
 import SpeakerAvatar from './SpeakerAvatar'
@@ -537,7 +537,10 @@ function IphoneMicStage({ listening }: { listening: boolean }) {
         </span>
       </div>
       {listening ? (
-        <b>{IPHONE_COPY.listeningNow}</b>
+        <>
+          <b>{IPHONE_COPY.listeningEmpty}</b>
+          <p className="iphone-stage-help">{IPHONE_COPY.listeningEmptyHelp}</p>
+        </>
       ) : (
         <>
           <b>{IPHONE_COPY.readyTitle}</b>
@@ -666,31 +669,59 @@ function MeetingNotes({
   )
 }
 
-function IphoneLiveContent({
+function IphoneLiveFeed({
+  items,
+  draft,
   listening,
-  headline,
-  previous,
-  notes,
+  paused,
+  ended,
+  speakerNames,
+  onRename,
 }: {
+  items: Array<{ id: string; ts: string; speaker: string; text: string }>
+  draft: { speaker: string; text: string } | null
   listening: boolean
-  headline: string
-  previous: string
-  notes: string
+  paused: boolean
+  ended: boolean
+  speakerNames: Record<string, string>
+  onRename: (id: string, name: string) => void
 }) {
+  const listRef = useRef<HTMLDivElement>(null)
+  useStickToBottom(listRef, [items, draft?.text, draft?.speaker, listening, paused])
+  const showDraft = Boolean(draft) && !ended
   return (
-    <div className={`iphone-live${listening ? ' live' : ''}`}>
-      <div className="iphone-live-wave" aria-hidden="true">
-        {Array.from({ length: 22 }, (_, i) => <i key={i} />)}
-      </div>
-      <div className="iphone-live-now">
-        <span className="iphone-live-dot" />
-        {listening ? IPHONE_COPY.listeningNowLabel : IPHONE_COPY.pausedStatus}
-      </div>
-      <div className="iphone-live-caption">
-        {headline ? <p className="iphone-live-headline">{headline}</p> : null}
-        {notes ? <p className="iphone-live-notes">{notes}</p> : null}
-        {previous ? <p className="iphone-live-prev">{previous}</p> : null}
-      </div>
+    <div className="iphone-live-feed" ref={listRef}>
+      {items.map((item) => (
+        <div className="iphone-live-item" key={item.id}>
+          {item.speaker ? <SpeakerAvatar speaker={item.speaker} /> : null}
+          <div className="iphone-live-item-main">
+            <div className="iphone-live-item-meta">
+              {item.speaker ? (
+                <SpeakerName
+                  speakerId={item.speaker}
+                  label={resolveSpeakerName(speakerNames, item.speaker)}
+                  onRename={onRename}
+                />
+              ) : null}
+              {item.ts ? <span className="iphone-live-item-ts">{item.ts}</span> : null}
+            </div>
+            <p className="iphone-live-item-text">{item.text}</p>
+          </div>
+        </div>
+      ))}
+      {showDraft && draft ? (
+        <div className="iphone-live-draft">
+          <span className={`iphone-status-wave${listening && !paused ? ' live' : ''}`} aria-hidden="true">
+            {Array.from({ length: 7 }, (_, i) => <i key={i} />)}
+          </span>
+          <div className="iphone-live-draft-main">
+            <span className="iphone-live-draft-status">
+              {!listening && paused ? IPHONE_COPY.pausedStatus : IPHONE_COPY.listeningEmpty}
+            </span>
+            <p className="iphone-live-draft-text">{draft.text}</p>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -959,7 +990,7 @@ export default function ListenPane(props: Props) {
   }, [props.notesDefaultOpen, props.notesReveal])
 
   const showStage = phone && mobilePane === 'live'
-  const stick = useStickToBottom(leftRef, [props.lines.length, props.partial], !showStage)
+  const stick = useStickToBottom(leftRef, [props.lines.length, props.partial, !showStage], !showStage)
 
   useEffect(() => {
     rightRef.current?.scrollTo({ top: rightRef.current.scrollHeight })
@@ -1004,17 +1035,19 @@ export default function ListenPane(props: Props) {
     setInput('')
   }
   const lastHeard = ((props.ended ? '' : props.partial) || props.lines[props.lines.length - 1]?.text || '').trim()
+  const hasHeardText = Boolean(lastHeard)
+  const paused = Boolean(props.paused)
   const liveMode = liveStageMode({
     listening: props.listening,
     elapsedMs: props.elapsedMs || 0,
-    hasHeardText: Boolean(lastHeard),
+    hasHeardText,
   })
-  const heard = liveHeardLines({ lines: props.lines, partial: props.ended ? '' : props.partial })
-  const notesLine = liveNotesLine({
+  const feed = liveFeed({
     lines: props.lines,
     partial: props.ended ? '' : props.partial,
-    translateOn: props.translateOn,
+    partialSpeaker: props.partialSpeaker,
   })
+  const hasFeed = feed.items.length > 0 || Boolean(feed.draft)
   const stackedPane = showStage ? 'stage' : !notesOpen || mobilePane === 'transcript' || mobilePane === 'live' ? 'live' : 'notes'
 
   const controls = (
@@ -1303,12 +1336,15 @@ export default function ListenPane(props: Props) {
         </>
       )}
 
-      {ready ? null : showStage && !props.qa && liveMode === 'content' ? (
-        <IphoneLiveContent
+      {ready ? null : showStage && !props.qa && liveMode === 'content' && hasFeed ? (
+        <IphoneLiveFeed
+          items={feed.items}
+          draft={feed.draft}
           listening={props.listening}
-          headline={heard.headline}
-          previous={heard.previous}
-          notes={notesLine}
+          paused={paused}
+          ended={props.ended}
+          speakerNames={props.speakerNames}
+          onRename={props.onRenameSpeaker}
         />
       ) : ready ? null : showStage && !props.qa ? (
         <IphoneMicStage listening={props.listening} />
@@ -1559,7 +1595,8 @@ export default function ListenPane(props: Props) {
             ) : null}
             <input
               value={input}
-              placeholder={phone ? (props.listening ? IPHONE_COPY.askLive : IPHONE_COPY.askReady) : 'Ask anything — the answer shows in Notes'}
+              disabled={phone && props.busy}
+              placeholder={phone ? IPHONE_COPY.askConversation : 'Ask anything — the answer shows in Notes'}
               onChange={(e) => {
                 setInput(e.target.value)
               }}
@@ -1568,7 +1605,9 @@ export default function ListenPane(props: Props) {
               }}
             />
             <button type="button" className="listen-go" disabled={props.busy || !input.trim()} onClick={submit}>
-              {phone ? (
+              {phone && props.busy ? (
+                <span className="iphone-ask-spin" aria-hidden="true" />
+              ) : phone ? (
                 <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
                   <path d="M9 13.4V4.8M5.4 8.2 9 4.6l3.6 3.6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
