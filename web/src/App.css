@@ -7162,34 +7162,6 @@ html.nod-phone .app.iphone-v2 .iphone-live {
   padding: 8px max(var(--iphone-gutter), env(safe-area-inset-right)) 12px max(var(--iphone-gutter), env(safe-area-inset-left));
 }
 
-html.nod-phone .app.iphone-v2 .iphone-live-wave {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  height: 36px;
-  margin: 0 auto 4px;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-live-wave i {
-  display: block;
-  width: 3px;
-  height: 10px;
-  border-radius: 999px;
-  background: #00d2ff;
-  transform-origin: center;
-  animation: iphone-bar 1.05s ease-in-out infinite;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-live-wave i:nth-child(3n) { animation-delay: 0.12s; height: 22px; }
-html.nod-phone .app.iphone-v2 .iphone-live-wave i:nth-child(3n + 1) { animation-delay: 0.28s; height: 14px; }
-html.nod-phone .app.iphone-v2 .iphone-live-wave i:nth-child(3n + 2) { animation-delay: 0.4s; height: 28px; }
-
-html.nod-phone .app.iphone-v2 .iphone-live:not(.live) .iphone-live-wave i {
-  animation: none;
-  opacity: 0.45;
-}
-
 html.nod-phone .app.iphone-v2 .iphone-live-now {
   display: flex;
   align-items: center;
@@ -7369,9 +7341,11 @@ html.nod-phone .app.iphone-v2 .iphone-live-draft {
   padding: 12px 0 4px;
 }
 
-html.nod-phone .app.iphone-v2 .iphone-live-draft .iphone-status-wave {
-  margin-top: 3px;
-  margin-left: 0;
+html.nod-phone .app.iphone-v2 .iphone-live-draft .iphone-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  flex: 0 0 auto;
 }
 
 html.nod-phone .app.iphone-v2 .iphone-live-draft-main {
@@ -7670,16 +7644,6 @@ html.nod-phone .app.iphone-v2 .iphone-tr-line .listen-ts {
   font-size: 13px;
   font-weight: 500;
   padding-top: 4px;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-tr-line .iphone-status-wave {
-  margin-left: 0;
-  height: 12px;
-  gap: 1.5px;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-tr-line .iphone-status-wave i {
-  width: 2px;
 }
 
 html.nod-phone .app.iphone-v2 .iphone-tr-ava {

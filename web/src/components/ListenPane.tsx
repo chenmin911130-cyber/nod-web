@@ -766,9 +766,7 @@ function IphoneLiveFeed({
         ))}
         {showDraft && draft ? (
           <div className="iphone-live-draft">
-            <span className={`iphone-status-wave${listening && !paused ? ' live' : ''}`} aria-hidden="true">
-              {Array.from({ length: 7 }, (_, i) => <i key={i} />)}
-            </span>
+            <i className={`iphone-dot ${listening && !paused ? 'recording' : 'paused'}`} aria-hidden="true" />
             <div className="iphone-live-draft-main">
               <span className="iphone-live-draft-status">
                 {!listening && paused ? IPHONE_COPY.pausedStatus : IPHONE_COPY.listeningEmpty}
@@ -803,14 +801,6 @@ function CopyIcon() {
       <rect x="5.2" y="5.2" width="7.4" height="8.2" rx="1.4" stroke="currentColor" strokeWidth="1.4" />
       <path d="M3.4 10.6V3.8A1.4 1.4 0 0 1 4.8 2.4h5.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
-  )
-}
-
-function DraftWave({ live }: { live: boolean }) {
-  return (
-    <span className={`iphone-status-wave${live ? ' live' : ''}`} aria-hidden="true">
-      <i /><i /><i /><i />
-    </span>
   )
 }
 
@@ -1515,9 +1505,7 @@ export default function ListenPane(props: Props) {
                 {props.partial && !props.ended && (
                   phone ? (
                     <div className={`listen-line iphone-tr-line iphone-tr-draft${props.listening ? ' live' : ''}`}>
-                      <div className="listen-ts">
-                        <DraftWave live={props.listening} />
-                      </div>
+                      <div className="listen-ts">…</div>
                       <div className="iphone-tr-ava">
                         <SpeakerAvatar speaker={props.partialSpeaker || ''} />
                       </div>
