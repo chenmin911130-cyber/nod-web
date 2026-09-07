@@ -8190,39 +8190,11 @@ html.nod-phone .app.iphone-v2 .translate-main .tr-toolbar {
 }
 
 html.nod-phone .app.iphone-v2 .translate-main .tr-voice-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: nowrap;
-  gap: 6px;
-  margin-top: 8px;
-  padding: 8px 10px;
-  border-radius: 18px;
-  background: #1c1c1e;
+  display: none;
 }
 
 html.nod-phone .app.iphone-v2 .translate-main .tr-queued {
   display: none;
-}
-
-html.nod-phone .app.iphone-v2 .translate-main .tr-voice-btn {
-  border-color: rgba(255, 255, 255, 0.12);
-  background: #2c2c2e;
-  color: #e8eef8;
-}
-
-html.nod-phone .app.iphone-v2 .translate-main .tr-voice-btn.on {
-  border-color: rgba(0, 210, 255, 0.45);
-  background: rgba(0, 210, 255, 0.12);
-}
-
-html.nod-phone .app.iphone-v2 .translate-main .tr-voice-btn.labeled {
-  flex-direction: row;
-  gap: 6px;
-  height: 36px;
-  min-width: 64px;
-  padding: 0 10px;
-  font-size: 12px;
-  letter-spacing: 0;
 }
 
 html.nod-phone .app.iphone-v2 .translate-main .tr-head-row,
