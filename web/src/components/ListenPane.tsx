@@ -30,8 +30,9 @@ import {
   spokenSettingsValue,
 } from '../iphoneCopy'
 import { usePhoneChrome } from '../phoneChrome'
-import { iphoneSummaryHeading, liveFeed, liveStageMode, summaryPlainText, transcriptPlainText } from '../liveView'
+import { askOutcome, iphoneSummaryHeading, isCatchAskCurrent, liveFeed, liveStageMode, summaryPlainText, transcriptPlainText, type LiveFeedItem } from '../liveView'
 import { useStickToBottom } from '../useStickToBottom'
+import { AnswerContent } from './AnswerContent'
 import PhoneSheet from './PhoneSheet'
 import SpeakerAvatar from './SpeakerAvatar'
 
@@ -66,6 +67,8 @@ interface Props {
   onMeetingSpeakers: (id: MeetingSpeakerId) => void
   onSummary: () => void
   onAsk: (text: string, files?: import('../attach').AttachPayload[]) => void
+  onRetryAsk?: (noteId: string) => void
+  catchAskId?: string
   elapsedMs?: number
   onExportPdf?: () => void
   actions?: ReactNode
@@ -675,6 +678,47 @@ function MeetingNotes({
   )
 }
 
+function formatAskClock(at: number): string {
+  const d = new Date(at || Date.now())
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function IphoneLiveAsk({
+  item,
+  onRetry,
+}: {
+  item: Extract<LiveFeedItem, { type: 'ask' }>
+  onRetry?: (noteId: string) => void
+}) {
+  return (
+    <div className="iphone-live-ask">
+      <div className="iphone-live-q">
+        <p className="iphone-live-q-text">{item.question}</p>
+        <span className="iphone-live-q-meta">{formatAskClock(item.at)} ✓</span>
+      </div>
+      <div className={`iphone-live-a ${item.status}`}>
+        <div className="iphone-live-a-head">✦ Nodpilot</div>
+        {item.status === 'pending' ? (
+          <p className="iphone-live-a-think">
+            <span className="iphone-live-think-dots" aria-hidden="true"><i /><i /><i /></span>
+            {IPHONE_COPY.askThinking}
+          </p>
+        ) : item.status === 'failed' ? (
+          <div className="iphone-live-a-fail">
+            <p>{IPHONE_COPY.askCouldntAnswer}</p>
+            <button type="button" className="iphone-ask-retry" onClick={() => onRetry?.(item.id)}>
+              {IPHONE_COPY.askRetry}
+            </button>
+          </div>
+        ) : (
+          <AnswerContent answer={item.answer} base={`live-${item.id}`} copyable={false} />
+        )}
+        <p className="iphone-live-a-foot">{IPHONE_COPY.askBasedOn}</p>
+      </div>
+    </div>
+  )
+}
+
 function IphoneLiveFeed({
   items,
   draft,
@@ -683,50 +727,63 @@ function IphoneLiveFeed({
   ended,
   speakerNames,
   onRename,
+  onRetry,
 }: {
-  items: Array<{ id: string; ts: string; speaker: string; text: string }>
+  items: LiveFeedItem[]
   draft: { speaker: string; text: string } | null
   listening: boolean
   paused: boolean
   ended: boolean
   speakerNames: Record<string, string>
   onRename: (id: string, name: string) => void
+  onRetry?: (noteId: string) => void
 }) {
   const listRef = useRef<HTMLDivElement>(null)
-  useStickToBottom(listRef, [items, draft?.text, draft?.speaker, listening, paused])
+  const stick = useStickToBottom(listRef, [items, draft?.text, draft?.speaker, listening, paused])
   const showDraft = Boolean(draft) && !ended
   return (
-    <div className="iphone-live-feed" ref={listRef}>
-      {items.map((item) => (
-        <div className="iphone-live-item" key={item.id}>
-          {item.speaker ? <SpeakerAvatar speaker={item.speaker} /> : null}
-          <div className="iphone-live-item-main">
-            <div className="iphone-live-item-meta">
-              {item.speaker ? (
-                <SpeakerName
-                  speakerId={item.speaker}
-                  label={resolveSpeakerName(speakerNames, item.speaker)}
-                  onRename={onRename}
-                />
-              ) : null}
-              {item.ts ? <span className="iphone-live-item-ts">{item.ts}</span> : null}
+    <div className="iphone-live-feed-wrap">
+      <div className="iphone-live-feed" ref={listRef}>
+        {items.map((item) => (
+          item.type === 'ask' ? (
+            <IphoneLiveAsk key={item.id} item={item} onRetry={onRetry} />
+          ) : (
+            <div className="iphone-live-item" key={item.id}>
+              {item.speaker ? <SpeakerAvatar speaker={item.speaker} /> : null}
+              <div className="iphone-live-item-main">
+                <div className="iphone-live-item-meta">
+                  {item.speaker ? (
+                    <SpeakerName
+                      speakerId={item.speaker}
+                      label={resolveSpeakerName(speakerNames, item.speaker)}
+                      onRename={onRename}
+                    />
+                  ) : null}
+                  {item.ts ? <span className="iphone-live-item-ts">{item.ts}</span> : null}
+                </div>
+                <p className="iphone-live-item-text">{item.text}</p>
+              </div>
             </div>
-            <p className="iphone-live-item-text">{item.text}</p>
-          </div>
-        </div>
-      ))}
-      {showDraft && draft ? (
-        <div className="iphone-live-draft">
-          <span className={`iphone-status-wave${listening && !paused ? ' live' : ''}`} aria-hidden="true">
-            {Array.from({ length: 7 }, (_, i) => <i key={i} />)}
-          </span>
-          <div className="iphone-live-draft-main">
-            <span className="iphone-live-draft-status">
-              {!listening && paused ? IPHONE_COPY.pausedStatus : IPHONE_COPY.listeningEmpty}
+          )
+        ))}
+        {showDraft && draft ? (
+          <div className="iphone-live-draft">
+            <span className={`iphone-status-wave${listening && !paused ? ' live' : ''}`} aria-hidden="true">
+              {Array.from({ length: 7 }, (_, i) => <i key={i} />)}
             </span>
-            <p className="iphone-live-draft-text">{draft.text}</p>
+            <div className="iphone-live-draft-main">
+              <span className="iphone-live-draft-status">
+                {!listening && paused ? IPHONE_COPY.pausedStatus : IPHONE_COPY.listeningEmpty}
+              </span>
+              <p className="iphone-live-draft-text">{draft.text}</p>
+            </div>
           </div>
-        </div>
+        ) : null}
+      </div>
+      {stick.hasNew ? (
+        <button type="button" className="iphone-live-latest" onClick={stick.scrollToBottom}>
+          {IPHONE_COPY.backToLatest}
+        </button>
       ) : null}
     </div>
   )
@@ -1059,7 +1116,12 @@ export default function ListenPane(props: Props) {
     lines: props.lines,
     partial: props.ended ? '' : props.partial,
     partialSpeaker: props.partialSpeaker,
+    catchNotes: props.catchNotes,
+    busy: props.busy,
+    catchAskId: props.catchAskId,
   })
+  const showQuickChips = phone && !props.qa && props.scene !== 'interview' && (props.listening || paused) && props.lines.length > 0 && !props.busy
+  const hadAskAnswer = props.catchNotes.some((note) => note.kind === 'ask' && note.text.trim())
   const hasFeed = feed.items.length > 0 || Boolean(feed.draft)
   const stackedPane = showStage ? 'stage' : !notesOpen || mobilePane === 'transcript' || mobilePane === 'live' ? 'live' : 'notes'
 
@@ -1170,6 +1232,7 @@ export default function ListenPane(props: Props) {
             onClick={openNotes}
           >
             {phone ? IPHONE_COPY.summaryTab : 'Notes'}
+            {phone && props.summarizing ? <i className="iphone-notes-dot" aria-hidden="true" /> : null}
           </button>
         </div>
   ) : null
@@ -1383,6 +1446,7 @@ export default function ListenPane(props: Props) {
           ended={props.ended}
           speakerNames={props.speakerNames}
           onRename={props.onRenameSpeaker}
+          onRetry={props.onRetryAsk}
         />
       ) : ready ? null : showStage && !props.qa ? (
         <IphoneMicStage listening={props.listening} />
@@ -1565,16 +1629,36 @@ export default function ListenPane(props: Props) {
                       : <>Ask in the box below — the answer lands here. Or tap <b>Summarize</b> for a recap.</>}
                   </div>
                 )}
-                {props.catchNotes.map((note, i) => (
-                  <div className={`listen-card${note.kind === 'ask' ? ' ask' : ''}`} key={note.id || `${note.title}-${i}`}>
+                {props.catchNotes.map((note, i) => {
+                  const askStatus = note.kind === 'ask'
+                    ? askOutcome({
+                      note,
+                      busy: Boolean(props.busy && isCatchAskCurrent(note.id, props.catchAskId)),
+                      lastError: null,
+                    })
+                    : null
+                  return (
+                  <div className={`listen-card${note.kind === 'ask' ? ' ask' : ''}${askStatus === 'failed' ? ' failed' : ''}`} key={note.id || `${note.title}-${i}`}>
                     <div className="listen-tag">{note.kind === 'ask' ? 'Ask' : note.title}</div>
                     {note.question ? <p className="listen-q">{note.question}</p> : null}
-                    <BiText
-                      text={note.text || (props.busy && !note.text ? '…' : note.kind === 'ask' && !note.text ? 'Waiting for an answer…' : '')}
-                      bilingual={false}
-                    />
+                    {askStatus === 'pending' ? (
+                      <p>{IPHONE_COPY.askThinking}</p>
+                    ) : askStatus === 'failed' ? (
+                      <div className="iphone-ask-fail">
+                        <p>{IPHONE_COPY.askCouldntAnswer}</p>
+                        <button type="button" className="iphone-ask-retry" onClick={() => props.onRetryAsk?.(note.id)}>
+                          {IPHONE_COPY.askRetry}
+                        </button>
+                      </div>
+                    ) : (
+                      <BiText
+                        text={note.text || (props.busy && !note.text ? '…' : note.kind === 'ask' && !note.text ? 'Waiting for an answer…' : '')}
+                        bilingual={false}
+                      />
+                    )}
                   </div>
-                ))}
+                  )
+                })}
                 {props.summarizing && props.busy && !sections.length && (
                   <div className="listen-empty">{lecture ? 'Writing the study sheet…' : 'Writing the summary…'}</div>
                 )}
@@ -1627,6 +1711,22 @@ export default function ListenPane(props: Props) {
 
           <div className="listen-ask-dock">
           {props.saveBanner}
+          {showQuickChips ? (
+            <div className="iphone-ask-chips" role="group" aria-label="Quick questions">
+              <button type="button" className="iphone-ask-chip" onClick={() => props.onSummary()}>
+                <span aria-hidden="true">✦</span>
+                {IPHONE_COPY.quickSummarize}
+              </button>
+              <button
+                type="button"
+                className="iphone-ask-chip"
+                onClick={() => props.onAsk(lecture ? IPHONE_COPY.quickKeyConcepts : IPHONE_COPY.quickActionItems)}
+              >
+                <span aria-hidden="true">☰</span>
+                {lecture ? IPHONE_COPY.quickKeyConceptsChip : IPHONE_COPY.quickActionItemsChip}
+              </button>
+            </div>
+          ) : null}
           <div className="listen-prompt">
             {phone ? (
               <span className="iphone-ask-spark" aria-hidden="true">
@@ -1638,7 +1738,7 @@ export default function ListenPane(props: Props) {
             <input
               value={input}
               disabled={phone && props.busy}
-              placeholder={phone ? IPHONE_COPY.askConversation : 'Ask anything — the answer shows in Notes'}
+              placeholder={phone ? (hadAskAnswer ? IPHONE_COPY.askFollowUp : IPHONE_COPY.askConversation) : 'Ask anything — the answer shows in Notes'}
               onChange={(e) => {
                 setInput(e.target.value)
               }}

@@ -249,6 +249,7 @@ type Action =
   | { type: 'listen_new' }
   | { type: 'meeting_resume' }
   | { type: 'expect_catch'; title?: string; kind?: 'catch' | 'ask'; question?: string }
+  | { type: 'retry_ask'; noteId: string }
   | { type: 'expect_notes' }
   | { type: 'rename_speaker'; id: string; name: string }
   | {
@@ -426,6 +427,7 @@ function reducer(state: AppState, action: Action): AppState {
                       title: state.catchPendingTitle || (isAskPrompt(text) ? 'Ask' : 'Summary'),
                       question: '',
                       text: '',
+                      at: Date.now(),
                     },
                   ],
               catchPendingTitle: '',
@@ -746,10 +748,28 @@ function reducer(state: AppState, action: Action): AppState {
             title,
             question: action.question || '',
             text: '',
+            at: Date.now(),
           },
         ],
         busy: true,
         status: kind === 'ask' ? 'Answering…' : 'Catching up…',
+      }
+    }
+    case 'retry_ask': {
+      const note = state.catchNotes.find((row) => row.id === action.noteId)
+      if (!note || note.kind !== 'ask') return state
+      const pendingId = `__pending__:${Date.now()}-retry-${state.catchNotes.length}`
+      return {
+        ...state,
+        catchAskId: pendingId,
+        catchPendingTitle: note.title || 'Ask',
+        catchNotes: state.catchNotes.map((row) =>
+          row.id === action.noteId
+            ? { ...row, id: pendingId, text: '', kind: 'ask', title: row.title || 'Ask', question: row.question || '' }
+            : row,
+        ),
+        busy: true,
+        status: 'Answering…',
       }
     }
     case 'expect_notes':
@@ -2634,6 +2654,28 @@ export default function App() {
     })()
   }, [])
 
+  const handleRetryAsk = useCallback((noteId: string) => {
+    const s = stateRef.current
+    const note = s.catchNotes.find((row) => row.id === noteId)
+    const question = (note?.question || '').trim()
+    if (!question || note?.kind !== 'ask') return
+    dispatch({ type: 'retry_ask', noteId })
+    void (async () => {
+      try {
+        window.api.send({
+          type: 'ask',
+          text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, s.translateOn, s.speakerNames),
+          mode: 'listen_ask',
+        })
+      } catch (ex) {
+        dispatch({
+          type: 'engine',
+          ev: { type: 'error', text: ex instanceof Error ? ex.message : 'Could not send the file' },
+        })
+      }
+    })()
+  }, [])
+
   const copyPairField = useCallback((pair: TranslatePair, field: 'original' | 'translation') => {
     const text = (field === 'translation' ? pair.translation : pair.original).trim()
     if (!text) {
@@ -3264,6 +3306,8 @@ export default function App() {
             onMeetingSpeakers={handleMeetingSpeakers}
             onSummary={handleSummary}
             onAsk={handleListenAsk}
+            onRetryAsk={handleRetryAsk}
+            catchAskId={state.catchAskId}
             elapsedMs={state.meetingElapsedMs}
             onExportPdf={() => { void handleExportPdf() }}
             actions={phoneActions}
