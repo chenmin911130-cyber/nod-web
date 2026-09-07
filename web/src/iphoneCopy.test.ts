@@ -35,6 +35,8 @@ eq(IPHONE_COPY.startListening, 'Start listening', 'Listen ready CTA is Start lis
 eq(IPHONE_COPY.startTranslate, 'Start voice translation', 'Translate ready CTA is Start voice translation')
 eq(IPHONE_COPY.recordingStatus, 'Recording', 'live status is Recording')
 eq(IPHONE_COPY.stop, 'End', 'listen control stop label is End')
+eq(IPHONE_COPY.translateStatus, 'Listening', 'Translate live status stays Listening')
+eq(IPHONE_COPY.translateStop, 'Stop', 'Translate stop capsule stays Stop')
 eq(IPHONE_COPY.resume, 'Resume', 'paused listen control is Resume')
 eq(IPHONE_COPY.more, 'More', 'PDF/Save/History live in More')
 eq(IPHONE_COPY.moreSession, 'This session', 'More sheet names this session')

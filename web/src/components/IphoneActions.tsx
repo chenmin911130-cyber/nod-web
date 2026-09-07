@@ -156,7 +156,7 @@ export default function IphoneActions({
             <span className="iphone-status rec" aria-live="polite">
                 <>
                   <i className={`iphone-dot ${tone}`} />
-                  {IPHONE_COPY.recordingStatus}
+                  {IPHONE_COPY.translateStatus}
                   <StatusWave live />
                 </>
             </span>
@@ -166,7 +166,7 @@ export default function IphoneActions({
             </button>
             <button type="button" className="iphone-pill stop" onClick={onStop}>
               <StopIcon />
-              {IPHONE_COPY.stop}
+              {IPHONE_COPY.translateStop}
             </button>
           </div>
           ) : paused ? (
@@ -182,7 +182,7 @@ export default function IphoneActions({
             </button>
             <button type="button" className="iphone-pill stop" onClick={onStop}>
               <StopIcon />
-              {IPHONE_COPY.stop}
+              {IPHONE_COPY.translateStop}
             </button>
           </div>
           ) : null

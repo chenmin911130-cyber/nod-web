@@ -12,6 +12,8 @@ export const IPHONE_COPY = {
   pause: 'Pause',
   resume: 'Resume',
   stop: 'End',
+  translateStatus: 'Listening',
+  translateStop: 'Stop',
   muted: 'Muted',
   readyStatus: 'Ready to listen',
   recordingStatus: 'Recording',
