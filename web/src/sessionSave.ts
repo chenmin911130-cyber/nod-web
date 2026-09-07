@@ -68,7 +68,25 @@ export function applyKeepAck(
 
 export function applyKeepFailed(book: SaveBook, _reason: KeepFailReason): SaveBook {
   if (book.status !== 'saving') return book
-  return { ...book, status: 'failed' }
+  return abandonDestructivePending({ ...book, status: 'failed' })
+}
+
+/** Drop delete/signout leave-after-save. New session stays queued for Retry. */
+export function abandonDestructivePending(book: SaveBook): SaveBook {
+  if (book.pendingAfterSave === 'delete' || book.pendingAfterSave === 'signout') {
+    return { ...book, pendingAfterSave: 'none' }
+  }
+  return book
+}
+
+/** A delete/signout ack only runs if that sheet is still on screen. */
+export function leaveActionStillArmed(
+  action: PendingAfterSave,
+  open: { account: boolean; deleteSheet: boolean },
+): boolean {
+  if (action === 'delete') return open.deleteSheet
+  if (action === 'signout') return open.account
+  return action === 'new'
 }
 
 export function bumpGeneration(book: SaveBook): SaveBook {

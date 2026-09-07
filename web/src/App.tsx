@@ -23,6 +23,7 @@ import {
   KEEP_CAPTURE_SETTLE_MS,
   applyKeepAck,
   applyKeepFailed,
+  abandonDestructivePending,
   beginSave,
   bindLiveId,
   bumpGeneration,
@@ -31,6 +32,7 @@ import {
   emptySaveBook,
   keepAfterNotesStillValid,
   keepShouldWaitForCapture,
+  leaveActionStillArmed,
   markOffered,
   savePromptSurface,
   setPendingAfterSave,
@@ -1128,6 +1130,10 @@ export default function App() {
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState('')
   const deletingRef = useRef(false)
+  const accountOpenRef = useRef(false)
+  const deleteOpenRef = useRef(false)
+  accountOpenRef.current = accountOpen
+  deleteOpenRef.current = deleteOpen
   const [meetingSpeakersId, setMeetingSpeakersId] = useState<MeetingSpeakerId>(() => meetingSpeakerId())
   const [moreOpen, setMoreOpen] = useState(false)
   const restoreHistory = useCallback((session: HistorySession) => {
@@ -1869,10 +1875,12 @@ export default function App() {
         pendingNewAfterSave.current = false
         doClearRef.current()
         dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.leaveSavedStatus } })
-      } else if (action === 'signout') {
-        performSignOutRef.current()
-      } else if (action === 'delete') {
-        performDeleteRef.current()
+      } else if (leaveActionStillArmed(action, {
+        account: accountOpenRef.current,
+        deleteSheet: deleteOpenRef.current,
+      })) {
+        if (action === 'signout') performSignOutRef.current()
+        if (action === 'delete') performDeleteRef.current()
       }
       return
     }
@@ -3266,6 +3274,7 @@ export default function App() {
         open={accountOpen}
         onClose={() => {
           if (deletingRef.current) return
+          commitBook(abandonDestructivePending(saveBookRef.current))
           setAccountOpen(false)
           setDeleteOpen(false)
           setDeleteError('')
@@ -3290,6 +3299,7 @@ export default function App() {
         }}
         onCancelDelete={() => {
           if (deletingRef.current) return
+          commitBook(abandonDestructivePending(saveBookRef.current))
           setDeleteOpen(false)
           setDeleteError('')
         }}

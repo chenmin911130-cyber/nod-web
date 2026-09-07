@@ -1,6 +1,7 @@
 import {
   KEEP_ACK_TIMEOUT_MS,
   KEEP_CAPTURE_SETTLE_MS,
+  abandonDestructivePending,
   applyKeepAck,
   applyKeepFailed,
   beginSave,
@@ -9,6 +10,7 @@ import {
   emptySaveBook,
   keepAfterNotesStillValid,
   keepShouldWaitForCapture,
+  leaveActionStillArmed,
   savePromptSurface,
   setPendingAfterSave,
 } from './sessionSave'
@@ -221,5 +223,48 @@ eq(
   const { action } = applyKeepAck(book, 'live-notnow', 'live-notnow', book.generation)
   eq(action, 'none', 'Save after Not now does not start a new session')
 }
+
+{
+  let book = setPendingAfterSave(beginSave(fresh, 'live-del-fail'), 'delete')
+  book = applyKeepFailed(book, 'timeout')
+  eq(book.status, 'failed', 'delete save failure still marks failed')
+  eq(book.pendingAfterSave, 'none', 'save failure drops pending delete so Retry cannot wipe')
+}
+
+{
+  let book = setPendingAfterSave(beginSave(fresh, 'live-out-fail'), 'signout')
+  book = applyKeepFailed(book, 'error')
+  eq(book.pendingAfterSave, 'none', 'save failure drops pending signout so Retry cannot sign out')
+}
+
+{
+  const book = setPendingAfterSave(beginSave(fresh, 'live-del-close'), 'delete')
+  const next = abandonDestructivePending(book)
+  eq(next.pendingAfterSave, 'none', 'closing the delete sheet drops pending delete')
+  eq(next.status, book.status, 'abandon does not change save status')
+  const kept = abandonDestructivePending(setPendingAfterSave(book, 'new'))
+  eq(kept.pendingAfterSave, 'new', 'abandon does not drop pending new session')
+}
+
+eq(
+  leaveActionStillArmed('delete', { account: true, deleteSheet: false }),
+  false,
+  'delete ack with the sheet closed must not fire',
+)
+eq(
+  leaveActionStillArmed('delete', { account: false, deleteSheet: true }),
+  true,
+  'delete ack with the sheet still open still fires',
+)
+eq(
+  leaveActionStillArmed('signout', { account: false, deleteSheet: false }),
+  false,
+  'signout ack with Account closed must not fire',
+)
+eq(
+  leaveActionStillArmed('new', { account: false, deleteSheet: false }),
+  true,
+  'pending new session does not depend on Account being open',
+)
 
 console.log('sessionSave.test.ts ok')
