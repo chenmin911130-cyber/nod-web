@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, fetchMe, type Me } from '../auth'
 import {
   accountInitials,
+  deleteAccountCopy,
   listeningLeftLine,
   signInLine,
   type SignOutGate,
@@ -26,6 +27,56 @@ function BackIcon() {
   )
 }
 
+function TrashIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M3.5 4.5h9M6 4.5V3.2A1.2 1.2 0 0 1 7.2 2h1.6A1.2 1.2 0 0 1 10 3.2v1.3M5.2 4.5l.4 8.1A1.2 1.2 0 0 0 6.8 13.7h2.4a1.2 1.2 0 0 0 1.2-1.1l.4-8.1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+export function DeleteAccountSheet({
+  open,
+  busy,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean
+  busy: boolean
+  error: string
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  if (!open) return null
+  return (
+    <div className="account-delete-sheet" role="dialog" aria-label={deleteAccountCopy.title}>
+      <div className="account-delete-card">
+        <h3>{deleteAccountCopy.title}</h3>
+        {deleteAccountCopy.body.map((line) => (
+          <p key={line}>{line}</p>
+        ))}
+        {error ? (
+          <div className="account-error">
+            <span>{error}</span>
+            <button type="button" className="account-retry" disabled={busy} onClick={onConfirm}>
+              {deleteAccountCopy.retry}
+            </button>
+          </div>
+        ) : null}
+        <div className="account-sheet-actions">
+          <button type="button" className="account-sheet-cancel" disabled={busy} onClick={onCancel}>
+            {deleteAccountCopy.cancel}
+          </button>
+          <button type="button" className="account-delete-confirm" disabled={busy} onClick={onConfirm}>
+            {busy ? deleteAccountCopy.deleting : deleteAccountCopy.confirm}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 async function openLegal(path: string): Promise<void> {
   const url = isNativeApp() ? `https://nodpilot.com${path}` : path
   if (isNativeApp()) {
@@ -44,6 +95,12 @@ export default function AccountPane({
   signOutGate,
   signOutError,
   onSignOut,
+  deleteOpen,
+  deleting,
+  deleteError,
+  onOpenDelete,
+  onCancelDelete,
+  onConfirmDelete,
 }: {
   open: boolean
   onClose: () => void
@@ -52,6 +109,12 @@ export default function AccountPane({
   signOutGate: SignOutGate
   signOutError: string
   onSignOut: () => void
+  deleteOpen: boolean
+  deleting: boolean
+  deleteError: string
+  onOpenDelete: () => void
+  onCancelDelete: () => void
+  onConfirmDelete: () => void
 }) {
   const [appVer, setAppVer] = useState('')
   const [usageLine, setUsageLine] = useState<string | null>(null)
@@ -165,10 +228,26 @@ export default function AccountPane({
           </div>
         ) : null}
 
+        <button type="button" className="account-delete-row" onClick={onOpenDelete}>
+          <span className="account-delete-label">
+            <TrashIcon />
+            {deleteAccountCopy.row}
+          </span>
+          <Chevron />
+        </button>
+
         {appVer ? (
           <div className="account-version">{PRODUCT_NAME} {appVer}</div>
         ) : null}
       </div>
+
+      <DeleteAccountSheet
+        open={deleteOpen}
+        busy={deleting}
+        error={deleteError}
+        onCancel={onCancelDelete}
+        onConfirm={onConfirmDelete}
+      />
 
       {feedbackOpen ? (
         <div className="account-sheet" role="dialog" aria-label="Help & feedback">

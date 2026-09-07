@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type TouchEvent } from 'react'
 import { registerPlugin } from '@capacitor/core'
+import { accountDeletedNotice, deleteAccountCopy } from '../accountCopy'
 import { api, setToken } from '../auth'
 import { tokenFromAppUrl } from '../native'
 import { SIGN_COVERS, nextSignCover, prevSignCover, signCoverById, type SignCoverId } from '../signCovers'
@@ -31,6 +32,7 @@ export default function NativeSignIn({ onSignedIn }: { onSignedIn: () => void })
   const [cover, setCover] = useState<SignCoverId>('listen')
   const swipeX = useRef<number | null>(null)
   const coverManualAt = useRef(0)
+  const deletedNotice = accountDeletedNotice(typeof location === 'undefined' ? '' : location.search)
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -157,6 +159,7 @@ export default function NativeSignIn({ onSignedIn }: { onSignedIn: () => void })
         </div>
       </div>
       <div className="native-sign-card">
+        {deletedNotice ? <p className="native-sign-ok">{deleteAccountCopy.notice}</p> : null}
         <p>
           {sent
             ? `We sent a code to ${email}.`

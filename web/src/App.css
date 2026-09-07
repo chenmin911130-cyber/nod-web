@@ -319,6 +319,11 @@ html.nod-phone body {
   font-size: 13px;
 }
 
+.native-sign-ok {
+  color: #7dcec0;
+  font-size: 14px;
+}
+
 html.nod-web .app {
   height: 100%;
   max-height: 100%;
@@ -9425,5 +9430,73 @@ html.nod-phone .app.iphone-v2 .leave-sheet-discard-help {
 }
 
 .account-sheet-send:disabled {
+  opacity: 0.45;
+}
+
+.account-delete-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 10px;
+  min-height: 48px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 16px;
+  background: #111518;
+  color: #ff514d;
+  font-size: 16px;
+  text-align: left;
+}
+
+.account-delete-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-delete-row svg {
+  color: #ff514d;
+}
+
+.account-delete-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: auto;
+  background: #050607;
+  padding: max(18px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom));
+}
+
+.account-delete-card {
+  width: min(100%, 520px);
+  margin: 0 auto;
+}
+
+.account-delete-card h3 {
+  margin: 0 0 16px;
+  font-size: 20px;
+}
+
+.account-delete-card p {
+  margin: 0 0 10px;
+  color: #c5cbd0;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.account-delete-confirm {
+  flex: 1.4;
+  min-height: 44px;
+  border: 0;
+  border-radius: 12px;
+  background: #ff514d;
+  color: #fff;
+  font-weight: 650;
+}
+
+.account-delete-confirm:disabled,
+.account-sheet-cancel:disabled,
+.account-retry:disabled {
   opacity: 0.45;
 }

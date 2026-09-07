@@ -1,4 +1,4 @@
-import { accountInitials, listeningLeftLine, signInLine, signOutGate } from './accountCopy'
+import { accountDeletedNotice, accountInitials, deleteAccountCopy, listeningLeftLine, signInLine, signOutGate } from './accountCopy'
 
 function eq<T>(got: T, want: T, label: string) {
   if (got !== want) throw new Error(`${label}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`)
@@ -34,3 +34,18 @@ eq(signOutGate({ listening: false, paused: false, disposition: 'saving', hasCont
 eq(signOutGate({ listening: false, paused: false, disposition: 'undecided', hasContent: true, workspaceMode: 'meeting' }), 'prompt', 'meeting content')
 eq(signOutGate({ listening: false, paused: false, disposition: 'undecided', hasContent: true, workspaceMode: 'translate' }), 'go', 'translate')
 eq(signOutGate({ listening: false, paused: false, disposition: 'undecided', hasContent: false, workspaceMode: 'meeting' }), 'go', 'empty')
+
+eq(deleteAccountCopy.body.length, 5, 'delete body has five lines')
+eq(
+  deleteAccountCopy.body.includes('Provider copies already processed cannot be recalled from here.'),
+  true,
+  'keeps provider-copy line',
+)
+{
+  const joined = deleteAccountCopy.body.join('\n')
+  if (joined.includes('稍后') || joined.includes('24 小时')) {
+    throw new Error('delete body must not promise later or 24 hours')
+  }
+}
+eq(accountDeletedNotice('?deleted=1'), deleteAccountCopy.notice, 'deleted query shows notice')
+eq(accountDeletedNotice('?signout=1'), '', 'signout alone has no delete notice')

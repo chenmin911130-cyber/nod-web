@@ -196,6 +196,14 @@ html.nod-site {
   padding: 0;
 }
 
+.landing-deleted {
+  margin: 16px auto 0;
+  max-width: var(--max);
+  padding: 0 20px;
+  color: #7dcec0;
+  font-size: 15px;
+}
+
 .hero {
   min-height: 780px;
   min-height: 100svh;

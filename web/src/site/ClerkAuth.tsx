@@ -52,7 +52,8 @@ export function ClerkSignOutGate() {
     if (ran.current) return
     if (new URLSearchParams(window.location.search).get('signout') !== '1') return
     ran.current = true
-    void clerk.signOut({ redirectUrl: '/' })
+    const dest = new URLSearchParams(window.location.search).get('deleted') === '1' ? '/?deleted=1' : '/'
+    void clerk.signOut({ redirectUrl: dest })
   }, [clerk])
 
   return null

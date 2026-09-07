@@ -3,6 +3,30 @@ import type { SaveStatus } from './sessionSave'
 
 export type SignOutGate = 'blocked-listening' | 'wait-saving' | 'prompt' | 'go'
 
+export const deleteAccountCopy = {
+  row: 'Delete account',
+  title: 'Delete your Nodpilot account',
+  body: [
+    'This deletes your saved sessions, notes, exported PDFs, and kept audio.',
+    'Usage records are deleted too.',
+    'This takes effect immediately and cannot be undone.',
+    'Your Google account and email are not deleted.',
+    'Provider copies already processed cannot be recalled from here.',
+  ],
+  cancel: 'Cancel',
+  confirm: 'Delete my Nodpilot account',
+  deleting: 'Deleting…',
+  error: "Couldn't delete your account. Try again.",
+  errorSignIn: "Couldn't delete your account. Sign in again.",
+  retry: 'Retry',
+  notice: 'Your account was deleted.',
+} as const
+
+export function accountDeletedNotice(search: string): string {
+  const query = search.startsWith('?') ? search.slice(1) : search
+  return new URLSearchParams(query).get('deleted') === '1' ? deleteAccountCopy.notice : ''
+}
+
 export function accountInitials(name: string, email: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean)
   if (parts.length >= 2) {

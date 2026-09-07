@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { accountDeletedNotice, deleteAccountCopy } from '../accountCopy'
 import { fetchMe } from '../auth'
 import { isNativeApp } from '../native'
 import { applySeo, track } from '../site/track'
@@ -142,6 +143,9 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
       </header>
 
       <main id="top">
+        {accountDeletedNotice(typeof location === 'undefined' ? '' : location.search) ? (
+          <p className="landing-deleted">{deleteAccountCopy.notice}</p>
+        ) : null}
         <section className="hero hero-posters">
           <h1 className="sr-only">{`${t.heroH1a} ${t.heroH1b} ${t.heroH1c}`}</h1>
           <div

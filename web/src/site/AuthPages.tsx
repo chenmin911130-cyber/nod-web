@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { accountDeletedNotice, deleteAccountCopy } from '../accountCopy'
 import { api, fetchMe, getToken, setToken } from '../auth'
 import { isNativeApp, maybeReturnToNativeApp, nativeGo } from '../native'
 import { track } from './track'
@@ -146,6 +147,9 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
           <div className="eyebrow">ACCOUNT</div>
           <Funnel current="account" />
           <h1>Sign in to Nodpilot</h1>
+          {accountDeletedNotice(location.search) ? (
+            <p className="site-ok">{deleteAccountCopy.notice}</p>
+          ) : null}
           <p>
             Nodpilot needs an account before it can listen, translate, and summarize. Continue with Google, or we email
             you a one-time code. Google is optional.
