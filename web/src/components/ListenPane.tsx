@@ -6,6 +6,7 @@ import {
   MEETING_SPEAKER_OPTIONS,
   SCENE_HELP,
   bilingualDisabled,
+  notesBilingualOn,
   listenMetaLine,
   notesBodyText,
   parseBiLines,
@@ -26,7 +27,6 @@ import {
   listenChipParts,
   nativeListenChipOrder,
   notesChipParts,
-  notesInChip,
   notesPageTitle,
   notesSettingsValue,
   showLineTranslation,
@@ -229,8 +229,6 @@ function useDismiss(open: boolean, onClose: () => void) {
 function LangSelect({
   value,
   onChange,
-  notesTranslateTo,
-  translateOn,
 }: {
   value: Lang
   onChange: (lang: Lang) => void
@@ -241,8 +239,6 @@ function LangSelect({
   const boxRef = useDismiss(open, () => setOpen(false))
   const current = NOTES_LANGS.find((l) => l.id === value)
   const phone = usePhoneChrome()
-  const biTarget = translateOn && value === 'auto' ? notesTranslateTo : undefined
-  const chipTitle = notesInChip(value, biTarget)
 
   return (
     <div className={`listen-lang-box${open ? ' open' : ''}`} ref={boxRef}>
@@ -251,9 +247,7 @@ function LangSelect({
         className={`listen-lang-pair-btn${open ? ' on' : ''}`}
         title={
           value === 'auto'
-            ? biTarget
-              ? `Notes follow the language you speak · translations in ${TRANSLATE_LANGS.find((l) => l.id === biTarget)?.name || 'Chinese'}`
-              : 'Notes follow the language you speak.'
+            ? 'Notes follow the language you speak.'
             : current
               ? `Notes language · ${current.name}`
               : 'Choose notes language'
@@ -267,10 +261,10 @@ function LangSelect({
         {phone ? <ChipNotes /> : null}
         {phone ? (
           <span className="iphone-chip-copy">
-            <b>{notesChipParts(value, biTarget).title}</b>
+            <b>{notesChipParts(value).title}</b>
           </span>
         ) : (
-          <span className="listen-lang-tag">{biTarget ? chipTitle : (current?.tag ?? 'EN')}</span>
+          <span className="listen-lang-tag">{current?.tag ?? 'EN'}</span>
         )}
         {phone ? null : <Chevron />}
       </button>
@@ -310,6 +304,7 @@ function SpeechLangSelect({
   enhanceOn,
   onEnhance,
   enhanceTarget,
+  enhanceDisabled,
 }: {
   value: Lang
   heard?: PairLang | null
@@ -317,6 +312,7 @@ function SpeechLangSelect({
   enhanceOn?: boolean
   onEnhance?: (on: boolean) => void
   enhanceTarget?: PairLang
+  enhanceDisabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const boxRef = useDismiss(open, () => setOpen(false))
@@ -377,8 +373,16 @@ function SpeechLangSelect({
               role="option"
               aria-selected={Boolean(enhanceOn)}
               className={enhanceOn ? 'on' : ''}
-              title={enhanceTarget ? bilingualButtonTitle(Boolean(enhanceOn), enhanceTarget) : undefined}
+              disabled={enhanceDisabled}
+              title={
+                enhanceDisabled
+                  ? 'Pick a notes language to translate captions'
+                  : enhanceTarget
+                    ? bilingualButtonTitle(Boolean(enhanceOn), enhanceTarget)
+                    : undefined
+              }
               onClick={() => {
+                if (enhanceDisabled) return
                 onEnhance(!enhanceOn)
                 setOpen(false)
               }}
@@ -1049,6 +1053,8 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
 
 export default function ListenPane(props: Props) {
   const phone = usePhoneChrome()
+  const biOn = notesBilingualOn(props.notesLang, props.translateOn)
+  const biLocked = bilingualDisabled(props.notesLang, props.translateOn, props.notesTranslateTo)
   const [input, setInput] = useState('')
   const [notesOpen, setNotesOpen] = useState(Boolean(props.notesDefaultOpen))
   const [mobilePane, setMobilePane] = useState<'live' | 'transcript' | 'notes'>(props.notesDefaultOpen ? 'notes' : 'live')
@@ -1205,14 +1211,15 @@ export default function ListenPane(props: Props) {
         {!props.qa && !phone && (
           <button
             type="button"
-            className={`listen-icon-btn listen-side-left listen-bi-btn${props.translateOn ? ' on' : ''}`}
+            className={`listen-icon-btn listen-side-left listen-bi-btn${biOn ? ' on' : ''}`}
             role="switch"
-            aria-checked={props.translateOn}
-            disabled={bilingualDisabled(props.notesLang, props.translateOn, props.notesTranslateTo)}
+            aria-label="Bilingual"
+            aria-checked={biOn}
+            disabled={biLocked}
             title={
-              bilingualDisabled(props.notesLang, props.translateOn, props.notesTranslateTo)
+              biLocked
                 ? 'Bilingual needs a notes language — pick one first'
-                : bilingualButtonTitle(props.translateOn, props.notesTranslateTo)
+                : bilingualButtonTitle(biOn, props.notesTranslateTo)
             }
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onTranslate(!props.translateOn)}
@@ -1233,9 +1240,10 @@ export default function ListenPane(props: Props) {
                     value={props.speechLang}
                     heard={props.heardLang}
                     onChange={props.onSpeechLang}
-                    enhanceOn={props.qa ? undefined : props.translateOn}
+                    enhanceOn={props.qa ? undefined : biOn}
                     onEnhance={props.qa ? undefined : props.onTranslate}
                     enhanceTarget={props.qa ? undefined : props.notesTranslateTo}
+                    enhanceDisabled={props.qa ? undefined : biLocked}
                   />
                 )
               }
@@ -1408,15 +1416,21 @@ export default function ListenPane(props: Props) {
             <button
               type="button"
               role="option"
-              aria-selected={Boolean(props.translateOn)}
-              className={props.translateOn ? 'on' : ''}
-              title={bilingualButtonTitle(Boolean(props.translateOn), props.notesTranslateTo)}
+              aria-selected={biOn}
+              className={biOn ? 'on' : ''}
+              disabled={biLocked}
+              title={
+                biLocked
+                  ? 'Pick a notes language to translate captions'
+                  : bilingualButtonTitle(biOn, props.notesTranslateTo)
+              }
               onClick={() => {
+                if (biLocked) return
                 props.onTranslate(!props.translateOn)
                 closeSheet()
               }}
             >
-              <b>{props.translateOn ? 'On' : 'Off'}</b>
+              <b>{biOn ? 'On' : 'Off'}</b>
               <span>{IPHONE_COPY.enhance}</span>
             </button>
           )}
@@ -1452,7 +1466,7 @@ export default function ListenPane(props: Props) {
   )
 
   return (
-    <div className={`listen-main scene-${props.scene}${props.translateOn ? ' tr-on' : ' tr-off'}${props.ended ? ' ended' : ''}${props.qa ? ' qa' : ''}${ready ? ' iphone-ready' : ''}`}>
+    <div className={`listen-main scene-${props.scene}${biOn ? ' tr-on' : ' tr-off'}${props.ended ? ' ended' : ''}${props.qa ? ' qa' : ''}${ready ? ' iphone-ready' : ''}`}>
       {ready ? (
         <div className="iphone-stack iphone-ready">
           <div className="iphone-stage">
@@ -1540,7 +1554,7 @@ export default function ListenPane(props: Props) {
                     onClick={() => void copyText(transcriptPlainText({
                       lines: props.lines,
                       speakerNames: props.speakerNames,
-                      translateOn: props.translateOn,
+                      translateOn: biOn,
                     }))}
                   >
                     <CopyIcon />
@@ -1612,7 +1626,7 @@ export default function ListenPane(props: Props) {
                             speakerLabel={line.speaker ? resolveSpeakerName(props.speakerNames, line.speaker) : ''}
                             live={props.listening && lastGroup && i === group.lines.length - 1 && !group.draft}
                             last={(lastGroup && i === group.lines.length - 1 && !group.draft) || openedLine === line.id}
-                            translateOn={props.translateOn}
+                            translateOn={biOn}
                             translateFailed={line.translateFailed || false}
                             onOpen={() => setOpenedLine(line.id || '')}
                             busy={props.busy}
@@ -1645,7 +1659,7 @@ export default function ListenPane(props: Props) {
                       speakerLabel={line.speaker ? resolveSpeakerName(props.speakerNames, line.speaker) : ''}
                       live={props.listening && i === props.lines.length - 1 && !props.partial}
                       last={(i === props.lines.length - 1 && !props.partial) || openedLine === line.id}
-                      translateOn={props.translateOn}
+                      translateOn={biOn}
                       translateFailed={line.translateFailed || false}
                       onOpen={() => setOpenedLine(line.id)}
                       busy={props.busy}

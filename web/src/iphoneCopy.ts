@@ -145,14 +145,8 @@ export function listenDetectChip(lang: Lang): string {
   return TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
 }
 
-export function notesInChip(lang: Lang, biTarget?: PairLang): string {
-  if (lang === 'auto') {
-    if (biTarget) {
-      const name = TRANSLATE_LANGS.find((item) => item.id === biTarget)?.name || 'English'
-      return `Notes · Auto → ${name}`
-    }
-    return 'Notes · Auto'
-  }
+export function notesInChip(lang: Lang, _biTarget?: PairLang): string {
+  if (lang === 'auto') return 'Notes · Auto'
   const name = TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
   return `Notes · ${name}`
 }

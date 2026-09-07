@@ -53,12 +53,17 @@ export function nodTag(
   return `[NOD_${kind}:${outLang}${extra}]`
 }
 
-// Bilingual output needs a concrete translation target. Auto notes still has
-// notesTranslateTo, so the toggle stays enabled. Only a missing target disables it.
-export function bilingualDisabled(notesLang: Lang, translateOn: boolean, notesTranslateTo?: PairLang): boolean {
-  if (notesLang !== 'auto') return false
-  if (notesTranslateTo) return false
-  return !translateOn
+/** Notes Auto follows speech. Bilingual captions only run with a concrete notes language. */
+export function notesBilingualOn(notesLang: Lang, translateOn: boolean): boolean {
+  return notesLang !== 'auto' && translateOn
+}
+
+export function bilingualDisabled(
+  notesLang: Lang,
+  _translateOn: boolean,
+  _notesTranslateTo?: PairLang,
+): boolean {
+  return notesLang === 'auto'
 }
 
 // The notes/translate language selector drives decoupled state. In the Meeting /

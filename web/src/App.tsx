@@ -72,6 +72,7 @@ import {
   askContext,
   askPrompt,
   bindSpeakerName,
+  notesBilingualOn,
   isAskPrompt,
   isCatchPrompt,
   isNotesPrompt,
@@ -583,7 +584,7 @@ function reducer(state: AppState, action: Action): AppState {
           if (translateChunk) {
             const route = routeTranslateChunk(
               state.workspaceMode,
-              state.translateOn,
+              notesBilingualOn(state.notesLang, state.translateOn),
               meetingLines.length > 0,
               translatePairs.length > 0,
             )
@@ -1419,7 +1420,7 @@ export default function App() {
       notesRaw: state.notesRaw,
       partial: state.partial,
       workspaceMode: state.workspaceMode,
-      translateOn: state.translateOn,
+      translateOn: notesBilingualOn(state.notesLang, state.translateOn),
       translatePairs: state.translatePairs,
       meetingLines: state.meetingLines,
       turns: state.turns,
@@ -1445,6 +1446,7 @@ export default function App() {
     state.notesRaw,
     state.partial,
     state.translateOn,
+    state.notesLang,
     state.translatePairs,
     state.turns,
     state.workspaceMode,
@@ -1552,7 +1554,7 @@ export default function App() {
       }
       const translateAskBefore = stateRef.current.translateAskId
       dispatch({ type: 'engine', ev: e })
-      if (e.type === 'question' && stateRef.current.workspaceMode === 'meeting' && stateRef.current.translateOn) {
+      if (e.type === 'question' && stateRef.current.workspaceMode === 'meeting' && notesBilingualOn(stateRef.current.notesLang, stateRef.current.translateOn)) {
         const text = e.text ?? ''
         if (!isTranslatePrompt(text) && !isCatchPrompt(text) && !isNotesPrompt(text)) {
           queueMicrotask(() => pumpTranslateRef.current())
@@ -2484,7 +2486,8 @@ export default function App() {
       if (s.lang === 'auto') {
         window.api.send({ type: 'set_lang', language: null })
       }
-      // Auto notes only: the bilingual target stays put (decoupled from notes).
+      // Auto notes only: follow speech. Drop any in-flight bilingual overlay.
+      killInflightTranslation()
       dispatch({ type: 'notes_lang', lang: 'auto' })
       dispatch({
         type: 'engine',
@@ -2614,7 +2617,7 @@ export default function App() {
   const pumpTranslate = useCallback(() => {
     const s = stateRef.current
     if (inflightTranslate.current) return
-    if (s.workspaceMode === 'meeting' && s.translateOn) {
+    if (s.workspaceMode === 'meeting' && notesBilingualOn(s.notesLang, s.translateOn)) {
       // 最新的未翻译、未放弃、未被 asked 的行优先（实时字幕语义：先出当前句子，
       // 停顿期间回填旧行）。translateFailed 行被跳过，避免对坏模型的重发死循环。
       const next = nextMeetingLineToTranslate(s.meetingLines, askedTranslate.current)
@@ -2644,7 +2647,7 @@ export default function App() {
     const next = nextLiveUtterances({
       live: true,
       workspaceMode: state.workspaceMode,
-      translateOn: state.translateOn,
+      translateOn: notesBilingualOn(state.notesLang, state.translateOn),
       bindId: state.translateBindId,
       spoken: spokenTranslate.current,
       pairs: state.translatePairs,
@@ -2660,7 +2663,7 @@ export default function App() {
         })
       })
     }
-  }, [state.translatePairs, state.meetingLines, state.translateBindId, state.workspaceMode, state.translateOn, ttsMode, ttsVoice])
+  }, [state.translatePairs, state.meetingLines, state.translateBindId, state.workspaceMode, state.translateOn, state.notesLang, ttsMode, ttsVoice])
 
   // Stable identity so memoised transcript rows are not invalidated on every
   // parent render — with thousands of lines that dominates the frame budget.
@@ -2696,13 +2699,13 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (state.workspaceMode === 'meeting' && state.translateOn) {
+    if (state.workspaceMode === 'meeting' && notesBilingualOn(state.notesLang, state.translateOn)) {
       pumpTranslate()
       return
     }
     if (state.workspaceMode !== 'translate') return
     pumpTranslate()
-  }, [state.translatePairs, state.meetingLines, state.translateOn, state.workspaceMode, pumpTranslate])
+  }, [state.translatePairs, state.meetingLines, state.translateOn, state.notesLang, state.workspaceMode, pumpTranslate])
 
   const generateNotes = useCallback(() => {
     const s = stateRef.current
@@ -2713,7 +2716,7 @@ export default function App() {
     killInflightTranslation()
     dispatch({ type: 'expect_notes' })
     const cap = capTranscript(s.meetingLines)
-    window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, cap.lines, s.notesLang, s.translateOn, s.speakerNames, cap, s.notesTranslateTo), mode: 'notes' })
+    window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, cap.lines, s.notesLang, notesBilingualOn(s.notesLang, s.translateOn), s.speakerNames, cap, s.notesTranslateTo), mode: 'notes' })
     if (cap.dropped > 0) {
       dispatch({
         type: 'engine',
@@ -2855,7 +2858,7 @@ export default function App() {
         const attach_id = await parkAttaches(files)
         window.api.send({
           type: 'ask',
-          text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, s.translateOn, s.speakerNames, s.notesTranslateTo),
+          text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, notesBilingualOn(s.notesLang, s.translateOn), s.speakerNames, s.notesTranslateTo),
           attach_id,
           mode: 'listen_ask',
         })
@@ -2878,7 +2881,7 @@ export default function App() {
       try {
         window.api.send({
           type: 'ask',
-          text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, s.translateOn, s.speakerNames, s.notesTranslateTo),
+          text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, notesBilingualOn(s.notesLang, s.translateOn), s.speakerNames, s.notesTranslateTo),
           mode: 'listen_ask',
         })
       } catch (ex) {
@@ -2990,7 +2993,7 @@ export default function App() {
           ts: ln.ts,
           speaker: resolveSpeakerName(s.speakerNames, ln.speaker),
           text: ln.text,
-          translation: s.translateOn ? ln.translation : undefined,
+          translation: notesBilingualOn(s.notesLang, s.translateOn) ? ln.translation : undefined,
         })),
       })
       title = doc.title
@@ -3064,7 +3067,7 @@ export default function App() {
           // Same-language passthrough: the translation equals the source, so a
           // second row would print it twice. (Fallback path of the export; the
           // template path dedups in pdfTemplates.sectionChunks.)
-          if (s.translateOn && ln.translation && !sameSpokenLine(ln.text, ln.translation)) {
+          if (notesBilingualOn(s.notesLang, s.translateOn) && ln.translation && !sameSpokenLine(ln.text, ln.translation)) {
             blocks.push({ kind: 'line', text: ln.translation, ts: '', speaker: '' })
           }
         }

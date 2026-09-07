@@ -2,10 +2,10 @@ import { test, expect } from '@playwright/test'
 
 /**
  * Meeting/Lecture bilingual target must not share Translate page To
- * (`nod_translate_pair`). Notes Auto + Bilingual uses `notesTranslateTo`.
+ * (`nod_translate_pair`). Notes Auto follows speech — no bilingual overlay.
  */
 test.describe('Notes bilingual target vs Translate To', () => {
-  test('Translate Japanese does not leak into Meeting Auto bilingual chip', async ({ page }) => {
+  test('Translate Japanese does not leak into Meeting Auto chip', async ({ page }) => {
     await page.goto('/app')
 
     await page.getByRole('tab', { name: /translate/i }).click()
@@ -15,11 +15,14 @@ test.describe('Notes bilingual target vs Translate To', () => {
 
     await page.getByRole('tab', { name: /listen/i }).click()
     await expect(page.getByRole('tab', { name: /listen/i })).toHaveAttribute('aria-selected', 'true')
-    await expect(page.getByRole('switch', { name: /bilingual/i })).toHaveAttribute('aria-checked', 'true')
+    await expect(page.getByRole('switch', { name: /bilingual/i })).toHaveAttribute('aria-checked', 'false')
+    await expect(page.getByRole('switch', { name: /bilingual/i })).toBeDisabled()
 
     const chip = page.getByLabel('Notes language')
     await expect(chip).toBeVisible()
+    await expect(chip).toHaveText('Auto')
     await expect(chip).not.toContainText('Japanese')
+    await expect(chip).not.toContainText('→')
   })
 
   test('Meeting Italian notes does not rewrite Translate To', async ({ page }) => {
@@ -36,15 +39,20 @@ test.describe('Notes bilingual target vs Translate To', () => {
     await expect(page.getByLabel('To', { exact: true })).toHaveValue('ja')
   })
 
-  test('Meeting Auto after Italian shows Notes · Auto → Italian', async ({ page }) => {
+  test('Meeting Auto after Italian shows Notes · Auto and turns bilingual off', async ({ page }) => {
     await page.goto('/app')
 
     await page.getByLabel('Notes language').click()
     await page.getByRole('option', { name: /italian/i }).click()
+    await expect(page.getByRole('switch', { name: /bilingual/i })).toHaveAttribute('aria-checked', 'true')
+    await expect(page.getByLabel('Notes language')).toHaveText('IT')
+
     await page.getByLabel('Notes language').click()
     await page.getByRole('option', { name: /^auto/i }).click()
 
-    await expect(page.getByRole('switch', { name: /bilingual/i })).toHaveAttribute('aria-checked', 'true')
-    await expect(page.getByLabel('Notes language')).toHaveText('Notes · Auto → Italian')
+    await expect(page.getByRole('switch', { name: /bilingual/i })).toHaveAttribute('aria-checked', 'false')
+    await expect(page.getByRole('switch', { name: /bilingual/i })).toBeDisabled()
+    await expect(page.getByLabel('Notes language')).toHaveText('Auto')
+    await expect(page.getByLabel('Notes language')).not.toContainText('→')
   })
 })

@@ -1,4 +1,4 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, SCENE_HELP, applyListenSetting, askPrompt, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesLangActions, notesPrompt, outLangRule, parseNotes, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakersExpected, transcriptBlock } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, SCENE_HELP, applyListenSetting, askPrompt, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesBilingualOn, notesLangActions, notesPrompt, outLangRule, parseNotes, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakersExpected, transcriptBlock } from './listen'
 import type { MeetingLine } from './types'
 
 function eq<T>(got: T, want: T, label?: string) {
@@ -22,15 +22,31 @@ eq(notesLangActions('meeting', 'auto'), [{ type: 'notes_lang', lang: 'auto' }], 
   if (rule.includes('Chinese if unclear')) throw new Error('bilingual auto rule must not fall back to Chinese if unclear')
 }
 {
-  const prompt = askPrompt([{ id: '1', ts: '0:01', text: 'Hi' }], 'q', 'auto', true, {}, 'ja')
+  const prompt = askPrompt(
+    [{ id: '1', ts: '0:01', text: 'Hi' }],
+    'q',
+    'auto',
+    notesBilingualOn('auto', true),
+    {},
+    'ja',
+  )
   const first = prompt.split('\n', 1)[0]
-  eq(first, '[NOD_ASK:auto:bi-ja]', 'ask tag carries bi-ja, not a colon-split ja out-lang')
+  eq(first, '[NOD_ASK:auto]', 'Notes Auto follow-speech Ask is not bilingual')
+}
+{
+  const prompt = askPrompt([{ id: '1', ts: '0:01', text: 'Hi' }], 'q', 'zh', true, {}, 'ja')
+  const first = prompt.split('\n', 1)[0]
+  eq(first, '[NOD_ASK:zh:bi-ja]', 'concrete notes ask tag carries bi-ja, not a colon-split ja out-lang')
 }
 
-// D (phase 1): Bilingual is dead when Notes = Auto. But an already-ON Bilingual
-// must stay toggleable OFF, so it is only disabled when it is NOT on.
+eq(notesBilingualOn('auto', true), false, 'Auto notes never overlays a bilingual target')
+eq(notesBilingualOn('auto', false), false, 'Auto notes stays follow-speech with bilingual off')
+eq(notesBilingualOn('zh', true), true, 'concrete notes language can run bilingual')
+eq(notesBilingualOn('zh', false), false, 'concrete notes language still honors bilingual off')
+
+// Notes Auto follows speech: bilingual is off the table until a notes language is picked.
 if (bilingualDisabled('auto', false) !== true) throw new Error('auto + off disables bilingual')
-if (bilingualDisabled('auto', true) !== false) throw new Error('auto + on stays toggleable')
+if (bilingualDisabled('auto', true) !== true) throw new Error('auto + on still disables bilingual')
 if (bilingualDisabled('zh', true) !== false) throw new Error('concrete notes lang enables bilingual')
 
 // B(1): capTranscript keeps the tail within a character budget, reports the drop.

@@ -2,6 +2,13 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-08 · Notes Auto 当成「隐藏目标语」而不是 Follow speech
+
+- 我以为：#107 的 `notesTranslateTo` 默认 navigator/`zh` + `translateOn: true` 可以让 Auto 继续双语（Ask `:bi-zh`、Live 翻中文）。真机 Listen 仍翻成中文时，我先解释成「没关 More accurate」。
+- 实际：Notes 选项文案是 `notesAutoHelp: 'Follow speech'`。用户选 Auto 就是不要指定笔记语、不要叠一层翻译。隐藏的 `notesTranslateTo=zh` 把 Follow speech 做成了跟 Speech Auto-detect 无关的「默认中文」。
+- 规则：Notes Auto = 跟讲话走，不套 `notesTranslateTo`。双语只在具体 Notes 语言时生效。真机「还是翻成中文」先对 UI 文案，不要先教用户关开关。
+- 涉及：`web/src/listen.ts` `notesBilingualOn` / `bilingualDisabled` · `askPrompt` · `pumpTranslate` · `iphoneCopy.ts` `notesAutoHelp`
+
 ## 2026-09-07 · listen_ask 输出语言把拉丁语 STT 锁当成「猜」
 
 - 我以为：`detect_question_lang(transcript)` 能覆盖八种语言；`_confident_stt_lang` 的 `en` 分支表示「确定是英文」。
