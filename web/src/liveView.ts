@@ -21,22 +21,83 @@ export function liveStageMode(input: {
   return 'mic'
 }
 
+export type LiveAskStatus = 'pending' | 'done' | 'failed'
+
+export type LiveFeedLine = {
+  type: 'line'
+  id: string
+  ts: string
+  speaker: string
+  text: string
+  at: number
+}
+
+export type LiveFeedAsk = {
+  type: 'ask'
+  id: string
+  question: string
+  answer: string
+  status: LiveAskStatus
+  at: number
+}
+
+export type LiveFeedItem = LiveFeedLine | LiveFeedAsk
+
+export function askOutcome(input: {
+  note: { text: string }
+  busy: boolean
+  lastError?: string | null
+}): LiveAskStatus {
+  if ((input.note.text || '').trim()) return 'done'
+  if (input.lastError) return 'failed'
+  if (input.busy) return 'pending'
+  return 'failed'
+}
+
+export function isCatchAskCurrent(noteId: string, catchAskId?: string): boolean {
+  return noteId === catchAskId || noteId === '__pending__' || noteId.startsWith('__pending__:')
+}
+
 export function liveFeed(input: {
-  lines: Array<{ id: string; ts: string; speaker?: string; text: string }>
+  lines: Array<{ id: string; ts: string; speaker?: string; text: string; at?: number }>
   partial: string
   partialSpeaker?: string
   max?: number
+  catchNotes?: CatchNote[]
+  busy?: boolean
+  catchAskId?: string
+  lastError?: string | null
 }): {
-  items: Array<{ id: string; ts: string; speaker: string; text: string }>
+  items: LiveFeedItem[]
   draft: { speaker: string; text: string } | null
 } {
   const max = input.max ?? 4
-  const items = input.lines.slice(-max).map((line) => ({
+  const lines: LiveFeedLine[] = input.lines.slice(-max).map((line) => ({
+    type: 'line',
     id: line.id,
     ts: line.ts,
     speaker: line.speaker || '',
     text: line.text,
+    at: line.at ?? 0,
   }))
+  const asks: LiveFeedAsk[] = (input.catchNotes || [])
+    .filter((note) => note.kind === 'ask')
+    .map((note) => {
+      const current = isCatchAskCurrent(note.id, input.catchAskId)
+      return {
+        type: 'ask',
+        id: note.id,
+        question: note.question || '',
+        answer: note.text || '',
+        status: askOutcome({
+          note,
+          busy: Boolean(input.busy && current),
+          lastError: current ? input.lastError : null,
+        }),
+        at: note.at ?? 0,
+      }
+    })
+  const items = [...lines, ...asks].sort((a, b) => a.at - b.at)
   const text = (input.partial || '').trim()
   const draft = text ? { speaker: input.partialSpeaker || '', text } : null
   return { items, draft }

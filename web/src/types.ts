@@ -7,6 +7,7 @@ export type CatchNote = {
   text: string
   kind?: 'catch' | 'ask'
   question?: string
+  at?: number
 }
 export type ViewMode = 'workspace' | 'focus' | 'fullscreen'
 export type AudioSource = 'system' | 'both' | 'mic'
