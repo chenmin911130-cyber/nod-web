@@ -3,8 +3,7 @@ import {
   LIVE_MIC_HOLD_MS,
   formatActionItem,
   iphoneSummaryHeading,
-  liveHeardLines,
-  liveNotesLine,
+  liveFeed,
   liveStageMode,
   summaryPlainText,
   transcriptPlainText,
@@ -34,118 +33,68 @@ eq(
   'paused or stopped Live stays on content once words exist',
 )
 
+eq(liveFeed({ lines: [], partial: '', partialSpeaker: '' }), { items: [], draft: null }, 'empty Live feed has no items or draft')
 eq(
-  liveHeardLines({ lines: [], partial: 'We need to finalize the launch date before Friday.' }),
-  { headline: 'We need to finalize the launch date before Friday.', previous: '' },
-  'partial is the Live headline',
-)
-eq(
-  liveHeardLines({
+  liveFeed({
     lines: [
-      { text: 'Sarah will confirm the marketing budget tomorrow.' },
-      { text: 'We need to finalize the launch date before Friday.' },
+      { id: 'a', ts: '12:10', speaker: '1', text: 'Let’s finish the onboarding update by Friday.' },
+      { id: 'b', ts: '12:18', speaker: '2', text: 'I’ll own the design review.' },
     ],
     partial: '',
   }),
   {
-    headline: 'We need to finalize the launch date before Friday.',
-    previous: 'Sarah will confirm the marketing budget tomorrow.',
+    items: [
+      { id: 'a', ts: '12:10', speaker: '1', text: 'Let’s finish the onboarding update by Friday.' },
+      { id: 'b', ts: '12:18', speaker: '2', text: 'I’ll own the design review.' },
+    ],
+    draft: null,
   },
-  'Live keeps the latest line large and the one before it faded',
-)
-
-eq(
-  liveNotesLine({
-    lines: [{ text: 'On finalise la date avant vendredi.', translation: 'We finalize the date before Friday.' }],
-    partial: '',
-    translateOn: true,
-  }),
-  'We finalize the date before Friday.',
-  'a confirmed line may show one notes-language line',
+  'fewer than max confirmed lines all stay',
 )
 eq(
-  liveNotesLine({
-    lines: [{ text: 'On finalise la date avant vendredi.', translation: 'We finalize the date before Friday.' }],
-    partial: 'Et le budget…',
-    translateOn: true,
-  }),
-  '',
-  'Live waits for the sentence to confirm before adding notes language',
-)
-eq(
-  liveNotesLine({
+  liveFeed({
     lines: [
-      { text: 'Sarah will confirm the budget.', translation: 'Sarah 明天确认预算。' },
-      { text: 'We finalize the date before Friday.', translation: '我们周五前定上线日。' },
+      { id: 'a', ts: '12:02', speaker: '1', text: 'Old opener.' },
+      { id: 'b', ts: '12:10', speaker: '1', text: 'Let’s finish the onboarding update by Friday.' },
+      { id: 'c', ts: '12:18', speaker: '2', text: 'I’ll own the design review.' },
+      { id: 'd', ts: '12:26', speaker: '1', text: 'I’ll prepare the checklist.' },
+      { id: 'e', ts: '12:34', speaker: '2', text: 'Can we confirm tomorrow?' },
     ],
     partial: '',
-    translateOn: true,
+    max: 4,
   }),
-  '我们周五前定上线日。',
-  'only the current sentence gets a notes line',
+  {
+    items: [
+      { id: 'b', ts: '12:10', speaker: '1', text: 'Let’s finish the onboarding update by Friday.' },
+      { id: 'c', ts: '12:18', speaker: '2', text: 'I’ll own the design review.' },
+      { id: 'd', ts: '12:26', speaker: '1', text: 'I’ll prepare the checklist.' },
+      { id: 'e', ts: '12:34', speaker: '2', text: 'Can we confirm tomorrow?' },
+    ],
+    draft: null,
+  },
+  'more than max keeps only the last max confirmed lines',
 )
 eq(
-  liveNotesLine({
-    lines: [{ text: 'We finalize the date before Friday.', translation: 'We finalize the date before Friday.' }],
-    partial: '',
-    translateOn: true,
-  }),
-  '',
-  'same-language notes do not add a second line',
+  liveFeed({ lines: [], partial: 'We need to finalize the launch date.', partialSpeaker: '1' }),
+  { items: [], draft: { speaker: '1', text: 'We need to finalize the launch date.' } },
+  'only a partial becomes the Live draft',
 )
 eq(
-  liveNotesLine({
-    lines: [{ text: 'On finalise la date avant vendredi.', translation: 'We finalize the date before Friday.' }],
+  liveFeed({
+    lines: [
+      { id: 'a', ts: '12:10', speaker: '1', text: 'Let’s finish the onboarding update by Friday.' },
+      { id: 'b', ts: '12:18', speaker: '1', text: 'I’ll prepare the checklist before our next meeting.' },
+    ],
     partial: '',
-    translateOn: false,
   }),
-  '',
-  'notes language stays off when More accurate is off',
-)
-eq(
-  liveNotesLine({
-    lines: [{ text: 'On finalise la date avant vendredi.', translation: '' }],
-    partial: '',
-    translateOn: true,
-  }),
-  '',
-  'Live is not a translator — no pending dots while notes language is still coming',
-)
-eq(
-  liveNotesLine({
-    lines: [{ text: 'On finalise la date avant vendredi.', translation: '{ "summary": "On finalise la date avant vendredi.", "keyPoints": [] }' }],
-    partial: '',
-    translateOn: true,
-  }),
-  '',
-  'Notes JSON leaked into a line translation is not shown as the live notes line',
-)
-eq(
-  liveNotesLine({
-    lines: [{ text: 'On finalise la date avant vendredi.', translation: '[{"summary":"x"}]' }],
-    partial: '',
-    translateOn: true,
-  }),
-  '',
-  'a JSON array starting with [ is also hidden',
-)
-eq(
-  liveNotesLine({
-    lines: [{ text: '今天讲了 GPU 的浮点运算。', translation: '今天讲了 GPU 的浮点运算。' }],
-    partial: '',
-    translateOn: true,
-  }),
-  '',
-  'a same-language detected turn still hides the notes line',
-)
-eq(
-  liveNotesLine({
-    lines: [{ text: '今天讲了 GPU 的浮点运算。', translation: '笔记本：今天讲了 GPU 的浮点运算。' }],
-    partial: '',
-    translateOn: true,
-  }),
-  '笔记本：今天讲了 GPU 的浮点运算。',
-  'a real translation still shows',
+  {
+    items: [
+      { id: 'a', ts: '12:10', speaker: '1', text: 'Let’s finish the onboarding update by Friday.' },
+      { id: 'b', ts: '12:18', speaker: '1', text: 'I’ll prepare the checklist before our next meeting.' },
+    ],
+    draft: null,
+  },
+  'two consecutive same-speaker lines are both kept and not merged',
 )
 
 eq(formatActionItem({ text: 'Confirm marketing budget tomorrow.', owner: 'Sarah' }), 'Sarah \u2192 Confirm marketing budget tomorrow.', 'owner sits in front of the action')
