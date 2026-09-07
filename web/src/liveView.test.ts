@@ -7,6 +7,7 @@ import {
   liveNotesLine,
   liveStageMode,
   summaryPlainText,
+  transcriptPlainText,
 } from './liveView'
 
 function eq<T>(got: T, want: T, label: string) {
@@ -197,3 +198,75 @@ const expectLecOrder = sceneSectionOrder('lecture').map((id) => sectionTitle('le
 const lecIdx = expectLecOrder.map((t) => lecText.indexOf(t))
 if (lecIdx.some((i) => i < 0)) throw new Error(`lecture plain text missing a heading: ${JSON.stringify(expectLecOrder)} in ${JSON.stringify(lecText)}`)
 if (lecIdx.some((v, i) => i > 0 && v < lecIdx[i - 1])) throw new Error('lecture headings out of SCENE_SECTIONS order')
+
+eq(
+  transcriptPlainText({
+    lines: [
+      { ts: '00:12', text: 'Let’s finish the onboarding update by Friday.', speaker: '1' },
+      { ts: '00:18', text: 'I can take the email draft.', speaker: '2' },
+      { ts: '00:24', text: 'Ship it after QA.', speaker: '1' },
+    ],
+    speakerNames: { '1': 'Speaker 1', '2': 'Speaker 2' },
+    translateOn: false,
+  }),
+  [
+    '[00:12] Speaker 1: Let’s finish the onboarding update by Friday.',
+    '[00:18] Speaker 2: I can take the email draft.',
+    '[00:24] Speaker 1: Ship it after QA.',
+  ].join('\n'),
+  'Copy writes three timestamped speaker turns',
+)
+
+eq(
+  transcriptPlainText({
+    lines: [
+      {
+        ts: '00:12',
+        text: 'Let’s finish the onboarding update by Friday.',
+        speaker: '1',
+        translation: '我们周五前完成入职流程更新。',
+      },
+    ],
+    speakerNames: { '1': 'Speaker 1' },
+    translateOn: true,
+  }),
+  [
+    '[00:12] Speaker 1: Let’s finish the onboarding update by Friday.',
+    '    我们周五前完成入职流程更新。',
+  ].join('\n'),
+  'Copy indents a real translation on the next line',
+)
+
+eq(
+  transcriptPlainText({
+    lines: [
+      {
+        ts: '00:12',
+        text: 'Let’s finish the onboarding update by Friday.',
+        speaker: '1',
+        translation: 'Let’s finish the onboarding update by Friday.',
+      },
+    ],
+    speakerNames: { '1': 'Speaker 1' },
+    translateOn: true,
+  }),
+  '[00:12] Speaker 1: Let’s finish the onboarding update by Friday.',
+  'Copy does not repeat a same-language translation',
+)
+
+eq(
+  transcriptPlainText({
+    lines: [
+      {
+        ts: '00:12',
+        text: 'Let’s finish the onboarding update by Friday.',
+        speaker: '1',
+        translation: '我们周五前完成入职流程更新。',
+      },
+    ],
+    speakerNames: { '1': 'Speaker 1' },
+    translateOn: false,
+  }),
+  '[00:12] Speaker 1: Let’s finish the onboarding update by Friday.',
+  'Copy stays original-only when translation is off',
+)

@@ -29,8 +29,10 @@ import {
   spokenSettingsValue,
 } from '../iphoneCopy'
 import { usePhoneChrome } from '../phoneChrome'
-import { iphoneSummaryHeading, liveHeardLines, liveNotesLine, liveStageMode, summaryPlainText } from '../liveView'
+import { iphoneSummaryHeading, liveHeardLines, liveNotesLine, liveStageMode, summaryPlainText, transcriptPlainText } from '../liveView'
+import { useStickToBottom } from '../useStickToBottom'
 import PhoneSheet from './PhoneSheet'
+import SpeakerAvatar from './SpeakerAvatar'
 
 interface Props {
   scene: ListenScene
@@ -703,10 +705,35 @@ async function copyText(text: string) {
   }
 }
 
+function CopyIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="5.2" y="5.2" width="7.4" height="8.2" rx="1.4" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M3.4 10.6V3.8A1.4 1.4 0 0 1 4.8 2.4h5.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function DraftWave({ live }: { live: boolean }) {
+  return (
+    <span className={`iphone-status-wave${live ? ' live' : ''}`} aria-hidden="true">
+      <i /><i /><i /><i />
+    </span>
+  )
+}
+
 function IphoneLineActions({ text }: { text: string }) {
   return (
     <div className="iphone-line-actions">
-      <button type="button" onClick={() => void copyText(text)}>{IPHONE_COPY.copyLine}</button>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          void copyText(text)
+        }}
+      >
+        {IPHONE_COPY.copyLine}
+      </button>
     </div>
   )
 }
@@ -838,8 +865,27 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
   // ellipsis row. (showLineTranslation returns false for an empty translation,
   // so this is separate from showTr; switching the target re-arms it.)
   const showFailed = p.translateFailed && p.translateOn
+  if (p.actions) {
+    return (
+      <div className={`listen-line iphone-tr-line${p.live ? ' live' : ''}`} onClick={p.onOpen}>
+        <div className="listen-ts">{p.ts}</div>
+        <div className="iphone-tr-ava">
+          <SpeakerAvatar speaker={p.speaker} />
+        </div>
+        <div className="iphone-tr-body">
+          {p.speaker ? <SpeakerName speakerId={p.speaker} label={p.speakerLabel} onRename={p.onRename} /> : null}
+          <div className="listen-orig">{p.text}</div>
+          {showTr && (
+            <div className="listen-tr">{p.translation || (p.busy ? '…' : '')}</div>
+          )}
+          {showFailed && <div className="listen-tr failed">Translation failed</div>}
+          <IphoneLineActions text={p.text} />
+        </div>
+      </div>
+    )
+  }
   return (
-    <div className={`listen-line${p.live ? ' live' : ''}${p.actions ? ' iphone-tr-line' : ''}`} onClick={p.onOpen}>
+    <div className={`listen-line${p.live ? ' live' : ''}`} onClick={p.onOpen}>
       <div className="listen-ts">
         {p.ts}
         {p.speaker ? <SpeakerName speakerId={p.speaker} label={p.speakerLabel} onRename={p.onRename} /> : null}
@@ -850,7 +896,6 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
           <div className="listen-tr">{p.translation || (p.busy ? '…' : '')}</div>
         )}
         {showFailed && <div className="listen-tr failed">Translation failed</div>}
-        {p.actions ? <IphoneLineActions text={p.text} /> : null}
       </div>
     </div>
   )
@@ -913,17 +958,8 @@ export default function ListenPane(props: Props) {
     setMobilePane('notes')
   }, [props.notesDefaultOpen, props.notesReveal])
 
-  useEffect(() => {
-    const el = leftRef.current
-    if (!el) return
-    // Reading scrollHeight forces layout, so coalesce bursts of partials into
-    // one measurement per frame and leave the user alone if they scrolled up.
-    const frame = requestAnimationFrame(() => {
-      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 240
-      if (nearBottom) el.scrollTop = el.scrollHeight
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [props.lines.length, props.partial])
+  const showStage = phone && mobilePane === 'live'
+  const stick = useStickToBottom(leftRef, [props.lines.length, props.partial], !showStage)
 
   useEffect(() => {
     rightRef.current?.scrollTo({ top: rightRef.current.scrollHeight })
@@ -979,7 +1015,6 @@ export default function ListenPane(props: Props) {
     partial: props.ended ? '' : props.partial,
     translateOn: props.translateOn,
   })
-  const showStage = phone && mobilePane === 'live'
   const stackedPane = showStage ? 'stage' : !notesOpen || mobilePane === 'transcript' || mobilePane === 'live' ? 'live' : 'notes'
 
   const controls = (
@@ -1292,24 +1327,45 @@ export default function ListenPane(props: Props) {
             style={notesOpen ? { ['--notes-w' as string]: `${notesW}%` } : undefined}
           >
             <section className="listen-pane">
-              <div className="listen-kicker">
-                {phone ? 'TRANSCRIPT' : lecture ? 'Classroom' : 'Transcript'}
-                {props.lines.length > 0 && !notesOpen && (
+              {phone ? (
+                <div className="iphone-tr-head">
+                  <div>
+                    <div className="iphone-tr-head-title">{IPHONE_COPY.fullTranscript}</div>
+                    <div className="iphone-tr-head-sub">{IPHONE_COPY.allCapturedSpeech}</div>
+                  </div>
                   <button
                     type="button"
-                    className="listen-catch"
-                    disabled={props.busy}
-                    onClick={runSummary}
+                    className="iphone-tr-copy-all"
+                    onClick={() => void copyText(transcriptPlainText({
+                      lines: props.lines,
+                      speakerNames: props.speakerNames,
+                      translateOn: props.translateOn,
+                    }))}
                   >
-                    Summarize
+                    <CopyIcon />
+                    {IPHONE_COPY.copyLine}
                   </button>
-                )}
-              </div>
+                </div>
+              ) : (
+                <div className="listen-kicker">
+                  {lecture ? 'Classroom' : 'Transcript'}
+                  {props.lines.length > 0 && !notesOpen && (
+                    <button
+                      type="button"
+                      className="listen-catch"
+                      disabled={props.busy}
+                      onClick={runSummary}
+                    >
+                      Summarize
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="listen-scroll" ref={leftRef}>
                 {props.lines.length === 0 && !(props.partial && !props.ended) ? (
                   <div className={`listen-empty${phone ? ' iphone-tr-empty' : ''}`}>
                     {phone
-                      ? IPHONE_COPY.emptyLive
+                      ? IPHONE_COPY.emptyTranscript
                       : lecture
                         ? 'Start listening. This side is the lecture stream. Notes stay closed until you ask or tap Summarize.'
                         : 'Start listening. The left side keeps what was said. Notes stay closed until you ask or tap Summarize.'}
@@ -1335,19 +1391,47 @@ export default function ListenPane(props: Props) {
                   ))
                 )}
                 {props.partial && !props.ended && (
-                  <div className="listen-line live">
-                    <div className="listen-ts">
-                      live
-                      {props.partialSpeaker ? (
-                        <span className="listen-spk">
-                          {resolveSpeakerName(props.speakerNames, props.partialSpeaker) || props.partialSpeaker}
-                        </span>
-                      ) : null}
+                  phone ? (
+                    <div className={`listen-line iphone-tr-line iphone-tr-draft${props.listening ? ' live' : ''}`}>
+                      <div className="listen-ts">
+                        <DraftWave live={props.listening} />
+                      </div>
+                      <div className="iphone-tr-ava">
+                        <SpeakerAvatar speaker={props.partialSpeaker || ''} />
+                      </div>
+                      <div className="iphone-tr-body">
+                        {props.partialSpeaker ? (
+                          <span className="listen-spk">
+                            {resolveSpeakerName(props.speakerNames, props.partialSpeaker) || props.partialSpeaker}
+                          </span>
+                        ) : null}
+                        <div className="listen-orig">{props.partial}</div>
+                      </div>
                     </div>
-                    <div className="listen-orig">{props.partial}</div>
-                  </div>
+                  ) : (
+                    <div className="listen-line live">
+                      <div className="listen-ts">
+                        live
+                        {props.partialSpeaker ? (
+                          <span className="listen-spk">
+                            {resolveSpeakerName(props.speakerNames, props.partialSpeaker) || props.partialSpeaker}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="listen-orig">{props.partial}</div>
+                    </div>
+                  )
                 )}
               </div>
+              {phone && stick.hasNew ? (
+                <button
+                  type="button"
+                  className="iphone-tr-latest"
+                  onClick={stick.scrollToBottom}
+                >
+                  {IPHONE_COPY.backToLatest}
+                </button>
+              ) : null}
             </section>
 
             <div

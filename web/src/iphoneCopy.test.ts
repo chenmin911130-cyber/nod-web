@@ -131,6 +131,10 @@ eq(
   true,
   'a different notes language still shows under the transcript',
 )
+eq(IPHONE_COPY.emptyTranscript, 'Waiting for speech…', 'Transcript empty waits for speech')
+eq(IPHONE_COPY.fullTranscript, 'Full transcript', 'Transcript header title')
+eq(IPHONE_COPY.allCapturedSpeech, 'All captured speech', 'Transcript header subtitle')
+eq(IPHONE_COPY.backToLatest, 'Back to latest', 'Transcript jump capsule')
 eq(IPHONE_COPY.emptyNotes, 'Start listening', 'Notes empty stays Start listening')
 eq(IPHONE_COPY.readyHelp, 'Tap start to capture, transcribe, and organize your conversation in real time.', 'help stays under Ready to listen')
 eq(IPHONE_COPY.readyTitleShort, 'Ready to listen', 'ready stage title has no trailing period')
