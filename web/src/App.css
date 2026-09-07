@@ -8885,3 +8885,50 @@ html.nod-phone .app.iphone-v2 .iphone-sheet-help {
   font-size: 13px;
   line-height: 1.4;
 }
+
+html.nod-phone .app.iphone-v2 .leave-sheet-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 16px 8px;
+}
+
+html.nod-phone .app.iphone-v2 .leave-sheet-save,
+html.nod-phone .app.iphone-v2 .leave-sheet-discard,
+html.nod-phone .app.iphone-v2 .leave-sheet-cancel {
+  width: 100%;
+  min-height: 56px;
+  border-radius: 14px;
+  font-size: 17px;
+  font-weight: 750;
+}
+
+html.nod-phone .app.iphone-v2 .leave-sheet-save {
+  border: 0;
+  background: #00d2ff;
+  color: #000;
+}
+
+html.nod-phone .app.iphone-v2 .leave-sheet-save:disabled {
+  opacity: 0.45;
+}
+
+html.nod-phone .app.iphone-v2 .leave-sheet-discard {
+  border: 1.5px solid var(--nod-rec);
+  background: transparent;
+  color: var(--nod-rec);
+}
+
+html.nod-phone .app.iphone-v2 .leave-sheet-cancel {
+  border: 0;
+  background: var(--nod-surface);
+  color: var(--nod-text);
+}
+
+html.nod-phone .app.iphone-v2 .leave-sheet-wait,
+html.nod-phone .app.iphone-v2 .leave-sheet-discard-help {
+  margin: 0 4px;
+  color: var(--nod-muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
