@@ -11,6 +11,8 @@ EN_TRANSCRIPT = (
 ZH_TRANSCRIPT = "我们周五发测试版。小王负责发布说明。小李核对账单。"
 CHIP = "List the action items so far, with who owns each."
 ZH_ASK = "这段会议的行动项有哪些？"
+IT_TRANSCRIPT = "Non è pronto. Lanciamo la beta venerdì."
+ES_TRANSCRIPT = "Vamos a lanzar la beta el viernes. Alice escribe las notas."
 
 
 def _auto_body(question: str, transcript: str) -> str:
@@ -24,9 +26,9 @@ def _auto_body(question: str, transcript: str) -> str:
     )
 
 
-def _system(tag_and_body: str) -> str:
+def _system(tag_and_body: str, stt_language: str | None = None) -> str:
     pipe = Pipeline.__new__(Pipeline)
-    pipe.cfg = {"llm": {}}
+    pipe.cfg = {"llm": {}, "stt": {"language": stt_language}}
     return pipe._build_messages(tag_and_body, "listen_ask")[0]["content"]
 
 
@@ -51,9 +53,37 @@ def test_auto_english_question_empty_transcript():
     assert "English only" in sys_msg
 
 
-def test_auto_undetectable_adds_no_output_language():
+def test_auto_short_question_empty_transcript_pins_english():
     sys_msg = _system("[NOD_ASK:auto]\n" + _auto_body("Why?", "(empty)"))
-    assert "OUTPUT LANGUAGE" not in sys_msg
+    assert "English only" in sys_msg
+
+
+def test_locked_italian_english_chip_pins_italian_not_french():
+    sys_msg = _system(
+        "[NOD_ASK:auto]\n" + _auto_body(CHIP, IT_TRANSCRIPT),
+        stt_language="it",
+    )
+    assert "Italian only" in sys_msg
+    assert "French" not in sys_msg
+    assert "English only" not in sys_msg
+
+
+def test_locked_spanish_why_pins_spanish():
+    sys_msg = _system(
+        "[NOD_ASK:auto]\n" + _auto_body("Why?", ES_TRANSCRIPT),
+        stt_language="es",
+    )
+    assert "Spanish only" in sys_msg
+    assert "English only" not in sys_msg
+
+
+def test_locked_italian_chinese_question_still_chinese():
+    sys_msg = _system(
+        "[NOD_ASK:auto]\n" + _auto_body(ZH_ASK, IT_TRANSCRIPT),
+        stt_language="it",
+    )
+    assert "Chinese only" in sys_msg
+    assert "Italian" not in sys_msg
 
 
 def test_explicit_zh_keeps_old_output_rule():
@@ -77,4 +107,16 @@ def test_listen_ask_lang_parse_edges():
         f"Listener question: Why?\nTranscript (tail):\n{ZH_TRANSCRIPT}\nMore lines here 还有一句。"
     ) == "zh"
     assert listen_ask_lang(f"Listener question: {CHIP}\nTranscript (tail):\n(empty)") == "en"
-    assert listen_ask_lang("Listener question: Why?\nTranscript (tail):\n(empty)") is None
+    assert listen_ask_lang("Listener question: Why?\nTranscript (tail):\n(empty)") == "en"
+    assert listen_ask_lang(
+        f"Listener question: {CHIP}\nTranscript (tail):\n{IT_TRANSCRIPT}",
+        locked="it",
+    ) == "it"
+    assert listen_ask_lang(
+        f"Listener question: Why?\nTranscript (tail):\n{ES_TRANSCRIPT}",
+        locked="es",
+    ) == "es"
+    assert listen_ask_lang(
+        f"Listener question: {ZH_ASK}\nTranscript (tail):\n{IT_TRANSCRIPT}",
+        locked="it",
+    ) == "zh"

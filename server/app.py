@@ -1432,7 +1432,10 @@ class Pipeline:
             if out_lang is None and not bilingual:
                 # Tag already stripped; Auto notes has no system-level language
                 # pin (same drift the translate branch already closed).
-                lang = listen_ask_lang(question)
+                lang = listen_ask_lang(
+                    question,
+                    locked=_normalize_stt_lang((self.cfg.get("stt") or {}).get("language")),
+                )
                 if lang:
                     name = _LANG_NAMES.get(lang, lang)
                     out_rule = (

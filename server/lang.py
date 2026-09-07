@@ -49,10 +49,14 @@ def _normalize_stt_lang(lang: Any) -> str | None:
     return _normalize_any_lang(lang)
 
 
-def listen_ask_lang(body: str) -> str | None:
-    """Pick the answer language for an Auto-notes listen_ask from the prompt body
-    (tag already stripped). Question language if confidently detectable, else the
-    transcript's majority language, else None.
+def listen_ask_lang(body: str, locked: str | None = None) -> str | None:
+    """Pick the answer language for an Auto-notes listen_ask.
+
+    Script-certain Chinese/Japanese on the question wins. Otherwise the
+    Speech lock (``cfg.stt.language``) when a transcript is present; Auto-detect
+    speech falls back to guessing the transcript (STT only emits en/zh/ja there).
+    Empty transcript follows the question guess. Latin-letter volume is not a
+    confident English question.
     """
     text = body or ""
     q_mark = "Listener question:"
@@ -70,11 +74,11 @@ def listen_ask_lang(body: str) -> str | None:
         if rest != "(empty)":
             transcript = rest
     confident = _confident_stt_lang(question, None)
-    if confident:
+    if confident in ("zh", "ja"):
         return confident
     if transcript:
-        return detect_question_lang(transcript)
-    return None
+        return _normalize_stt_lang(locked) or detect_question_lang(transcript)
+    return detect_question_lang(question) or None
 
 
 def _confident_stt_lang(text: str, heard: str | None) -> str | None:
