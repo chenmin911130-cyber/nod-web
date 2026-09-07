@@ -104,6 +104,7 @@ def _public_user(user: User) -> dict[str, Any]:
         "plans": list(PLANS.values()),
         "stripe_enabled": bool(STRIPE_SECRET_KEY and STRIPE_PRICE_PRO),
         "quota_disabled": bool(snap.get("quota_disabled")),
+        "sign_in": "google" if user.clerk_id else "email",
     }
 
 

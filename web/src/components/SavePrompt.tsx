@@ -48,6 +48,11 @@ export default function SavePrompt({
           >
             {secondary === 'cancel' ? IPHONE_COPY.saveCancel : IPHONE_COPY.saveNo}
           </button>
+          {onCancel && secondary === 'discard' ? (
+            <button type="button" className="save-prompt-discard" onClick={onCancel}>
+              {IPHONE_COPY.moreCancel}
+            </button>
+          ) : null}
           <button type="button" className="save-prompt-keep" onClick={() => onKeep(sessionSaveKeep({ audio: native ? true : audio }))}>
             {IPHONE_COPY.saveYes}
           </button>
