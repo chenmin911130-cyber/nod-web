@@ -6,7 +6,7 @@ import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
-import { restoreFromSession, restoreIdOfferable, restoreShouldNotAsk, applyMeetingResume, resumeResetsKept, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck, shouldOfferSaveOnce } from './historyRestore'
+import { restoreFromSession, restoreIdOfferable, restoreShouldNotAsk, applyMeetingResume, resumeResetsKept, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
 import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
@@ -15,6 +15,22 @@ import SavePrompt from './components/SavePrompt'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
 import { IPHONE_COPY, canSwitchWorkspace, sameSpokenLine, sessionListening } from './iphoneCopy'
+import SaveBanner from './components/SaveBanner'
+import {
+  KEEP_ACK_TIMEOUT_MS,
+  applyKeepAck,
+  applyKeepFailed,
+  beginSave,
+  bindLiveId,
+  bumpGeneration,
+  cancelCollect,
+  emptySaveBook,
+  keepAfterNotesStillValid,
+  markOffered,
+  savePromptSurface,
+  type KeepAfterNotesJob,
+  type SaveBook,
+} from './sessionSave'
 import { isTranslateChunk, looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, sttTag, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough, wrongScriptForTarget } from './translateGate'
 import { meetingLinesAfterTargetChange, nextMeetingLineToTranslate } from './meetingTranslate'
 import { applyLineUpdate, applyLineTranslationRev, staleTranslateDone } from './meetingLines'
@@ -891,12 +907,19 @@ function engineSource(listenMic: boolean, systemMuted: boolean): AudioSource {
 
 export default function App() {
   const phone = usePhoneChrome()
+  const phoneRef = useRef(phone)
+  phoneRef.current = phone
   const [state, dispatch] = useReducer(reducer, initial, applyDemoSeed)
   const demoScene = readDemoScene()
   const stateRef = useRef(state)
   stateRef.current = state
   const listenWanted = useRef(false)
   const [savePrompt, setSavePrompt] = useState(false)
+  const [savePromptMode, setSavePromptMode] = useState<'discard' | 'cancel'>('discard')
+  const [saveBannerOpen, setSaveBannerOpen] = useState(false)
+  const [saveBook, setSaveBook] = useState<SaveBook>(emptySaveBook)
+  const saveBookRef = useRef(saveBook)
+  saveBookRef.current = saveBook
   const [historyKept, setHistoryKept] = useState(false)
   const historyKeptRef = useRef(false)
   const markHistoryKept = (kept: boolean) => {
@@ -907,11 +930,21 @@ export default function App() {
   const pendingRestoreId = useRef<string | null>(null)
   const lastRestoredKeepId = useRef<string | null>(null)
   const offerSaveAfterMeetingStopRef = useRef<() => void>(() => undefined)
+  const doClearRef = useRef<() => void>(() => undefined)
+  const handleEngineKeepRef = useRef<(e: EngineEvent) => void>(() => undefined)
   // #36: a live session may show at most ONE Save UI. Set when the Save dialog is
   // first opened; gating the AUTO offers (Stop, save_prompt, reconnect Restore,
   // New-session leave) so the same session is never re-prompted. A user-initiated
   // Save (menu / phone button, a retry after a failed keep) bypasses it.
   const saveOfferedRef = useRef(false)
+  const keepTimerRef = useRef(0)
+  const keepEpochRef = useRef<{ liveId: string | null; generation: number } | null>(null)
+  const pendingKeepRef = useRef<{ content: boolean; audio: boolean; waitNotes: boolean } | null>(null)
+  const commitBook = (next: SaveBook) => {
+    saveBookRef.current = next
+    setSaveBook(next)
+    saveOfferedRef.current = next.offered
+  }
   const startOrResumeMeeting = (s: AppState) => {
     if (s.meetingStartedAt == null) {
       dispatch({ type: 'listen_new' })
@@ -922,7 +955,12 @@ export default function App() {
       dispatch({ type: 'meeting_resume' })
       if (resumeResetsKept({ kept: historyKeptRef.current, hasContent: meetingHasSaveableContent(s) })) {
         markHistoryKept(false)
-        saveOfferedRef.current = false
+        commitBook({
+          ...bumpGeneration(saveBookRef.current),
+          status: 'undecided',
+          offered: false,
+        })
+        setSaveBannerOpen(false)
       }
       return
     }
@@ -950,7 +988,8 @@ export default function App() {
     // purges the pending row after 24h rather than letting it shadow this one.
     setSavePrompt(false)
     pendingRestoreId.current = null
-    saveOfferedRef.current = false
+    commitBook({ ...saveBookRef.current, offered: false })
+    setSaveBannerOpen(false)
     seenRestoreIds.current.clear()
     if (!watchAutoNotes.current && !autoReport.current) {
       clearWatchReport()
@@ -975,7 +1014,7 @@ export default function App() {
   const pumpTranslateRef = useRef<() => void>(() => {})
   const generateNotesRef = useRef<() => void>(() => {})
   const exportAfterNotes = useRef(false)
-  const keepAfterNotes = useRef<{ content: boolean; audio: boolean } | null>(null)
+  const keepAfterNotes = useRef<KeepAfterNotesJob | null>(null)
   const autoNotesTried = useRef(false)
   const tickRef = useRef(0)
   const [consent, setConsent] = useState<boolean | null>(demoScene ? true : null)
@@ -1047,7 +1086,8 @@ export default function App() {
         if (!restoreIdOfferable(seenRestoreIds.current, pending.id)) return
         if (saveOfferedRef.current) return
         pendingRestoreId.current = pending.id
-        saveOfferedRef.current = true
+        commitBook(markOffered(saveBookRef.current))
+        setSavePromptMode('discard')
         setSavePrompt(true)
       })
       .catch(() => undefined)
@@ -1361,32 +1401,13 @@ export default function App() {
       if (shouldReleaseListen(e)) {
         listenWanted.current = false
       }
-      if (e.type === 'save_prompt') {
-        // Watch Stop asks on the wrist. Phone Meeting Save stays for phone Stop.
-        if (watchAutoNotes.current) {
-          if (watchStopShouldAutoKeepHistory(watchAutoNotes.current)) {
-            api.send(watchSaveCommand())
-            markHistoryKept(true)
-          }
-        } else if (!saveOfferedRef.current && sessionShouldOpenSavePrompt({
-          workspaceMode: stateRef.current.workspaceMode,
-          kept: historyKeptRef.current,
-          paused: stateRef.current.capture === 'paused',
-        })) {
-          saveOfferedRef.current = true
-          setSavePrompt(true)
-        }
-      }
-      if (e.type === 'history_kept') {
-        // Server confirmed a keep. Only flip the kept flag when the ack is NOT
-        // for the restored session we just saved by id — that ack belongs to the
-        // OLD half-session, not the live one, so it must not mark the current
-        // session kept (which would suppress its own Save prompt on Stop).
-        if (shouldMarkKeptOnAck(e.id, lastRestoredKeepId.current)) {
-          markHistoryKept(true)
-        } else {
-          lastRestoredKeepId.current = null
-        }
+      if (
+        e.type === 'save_prompt'
+        || e.type === 'history_kept'
+        || e.type === 'history_keep_failed'
+        || e.type === 'disconnected'
+      ) {
+        handleEngineKeepRef.current(e)
       }
       const translateAskBefore = stateRef.current.translateAskId
       dispatch({ type: 'engine', ev: e })
@@ -1565,6 +1586,164 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [copyLatest])
 
+  const clearKeepTimer = () => {
+    if (keepTimerRef.current) {
+      window.clearTimeout(keepTimerRef.current)
+      keepTimerRef.current = 0
+    }
+  }
+
+  const failKeep = (reason: 'timeout' | 'error' | 'disconnect') => {
+    const next = applyKeepFailed(saveBookRef.current, reason)
+    if (next === saveBookRef.current) return
+    commitBook(next)
+    pendingKeepRef.current = null
+    keepAfterNotes.current = null
+    clearKeepTimer()
+    if (phoneRef.current && next.offered) setSaveBannerOpen(true)
+    dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.saveFailed } })
+  }
+
+  const sendKeepNow = (opts: { content: boolean; audio: boolean }) => {
+    window.api.send({ type: 'keep_history', content: opts.content, audio: opts.audio })
+    clearKeepTimer()
+    keepTimerRef.current = window.setTimeout(() => failKeep('timeout'), KEEP_ACK_TIMEOUT_MS)
+  }
+
+  const flushPendingKeep = () => {
+    const pending = pendingKeepRef.current
+    const book = saveBookRef.current
+    if (!pending || !book.liveId || book.status !== 'saving') return
+    pendingKeepRef.current = null
+    if (pending.waitNotes && keepShouldWaitForNotes(stateRef.current.notesAskId)) {
+      keepAfterNotes.current = {
+        content: pending.content,
+        audio: pending.audio,
+        liveId: book.liveId,
+        generation: book.generation,
+      }
+      return
+    }
+    sendKeepNow(pending)
+  }
+
+  const bindLiveFromEngine = (id?: string) => {
+    if (!id) return
+    commitBook(bindLiveId(saveBookRef.current, id))
+    if (keepEpochRef.current && !keepEpochRef.current.liveId) {
+      keepEpochRef.current = { ...keepEpochRef.current, liveId: id }
+    }
+    flushPendingKeep()
+  }
+
+  const offerSaveUi = () => {
+    const s = stateRef.current
+    if (!sessionShouldOpenSavePrompt({
+      workspaceMode: s.workspaceMode,
+      kept: historyKeptRef.current,
+      paused: s.capture === 'paused',
+    })) return
+    const surface = savePromptSurface({
+      phone: phoneRef.current,
+      workspaceMode: s.workspaceMode,
+      kept: historyKeptRef.current,
+      offered: saveBookRef.current.offered,
+      hasContent: meetingHasSaveableContent(s),
+    })
+    if (surface === 'none') return
+    commitBook(markOffered(saveBookRef.current))
+    if (surface === 'banner') {
+      setSaveBannerOpen(true)
+      return
+    }
+    setSavePromptMode('discard')
+    setSavePrompt(true)
+  }
+
+  const saveLiveSession = (opts?: { content?: boolean; audio?: boolean; fromPrompt?: boolean }) => {
+    if (historyKeptRef.current) {
+      setHistoryOpen(true)
+      return
+    }
+    if (!isNativeApp() && !opts?.fromPrompt) {
+      setSavePromptMode('cancel')
+      setSavePrompt(true)
+      return
+    }
+    const content = opts?.content !== false
+    const audio = opts?.audio !== false
+    const book = beginSave(saveBookRef.current, saveBookRef.current.liveId || '')
+    commitBook(book)
+    keepEpochRef.current = { liveId: book.liveId, generation: book.generation }
+    if (phoneRef.current) setSaveBannerOpen(true)
+    const waitNotes = keepShouldWaitForNotes(stateRef.current.notesAskId)
+    if (!book.liveId) {
+      pendingKeepRef.current = { content, audio, waitNotes }
+      clearKeepTimer()
+      keepTimerRef.current = window.setTimeout(() => failKeep('timeout'), KEEP_ACK_TIMEOUT_MS)
+      return
+    }
+    if (waitNotes) {
+      keepAfterNotes.current = { content, audio, liveId: book.liveId, generation: book.generation }
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'Saving after notes finish…' } })
+      return
+    }
+    sendKeepNow({ content, audio })
+  }
+
+  handleEngineKeepRef.current = (e) => {
+    if (e.type === 'save_prompt') {
+      bindLiveFromEngine(e.id)
+      if (watchAutoNotes.current) {
+        if (watchStopShouldAutoKeepHistory(watchAutoNotes.current)) {
+          window.api.send(watchSaveCommand())
+          markHistoryKept(true)
+        }
+        return
+      }
+      offerSaveUi()
+      return
+    }
+    if (e.type === 'disconnected') {
+      failKeep('disconnect')
+      return
+    }
+    if (e.type === 'history_keep_failed') {
+      const book = saveBookRef.current
+      if (e.id && book.liveId && e.id !== book.liveId) return
+      failKeep('error')
+      return
+    }
+    if (e.type !== 'history_kept') return
+    if (!shouldMarkKeptOnAck(e.id, lastRestoredKeepId.current)) {
+      lastRestoredKeepId.current = null
+      return
+    }
+    const book = saveBookRef.current
+    const epoch = keepEpochRef.current
+    const { book: next, action } = applyKeepAck(
+      book,
+      e.id,
+      book.liveId,
+      epoch?.generation ?? book.generation,
+    )
+    if (next.status === 'saved' && next !== book) {
+      markHistoryKept(true)
+      commitBook(next)
+      clearKeepTimer()
+      pendingKeepRef.current = null
+      keepAfterNotes.current = null
+      keepEpochRef.current = null
+      setSaveBannerOpen(false)
+      if (action === 'new') {
+        pendingNewAfterSave.current = false
+        doClearRef.current()
+        dispatch({ type: 'engine', ev: { type: 'status', text: 'Saved · new session' } })
+      }
+      return
+    }
+  }
+
   const doClear = useCallback(() => {
     spokenTranslate.current.clear()
     stopSpeech()
@@ -1577,16 +1756,26 @@ export default function App() {
     setClearOpen(false)
     markHistoryKept(false)
     pendingNewAfterSave.current = false
-    saveOfferedRef.current = false
+    pendingKeepRef.current = null
+    keepAfterNotes.current = null
+    keepEpochRef.current = null
+    clearKeepTimer()
+    setSaveBannerOpen(false)
+    commitBook({
+      ...bumpGeneration(saveBookRef.current),
+      liveId: null,
+      status: 'undecided',
+      offered: false,
+      pendingAfterSave: 'none',
+    })
     seenRestoreIds.current.clear()
   }, [])
+  doClearRef.current = doClear
 
   const offerSaveAfterMeetingStop = () => {
     const s = stateRef.current
     if (s.workspaceMode !== 'meeting' || historyKeptRef.current) return
-    if (saveOfferedRef.current) return
-    saveOfferedRef.current = true
-    setSavePrompt(true)
+    offerSaveUi()
   }
   offerSaveAfterMeetingStopRef.current = offerSaveAfterMeetingStop
 
@@ -1599,16 +1788,17 @@ export default function App() {
       })
       return
     }
-    if (shouldOfferSaveOnce({
+    if (sessionShouldOfferSave({
       workspaceMode: s.workspaceMode,
       ended: s.meetingEnded,
       kept: historyKept,
       hasContent: meetingHasSaveableContent(s),
-      offered: saveOfferedRef.current,
       listening: false,
     })) {
       pendingNewAfterSave.current = true
-      saveOfferedRef.current = true
+      commitBook({ ...markOffered(saveBookRef.current), pendingAfterSave: 'new' })
+      setSaveBannerOpen(false)
+      setSavePromptMode('discard')
       setSavePrompt(true)
       return
     }
@@ -2568,14 +2758,10 @@ export default function App() {
   // keeps the session (with its Notes section) instead of saving it empty.
   useEffect(() => {
     if (!keepAfterNotes.current || state.busy || state.notesAskId) return
-    const opts = keepAfterNotes.current
+    const job = keepAfterNotes.current
     keepAfterNotes.current = null
-    window.api.send({ type: 'keep_history', content: opts.content, audio: opts.audio })
-    if (pendingNewAfterSave.current) {
-      pendingNewAfterSave.current = false
-      doClear()
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'Saved · new session' } })
-    }
+    if (!keepAfterNotesStillValid(job, saveBookRef.current)) return
+    sendKeepNow({ content: job.content, audio: job.audio })
   }, [state.busy, state.notesAskId])
 
   // 'generating'/'transcribing' is an engine state, not a pause: it must not
@@ -2671,8 +2857,7 @@ export default function App() {
           setHistoryOpen(true)
           return
         }
-        saveOfferedRef.current = true
-        setSavePrompt(true)
+        saveLiveSession()
       }}
       canSaveSession={sessionShouldOfferSave({
         workspaceMode: state.workspaceMode,
@@ -2719,8 +2904,7 @@ export default function App() {
           setHistoryOpen(true)
           return
         }
-        saveOfferedRef.current = true
-        setSavePrompt(true)
+        saveLiveSession()
       }}
       onHistory={() => setHistoryOpen(true)}
       onNew={handleNewSession}
@@ -2772,6 +2956,7 @@ export default function App() {
       <HistoryPane open={historyOpen} onClose={() => setHistoryOpen(false)} onRestore={restoreHistory} />
       <SavePrompt
         open={savePrompt}
+        secondary={savePromptMode}
         onKeep={(opts) => {
           setSavePrompt(false)
           const restoredId = pendingRestoreId.current
@@ -2783,19 +2968,11 @@ export default function App() {
             window.api.send({ type: 'keep_history', id: restoredId, content: opts.content, audio: opts.audio })
             return
           }
-          // If Notes are still streaming, wait for them — a keep now would save
-          // the session without its Notes section. Deferred below.
-          if (keepShouldWaitForNotes(stateRef.current.notesAskId)) {
-            keepAfterNotes.current = { content: opts.content, audio: opts.audio }
-            dispatch({ type: 'engine', ev: { type: 'status', text: 'Saving after notes finish…' } })
-            return
-          }
-          window.api.send({ type: 'keep_history', content: opts.content, audio: opts.audio })
-          if (pendingNewAfterSave.current) {
-            pendingNewAfterSave.current = false
-            doClear()
-            dispatch({ type: 'engine', ev: { type: 'status', text: 'Saved · new session' } })
-          }
+          saveLiveSession({ content: opts.content, audio: opts.audio, fromPrompt: true })
+        }}
+        onCancel={() => {
+          setSavePrompt(false)
+          commitBook(cancelCollect(saveBookRef.current))
         }}
         onDiscard={() => {
           setSavePrompt(false)
@@ -2970,6 +3147,17 @@ export default function App() {
             elapsedMs={state.meetingElapsedMs}
             onExportPdf={() => { void handleExportPdf() }}
             actions={phoneActions}
+            showSavedLine={phone && state.workspaceMode === 'meeting' && historyKept && meetingHasSaveableContent(state)}
+            saveBanner={
+              saveBannerOpen && saveBook.status !== 'saved' ? (
+                <SaveBanner
+                  status={saveBook.status}
+                  onSave={() => saveLiveSession()}
+                  onNotNow={() => setSaveBannerOpen(false)}
+                  onRetry={() => saveLiveSession()}
+                />
+              ) : null
+            }
           />
         )}
       </div>

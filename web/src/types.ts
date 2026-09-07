@@ -150,6 +150,8 @@ export type EngineEvent =
   | { type: 'quota_exceeded'; reason: string }
   | { type: 'save_prompt'; id?: string; text?: string }
   | { type: 'history_kept'; id?: string }
+  | { type: 'history_keep_failed'; id?: string; reason?: string }
+  | { type: 'disconnected' }
 
 // 前端 → 引擎
 export type EngineMsg =

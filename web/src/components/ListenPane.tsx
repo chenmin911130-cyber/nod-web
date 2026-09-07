@@ -69,6 +69,8 @@ interface Props {
   elapsedMs?: number
   onExportPdf?: () => void
   actions?: ReactNode
+  saveBanner?: ReactNode
+  showSavedLine?: boolean
 }
 
 const NOTES_W_MIN = 28
@@ -1357,6 +1359,12 @@ export default function ListenPane(props: Props) {
           ) : (
             controls
           )}
+          {props.showSavedLine ? (
+            <div className="iphone-saved-line">
+              <span className="iphone-saved-check" aria-hidden="true">✓</span>
+              {IPHONE_COPY.saveSavedLine}
+            </div>
+          ) : null}
           {tabs}
         </div>
       ) : (
@@ -1617,6 +1625,8 @@ export default function ListenPane(props: Props) {
           </div>
           )}
 
+          <div className="listen-ask-dock">
+          {props.saveBanner}
           <div className="listen-prompt">
             {phone ? (
               <span className="iphone-ask-spark" aria-hidden="true">
@@ -1647,6 +1657,7 @@ export default function ListenPane(props: Props) {
                 'Ask'
               )}
             </button>
+          </div>
           </div>
         </>
       )}

@@ -6896,6 +6896,93 @@ html.nod-phone .app.iphone-v2 .iphone-chip-copy b {
   text-overflow: clip;
 }
 
+html.nod-phone .app.iphone-v2 .iphone-saved-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  color: #8b969f;
+  font-size: 13px;
+  font-weight: 550;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-saved-check {
+  color: #00d2ff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.listen-ask-dock {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+html.nod-phone .app.iphone-v2 .save-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 max(var(--iphone-gutter), env(safe-area-inset-right)) 8px max(var(--iphone-gutter), env(safe-area-inset-left));
+  padding: 12px 14px;
+  background: var(--nod-surface);
+  border-radius: 14px;
+}
+
+html.nod-phone .app.iphone-v2 .save-banner b {
+  color: #f4f8fc;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+html.nod-phone .app.iphone-v2 .save-banner-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+html.nod-phone .app.iphone-v2 .save-banner-spin {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  border-top-color: #00d2ff;
+  border-radius: 50%;
+  animation: iphone-ask-spin 0.7s linear infinite;
+}
+
+html.nod-phone .app.iphone-v2 .save-banner-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+html.nod-phone .app.iphone-v2 .save-banner-notnow {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: #8b969f;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+html.nod-phone .app.iphone-v2 .save-banner-save {
+  height: 36px;
+  min-width: 88px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: #00d2ff;
+  color: #000;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+html.nod-phone .app.iphone-v2 .save-banner-notnow:disabled,
+html.nod-phone .app.iphone-v2 .save-banner-save:disabled {
+  opacity: 0.45;
+}
+
 html.nod-phone .app.iphone-v2 .listen-mobile-tabs {
   justify-content: stretch;
   gap: 0;
