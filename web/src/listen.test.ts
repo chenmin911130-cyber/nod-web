@@ -1,4 +1,4 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, nodTag, notesBodyText, notesPrompt, outLangRule, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, speakersExpected, transcriptBlock } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, SCENE_HELP, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, nodTag, notesBodyText, notesPrompt, outLangRule, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, speakersExpected, transcriptBlock } from './listen'
 import type { MeetingLine } from './types'
 
 function eq<T>(got: T, want: T, label?: string) {
@@ -52,6 +52,9 @@ eq(sceneLabel('interview'), 'Live Q&A')
 eq(LISTEN_SCENES.find((s) => s.id === 'interview')?.label, 'Live Q&A')
 eq(sceneLabel('meeting'), 'Meeting')
 eq(sceneLabel('lecture'), 'Lecture')
+eq(SCENE_HELP.meeting, 'Decisions and action items', 'meeting blurb')
+eq(SCENE_HELP.lecture, 'Key concepts and study notes', 'lecture blurb')
+eq(SCENE_HELP.interview, 'Questions and suggested answers', 'live qa blurb')
 
 // item1: the lecture section order is defined once (SCENE_SECTIONS), the single
 // source every renderer (Live pane / PDF / copy-Share) reads.

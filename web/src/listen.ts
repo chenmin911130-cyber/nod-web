@@ -115,6 +115,12 @@ export const LISTEN_SCENES: Array<{ id: ListenScene; label: string }> = [
   { id: 'interview', label: 'Live Q&A' },
 ]
 
+export const SCENE_HELP: Record<ListenScene, string> = {
+  meeting: 'Decisions and action items',
+  lecture: 'Key concepts and study notes',
+  interview: 'Questions and suggested answers',
+}
+
 const SCENE_SECTIONS: Record<ListenScene, NotesSectionId[]> = {
   meeting: ['summary', 'keyPoints', 'decisions', 'actionItems', 'importantDetails', 'followUps'],
   lecture: ['summary', 'keyPoints', 'importantDetails', 'revisionNotes', 'followUps'],

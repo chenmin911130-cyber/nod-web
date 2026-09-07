@@ -1,9 +1,10 @@
-import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
 import type { CatchNote, Lang, MeetingLine, PairLang } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import {
   LISTEN_SCENES,
   MEETING_SPEAKER_OPTIONS,
+  SCENE_HELP,
   bilingualDisabled,
   notesBodyText,
   parseBiLines,
@@ -16,9 +17,20 @@ import {
   type MeetingSpeakerId,
   type NotesSectionId,
 } from '../listen'
-import { IPHONE_COPY, listenChipParts, nativeListenChipOrder, notesChipParts, notesPageTitle, showLineTranslation } from '../iphoneCopy'
+import {
+  IPHONE_COPY,
+  isListenReadyView,
+  listenChipParts,
+  nativeListenChipOrder,
+  notesChipParts,
+  notesPageTitle,
+  notesSettingsValue,
+  showLineTranslation,
+  spokenSettingsValue,
+} from '../iphoneCopy'
 import { usePhoneChrome } from '../phoneChrome'
 import { iphoneSummaryHeading, liveHeardLines, liveNotesLine, liveStageMode, summaryPlainText } from '../liveView'
+import PhoneSheet from './PhoneSheet'
 
 interface Props {
   scene: ListenScene
@@ -31,6 +43,7 @@ interface Props {
   onRenameSpeaker: (id: string, name: string) => void
   partial: string
   listening: boolean
+  paused?: boolean
   ended: boolean
   catchNotes: CatchNote[]
   notesRaw: string
@@ -401,13 +414,7 @@ function SceneSelect({
               >
                 <SceneMark scene={item.id} size={20} />
                 <b>{item.label}</b>
-                <span>
-                  {item.id === 'meeting'
-                    ? 'Decisions and action items'
-                    : item.id === 'lecture'
-                      ? 'Revision notes and homework'
-                      : 'Hear a question, draft an answer'}
-                </span>
+                <span>{SCENE_HELP[item.id]}</span>
               </button>
             ))}
           </div>
@@ -428,6 +435,113 @@ function SceneSelect({
             </div>
           )}
         </div>
+      )}
+    </div>
+  )
+}
+
+function SettingsChevron() {
+  return (
+    <span className="iphone-settings-chevron" aria-hidden="true">›</span>
+  )
+}
+
+function IphoneSettingsList({
+  scene,
+  speakersId,
+  speechLang,
+  notesLang,
+  qa,
+  sceneRef,
+  speechRef,
+  notesRef,
+  onScene,
+  onSpeech,
+  onNotes,
+}: {
+  scene: ListenScene
+  speakersId: MeetingSpeakerId
+  speechLang: Lang
+  notesLang: Lang
+  qa: boolean
+  sceneRef: Ref<HTMLButtonElement>
+  speechRef: Ref<HTMLButtonElement>
+  notesRef: Ref<HTMLButtonElement>
+  onScene: () => void
+  onSpeech: () => void
+  onNotes: () => void
+}) {
+  return (
+    <div className="iphone-settings">
+      <button type="button" className="iphone-settings-row" ref={sceneRef} aria-haspopup="dialog" onClick={onScene}>
+        <ChipPeople />
+        <span className="iphone-settings-label">{IPHONE_COPY.sceneRow}</span>
+        <span className="iphone-settings-value">{sceneChipLabel(scene, speakersId)}</span>
+        <SettingsChevron />
+      </button>
+      <button type="button" className="iphone-settings-row" ref={speechRef} aria-haspopup="dialog" onClick={onSpeech}>
+        <ChipGlobe />
+        <span className="iphone-settings-label">{IPHONE_COPY.spokenLanguage}</span>
+        <span className="iphone-settings-value">{spokenSettingsValue(speechLang)}</span>
+        <SettingsChevron />
+      </button>
+      {qa ? null : (
+        <button type="button" className="iphone-settings-row" ref={notesRef} aria-haspopup="dialog" onClick={onNotes}>
+          <ChipNotes />
+          <span className="iphone-settings-label">{IPHONE_COPY.notesLanguage}</span>
+          <span className="iphone-settings-value">{notesSettingsValue(notesLang)}</span>
+          <SettingsChevron />
+        </button>
+      )}
+    </div>
+  )
+}
+
+function RadioMark({ on }: { on: boolean }) {
+  return (
+    <span className={`iphone-setup-mark${on ? ' on' : ''}`} aria-hidden="true">
+      {on ? (
+        <svg width="18" height="18" viewBox="0 0 18 18">
+          <circle cx="9" cy="9" r="9" fill="#00d2ff" />
+          <path d="M5.2 9.2l2.4 2.4 5.2-5.4" fill="none" stroke="#050607" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ) : (
+        <svg width="18" height="18" viewBox="0 0 18 18">
+          <circle cx="9" cy="9" r="8" fill="none" stroke="currentColor" strokeWidth="1.4" />
+        </svg>
+      )}
+    </span>
+  )
+}
+
+function IphoneMicStage({ listening }: { listening: boolean }) {
+  return (
+    <div className={`iphone-stage${listening ? ' live' : ''}`}>
+      <div className="iphone-viz" aria-hidden="true">
+        <span className="iphone-ripple r1" />
+        <span className="iphone-ripple r2" />
+        <span className="iphone-ripple r3" />
+        <span className="iphone-wave-left">
+          <i /><i /><i /><i /><i />
+        </span>
+        <span className="iphone-viz-core">
+          <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+            <rect x="14" y="6" width="8" height="14" rx="4" fill="currentColor" />
+            <path d="M10 18a8 8 0 0 0 16 0M18 26v4" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+          </svg>
+        </span>
+        <span className="iphone-wave-right">
+          <i /><i /><i /><i /><i />
+        </span>
+      </div>
+      {listening ? (
+        <b>{IPHONE_COPY.listeningNow}</b>
+      ) : (
+        <>
+          <b>{IPHONE_COPY.readyTitle}</b>
+          <p className="iphone-stage-help">{IPHONE_COPY.readyHelp}</p>
+          <p className="iphone-ai-note">{IPHONE_COPY.aiNote}</p>
+        </>
       )}
     </div>
   )
@@ -762,6 +876,32 @@ export default function ListenPane(props: Props) {
   const sections = useMemo(() => visibleSections(props.scene, notes), [props.scene, notes])
   const lecture = props.scene === 'lecture'
   const notesHeading = notesPageTitle(props.scene)
+  const ready = isListenReadyView({
+    phone,
+    listening: props.listening,
+    paused: Boolean(props.paused),
+    ended: props.ended,
+    lines: props.lines.length,
+    partial: Boolean(props.partial),
+  })
+  const [sheet, setSheet] = useState<null | 'scene' | 'speech' | 'notes'>(null)
+  const [draftScene, setDraftScene] = useState(props.scene)
+  const [draftSpeakers, setDraftSpeakers] = useState(props.meetingSpeakersId)
+  const sceneRowRef = useRef<HTMLButtonElement>(null)
+  const speechRowRef = useRef<HTMLButtonElement>(null)
+  const notesRowRef = useRef<HTMLButtonElement>(null)
+
+  const openSceneSheet = () => {
+    setDraftScene(props.scene)
+    setDraftSpeakers(props.meetingSpeakersId)
+    setSheet('scene')
+  }
+  const closeSheet = () => setSheet(null)
+  const commitSceneSheet = () => {
+    props.onScene(draftScene)
+    if (draftScene === 'meeting') props.onMeetingSpeakers(draftSpeakers)
+    setSheet(null)
+  }
 
   useEffect(() => {
     setNotesW(readNotesW(props.scene))
@@ -953,9 +1093,169 @@ export default function ListenPane(props: Props) {
         </div>
   ) : null
 
+  const setupSheets = (
+    <>
+      <PhoneSheet
+        open={sheet === 'scene'}
+        title={IPHONE_COPY.recordingSetup}
+        onClose={closeSheet}
+        returnFocusRef={sceneRowRef}
+        footer={
+          <button type="button" className="phone-sheet-done" onClick={commitSceneSheet}>
+            {IPHONE_COPY.setupDone}
+          </button>
+        }
+      >
+        <div className="iphone-setup-kicker">{IPHONE_COPY.sceneSection}</div>
+        <div className="iphone-setup-scenes" role="radiogroup" aria-label={IPHONE_COPY.sceneRow}>
+          {LISTEN_SCENES.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="radio"
+              aria-checked={draftScene === item.id}
+              className={`iphone-setup-scene${draftScene === item.id ? ' on' : ''}`}
+              onClick={() => setDraftScene(item.id)}
+            >
+              <SceneMark scene={item.id} />
+              <span className="iphone-setup-copy">
+                <b>{item.label}</b>
+                <span>{SCENE_HELP[item.id]}</span>
+              </span>
+              <RadioMark on={draftScene === item.id} />
+            </button>
+          ))}
+        </div>
+        {draftScene === 'meeting' ? (
+          <div className="iphone-setup-people" role="group" aria-label={IPHONE_COPY.participants}>
+            <div className="iphone-setup-kicker">{IPHONE_COPY.participants}</div>
+            <div className="iphone-setup-seg">
+              {MEETING_SPEAKER_OPTIONS.map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={o.id === draftSpeakers}
+                  className={o.id === draftSpeakers ? 'on' : ''}
+                  onClick={() => setDraftSpeakers(o.id)}
+                >
+                  {o.chip}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </PhoneSheet>
+      <PhoneSheet
+        open={sheet === 'speech'}
+        title={IPHONE_COPY.spokenLanguage}
+        onClose={closeSheet}
+        returnFocusRef={speechRowRef}
+      >
+        <div className="iphone-lang-rows" role="listbox" aria-label={IPHONE_COPY.spokenLanguage}>
+          {SPEECH_LANGS.map((lang) => (
+            <button
+              key={lang.id}
+              type="button"
+              role="option"
+              aria-selected={props.speechLang === lang.id}
+              className={props.speechLang === lang.id ? 'on' : ''}
+              onClick={() => {
+                props.onSpeechLang(lang.id)
+                closeSheet()
+              }}
+            >
+              <b>{lang.id === 'auto' ? IPHONE_COPY.speechAutoTitle : lang.name}</b>
+              <span>{lang.id === 'auto' ? IPHONE_COPY.speechAutoHelp : lang.tag}</span>
+            </button>
+          ))}
+          {props.qa ? null : (
+            <button
+              type="button"
+              role="option"
+              aria-selected={Boolean(props.translateOn)}
+              className={props.translateOn ? 'on' : ''}
+              onClick={() => {
+                props.onTranslate(!props.translateOn)
+                closeSheet()
+              }}
+            >
+              <b>{props.translateOn ? 'On' : 'Off'}</b>
+              <span>{IPHONE_COPY.enhance}</span>
+            </button>
+          )}
+        </div>
+      </PhoneSheet>
+      <PhoneSheet
+        open={sheet === 'notes'}
+        title={IPHONE_COPY.notesLanguage}
+        onClose={closeSheet}
+        returnFocusRef={notesRowRef}
+      >
+        <div className="iphone-lang-rows" role="listbox" aria-label={IPHONE_COPY.notesLanguage}>
+          {NOTES_LANGS.map((lang) => (
+            <button
+              key={lang.id}
+              type="button"
+              role="option"
+              aria-selected={props.notesLang === lang.id}
+              className={props.notesLang === lang.id ? 'on' : ''}
+              onClick={() => {
+                props.onTranslateTo(lang.id)
+                closeSheet()
+              }}
+            >
+              <b>{lang.id === 'auto' ? IPHONE_COPY.notesAutoTitle : lang.name}</b>
+              <span>{lang.id === 'auto' ? IPHONE_COPY.notesAutoHelp : lang.tag}</span>
+            </button>
+          ))}
+        </div>
+        <p className="iphone-sheet-help">{IPHONE_COPY.notesSheetHelp}</p>
+      </PhoneSheet>
+    </>
+  )
+
   return (
-    <div className={`listen-main scene-${props.scene}${props.translateOn ? ' tr-on' : ' tr-off'}${props.ended ? ' ended' : ''}${props.qa ? ' qa' : ''}`}>
-      {phone ? (
+    <div className={`listen-main scene-${props.scene}${props.translateOn ? ' tr-on' : ' tr-off'}${props.ended ? ' ended' : ''}${props.qa ? ' qa' : ''}${ready ? ' iphone-ready' : ''}`}>
+      {ready ? (
+        <div className="iphone-stack iphone-ready">
+          <div className="iphone-stage">
+            <div className="iphone-viz" aria-hidden="true">
+              <span className="iphone-ripple r1" />
+              <span className="iphone-ripple r2" />
+              <span className="iphone-ripple r3" />
+              <span className="iphone-wave-left">
+                <i /><i /><i /><i /><i />
+              </span>
+              <span className="iphone-viz-core">
+                <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+                  <rect x="14" y="6" width="8" height="14" rx="4" fill="currentColor" />
+                  <path d="M10 18a8 8 0 0 0 16 0M18 26v4" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+                </svg>
+              </span>
+              <span className="iphone-wave-right">
+                <i /><i /><i /><i /><i />
+              </span>
+            </div>
+            <b>{IPHONE_COPY.readyTitleShort}</b>
+            <p className="iphone-stage-help">{IPHONE_COPY.readyHelpCapture}</p>
+          </div>
+          <IphoneSettingsList
+            scene={props.scene}
+            speakersId={props.meetingSpeakersId}
+            speechLang={props.speechLang}
+            notesLang={props.notesLang}
+            qa={Boolean(props.qa)}
+            sceneRef={sceneRowRef}
+            speechRef={speechRowRef}
+            notesRef={notesRowRef}
+            onScene={openSceneSheet}
+            onSpeech={() => setSheet('speech')}
+            onNotes={() => setSheet('notes')}
+          />
+          {props.actions}
+        </div>
+      ) : phone ? (
         <div className="iphone-stack">
           {props.actions}
           {controls}
@@ -968,39 +1268,18 @@ export default function ListenPane(props: Props) {
         </>
       )}
 
-      {showStage && !props.qa && liveMode === 'content' ? (
+      {ready ? null : showStage && !props.qa && liveMode === 'content' ? (
         <IphoneLiveContent
           listening={props.listening}
           headline={heard.headline}
           previous={heard.previous}
           notes={notesLine}
         />
-      ) : showStage && !props.qa ? (
-        <div className={`iphone-stage${props.listening ? ' live' : ''}`}>
-          <div className="iphone-viz" aria-hidden="true">
-            <span className="iphone-ripple r1" />
-            <span className="iphone-ripple r2" />
-            <span className="iphone-ripple r3" />
-            <span className="iphone-wave-left">
-              <i /><i /><i /><i /><i />
-            </span>
-            <span className="iphone-viz-core">
-              <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
-                <rect x="14" y="6" width="8" height="14" rx="4" fill="currentColor" />
-                <path d="M10 18a8 8 0 0 0 16 0M18 26v4" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-              </svg>
-            </span>
-            <span className="iphone-wave-right">
-              <i /><i /><i /><i /><i />
-            </span>
-          </div>
-          <b>{props.listening ? IPHONE_COPY.listeningNow : IPHONE_COPY.readyTitle}</b>
-          {!props.listening ? <p className="iphone-stage-help">{IPHONE_COPY.readyHelp}</p> : null}
-          <p className="iphone-ai-note">{IPHONE_COPY.aiNote}</p>
-        </div>
+      ) : ready ? null : showStage && !props.qa ? (
+        <IphoneMicStage listening={props.listening} />
       ) : null}
 
-      {props.qa ? (
+      {ready ? setupSheets : props.qa ? (
         <div className="listen-qa">
           {props.qaSlot}
         </div>

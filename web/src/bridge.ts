@@ -206,7 +206,7 @@ export function installWebApi(): void {
       } catch (err) {
         emit({
           type: 'error',
-          text: `Microphone permission denied: ${err instanceof Error ? err.message : String(err)}`,
+          text: 'Microphone access needed. Allow it in Settings, then tap Start listening again.',
         })
       }
     } else if (mic.active) {

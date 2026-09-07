@@ -26,7 +26,20 @@ export const IPHONE_COPY = {
   shareSummary: 'Share',
   summarizeNow: 'Summarize',
   readyTitle: 'Ready to listen.',
+  readyTitleShort: 'Ready to listen',
   readyHelp: 'Tap start to capture, transcribe, and organize your conversation in real time.',
+  readyHelpCapture: "Capture your conversation. We'll organize the rest.",
+  recordingSetup: 'Recording setup',
+  sceneRow: 'Scene',
+  spokenLanguage: 'Spoken language',
+  notesLanguage: 'Notes language',
+  sceneSection: 'SCENE',
+  participants: 'Participants',
+  setupDone: 'Done',
+  speechAutoTitle: 'Auto-detect',
+  speechAutoHelp: 'Detect automatically',
+  notesAutoTitle: 'Auto',
+  notesAutoHelp: 'Follow speech',
   aiNote: 'Your AI listening assistant, ready when you are.',
   pausedStatus: 'Paused',
   endedStatus: 'Ended',
@@ -255,4 +268,32 @@ export function notesPageTitle(scene: ListenScene): string | null {
   if (scene === 'interview') return null
   if (scene === 'lecture') return IPHONE_COPY.studyNotes
   return IPHONE_COPY.meetingNotes
+}
+
+export function isListenReadyView(input: {
+  phone: boolean
+  listening: boolean
+  paused: boolean
+  ended: boolean
+  lines: number
+  partial: boolean
+}): boolean {
+  return (
+    input.phone &&
+    !input.listening &&
+    !input.paused &&
+    !input.ended &&
+    input.lines === 0 &&
+    !input.partial
+  )
+}
+
+export function spokenSettingsValue(lang: Lang): string {
+  if (lang === 'auto') return IPHONE_COPY.speechAutoTitle
+  return TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
+}
+
+export function notesSettingsValue(lang: Lang): string {
+  if (lang === 'auto') return IPHONE_COPY.notesAutoTitle
+  return TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
 }

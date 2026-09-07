@@ -1,6 +1,7 @@
 import {
   IPHONE_COPY,
   canSwitchWorkspace,
+  isListenReadyView,
   listenChipLabel,
   listenChipParts,
   moreMenuEnabled,
@@ -9,6 +10,7 @@ import {
   notesPageTitle,
   notesChipLabel,
   notesChipParts,
+  notesSettingsValue,
   listenClock,
   listenShowsRecClock,
   listenDetectChip,
@@ -18,6 +20,7 @@ import {
   notesInChip,
   recClock,
   sameSpokenLine,
+  spokenSettingsValue,
   showLineTranslation,
   showLiveTranslation,
   translateFromChip,
@@ -130,7 +133,24 @@ eq(
 )
 eq(IPHONE_COPY.emptyNotes, 'Start listening', 'Notes empty stays Start listening')
 eq(IPHONE_COPY.readyHelp, 'Tap start to capture, transcribe, and organize your conversation in real time.', 'help stays under Ready to listen')
+eq(IPHONE_COPY.readyTitleShort, 'Ready to listen', 'ready stage title has no trailing period')
+eq(IPHONE_COPY.readyHelpCapture, "Capture your conversation. We'll organize the rest.", 'ready stage help is the capture line')
+eq(IPHONE_COPY.recordingSetup, 'Recording setup', 'scene sheet title')
+eq(IPHONE_COPY.notesSheetHelp, 'Notes are written in this language only', 'notes sheet help stays')
+eq(spokenSettingsValue('auto'), 'Auto-detect', 'ready spoken row shows Auto-detect')
+eq(spokenSettingsValue('zh'), 'Chinese', 'ready spoken row shows the language name')
+eq(notesSettingsValue('auto'), 'Auto', 'ready notes row shows Auto')
+eq(notesSettingsValue('zh'), 'Chinese', 'ready notes row shows the language name')
 eq(IPHONE_COPY.aiNote, 'Your AI listening assistant, ready when you are.', 'closing line is the product line')
+
+const readyBase = { phone: true, listening: false, paused: false, ended: false, lines: 0, partial: false }
+eq(isListenReadyView(readyBase), true, 'phone idle empty session is ready')
+eq(isListenReadyView({ ...readyBase, listening: true }), false, 'listening is not ready')
+eq(isListenReadyView({ ...readyBase, paused: true }), false, 'paused is not ready')
+eq(isListenReadyView({ ...readyBase, ended: true }), false, 'ended is not ready')
+eq(isListenReadyView({ ...readyBase, lines: 1 }), false, 'lines are not ready')
+eq(isListenReadyView({ ...readyBase, partial: true }), false, 'partial is not ready')
+eq(isListenReadyView({ ...readyBase, phone: false }), false, 'desktop is not the ready page')
 eq(IPHONE_COPY.pausedStatus, 'Paused', 'paused status stays Paused')
 eq(IPHONE_COPY.endedStatus, 'Ended', 'ended status is Ended')
 eq(listenControlMode({ listening: true, paused: false, ended: true, hasContent: true }), 'recording', 'live chrome wins over ended')
