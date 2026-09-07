@@ -6,6 +6,7 @@ import {
   MEETING_SPEAKER_OPTIONS,
   SCENE_HELP,
   bilingualDisabled,
+  listenMetaLine,
   notesBodyText,
   parseBiLines,
   parseNotes,
@@ -454,6 +455,7 @@ function IphoneSettingsList({
   speechLang,
   notesLang,
   qa,
+  help,
   sceneRef,
   speechRef,
   notesRef,
@@ -466,6 +468,7 @@ function IphoneSettingsList({
   speechLang: Lang
   notesLang: Lang
   qa: boolean
+  help?: string
   sceneRef: Ref<HTMLButtonElement>
   speechRef: Ref<HTMLButtonElement>
   notesRef: Ref<HTMLButtonElement>
@@ -495,6 +498,7 @@ function IphoneSettingsList({
           <SettingsChevron />
         </button>
       )}
+      {help ? <p className="iphone-settings-help">{help}</p> : null}
     </div>
   )
 }
@@ -952,10 +956,11 @@ export default function ListenPane(props: Props) {
   const sections = useMemo(() => visibleSections(props.scene, notes), [props.scene, notes])
   const lecture = props.scene === 'lecture'
   const notesHeading = notesPageTitle(props.scene)
+  const paused = Boolean(props.paused)
   const ready = isListenReadyView({
     phone,
     listening: props.listening,
-    paused: Boolean(props.paused),
+    paused,
     ended: props.ended,
     lines: props.lines.length,
     partial: Boolean(props.partial),
@@ -978,6 +983,13 @@ export default function ListenPane(props: Props) {
     if (draftScene === 'meeting') props.onMeetingSpeakers(draftSpeakers)
     setSheet(null)
   }
+  const settingsLockedUi = phone && (props.listening || paused)
+  const settingsEndedUi = phone && props.ended && !props.listening && !paused
+  const settingsEditable = ready || settingsEndedUi
+
+  useEffect(() => {
+    if (props.listening || paused) setSheet(null)
+  }, [props.listening, paused])
 
   useEffect(() => {
     setNotesW(readNotesW(props.scene))
@@ -1036,7 +1048,6 @@ export default function ListenPane(props: Props) {
   }
   const lastHeard = ((props.ended ? '' : props.partial) || props.lines[props.lines.length - 1]?.text || '').trim()
   const hasHeardText = Boolean(lastHeard)
-  const paused = Boolean(props.paused)
   const liveMode = liveStageMode({
     listening: props.listening,
     elapsedMs: props.elapsedMs || 0,
@@ -1160,6 +1171,23 @@ export default function ListenPane(props: Props) {
           </button>
         </div>
   ) : null
+
+  const settingsList = (help?: string) => (
+    <IphoneSettingsList
+      scene={props.scene}
+      speakersId={props.meetingSpeakersId}
+      speechLang={props.speechLang}
+      notesLang={props.notesLang}
+      qa={Boolean(props.qa)}
+      help={help}
+      sceneRef={sceneRowRef}
+      speechRef={speechRowRef}
+      notesRef={notesRowRef}
+      onScene={openSceneSheet}
+      onSpeech={() => setSheet('speech')}
+      onNotes={() => setSheet('notes')}
+    />
+  )
 
   const setupSheets = (
     <>
@@ -1308,25 +1336,27 @@ export default function ListenPane(props: Props) {
             <b>{IPHONE_COPY.readyTitleShort}</b>
             <p className="iphone-stage-help">{IPHONE_COPY.readyHelpCapture}</p>
           </div>
-          <IphoneSettingsList
-            scene={props.scene}
-            speakersId={props.meetingSpeakersId}
-            speechLang={props.speechLang}
-            notesLang={props.notesLang}
-            qa={Boolean(props.qa)}
-            sceneRef={sceneRowRef}
-            speechRef={speechRowRef}
-            notesRef={notesRowRef}
-            onScene={openSceneSheet}
-            onSpeech={() => setSheet('speech')}
-            onNotes={() => setSheet('notes')}
-          />
+          {settingsList()}
           {props.actions}
         </div>
       ) : phone ? (
         <div className="iphone-stack">
           {props.actions}
-          {controls}
+          {settingsLockedUi ? (
+            <p className="iphone-meta" aria-label={IPHONE_COPY.settingsReadonlyAria}>
+              {listenMetaLine({
+                scene: props.scene,
+                speakersId: props.meetingSpeakersId,
+                speechLang: props.speechLang,
+                notesLang: props.notesLang,
+                qa: Boolean(props.qa),
+              })}
+            </p>
+          ) : settingsEndedUi ? (
+            settingsList(IPHONE_COPY.appliesToNextRecording)
+          ) : (
+            controls
+          )}
           {tabs}
         </div>
       ) : (
@@ -1350,7 +1380,9 @@ export default function ListenPane(props: Props) {
         <IphoneMicStage listening={props.listening} />
       ) : null}
 
-      {ready ? setupSheets : props.qa ? (
+      {settingsEditable ? setupSheets : null}
+
+      {ready ? null : props.qa ? (
         <div className="listen-qa">
           {props.qaSlot}
         </div>

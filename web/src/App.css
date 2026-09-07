@@ -6279,6 +6279,8 @@ html.nod-phone .app.iphone-v2 .iphone-stack {
 
 html.nod-phone .app.iphone-v2 .iphone-stack .iphone-actions,
 html.nod-phone .app.iphone-v2 .iphone-stack .listen-controls,
+html.nod-phone .app.iphone-v2 .iphone-stack .iphone-meta,
+html.nod-phone .app.iphone-v2 .iphone-stack .iphone-settings,
 html.nod-phone .app.iphone-v2 .iphone-stack .listen-mobile-tabs,
 html.nod-phone .app.iphone-v2 .iphone-stack .tr-toolbar {
   width: 100%;
@@ -8532,6 +8534,25 @@ html.nod-phone .app.iphone-v2 .iphone-settings-chevron {
   color: var(--nod-muted);
   font-size: 22px;
   line-height: 1;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-meta {
+  margin: 4px 0 12px;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--nod-muted);
+  pointer-events: none;
+  user-select: none;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-settings-help {
+  margin: 0;
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--nod-line);
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--nod-muted);
 }
 
 html.nod-phone .app.iphone-v2 .phone-sheet-backdrop {

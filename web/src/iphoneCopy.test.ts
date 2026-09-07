@@ -30,6 +30,7 @@ import {
   translateTargetChip,
   translateToChip,
 } from './iphoneCopy'
+import { listenMetaLine } from './listen'
 
 function eq<T>(got: T, want: T, label: string) {
   if (got !== want) throw new Error(`${label}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`)
@@ -149,6 +150,35 @@ eq(spokenSettingsValue('zh'), 'Chinese', 'ready spoken row shows the language na
 eq(notesSettingsValue('auto'), 'Auto', 'ready notes row shows Auto')
 eq(notesSettingsValue('zh'), 'Chinese', 'ready notes row shows the language name')
 eq(IPHONE_COPY.aiNote, 'Your AI listening assistant, ready when you are.', 'closing line is the product line')
+eq(IPHONE_COPY.autoNotes, 'Auto notes', 'meta line auto notes segment')
+eq(IPHONE_COPY.appliesToNextRecording, 'Applies to next recording', 'ended settings help')
+eq(IPHONE_COPY.settingsLocked, 'Settings are locked while recording', 'locked settings toast')
+eq(IPHONE_COPY.settingsReadonlyAria, 'Session settings (read-only while recording)', 'meta line aria')
+eq(
+  listenMetaLine({ scene: 'meeting', speakersId: '2', speechLang: 'auto', notesLang: 'zh' }),
+  'Meeting · Auto-detect · Chinese notes',
+  'Meeting 2 drops the speaker badge',
+)
+eq(
+  listenMetaLine({ scene: 'meeting', speakersId: '3-4', speechLang: 'auto', notesLang: 'zh' }),
+  'Meeting · 3–4 · Auto-detect · Chinese notes',
+  'Meeting 3–4 keeps the speaker badge',
+)
+eq(
+  listenMetaLine({ scene: 'meeting', speakersId: '5+', speechLang: 'en', notesLang: 'auto' }),
+  'Meeting · 5+ · English · Auto notes',
+  'auto notes language is Auto notes',
+)
+eq(
+  listenMetaLine({ scene: 'lecture', speakersId: '5+', speechLang: 'auto', notesLang: 'en' }),
+  'Lecture · Auto-detect · English notes',
+  'Lecture ignores the speaker badge',
+)
+eq(
+  listenMetaLine({ scene: 'interview', speakersId: '2', speechLang: 'auto', notesLang: 'zh', qa: true }),
+  'Live Q&A · Auto-detect',
+  'Live Q&A omits the notes segment',
+)
 
 const readyBase = { phone: true, listening: false, paused: false, ended: false, lines: 0, partial: false }
 eq(isListenReadyView(readyBase), true, 'phone idle empty session is ready')

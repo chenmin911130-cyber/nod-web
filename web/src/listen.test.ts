@@ -1,4 +1,4 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, SCENE_HELP, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, nodTag, notesBodyText, notesPrompt, outLangRule, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, speakersExpected, transcriptBlock } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, SCENE_HELP, applyListenSetting, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesPrompt, outLangRule, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakersExpected, transcriptBlock } from './listen'
 import type { MeetingLine } from './types'
 
 function eq<T>(got: T, want: T, label?: string) {
@@ -47,6 +47,76 @@ eq(sceneChipLabel('meeting', '2'), 'Meeting', 'meeting default 2 has no badge')
 eq(sceneChipLabel('meeting', '3-4'), 'Meeting · 3–4', 'meeting 3-4 badge uses en-dash')
 eq(sceneChipLabel('meeting', '5+'), 'Meeting · 5+', 'meeting 5+ badge')
 eq(sceneChipLabel('lecture', '5+'), 'Lecture', 'lecture ignores the speaker badge')
+
+eq(settingsLocked({ capture: 'off' }), false, 'off is unlocked')
+eq(settingsLocked({ capture: 'listening' }), true, 'listening is locked')
+eq(settingsLocked({ capture: 'recording' }), true, 'recording is locked')
+eq(settingsLocked({ capture: 'paused' }), true, 'paused is locked')
+eq(listenSettingsBlocked({ capture: 'listening', workspaceMode: 'meeting' }), true, 'Listen settings block while listening')
+eq(listenSettingsBlocked({ capture: 'paused', workspaceMode: 'interview' }), true, 'Listen settings block while paused')
+eq(listenSettingsBlocked({ capture: 'off', workspaceMode: 'meeting' }), false, 'Listen settings unlock when capture is off')
+eq(listenSettingsBlocked({ capture: 'listening', workspaceMode: 'translate' }), false, 'Translate language switching stays unlocked')
+eq(
+  listenMetaLine({ scene: 'meeting', speakersId: '3-4', speechLang: 'ja', notesLang: 'zh' }),
+  'Meeting · 3–4 · Japanese · Chinese notes',
+  'concrete speech and notes languages',
+)
+
+{
+  let sent = 0
+  let applied = 0
+  eq(applyListenSetting({
+    capture: 'listening',
+    workspaceMode: 'meeting',
+    send: () => { sent += 1 },
+    apply: () => { applied += 1 },
+  }), 'locked', 'listening blocks send and apply')
+  eq([sent, applied], [0, 0], 'locked listening does not dispatch or send')
+}
+{
+  let sent = 0
+  let applied = 0
+  eq(applyListenSetting({
+    capture: 'recording',
+    workspaceMode: 'meeting',
+    send: () => { sent += 1 },
+    apply: () => { applied += 1 },
+  }), 'locked', 'recording blocks send and apply')
+  eq([sent, applied], [0, 0], 'locked recording does not dispatch or send')
+}
+{
+  let sent = 0
+  let applied = 0
+  eq(applyListenSetting({
+    capture: 'paused',
+    workspaceMode: 'interview',
+    send: () => { sent += 1 },
+    apply: () => { applied += 1 },
+  }), 'locked', 'paused blocks send and apply')
+  eq([sent, applied], [0, 0], 'locked paused does not dispatch or send')
+}
+{
+  let sent = 0
+  let applied = 0
+  eq(applyListenSetting({
+    capture: 'off',
+    workspaceMode: 'meeting',
+    send: () => { sent += 1 },
+    apply: () => { applied += 1 },
+  }), 'applied', 'ended/ready applies send and state')
+  eq([sent, applied], [1, 1], 'unlocked Listen still sends set_*')
+}
+{
+  let sent = 0
+  let applied = 0
+  eq(applyListenSetting({
+    capture: 'listening',
+    workspaceMode: 'translate',
+    send: () => { sent += 1 },
+    apply: () => { applied += 1 },
+  }), 'applied', 'Translate workspace is not this lock')
+  eq([sent, applied], [1, 1], 'Translate still sends while listening')
+}
 
 eq(sceneLabel('interview'), 'Live Q&A')
 eq(LISTEN_SCENES.find((s) => s.id === 'interview')?.label, 'Live Q&A')
