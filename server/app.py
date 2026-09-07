@@ -61,6 +61,7 @@ from server.meeting_lines import (
     last_sentence_index as meeting_last_sentence_index,
     tail_meta as meeting_tail_meta,
 )
+from server.turn_pacing import cut_decision, split_carry, turn_pacing_from_env, word_span_ms
 from server.logging_setup import backup_now, setup_logging
 from server.settings import (
     AUTH_DISABLED,
@@ -1761,6 +1762,10 @@ class CloudListener:
         self._drop_sent = False
         self._terminated = threading.Event()
         self._turn_order = 0
+        pacing = (cfg.get("stt") or {}).get("turn_pacing")
+        self._turn_pacing = pacing if isinstance(pacing, dict) else None
+        self._force_inflight = 0.0
+        self._force_pending = False
 
     def set_muted(self, muted: bool) -> None:
         self._muted = bool(muted)
@@ -1789,6 +1794,8 @@ class CloudListener:
         self._fail = []
         self._was_ready = False
         self._drop_sent = False
+        self._force_pending = False
+        self._force_inflight = 0.0
         self._ws = websocket.WebSocketApp(
             url,
             header=[f"Authorization: {self.api_key}"],
@@ -1821,6 +1828,7 @@ class CloudListener:
     def _sender(self) -> None:
         import websocket
         while not self._stop.is_set():
+            self._flush_force_endpoint()
             try:
                 chunk = self._q.get(timeout=0.08)
             except queue.Empty:
@@ -1834,6 +1842,46 @@ class CloudListener:
                     self._notify_drop(str(e))
                 return
 
+    def _flush_force_endpoint(self) -> None:
+        if not self._force_pending:
+            return
+        ws = self._ws
+        if not (ws and getattr(ws, "sock", None) and ws.sock.connected):
+            return
+        try:
+            ws.send(json.dumps({"type": "ForceEndpoint"}))
+        except Exception as e:
+            if not self._stop.is_set():
+                self._notify_drop(str(e))
+            return
+        self._force_pending = False
+        self._force_inflight = time.time()
+
+    def _force_inflight_armed(self) -> bool:
+        if self._force_inflight <= 0:
+            return False
+        if time.time() - self._force_inflight >= 2.0:
+            self._force_inflight = 0.0
+            return False
+        return True
+
+    def _maybe_queue_translate_cut(self, data: dict[str, Any]) -> None:
+        if not self._turn_pacing:
+            return
+        words = data.get("words") or []
+        reason = cut_decision(words, self._turn_pacing, self._force_inflight_armed())
+        if reason == "none":
+            return
+        self._force_pending = True
+        open_ms, gap_ms = word_span_ms(words)
+        logging.getLogger("nod").info(
+            "translate_cut reason=%s open_ms=%s gap_ms=%s words=%s",
+            reason,
+            open_ms,
+            gap_ms,
+            len(words),
+        )
+
     def _on_message(self, _ws, message) -> None:
         try:
             data = json.loads(message)
@@ -1841,6 +1889,10 @@ class CloudListener:
             return
         kind = data.get("type")
         if kind == "Turn":
+            if data.get("end_of_turn"):
+                self._force_inflight = 0.0
+            else:
+                self._maybe_queue_translate_cut(data)
             text = (data.get("utterance") or data.get("transcript") or "").strip()
             if not text:
                 return
@@ -1948,6 +2000,8 @@ class CloudListener:
 
     def stop(self) -> None:
         self._stop.set()
+        self._force_pending = False
+        self._force_inflight = 0.0
         ws = self._ws
         self._ws = None
         if ws:
@@ -2000,6 +2054,7 @@ class Session:
         self._follow_switch_lang: str | None = None
         self._follow_switch_hits = 0
         self._recent_finals: list[tuple[str, float]] = []
+        self._translate_carry = ""
         self._mic_muted = False
         self._workspace = "interview"
         self._pending_speaker: str | None = None
@@ -2406,6 +2461,8 @@ class Session:
                 stt["speakers_expected"] = 4 if scene == "lecture" else 2
         else:
             stt["speaker_labels"] = False
+        if self._workspace == "translate":
+            stt["turn_pacing"] = turn_pacing_from_env()
         recent = [t for t, _ in self._recent_finals[-6:]]
         stt["context_terms"] = _stt_context_terms(recent)
         stt["context_prompt"] = _stt_context_prompt(recent[-3:])
@@ -2460,6 +2517,7 @@ class Session:
             lst = self._listener
             self._listener = None
             self._stop_listener(lst)
+            self._flush_translate_carry("restart")
             self._start_listening(resume=True)
 
     def _on_listen_taken(self) -> None:
@@ -2531,6 +2589,40 @@ class Session:
     def _remember_final(self, text: str) -> None:
         self._recent_finals.append((text, time.time()))
         self._recent_finals = self._recent_finals[-8:]
+
+    def _emit_translate_pieces(self, text: str, heard: str | None, speaker: str | None) -> None:
+        piece_src = (text or "").strip()
+        if not piece_src:
+            return
+        # 不取消在途翻译：取消会让被中断的句子等 25s 超时重试（双倍 token + 字幕卡死）。
+        # 新 final 照常入队，前端 pump 一次只发一条，翻译自然串行。
+        self._pending_q.clear()
+        self._pending_wait = (None, 0.0, None)
+        for piece in split_code_switched(piece_src):
+            piece_heard = heard_lang_from_text(piece, heard)
+            self._maybe_follow_speech(piece, piece_heard)
+            self._remember_final(piece)
+            ev: dict[str, Any] = {"type": "question", "id": self.pipeline._new_qid(), "text": piece}
+            if piece_heard:
+                ev["language"] = piece_heard
+            if speaker:
+                ev["speaker"] = speaker
+            self.emit(ev)
+
+    def _flush_translate_carry(self, reason: str) -> None:
+        carry = (getattr(self, "_translate_carry", "") or "").strip()
+        if not carry:
+            return
+        logging.getLogger("nod").info(
+            "translate_carry_flush reason=%s len=%s",
+            reason,
+            len(carry),
+        )
+        if getattr(self, "_workspace", "") == "translate":
+            locked = self._effective_stt_lang()
+            heard = heard_lang_from_text(carry, locked) if locked else heard_lang_from_text(carry, None)
+            self._emit_translate_pieces(carry, heard, None)
+        self._translate_carry = ""
 
     def _maybe_follow_speech(self, text: str, heard: str | None) -> None:
         if self._effective_stt_lang():
@@ -2949,6 +3041,8 @@ class Session:
         prev = self._workspace
         prev_lang = self._effective_stt_lang(prev)
         prev_url = assemblyai_ws_url(self._stt_cfg()) if self._listener else ""
+        if prev == "translate" and mode != "translate":
+            self._flush_translate_carry("workspace")
         self._workspace = mode
         if str(scene or "").strip().lower() in ("meeting", "lecture", "interview"):
             self.cfg.setdefault("stt", {})["listen_scene"] = str(scene).strip().lower()
@@ -3011,6 +3105,7 @@ class Session:
         if self._listener:
             self._stop_listening()
         else:
+            self._flush_translate_carry("stop")
             self._emit_phase()
             self.emit({"type": "status", "text": STATUS_READY})
         self._offer_save_history()
@@ -3038,6 +3133,7 @@ class Session:
                 lst = self._listener
                 self._listener = None
             self._stop_listener(lst)
+        self._flush_translate_carry("pause")
         # Flush any held half-sentence, drain the worker (its queued finals may
         # re-open _open_line via _hold_or_emit_meeting), THEN close the open line
         # so the first final after Resume starts a fresh line (issue #29/#31 P1-c).
@@ -3248,6 +3344,7 @@ class Session:
             lst = self._listener
             self._listener = None
         self._stop_listener(lst)
+        self._flush_translate_carry("stop")
         if self._workspace == "interview":
             self._cancel_interview_wait_timer()
             self._flush_interview_wait()
@@ -3574,27 +3671,28 @@ class Session:
                 return
         if self._workspace == "translate":
             locked = self._effective_stt_lang()
-            # A locked Translate From: emit the locked language so the turn
-            # stays semantically clean, instead of a mis-tagged/guessed 'en'.
-            heard = heard_lang_from_text(cleaned, locked) if locked else heard_lang_from_text(cleaned, lang)
+            raw = cleaned
+            carry = (getattr(self, "_translate_carry", "") or "").strip()
+            joined = join_meeting_text(carry, raw) if carry else raw
+            heard = heard_lang_from_text(joined, locked) if locked else heard_lang_from_text(joined, lang)
+            if carry:
+                head, tail = split_carry(joined)
+                if not head:
+                    self._emit_translate_pieces(joined, heard, speaker)
+                    self._translate_carry = ""
+                    return
+                self._emit_translate_pieces(head, heard, speaker)
+                self._translate_carry = tail
+                return
+            head, tail = split_carry(joined)
+            if not head:
+                self._translate_carry = tail
+                return
+            self._emit_translate_pieces(head, heard, speaker)
+            self._translate_carry = tail
+            return
         else:
             heard = heard_lang_from_text(cleaned, lang)
-        if self._workspace == "translate":
-            # 不取消在途翻译：取消会让被中断的句子等 25s 超时重试（双倍 token + 字幕卡死）。
-            # 新 final 照常入队，前端 pump 一次只发一条，翻译自然串行。
-            self._pending_q.clear()
-            self._pending_wait = (None, 0.0, None)
-            for piece in split_code_switched(cleaned):
-                piece_heard = heard_lang_from_text(piece, heard)
-                self._maybe_follow_speech(piece, piece_heard)
-                self._remember_final(piece)
-                ev: dict[str, Any] = {"type": "question", "id": self.pipeline._new_qid(), "text": piece}
-                if piece_heard:
-                    ev["language"] = piece_heard
-                if speaker:
-                    ev["speaker"] = speaker
-                self.emit(ev)
-            return
         if self._workspace == "meeting":
             self._enqueue_meeting_final(cleaned, lang, speaker, meta)
             return
