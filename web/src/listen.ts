@@ -6,9 +6,13 @@ function langName(lang: PairLang): string {
   return TRANSLATE_LANGS.find((item) => item.id === lang)?.name ?? 'Chinese'
 }
 
-export function outLangRule(outLang: Lang, kind: 'answer' | 'catch-up' | 'json', bilingual = false): string {
+export function outLangRule(outLang: Lang, kind: 'answer' | 'catch-up' | 'json', bilingual = false, biTarget?: PairLang): string {
   if (bilingual) {
-    const name = outLang === 'auto' ? 'the listener notes language, or Chinese if unclear' : langName(outLang)
+    const name = biTarget
+      ? langName(biTarget)
+      : outLang === 'auto'
+        ? 'the listener notes language, or Chinese if unclear'
+        : langName(outLang)
     if (kind === 'json') {
       return (
         `BILINGUAL (hard rule): Every JSON string value has TWO lines. Line 1 is the transcript / source language. ` +
@@ -37,34 +41,38 @@ export function outLangRule(outLang: Lang, kind: 'answer' | 'catch-up' | 'json',
   return `OUTPUT LANGUAGE (hard rule): Write the entire answer in ${name} only. Do not follow the transcript language.\n`
 }
 
-export function nodTag(kind: 'ASK' | 'CATCH' | 'NOTES', outLang: Lang, bilingual: boolean, scene?: ListenScene): string {
-  const extra = bilingual ? ':bi' : ''
+export function nodTag(
+  kind: 'ASK' | 'CATCH' | 'NOTES',
+  outLang: Lang,
+  bilingual: boolean,
+  scene?: ListenScene,
+  biTarget?: PairLang,
+): string {
+  const extra = bilingual ? (biTarget ? `:bi-${biTarget}` : ':bi') : ''
   if (kind === 'NOTES') return `[NOD_NOTES:${scene}:${outLang}${extra}]`
   return `[NOD_${kind}:${outLang}${extra}]`
 }
 
-// Bilingual output needs a concrete translation target. With the notes language
-// and the translate target now decoupled, an auto notes language still has a
-// concrete translateTo, so the toggle stays enabled and the target comes from
-// translateTo. Only a missing target disables it.
-export function bilingualDisabled(notesLang: Lang, translateOn: boolean, translateTo?: PairLang): boolean {
+// Bilingual output needs a concrete translation target. Auto notes still has
+// notesTranslateTo, so the toggle stays enabled. Only a missing target disables it.
+export function bilingualDisabled(notesLang: Lang, translateOn: boolean, notesTranslateTo?: PairLang): boolean {
   if (notesLang !== 'auto') return false
-  if (translateTo) return false
+  if (notesTranslateTo) return false
   return !translateOn
 }
 
 // The notes/translate language selector drives decoupled state. In the Meeting /
 // Lecture notes dropdown, picking a concrete language sets BOTH the notes
-// language and the translation target (the one control old that behavior);
-// picking "auto" sets only the notes language. In the Translate workspace,
-// changing the target affects only translateTo — never the notes language.
+// language and notesTranslateTo; picking "auto" sets only the notes language.
+// In the Translate workspace, changing the target affects only translateTo.
 export type LangDispatch =
   | { type: 'translate_to'; lang: PairLang }
   | { type: 'notes_lang'; lang: Lang }
+  | { type: 'notes_translate_to'; lang: PairLang }
 
 export function notesLangActions(workspaceMode: string, lang: Lang): LangDispatch[] {
   if (lang === 'auto') return [{ type: 'notes_lang', lang: 'auto' }]
-  if (workspaceMode !== 'translate') return [{ type: 'translate_to', lang }, { type: 'notes_lang', lang }]
+  if (workspaceMode !== 'translate') return [{ type: 'notes_translate_to', lang }, { type: 'notes_lang', lang }]
   return [{ type: 'translate_to', lang }]
 }
 
@@ -521,11 +529,12 @@ export function askPrompt(
   outLang: Lang = 'zh',
   bilingual = false,
   names: Record<string, string> = {},
+  biTarget?: PairLang,
 ): string {
   const ask = question.trim()
   return (
-    `${nodTag('ASK', outLang, bilingual)}\n` +
-    outLangRule(outLang, 'answer', bilingual) +
+    `${nodTag('ASK', outLang, bilingual, undefined, biTarget)}\n` +
+    outLangRule(outLang, 'answer', bilingual, biTarget) +
     `Listener question: ${ask}\n` +
     `Transcript (use when relevant; if empty, say you have not heard enough yet and still answer what you can):\n` +
     `${transcriptBlock(lines, bilingual, names) || '(empty)'}`
@@ -543,6 +552,7 @@ export function notesPrompt(
   bilingual = false,
   names: Record<string, string> = {},
   cap?: { dropped: number; fromTs: string | null },
+  biTarget?: PairLang,
 ): string {
   const follow =
     scene === 'lecture'
@@ -551,7 +561,7 @@ export function notesPrompt(
         ? 'followUps = thank-you note / materials to send'
         : 'followUps = next check-ins'
   return (
-    `${nodTag('NOTES', outLang, false, scene)}\n` +
+    `${nodTag('NOTES', outLang, false, scene, biTarget)}\n` +
     outLangRule(outLang, 'json', false) +
     `Write structured notes for a ${scene}. Use only the transcript. Do not invent names, numbers, or commitments.\n` +
     'Return JSON only with keys: summary (string), takeaways, keyPoints, decisions, actionItems, importantDetails, followUps, revisionNotes, speakers.\n' +

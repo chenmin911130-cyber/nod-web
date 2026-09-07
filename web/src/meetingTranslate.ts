@@ -25,3 +25,14 @@ export function meetingLinesAfterTargetChange(lines: MeetingLine[], prevLang: Pa
   if (lang === prevLang) return lines
   return lines.map((ln) => (ln.translateFailed ? { ...ln, translateFailed: false } : ln))
 }
+
+/** notes_translate_to reducer: reset give-up flags while live; after End, leave lines alone. */
+export function applyNotesTranslateTo(
+  lines: MeetingLine[],
+  prevLang: PairLang,
+  lang: PairLang,
+  meetingEnded: boolean,
+): MeetingLine[] {
+  if (lang === prevLang || meetingEnded) return lines
+  return meetingLinesAfterTargetChange(lines, prevLang, lang)
+}

@@ -1,4 +1,4 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, SCENE_HELP, applyListenSetting, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesPrompt, outLangRule, parseNotes, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakersExpected, transcriptBlock } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, SCENE_HELP, applyListenSetting, askPrompt, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesLangActions, notesPrompt, outLangRule, parseNotes, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakersExpected, transcriptBlock } from './listen'
 import type { MeetingLine } from './types'
 
 function eq<T>(got: T, want: T, label?: string) {
@@ -8,6 +8,24 @@ function eq<T>(got: T, want: T, label?: string) {
 }
 
 eq(nodTag('NOTES', 'zh', false, 'meeting'), '[NOD_NOTES:meeting:zh]', 'notes tag keeps scene')
+
+eq(
+  notesLangActions('meeting', 'ja'),
+  [{ type: 'notes_translate_to', lang: 'ja' }, { type: 'notes_lang', lang: 'ja' }],
+  'meeting concrete notes sets notesTranslateTo, not translateTo',
+)
+eq(notesLangActions('translate', 'ja'), [{ type: 'translate_to', lang: 'ja' }], 'translate target stays translate_to')
+eq(notesLangActions('meeting', 'auto'), [{ type: 'notes_lang', lang: 'auto' }], 'auto notes leaves the bilingual target put')
+{
+  const rule = outLangRule('auto', 'answer', true, 'ja')
+  if (!rule.includes('Japanese')) throw new Error(`bilingual auto rule names Japanese, got ${rule}`)
+  if (rule.includes('Chinese if unclear')) throw new Error('bilingual auto rule must not fall back to Chinese if unclear')
+}
+{
+  const prompt = askPrompt([{ id: '1', ts: '0:01', text: 'Hi' }], 'q', 'auto', true, {}, 'ja')
+  const first = prompt.split('\n', 1)[0]
+  eq(first, '[NOD_ASK:auto:bi-ja]', 'ask tag carries bi-ja, not a colon-split ja out-lang')
+}
 
 // D (phase 1): Bilingual is dead when Notes = Auto. But an already-ON Bilingual
 // must stay toggleable OFF, so it is only disabled when it is NOT on.

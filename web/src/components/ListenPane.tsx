@@ -21,10 +21,12 @@ import {
 import { speakerSuggestions } from '../speakerSuggest'
 import {
   IPHONE_COPY,
+  bilingualButtonTitle,
   isListenReadyView,
   listenChipParts,
   nativeListenChipOrder,
   notesChipParts,
+  notesInChip,
   notesPageTitle,
   notesSettingsValue,
   showLineTranslation,
@@ -41,7 +43,7 @@ import SpeakerAvatar from './SpeakerAvatar'
 interface Props {
   scene: ListenScene
   translateOn: boolean
-  translateTo: PairLang
+  notesTranslateTo: PairLang
   notesLang: Lang
   lines: MeetingLine[]
   speakerNames: Record<string, string>
@@ -227,14 +229,20 @@ function useDismiss(open: boolean, onClose: () => void) {
 function LangSelect({
   value,
   onChange,
+  notesTranslateTo,
+  translateOn,
 }: {
   value: Lang
   onChange: (lang: Lang) => void
+  notesTranslateTo: PairLang
+  translateOn: boolean
 }) {
   const [open, setOpen] = useState(false)
   const boxRef = useDismiss(open, () => setOpen(false))
   const current = NOTES_LANGS.find((l) => l.id === value)
   const phone = usePhoneChrome()
+  const biTarget = translateOn && value === 'auto' ? notesTranslateTo : undefined
+  const chipTitle = notesInChip(value, biTarget)
 
   return (
     <div className={`listen-lang-box${open ? ' open' : ''}`} ref={boxRef}>
@@ -243,7 +251,9 @@ function LangSelect({
         className={`listen-lang-pair-btn${open ? ' on' : ''}`}
         title={
           value === 'auto'
-            ? 'Notes follow the language you speak.'
+            ? biTarget
+              ? `Notes follow the language you speak · translations in ${TRANSLATE_LANGS.find((l) => l.id === biTarget)?.name || 'Chinese'}`
+              : 'Notes follow the language you speak.'
             : current
               ? `Notes language · ${current.name}`
               : 'Choose notes language'
@@ -257,10 +267,10 @@ function LangSelect({
         {phone ? <ChipNotes /> : null}
         {phone ? (
           <span className="iphone-chip-copy">
-            <b>{notesChipParts(value).title}</b>
+            <b>{notesChipParts(value, biTarget).title}</b>
           </span>
         ) : (
-          <span className="listen-lang-tag">{current?.tag ?? 'EN'}</span>
+          <span className="listen-lang-tag">{biTarget ? chipTitle : (current?.tag ?? 'EN')}</span>
         )}
         {phone ? null : <Chevron />}
       </button>
@@ -299,12 +309,14 @@ function SpeechLangSelect({
   onChange,
   enhanceOn,
   onEnhance,
+  enhanceTarget,
 }: {
   value: Lang
   heard?: PairLang | null
   onChange: (lang: Lang) => void
   enhanceOn?: boolean
   onEnhance?: (on: boolean) => void
+  enhanceTarget?: PairLang
 }) {
   const [open, setOpen] = useState(false)
   const boxRef = useDismiss(open, () => setOpen(false))
@@ -365,6 +377,7 @@ function SpeechLangSelect({
               role="option"
               aria-selected={Boolean(enhanceOn)}
               className={enhanceOn ? 'on' : ''}
+              title={enhanceTarget ? bilingualButtonTitle(Boolean(enhanceOn), enhanceTarget) : undefined}
               onClick={() => {
                 onEnhance(!enhanceOn)
                 setOpen(false)
@@ -1195,13 +1208,11 @@ export default function ListenPane(props: Props) {
             className={`listen-icon-btn listen-side-left listen-bi-btn${props.translateOn ? ' on' : ''}`}
             role="switch"
             aria-checked={props.translateOn}
-            disabled={bilingualDisabled(props.notesLang, props.translateOn, props.translateTo)}
+            disabled={bilingualDisabled(props.notesLang, props.translateOn, props.notesTranslateTo)}
             title={
-              bilingualDisabled(props.notesLang, props.translateOn, props.translateTo)
+              bilingualDisabled(props.notesLang, props.translateOn, props.notesTranslateTo)
                 ? 'Bilingual needs a notes language — pick one first'
-                : props.translateOn
-                  ? 'Bilingual on — tap to turn off'
-                  : 'Bilingual off — tap to show translations'
+                : bilingualButtonTitle(props.translateOn, props.notesTranslateTo)
             }
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => props.onTranslate(!props.translateOn)}
@@ -1224,11 +1235,12 @@ export default function ListenPane(props: Props) {
                     onChange={props.onSpeechLang}
                     enhanceOn={props.qa ? undefined : props.translateOn}
                     onEnhance={props.qa ? undefined : props.onTranslate}
+                    enhanceTarget={props.qa ? undefined : props.notesTranslateTo}
                   />
                 )
               }
               if (chip === 'notes' && !props.qa) {
-                return <LangSelect key="notes" value={props.notesLang} onChange={props.onTranslateTo} />
+                return <LangSelect key="notes" value={props.notesLang} onChange={props.onTranslateTo} notesTranslateTo={props.notesTranslateTo} translateOn={props.translateOn} />
               }
               return null
             })}
@@ -1243,7 +1255,7 @@ export default function ListenPane(props: Props) {
                 onChange={props.onSpeechLang}
               />
               <span className="listen-lang-dash" aria-hidden="true">-</span>
-              <LangSelect value={props.notesLang} onChange={props.onTranslateTo} />
+              <LangSelect value={props.notesLang} onChange={props.onTranslateTo} notesTranslateTo={props.notesTranslateTo} translateOn={props.translateOn} />
             </div>
           </>
         ) : (
@@ -1398,6 +1410,7 @@ export default function ListenPane(props: Props) {
               role="option"
               aria-selected={Boolean(props.translateOn)}
               className={props.translateOn ? 'on' : ''}
+              title={bilingualButtonTitle(Boolean(props.translateOn), props.notesTranslateTo)}
               onClick={() => {
                 props.onTranslate(!props.translateOn)
                 closeSheet()

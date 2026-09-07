@@ -141,3 +141,45 @@ def test_listen_ask_lang_parse_edges():
         f"Listener question: {ZH_ASK}\nTranscript (tail):\n{IT_TRANSCRIPT}",
         locked="it",
     ) == "zh"
+
+
+def _pipe() -> Pipeline:
+    pipe = Pipeline.__new__(Pipeline)
+    pipe.cfg = {"llm": {}, "stt": {"language": None}}
+    return pipe
+
+
+def test_bi_ja_tag_keeps_auto_out_lang_and_names_japanese():
+    pipe = _pipe()
+    q = "[NOD_ASK:auto:bi-ja]\n" + _auto_body(CHIP, EN_TRANSCRIPT)
+    assert pipe._out_lang_from_tag(q) is None
+    assert pipe._bilingual_from_tag(q) == "ja"
+    sys_msg = pipe._build_messages(q, "listen_ask")[0]["content"]
+    assert "Japanese translation" in sys_msg
+    assert "Chinese if unclear" not in sys_msg
+
+
+def test_zh_out_lang_with_bi_ja_target():
+    pipe = _pipe()
+    q = (
+        "[NOD_ASK:zh:bi-ja]\n"
+        "OUTPUT LANGUAGE (hard rule): Write the entire answer in Chinese only.\n"
+        f"Listener question: {ZH_ASK}\n"
+        "Transcript (use when relevant; if empty, say you have not heard enough yet "
+        "and still answer what you can):\n"
+        f"{EN_TRANSCRIPT}"
+    )
+    assert pipe._out_lang_from_tag(q) == "zh"
+    assert pipe._bilingual_from_tag(q) == "ja"
+    sys_msg = pipe._build_messages(q, "listen_ask")[0]["content"]
+    assert "Japanese translation" in sys_msg
+
+
+def test_bare_bi_old_client_keeps_chinese_if_unclear():
+    pipe = _pipe()
+    q = "[NOD_ASK:auto:bi]\n" + _auto_body(CHIP, EN_TRANSCRIPT)
+    assert pipe._out_lang_from_tag(q) is None
+    assert pipe._bilingual_from_tag(q) == "auto"
+    sys_msg = pipe._build_messages(q, "listen_ask")[0]["content"]
+    assert "Chinese if unclear" in sys_msg
+    assert "Japanese translation" not in sys_msg
