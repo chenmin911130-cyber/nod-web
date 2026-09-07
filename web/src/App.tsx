@@ -12,6 +12,7 @@ import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
 import { meetingRailIsPaused } from './meetingPause'
 import SavePrompt from './components/SavePrompt'
+import AccountPane from './components/AccountPane'
 import LeaveSessionSheet from './components/LeaveSessionSheet'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
@@ -46,7 +47,8 @@ import TranslatePane from './components/TranslatePane'
 import StatusToast from './components/StatusToast'
 import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
-import { api as authApi, fetchMe } from './auth'
+import { api as authApi, fetchMe, logout, type Me } from './auth'
+import { accountInitials, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
 import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchListenMode, watchShouldApplyMode, watchStartShouldPreferWatchMic } from './watch'
@@ -993,6 +995,7 @@ export default function App() {
   const lastRestoredKeepId = useRef<string | null>(null)
   const offerSaveAfterMeetingStopRef = useRef<() => void>(() => undefined)
   const doClearRef = useRef<() => void>(() => undefined)
+  const performSignOutRef = useRef<() => void>(() => undefined)
   const handleEngineKeepRef = useRef<(e: EngineEvent) => void>(() => undefined)
   // #36: a live session may show at most ONE Save UI. Set when the Save dialog is
   // first opened; gating the AUTO offers (Stop, save_prompt, reconnect Restore,
@@ -1117,6 +1120,9 @@ export default function App() {
     || (Boolean(state.currentQ) && state.currentQ !== PLACEHOLDER)
   )
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [accountOpen, setAccountOpen] = useState(false)
+  const [me, setMe] = useState<Me | null>(null)
+  const [signOutError, setSignOutError] = useState('')
   const [meetingSpeakersId, setMeetingSpeakersId] = useState<MeetingSpeakerId>(() => meetingSpeakerId())
   const [moreOpen, setMoreOpen] = useState(false)
   const restoreHistory = useCallback((session: HistorySession) => {
@@ -1205,8 +1211,9 @@ export default function App() {
   }, [clearOpen])
 
   useEffect(() => {
-    void fetchMe().then((me) => {
-      const ok = me ? Boolean(me.consent) : true
+    void fetchMe().then((user) => {
+      if (user) setMe(user)
+      const ok = user ? Boolean(user.consent) : true
       consentRef.current = ok
       setConsent(ok)
     })
@@ -1799,7 +1806,9 @@ export default function App() {
 
   handleEngineKeepRef.current = (e) => {
     if (e.type === 'save_prompt') {
-      const leaving = saveBookRef.current.pendingAfterSave === 'new' || pendingLeaveSaveRef.current
+      const leaving = saveBookRef.current.pendingAfterSave === 'new'
+        || saveBookRef.current.pendingAfterSave === 'signout'
+        || pendingLeaveSaveRef.current
       if (skipOfferSavePromptRef.current && !leaving) {
         skipOfferSavePromptRef.current = false
         return
@@ -1854,6 +1863,8 @@ export default function App() {
         pendingNewAfterSave.current = false
         doClearRef.current()
         dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.leaveSavedStatus } })
+      } else if (action === 'signout') {
+        performSignOutRef.current()
       }
       return
     }
@@ -1929,6 +1940,48 @@ export default function App() {
     setSavePromptMode('discard')
     setSavePrompt(true)
   }, [doClear])
+
+  const performSignOut = useCallback(() => {
+    setSignOutError('')
+    void logout()
+      .then(() => {
+        nativeGo(isNativeApp() ? '/login' : '/?signout=1')
+      })
+      .catch((ex: unknown) => {
+        setSignOutError(ex instanceof Error ? ex.message : 'Could not sign out')
+      })
+  }, [])
+  performSignOutRef.current = performSignOut
+
+  const handleSignOut = useCallback(() => {
+    const s = stateRef.current
+    const gate = signOutGate({
+      listening: sessionListening({ capture: s.capture }),
+      paused: s.capture === 'paused',
+      disposition: saveBookRef.current.status,
+      hasContent: meetingHasSaveableContent(s),
+      workspaceMode: s.workspaceMode,
+    })
+    if (gate === 'blocked-listening') {
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'Stop listening first' } })
+      return
+    }
+    if (gate === 'wait-saving') {
+      dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.saveSaving } })
+      return
+    }
+    if (gate === 'prompt') {
+      commitBook(setPendingAfterSave(saveBookRef.current, 'signout'))
+      setSavePromptMode('discard')
+      setSavePrompt(true)
+      return
+    }
+    performSignOut()
+  }, [performSignOut])
+
+  const handleAccountMe = useCallback((user: Me | null) => {
+    if (user) setMe(user)
+  }, [])
 
   const armLeaveCaptureWait = () => {
     if (leaveCaptureTimerRef.current) {
@@ -3123,7 +3176,7 @@ export default function App() {
   ) : null
 
   return (
-    <div className={`app${phone ? ' iphone-v2' : ''}${historyOpen ? ' hist-open' : ''}${phone && state.workspaceMode === 'translate' ? ' translate-mode' : ''}`}>
+    <div className={`app${phone ? ' iphone-v2' : ''}${historyOpen ? ' hist-open' : ''}${accountOpen ? ' account-open' : ''}${phone && state.workspaceMode === 'translate' ? ' translate-mode' : ''}`}>
       <TitleBar
         mode={state.workspaceMode}
         lang={state.lang}
@@ -3145,6 +3198,8 @@ export default function App() {
         onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
         onOpenHistory={() => setHistoryOpen(true)}
         onMore={() => setMoreOpen(true)}
+        accountInitials={accountInitials(me?.name || '', me?.email || '')}
+        onAccount={() => setAccountOpen(true)}
         listening={listening}
         elapsedMs={
           state.workspaceMode === 'meeting' && state.meetingStartedAt != null
@@ -3153,6 +3208,21 @@ export default function App() {
         }
       />
       <HistoryPane open={historyOpen} onClose={() => setHistoryOpen(false)} onRestore={restoreHistory} />
+      <AccountPane
+        open={accountOpen}
+        onClose={() => setAccountOpen(false)}
+        me={me}
+        onMe={handleAccountMe}
+        signOutGate={signOutGate({
+          listening: sessionListening({ capture: state.capture }),
+          paused: state.capture === 'paused',
+          disposition: saveBook.status,
+          hasContent: meetingHasSaveableContent(state),
+          workspaceMode: state.workspaceMode,
+        })}
+        signOutError={signOutError}
+        onSignOut={handleSignOut}
+      />
       {phone ? (
         <LeaveSessionSheet
           open={leaveSheetOpen}
@@ -3179,11 +3249,15 @@ export default function App() {
           }
           saveLiveSession({ content: opts.content, audio: opts.audio, fromPrompt: true })
         }}
-        onCancel={() => {
-          setSavePrompt(false)
-          pendingNewAfterSave.current = false
-          commitBook(setPendingAfterSave(cancelCollect(saveBookRef.current), 'none'))
-        }}
+        onCancel={
+          savePromptMode === 'cancel' || saveBook.pendingAfterSave === 'signout'
+            ? () => {
+                setSavePrompt(false)
+                pendingNewAfterSave.current = false
+                commitBook(setPendingAfterSave(cancelCollect(saveBookRef.current), 'none'))
+              }
+            : undefined
+        }
         onDiscard={() => {
           setSavePrompt(false)
           const restoredId = pendingRestoreId.current
@@ -3194,12 +3268,16 @@ export default function App() {
             window.api.send({ type: 'discard_history', id: restoredId })
             return
           }
+          const leavingSignOut = saveBookRef.current.pendingAfterSave === 'signout'
           markHistoryKept(false)
           window.api.send({ type: 'discard_history' })
+          commitBook(setPendingAfterSave(saveBookRef.current, 'none'))
           if (pendingNewAfterSave.current) {
             pendingNewAfterSave.current = false
             doClear()
             dispatch({ type: 'engine', ev: { type: 'status', text: 'New session' } })
+          } else if (leavingSignOut) {
+            performSignOut()
           }
         }}
       />

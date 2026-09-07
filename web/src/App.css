@@ -90,10 +90,12 @@ html.nod-web .hist-page {
 
 html.nod-phone .app.iphone-v2.hist-open > .titlebar,
 html.nod-web .app.hist-open > .titlebar,
+html.nod-phone .app.iphone-v2.account-open > .titlebar,
 html.nod-phone .app.iphone-v2.hist-open .iphone-actions,
 html.nod-web .app.hist-open .iphone-actions,
 html.nod-phone .app.iphone-v2.hist-open > .workspace,
 html.nod-web .app.hist-open > .workspace,
+html.nod-phone .app.iphone-v2.account-open > .workspace,
 html.nod-phone .app.iphone-v2.hist-open > .status-toast,
 html.nod-web .app.hist-open > .status-toast {
   display: none !important;
@@ -6247,6 +6249,25 @@ html.nod-phone .app.iphone-v2 .tb-icon {
   color: var(--nod-text);
 }
 
+html.nod-phone .app.iphone-v2 .tb-account {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+html.nod-phone .app.iphone-v2 .tb-account-mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #2c2c2e;
+  color: #f5f7f8;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
 html.nod-phone .app.iphone-v2 .tb-icon svg {
   width: 22px;
   height: 22px;
@@ -9160,4 +9181,249 @@ html.nod-phone .app.iphone-v2 .leave-sheet-discard-help {
   color: var(--nod-muted);
   font-size: 13px;
   line-height: 1.35;
+}
+
+.account-root {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  background: #050607;
+  color: #f5f7f8;
+}
+
+.account-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: max(12px, env(safe-area-inset-top)) 12px 12px;
+}
+
+.account-head h2 {
+  flex: 1;
+  margin: 0;
+  text-align: center;
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.account-back,
+.account-head-spacer {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+}
+
+.account-back {
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #f5f7f8;
+}
+
+.account-body {
+  flex: 1;
+  overflow: auto;
+  padding: 0 20px max(24px, env(safe-area-inset-bottom));
+}
+
+.account-card {
+  padding: 20px 16px 16px;
+  border-radius: 18px;
+  background: #111518;
+}
+
+.account-avatar {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 12px;
+  border-radius: 50%;
+  background: #2c2c2e;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.account-name {
+  text-align: center;
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.account-email {
+  margin-top: 4px;
+  text-align: center;
+  color: #a4abb1;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.account-signin,
+.account-usage {
+  margin-top: 10px;
+  text-align: center;
+  color: #a4abb1;
+  font-size: 13px;
+}
+
+.account-group-label {
+  margin: 22px 4px 8px;
+  color: #a4abb1;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+}
+
+.account-group {
+  overflow: hidden;
+  border-radius: 16px;
+  background: #111518;
+}
+
+.account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 0;
+  border-bottom: 1px solid #2a3035;
+  background: transparent;
+  color: #f5f7f8;
+  font-size: 16px;
+  text-align: left;
+}
+
+.account-row:last-child {
+  border-bottom: 0;
+}
+
+.account-row svg {
+  color: #a4abb1;
+}
+
+.account-signout {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  margin-top: 18px;
+  min-height: 48px;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 16px;
+  background: #111518;
+  color: #f5f7f8;
+  font-size: 16px;
+  text-align: left;
+}
+
+.account-signout.dim {
+  color: #a4abb1;
+}
+
+.account-signout-hint {
+  color: #a4abb1;
+  font-size: 12px;
+}
+
+.account-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  color: #ff514d;
+  font-size: 13px;
+}
+
+.account-retry {
+  border: 0;
+  background: transparent;
+  color: #00c4e8;
+  font-weight: 650;
+}
+
+.account-version {
+  margin-top: 28px;
+  text-align: center;
+  color: #a4abb1;
+  font-size: 12px;
+}
+
+.account-sheet {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: end center;
+  background: rgba(5, 6, 7, 0.55);
+}
+
+.account-sheet-card {
+  width: min(100%, 520px);
+  padding: 18px 18px max(18px, env(safe-area-inset-bottom));
+  border-radius: 20px 20px 0 0;
+  background: #111518;
+}
+
+.account-sheet-card h3 {
+  margin: 0 0 12px;
+  font-size: 17px;
+}
+
+.account-feedback {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid #2a3035;
+  border-radius: 12px;
+  background: #050607;
+  color: #f5f7f8;
+  font: inherit;
+  resize: vertical;
+}
+
+.account-ok {
+  color: #7dcec0;
+  font-size: 13px;
+}
+
+.account-error-text {
+  color: #ff514d;
+  font-size: 13px;
+}
+
+.account-sheet-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.account-sheet-cancel,
+.account-sheet-send {
+  flex: 1;
+  min-height: 44px;
+  border-radius: 12px;
+  font-weight: 650;
+}
+
+.account-sheet-cancel {
+  border: 1px solid #2a3035;
+  background: transparent;
+  color: #f5f7f8;
+}
+
+.account-sheet-send {
+  border: 0;
+  background: #00c4e8;
+  color: #050607;
+}
+
+.account-sheet-send:disabled {
+  opacity: 0.45;
 }

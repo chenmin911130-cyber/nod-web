@@ -67,6 +67,7 @@ class OtpApiTests(unittest.TestCase):
         self.assertTrue(body["created"])
         self.assertEqual(body["user"]["email"], email)
         self.assertTrue(body["user"]["consent"])
+        self.assertEqual(body["user"]["sign_in"], "email")
 
     def test_login_unknown_email_does_not_send_or_leak(self):
         email = _email()
@@ -120,3 +121,29 @@ class OtpApiTests(unittest.TestCase):
         self.assertIn("Disallow: /app", text)
         self.assertIn("Disallow: /api/", text)
         self.assertIn("Allow: /", text)
+
+
+class PublicUserSignInTests(unittest.TestCase):
+    def test_sign_in_follows_clerk_id(self):
+        from server.commerce import _public_user
+        from server.db import User, db_session
+        from server.security import new_id
+
+        email_id = new_id()
+        google_id = new_id()
+        with db_session() as db:
+            db.add(User(id=email_id, email=f"e.{email_id[:8]}@example.com", password_hash="", name="E"))
+            db.add(User(
+                id=google_id,
+                email=f"g.{google_id[:8]}@example.com",
+                password_hash="",
+                name="G",
+                clerk_id="user_clerk_test",
+            ))
+        with db_session() as db:
+            email_user = db.get(User, email_id)
+            google_user = db.get(User, google_id)
+            self.assertIsNotNone(email_user)
+            self.assertIsNotNone(google_user)
+            self.assertEqual(_public_user(email_user)["sign_in"], "email")
+            self.assertEqual(_public_user(google_user)["sign_in"], "google")

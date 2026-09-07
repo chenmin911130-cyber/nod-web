@@ -1,5 +1,5 @@
 export type SaveStatus = 'undecided' | 'saving' | 'saved' | 'failed'
-export type PendingAfterSave = 'none' | 'new'
+export type PendingAfterSave = 'none' | 'new' | 'signout'
 export type KeepFailReason = 'timeout' | 'error' | 'disconnect'
 
 export type SaveBook = {

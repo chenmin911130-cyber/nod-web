@@ -52,6 +52,8 @@ interface Props {
   onFullScreen: () => void
   onOpenHistory?: () => void
   onMore?: () => void
+  accountInitials?: string
+  onAccount?: () => void
 }
 
 const MODES: Array<{ id: WorkspaceMode; label: string }> = [
@@ -284,7 +286,7 @@ export function TitleIcons(props: TitleIconsProps) {
                 </button>
               </>
             )}
-            {isWeb && (
+            {isWeb && !phone && (
               <>
                 <div className="tb-menu-action tb-version">
                   {appVer ? `Version ${appVer}` : 'Version'}
@@ -349,7 +351,7 @@ export default function TitleBar(props: Props) {
       <div className="titlebar-right no-drag">
         {!phone && <PetTimer listening={Boolean(props.listening)} />}
         {phone ? (
-          /* Gear = long-term settings. … = this session (PDF / Save / History / New). */
+          /* Avatar = Account. … = this session (PDF / Save / History / New). */
           <button
             type="button"
             className="tb-icon tb-session"
@@ -360,7 +362,20 @@ export default function TitleBar(props: Props) {
             <SessionMoreIcon />
           </button>
         ) : null}
-        {(mode !== 'translate' || phone) && (
+        {phone ? (
+          <button
+            type="button"
+            className="tb-icon tb-account"
+            onClick={() => props.onAccount?.()}
+            title={IPHONE_COPY.accountTitle}
+            aria-label={IPHONE_COPY.accountTitle}
+          >
+            <span className="tb-account-mark" aria-hidden="true">
+              {props.accountInitials || '?'}
+            </span>
+          </button>
+        ) : (
+          (mode !== 'translate') && (
           <TitleIcons
             mode={mode}
             source={source}
@@ -379,6 +394,7 @@ export default function TitleBar(props: Props) {
             onOpenHistory={props.onOpenHistory}
             onMore={props.onMore}
           />
+          )
         )}
 
         {!isWeb && (
