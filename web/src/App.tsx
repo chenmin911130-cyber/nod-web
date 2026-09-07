@@ -1686,8 +1686,6 @@ export default function App() {
     if (waitNotes) {
       keepAfterNotes.current = { content, audio, liveId: book.liveId, generation: book.generation }
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Saving after notes finish…' } })
-      clearKeepTimer()
-      keepTimerRef.current = window.setTimeout(() => failKeep('timeout'), KEEP_ACK_TIMEOUT_MS)
       return
     }
     sendKeepNow({ content, audio })
@@ -1744,7 +1742,6 @@ export default function App() {
       }
       return
     }
-    if (book.status !== 'saving') markHistoryKept(true)
   }
 
   const doClear = useCallback(() => {
@@ -2764,7 +2761,7 @@ export default function App() {
     const job = keepAfterNotes.current
     keepAfterNotes.current = null
     if (!keepAfterNotesStillValid(job, saveBookRef.current)) return
-    window.api.send({ type: 'keep_history', content: job.content, audio: job.audio })
+    sendKeepNow({ content: job.content, audio: job.audio })
   }, [state.busy, state.notesAskId])
 
   // 'generating'/'transcribing' is an engine state, not a pause: it must not
