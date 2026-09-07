@@ -155,7 +155,7 @@ PLANS: dict[str, dict] = {
         "id": "free",
         "name": "Trial",
         "stt_seconds": 2 * 3600 * 31,
-        "llm_tokens": 100_000,
+        "llm_tokens": 2_000_000,
         "sessions": 60,
         "daily_cost_usd": 2.0,
         "price_cents": 0,
