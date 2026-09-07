@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { IPHONE_COPY, listenClock, listenShowsRecClock, listenStatusDot, moreMenuEnabled, moreSaveRow } from '../iphoneCopy'
+import { IPHONE_COPY, listenClock, listenControlMode, listenShowsRecClock, listenStatusDot, moreMenuEnabled, moreSaveRow } from '../iphoneCopy'
 
 function MicIcon() {
   return (
@@ -86,6 +86,7 @@ export default function IphoneActions({
   canSave,
   hasContent,
   saved = false,
+  ended = false,
   onStart,
   onPause,
   onResume,
@@ -106,6 +107,7 @@ export default function IphoneActions({
   canSave: boolean
   hasContent: boolean
   saved?: boolean
+  ended?: boolean
   variant?: 'listen' | 'translate' | 'interview'
   onStart: () => void
   onPause: () => void
@@ -119,7 +121,7 @@ export default function IphoneActions({
   onHistory: () => void
   onNew: () => void
 }) {
-  const ready = !listening && !paused
+  const chrome = listenControlMode({ listening, paused, ended, hasContent, variant })
   const menu = moreMenuEnabled({ hasContent, canSave })
   const saveRow = moreSaveRow({ saved, canSave })
   const clock = listenClock(elapsedMs)
@@ -142,8 +144,8 @@ export default function IphoneActions({
 
   return (
     <>
-      <div className={`iphone-actions${ready ? ' ready' : ''}${listening ? ' live' : ''}${paused ? ' paused' : ''}${variant === 'translate' ? ' translate' : ''}`}>
-        {ready ? (
+      <div className={`iphone-actions${chrome === 'ready' ? ' ready' : ''}${listening ? ' live' : ''}${paused ? ' paused' : ''}${chrome === 'ended' ? ' ended' : ''}${variant === 'translate' ? ' translate' : ''}`}>
+        {chrome === 'ready' ? (
           <div className="iphone-start-row">
             <button type="button" className="iphone-btn primary iphone-start" onClick={onStart}>
               <MicIcon />
@@ -226,6 +228,14 @@ export default function IphoneActions({
             <span className="iphone-rec-rule" aria-hidden="true" />
             <button type="button" className="iphone-rec-cell iphone-rec-end" onClick={onStop}>
               {IPHONE_COPY.stop}
+            </button>
+          </div>
+        ) : chrome === 'ended' ? (
+          <div className="iphone-status-row" role="group" aria-label={`${IPHONE_COPY.endedStatus} · ${clock}`}>
+            <span className="iphone-ended-clock">{IPHONE_COPY.endedStatus} · {clock}</span>
+            <button type="button" className="iphone-btn primary iphone-start" onClick={onStart}>
+              <MicIcon />
+              {IPHONE_COPY.startListening}
             </button>
           </div>
         ) : null}

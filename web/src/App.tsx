@@ -6,7 +6,7 @@ import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
-import { restoreFromSession, restoreIdOfferable, restoreShouldNotAsk, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck, shouldOfferSaveOnce } from './historyRestore'
+import { restoreFromSession, restoreIdOfferable, restoreShouldNotAsk, applyMeetingResume, resumeResetsKept, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck, shouldOfferSaveOnce } from './historyRestore'
 import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
@@ -225,6 +225,7 @@ type Action =
   | { type: 'listen_scene'; scene: ListenScene }
   | { type: 'translate_on'; on: boolean }
   | { type: 'listen_new' }
+  | { type: 'meeting_resume' }
   | { type: 'expect_catch'; title?: string; kind?: 'catch' | 'ask'; question?: string }
   | { type: 'expect_notes' }
   | { type: 'rename_speaker'; id: string; name: string }
@@ -262,6 +263,15 @@ function isTranslatePrompt(text: string): boolean {
     t.startsWith('[NOD_TRANSLATE') ||
     t.includes('[NOD_TRANSLATE') ||
     t.includes('Output only the translation')
+  )
+}
+
+function meetingHasSaveableContent(s: AppState): boolean {
+  return (
+    s.meetingLines.length > 0
+    || Boolean(s.partial.trim())
+    || Boolean(s.notesRaw.trim())
+    || s.catchNotes.some((note) => note.text.trim())
   )
 }
 
@@ -696,6 +706,8 @@ function reducer(state: AppState, action: Action): AppState {
         translateAskId: '',
         translateBindId: '',
       }
+    case 'meeting_resume':
+      return applyMeetingResume(state)
     case 'expect_catch': {
       const kind = action.kind || 'catch'
       const title = action.title || (kind === 'ask' ? 'Ask' : 'Summary')
@@ -896,6 +908,22 @@ export default function App() {
   // New-session leave) so the same session is never re-prompted. A user-initiated
   // Save (menu / phone button, a retry after a failed keep) bypasses it.
   const saveOfferedRef = useRef(false)
+  const startOrResumeMeeting = (s: AppState) => {
+    if (s.meetingStartedAt == null) {
+      dispatch({ type: 'listen_new' })
+      markHistoryKept(false)
+      return
+    }
+    if (s.meetingEnded) {
+      dispatch({ type: 'meeting_resume' })
+      if (resumeResetsKept({ kept: historyKeptRef.current, hasContent: meetingHasSaveableContent(s) })) {
+        markHistoryKept(false)
+        saveOfferedRef.current = false
+      }
+      return
+    }
+    dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
+  }
   // #36: pending (disconnected) session ids already offered for Restore, so a
   // reconnect never re-prompts the same unsaved session.
   const seenRestoreIds = useRef(new Set<string>())
@@ -1106,8 +1134,7 @@ export default function App() {
         setWatchReportOpen(false)
         const workspace = watchShouldApplyMode(mode, s)?.workspace ?? s.workspaceMode
         if (workspace === 'meeting' && (s.meetingEnded || s.meetingStartedAt == null)) {
-          dispatch({ type: 'listen_new' })
-          markHistoryKept(false)
+          startOrResumeMeeting(s)
         }
         guardMic(() => startListen({ fromWatch: true }))
       },
@@ -1133,8 +1160,7 @@ export default function App() {
         setWatchReportOpen(false)
         const workspace = watchShouldApplyMode(mode, s)?.workspace ?? s.workspaceMode
         if (workspace === 'meeting' && (s.meetingEnded || s.meetingStartedAt == null)) {
-          dispatch({ type: 'listen_new' })
-          markHistoryKept(false)
+          startOrResumeMeeting(s)
         }
         guardMic(() => startListen({ fromWatch: true }))
       },
@@ -1551,12 +1577,6 @@ export default function App() {
     seenRestoreIds.current.clear()
   }, [])
 
-  const meetingHasSaveableContent = (s: AppState) =>
-    s.meetingLines.length > 0
-    || Boolean(s.partial.trim())
-    || Boolean(s.notesRaw.trim())
-    || s.catchNotes.some((note) => note.text.trim())
-
   const offerSaveAfterMeetingStop = () => {
     const s = stateRef.current
     if (s.workspaceMode !== 'meeting' || historyKeptRef.current) return
@@ -1842,12 +1862,7 @@ export default function App() {
         queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
         return
       }
-      if (s.meetingEnded || s.meetingStartedAt == null) {
-        dispatch({ type: 'listen_new' })
-        markHistoryKept(false)
-      } else {
-        dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
-      }
+      startOrResumeMeeting(s)
       guardMic(startListen)
       return
     }
@@ -1907,12 +1922,7 @@ export default function App() {
     }
     autoReport.current = true
     recordHeard.current = false
-    if (s.meetingEnded || s.meetingStartedAt == null) {
-      dispatch({ type: 'listen_new' })
-      markHistoryKept(false)
-    } else {
-      dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
-    }
+    startOrResumeMeeting(s)
     guardMic(startListen)
     dispatch({ type: 'engine', ev: { type: 'status', text: 'Recording · report after stop' } })
   }, [])
@@ -2673,6 +2683,7 @@ export default function App() {
       canSave={canSaveSession}
       hasContent={meetingHasSaveableContent(state) || state.translatePairs.length > 0}
       saved={historyKept && meetingHasSaveableContent(state)}
+      ended={state.workspaceMode === 'meeting' && state.meetingEnded}
       variant={state.workspaceMode === 'translate' ? 'translate' : state.workspaceMode === 'interview' ? 'interview' : 'listen'}
       onStart={handlePrimary}
       onPause={handlePause}

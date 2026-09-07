@@ -827,16 +827,16 @@ export default function ListenPane(props: Props) {
     props.onAsk(text)
     setInput('')
   }
-  const lastHeard = (props.partial || props.lines[props.lines.length - 1]?.text || '').trim()
+  const lastHeard = ((props.ended ? '' : props.partial) || props.lines[props.lines.length - 1]?.text || '').trim()
   const liveMode = liveStageMode({
     listening: props.listening,
     elapsedMs: props.elapsedMs || 0,
     hasHeardText: Boolean(lastHeard),
   })
-  const heard = liveHeardLines({ lines: props.lines, partial: props.partial })
+  const heard = liveHeardLines({ lines: props.lines, partial: props.ended ? '' : props.partial })
   const notesLine = liveNotesLine({
     lines: props.lines,
-    partial: props.partial,
+    partial: props.ended ? '' : props.partial,
     translateOn: props.translateOn,
   })
   const showStage = phone && mobilePane === 'live'
@@ -1027,7 +1027,7 @@ export default function ListenPane(props: Props) {
                 )}
               </div>
               <div className="listen-scroll" ref={leftRef}>
-                {props.lines.length === 0 && !props.partial ? (
+                {props.lines.length === 0 && !(props.partial && !props.ended) ? (
                   <div className={`listen-empty${phone ? ' iphone-tr-empty' : ''}`}>
                     {phone
                       ? IPHONE_COPY.emptyLive
@@ -1055,7 +1055,7 @@ export default function ListenPane(props: Props) {
                     />
                   ))
                 )}
-                {props.partial && (
+                {props.partial && !props.ended && (
                   <div className="listen-line live">
                     <div className="listen-ts">
                       live

@@ -29,6 +29,7 @@ export const IPHONE_COPY = {
   readyHelp: 'Tap start to capture, transcribe, and organize your conversation in real time.',
   aiNote: 'Your AI listening assistant, ready when you are.',
   pausedStatus: 'Paused',
+  endedStatus: 'Ended',
   askReady: 'Ask anything after recording starts...',
   askLive: 'Ask anything about this conversation...',
   liveTab: 'Live',
@@ -163,6 +164,19 @@ export function listenStatusDot(input: { listening: boolean; paused: boolean }):
   if (input.paused) return 'paused'
   if (input.listening) return 'recording'
   return 'standby'
+}
+
+export function listenControlMode(input: {
+  listening: boolean
+  paused: boolean
+  ended: boolean
+  hasContent: boolean
+  variant?: 'listen' | 'translate' | 'interview'
+}): 'recording' | 'paused' | 'ended' | 'ready' {
+  if (input.listening) return 'recording'
+  if (input.paused) return 'paused'
+  if (input.variant !== 'translate' && input.ended && input.hasContent) return 'ended'
+  return 'ready'
 }
 
 /** Mic is live while capture is listening/recording (ADR 0001). Paused/off is
