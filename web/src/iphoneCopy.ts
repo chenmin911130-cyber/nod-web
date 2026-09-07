@@ -298,7 +298,6 @@ export function isListenReadyView(input: {
     input.phone &&
     !input.listening &&
     !input.paused &&
-    !input.ended &&
     input.lines === 0 &&
     !input.partial
   )
