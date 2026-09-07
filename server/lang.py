@@ -49,6 +49,34 @@ def _normalize_stt_lang(lang: Any) -> str | None:
     return _normalize_any_lang(lang)
 
 
+def listen_ask_lang(body: str) -> str | None:
+    """Pick the answer language for an Auto-notes listen_ask from the prompt body
+    (tag already stripped). Question language if confidently detectable, else the
+    transcript's majority language, else None.
+    """
+    text = body or ""
+    q_mark = "Listener question:"
+    t_mark = "Transcript ("
+    q_at = text.find(q_mark)
+    t_at = text.find(t_mark)
+    question = ""
+    transcript = ""
+    if q_at >= 0:
+        q_end = t_at if t_at > q_at else len(text)
+        question = text[q_at + len(q_mark) : q_end].strip()
+    if t_at >= 0:
+        nl = text.find("\n", t_at)
+        rest = text[nl + 1 :].strip() if nl >= 0 else ""
+        if rest != "(empty)":
+            transcript = rest
+    confident = _confident_stt_lang(question, None)
+    if confident:
+        return confident
+    if transcript:
+        return detect_question_lang(transcript)
+    return None
+
+
 def _confident_stt_lang(text: str, heard: str | None) -> str | None:
     raw = heard if heard in _STT_AUTO_LANGS else detect_question_lang(text)
     if raw not in _STT_AUTO_LANGS:
