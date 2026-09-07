@@ -1,6 +1,7 @@
-import { sameSpokenLine } from './iphoneCopy'
+import { sameSpokenLine, showLineTranslation } from './iphoneCopy'
 import type { CatchNote } from './types'
 import {
+  resolveSpeakerName,
   sectionTitle,
   sceneSectionOrder,
   type ListenScene,
@@ -96,4 +97,40 @@ export function summaryPlainText(input: {
     blocks.push(`${note.kind === 'ask' ? 'Ask' : note.title}\n${text}`)
   }
   return blocks.join('\n\n')
+}
+
+function transcriptStamp(ts: string): string {
+  const raw = (ts || '').trim()
+  const parts = raw.split(':')
+  if (parts.length === 3 && parts.every((part) => /^\d+$/.test(part))) {
+    const totalM = Number(parts[0]) * 60 + Number(parts[1])
+    return `[${String(totalM).padStart(2, '0')}:${parts[2].padStart(2, '0')}]`
+  }
+  if (parts.length === 2 && parts.every((part) => /^\d+$/.test(part))) {
+    return `[${parts[0].padStart(2, '0')}:${parts[1].padStart(2, '0')}]`
+  }
+  return raw ? `[${raw}]` : '[00:00]'
+}
+
+export function transcriptPlainText(input: {
+  lines: Array<{ ts: string; text: string; speaker?: string; translation?: string }>
+  speakerNames: Record<string, string>
+  translateOn: boolean
+}): string {
+  return input.lines
+    .map((line) => {
+      const who = resolveSpeakerName(input.speakerNames, line.speaker)
+      const head = who
+        ? `${transcriptStamp(line.ts)} ${who}: ${line.text}`
+        : `${transcriptStamp(line.ts)} ${line.text}`
+      const showTr = showLineTranslation({
+        translateOn: input.translateOn,
+        original: line.text,
+        translation: line.translation || '',
+        native: true,
+      })
+      const tr = (line.translation || '').trim()
+      return showTr && tr ? `${head}\n    ${tr}` : head
+    })
+    .join('\n')
 }
