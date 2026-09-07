@@ -2091,7 +2091,6 @@ export default function App() {
     const s = stateRef.current
     if (inflightTranslate.current) return
     if (s.workspaceMode === 'meeting' && s.translateOn) {
-      if (s.meetingEnded) return
       // 最新的未翻译、未放弃、未被 asked 的行优先（实时字幕语义：先出当前句子，
       // 停顿期间回填旧行）。translateFailed 行被跳过，避免对坏模型的重发死循环。
       const next = nextMeetingLineToTranslate(s.meetingLines, askedTranslate.current)
@@ -2170,13 +2169,12 @@ export default function App() {
 
   useEffect(() => {
     if (state.workspaceMode === 'meeting' && state.translateOn) {
-      if (state.meetingEnded) return
       pumpTranslate()
       return
     }
     if (state.workspaceMode !== 'translate') return
     pumpTranslate()
-  }, [state.translatePairs, state.meetingLines, state.translateOn, state.workspaceMode, state.meetingEnded, pumpTranslate])
+  }, [state.translatePairs, state.meetingLines, state.translateOn, state.workspaceMode, pumpTranslate])
 
   const generateNotes = useCallback(() => {
     const s = stateRef.current
@@ -2962,7 +2960,7 @@ export default function App() {
               if (on === s.translateOn) return
               dispatch({ type: 'translate_on', on })
               if (!on) killInflightTranslation()
-              if (on && !s.meetingEnded) queueMicrotask(() => pumpTranslateRef.current())
+              if (on) queueMicrotask(() => pumpTranslateRef.current())
             }}
             onTranslateTo={handleTranslateTo}
             meetingSpeakersId={meetingSpeakersId}
