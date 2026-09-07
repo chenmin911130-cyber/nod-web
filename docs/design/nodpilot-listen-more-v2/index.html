@@ -1,0 +1,103 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nodpilot · Listen + More 设计稿</title><style>*{box-sizing:border-box}body{margin:0;background:#080b0e;color:#eef3f6;font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1240px;margin:auto;padding:50px 24px}h1{font-size:clamp(30px,5vw,52px);letter-spacing:-1.8px;line-height:1.15}h2{font-size:24px;margin-bottom:0}p{color:#a6b3bc}.eyebrow{color:#00c4e8;letter-spacing:2px;font-size:12px}nav{display:flex;gap:10px;flex-wrap:wrap;margin:30px 0}a{color:#00c4e8}nav a{padding:9px 16px;border:1px solid #2a3035;border-radius:30px;text-decoration:none}section{margin:50px 0}img{width:100%;height:auto;border-radius:16px}details{border-top:1px solid #2a3035;padding-top:24px}summary{cursor:pointer;font-size:24px}pre{font:15px/1.85 -apple-system,BlinkMacSystemFont,sans-serif;white-space:pre-wrap;overflow-wrap:anywhere;color:#cdd7de}footer{color:#7f909d;margin-top:40px}@media print{body{background:white;color:black}main{padding:0}nav{display:none}section{break-inside:avoid}img{border-radius:0}pre{color:black}}</style><main><div class="eyebrow">NODPILOT / DESIGN DELIVERY / 2026.09.07</div><h1>Listen，补齐 More。</h1><p>保留选定的黑色与青色界面。四张高清画板，八个状态，附菜单、内容保留与保存交互规范。</p><nav><a href="#board1">准备与设置</a><a href="#board2">录音与提问</a><a href="#board3">Transcript 与 More</a><a href="#board4">Notes 与保存</a><a href="design.md">完整设计说明</a></nav><section id="board1"><h2>01 / 准备与设置</h2><p>录音前 · Recording setup</p><a href="assets/01-ready-setup.png" target="_blank"><img src="assets/01-ready-setup.png" alt="录音前 · Recording setup"></a></section><section id="board2"><h2>02 / 录音与提问</h2><p>Live · Ask</p><a href="assets/02-live-ask.png" target="_blank"><img src="assets/02-live-ask.png" alt="Live · Ask"></a></section><section id="board3"><h2>03 / 全文与菜单</h2><p>Transcript · More</p><a href="assets/03-transcript-more.png" target="_blank"><img src="assets/03-transcript-more.png" alt="Transcript · More"></a></section><section id="board4"><h2>04 / 笔记与保存</h2><p>Notes · Saved</p><a href="assets/04-notes-saved.png" target="_blank"><img src="assets/04-notes-saved.png" alt="Notes · Saved"></a></section><details><summary>完整交互与交付规范</summary><pre># Nodpilot · Listen 完整设计说明 v2
+
+2026-09-07 · 用户选定黑色＋青色方向的完善稿。交付范围为两张参考图对应的 Listen 流程与 More：4 张高清画板、8 个界面状态及交互说明。Translate 独立工作区与 Settings 详情沿用现有功能，不在本次视觉重设计范围。此文件是设计交付，不代表功能已经开发或线上问题已修复。
+
+## 画板
+
+1. `assets/01-ready-setup.png`：录音前、录音设置。
+2. `assets/02-live-ask.png`：录音中 Live、录音中提问回答。
+3. `assets/03-transcript-more.png`：完整 Transcript、录音中 More。
+4. `assets/04-notes-saved.png`：结束后的 Notes 与保存提示、已保存 More。
+
+## 信息架构
+
+顶部：Nodpilot 标识 → … More → 齿轮 Settings。两个按钮始终分开；More 管理会话，Settings 管理长期偏好。按钮触控区域至少 44×44 pt，图标可小于触控区域。读屏名称分别为 More、Settings。
+
+一级导航 Listen / Translate；Listen 的内容导航为 Live / Transcript / Notes，不能用 Summary 代替 Notes。录音控制固定在内容导航之前，内容区域独立滚动。打开 More、查看历史、生成回答均不能自行结束录音。
+
+## 录音前与录音设置
+
+- Ready 页面只保留一个主行动 Start listening；场景、口语语言、笔记语言以三行设置展示。
+- Scene 打开 Recording setup 底部面板：Meeting、Lecture、Live Q&amp;A。Meeting 人数为 2、3–4、5+，不新增参考图里的 Auto 人数。
+- Spoken language 支持 Auto-detect 及项目已有语言；Notes language 支持 Auto 及项目已有语言。图中 Chinese 只是示例选择。
+- Done 提交设置，关闭只退出面板。麦克风授权失败保留所选设置，并展示可重试提示。
+- 录音前不把 Ask 输入框伪装为“预设录音指令”；初始页面不展示该输入框。
+
+## 录音中与暂停
+
+Recording 控制条显示录音状态、累计录音时长、Pause、End。Pause 后状态为 Paused、计时停止、Pause 替换为 Resume，End 仍可用；恢复后继续同一会话。AI 回答生成时录音状态不变。End 只结束采集，页面继续显示已有内容。
+
+Live 面向当前交流，展示最近发言、正在识别的草稿及用户提问。提问发送后输入恢复可用状态的具体时机遵循请求状态；失败显示局部重试入口，不能清空录音内容。
+
+图中“回答直接显示在 Live”、两枚快捷提问按钮属于本稿提议的交互调整，不能当成已有功能已落地。它们与专门的 Live Q&amp;A 场景不同：Meeting 内提问仍基于当前会议，切换场景必须显式操作。
+
+## Transcript 内容保留契约
+
+- Transcript 是当前会话从开始到现在的完整记录，不能只显示最新一段，也不能绑定成 Live 的临时文本。
+- 已确认段落按时间追加；同一段后续识别修订只更新该段。新段必须保留旧段，即使同一个说话人连续发言。
+- 临时识别放在末尾，样式与已确认段落区分；AI 回答、暂停、切页、打开 More 均不清空历史。
+- 每段显示时间、说话人、原文；真实跨语言译文放在原文下方，同语言直通不重复展示。不为去重删除真实重复说出的句子。
+- 图中的顶部 Copy 定义为复制完整 Transcript，是布局提议；仍须提供逐段复制，可放在该段的上下文操作中。
+- 用户向上阅读时不强制跳到底部；有新内容时显示“回到最新”。空状态显示等待语音，不使用空白占位假装已保存。
+
+## Notes
+
+保留摘要、关键点、决策、待办、重要细节、后续跟进等适用章节；无内容章节不占空卡片。画板仅示意摘要、决策、待办，不代表删除其他章节。
+
+Auto 只生成一份按语言策略决定的笔记，不能把同一内容作为原文和译文各输出一次。生成中保留上次已完成内容并显示更新状态，失败给局部 Retry。按明确语言输出时，章节标题与正文跟随所选语言；人物标识可保持 Speaker 1 等原始标签。PDF 与 History 应使用同一份笔记语义。
+
+## More 完整菜单与状态
+
+点击顶部 … 打开底部菜单；顺序固定 Export PDF、Save、History、New session。Cancel、点遮罩、关闭手势只关闭菜单，不结束或清空会话。菜单打开时限制焦点，关闭后回到 … 按钮。不可用项保留显示并解释原因。
+
+| 会话状态 | Export PDF | Save | History | New session |
+|---|---|---|---|---|
+| 无内容 | 禁用 | 禁用 | 可用 | 禁用 |
+| 录音中，有内容 | 可用，导出当前快照 | 禁用，结束录音后可用 | 可用 | 可用，进入离开当前会话流程 |
+| 暂停，有内容 | 可用 | 禁用，暂停不等于结束 | 可用 | 可用，进入离开当前会话流程 |
+| 已结束且可保存 | 可用 | 可用 | 可用 | 可用 |
+| 保存中 | 可用 | Saving…，禁止重复发送 | 可用 | 等待结果，不抢先清空 |
+| 已确认保存 | 可用 | Saved / View in History | 可用 | 可用 |
+| 保存失败 | 可用 | Retry save | 可用 | 先处理未保存内容 |
+
+表中保存能力仅用于当前支持保存的 Meeting / Lecture 会话，不扩大到 Translate 或 Live Q&amp;A。已保存的 Save 行跳转历史为已有行为，动态 Saved 文案是本稿提议的状态表达。
+
+### Export PDF
+
+有内容才启用。导出当前可见会话的数据快照，不因导出暂停录音。重复点击时只维持一个导出任务。失败显示导出失败与 Retry，原始内容仍在。复用现有导出能力，不凭图新增分享渠道。
+
+### Save
+
+End 后使用页面内提示条，不自动反复打开 Save / Don&#x27;t save 弹窗。主动点击 Save 才进入必要的保存设置；保留现有内容/音频保存选项与可用性，不静默改变用户偏好。等待服务端确认后才显示 Saved to History；失败保留内容、显示 Retry save。
+
+画板将次要操作提议为 Not now，语义仅为关闭提示、稍后可从 More 保存。如果现有 Don&#x27;t save 会执行丢弃，不能只改文字而保留丢弃行为；必须实现对应语义，或保留准确的 Don&#x27;t save 标签。已保存会话不重复弹提示。新的会话使用独立保存状态。
+
+### History
+
+History 打开已有会话列表，展示标题、日期、时长与摘要预览；加载中、空记录、加载失败分别反馈。打开列表不丢掉正在录音的会话；选择历史会话恢复前经过当前会话保护流程。返回当前会话保留录音与内容。
+
+### New session
+
+点击本身不立即清空。当前有未保存内容时，明确展示一次离开流程：Save and start new / Discard and start new / Cancel；录音中先明确“结束当前录音并新建”。选择保存必须等到成功才新建，失败留在原会话。已保存或确实无内容时不重复询问。Discard 为明确破坏性动作，使用红色，只在用户主动发起离开时出现。
+
+## 视觉与布局规格
+
+移动设计基准 390×844 pt，兼容窄屏和安全区；交付画板 1536×1024 为双机展示，不直接等同开发尺寸。页面左右内边距 20 pt，间距以 8 pt 为基础；正文 16 pt、辅助信息 13–14 pt、标题 24–28 pt，正文行高约 1.45。字体使用系统字体栈，中文使用系统中文无衬线字体。
+
+背景 #050607，表面 #111518，分隔线 #2A3035，主文字 #F5F7F8，次文字 #A4ABB1，主青色 #00C4E8；录音/结束 #FF514D，暂停 #FFC857。色值是拟定设计标记，不声称为参考位图的精确采样。正文与背景对比度需验收；不可用状态不能仅靠颜色表达。
+
+主按钮高度至少 48 pt、圆角 14 pt；菜单行至少 56 pt，带说明行时增加高度；底部面板圆角 24 pt，Cancel 为次级深色按钮。输入框随键盘上移、不遮挡最新内容；长标题、200% 字号、横屏与窄屏允许换行或滚动，不裁切操作。
+
+## 交付验收
+
+1. 所有顶层页面同时保留 … 与齿轮，More 四项无遗漏。
+2. 连续录音跨多段、同一说话人、暂停恢复、切换标签后，Transcript 旧段仍保留。
+3. Notes Auto、同语种译文、PDF、历史恢复没有虚假的双份内容。
+4. 结束一次只出现一次非阻塞保存提示；服务端失败不得显示 Saved。
+5. More 和 History 不偷偷停止录音；新建不跳过未保存内容处理。
+6. 图中新增交互与当前实现分开评审；本轮只交付设计资产，不修改业务代码。
+
+## 来源与生成
+
+视觉依据为用户本轮附带的两张 Nodpilot 参考图。使用内置 image_gen 工具生成，并对第三张画板的一级选中态做了定向修正。可复用完整提示词保存在 prompts.json。核对的现有代码包括 web/src/components/IphoneActions.tsx、TitleBar.tsx、web/src/iphoneCopy.ts、web/src/listen.ts 及 App.tsx 的菜单回调。
+</pre></details><footer>设计提案 · 非上线状态证明 · 图片使用内置 image_gen 生成，提示词见 prompts.json。点击画板可打开原图。</footer></main></html>
