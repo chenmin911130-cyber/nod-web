@@ -525,26 +525,24 @@ function RadioMark({ on }: { on: boolean }) {
   )
 }
 
+function IphoneMicViz({ state }: { state: 'ready' | 'listening' }) {
+  return (
+    <div className={`iphone-viz is-${state}`} aria-hidden="true">
+      {state === 'listening' ? <span className="iphone-ripple" /> : null}
+      <span className="iphone-viz-core">
+        <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+          <rect x="14" y="6" width="8" height="14" rx="4" fill="currentColor" />
+          <path d="M10 18a8 8 0 0 0 16 0M18 26v4" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+        </svg>
+      </span>
+    </div>
+  )
+}
+
 function IphoneMicStage({ listening }: { listening: boolean }) {
   return (
     <div className={`iphone-stage${listening ? ' live' : ''}`}>
-      <div className="iphone-viz" aria-hidden="true">
-        <span className="iphone-ripple r1" />
-        <span className="iphone-ripple r2" />
-        <span className="iphone-ripple r3" />
-        <span className="iphone-wave-left">
-          <i /><i /><i /><i /><i />
-        </span>
-        <span className="iphone-viz-core">
-          <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
-            <rect x="14" y="6" width="8" height="14" rx="4" fill="currentColor" />
-            <path d="M10 18a8 8 0 0 0 16 0M18 26v4" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-          </svg>
-        </span>
-        <span className="iphone-wave-right">
-          <i /><i /><i /><i /><i />
-        </span>
-      </div>
+      <IphoneMicViz state="listening" />
       {listening ? (
         <>
           <b>{IPHONE_COPY.listeningEmpty}</b>
@@ -1381,23 +1379,7 @@ export default function ListenPane(props: Props) {
       {ready ? (
         <div className="iphone-stack iphone-ready">
           <div className="iphone-stage">
-            <div className="iphone-viz" aria-hidden="true">
-              <span className="iphone-ripple r1" />
-              <span className="iphone-ripple r2" />
-              <span className="iphone-ripple r3" />
-              <span className="iphone-wave-left">
-                <i /><i /><i /><i /><i />
-              </span>
-              <span className="iphone-viz-core">
-                <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
-                  <rect x="14" y="6" width="8" height="14" rx="4" fill="currentColor" />
-                  <path d="M10 18a8 8 0 0 0 16 0M18 26v4" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-                </svg>
-              </span>
-              <span className="iphone-wave-right">
-                <i /><i /><i /><i /><i />
-              </span>
-            </div>
+            <IphoneMicViz state="ready" />
             <b>{IPHONE_COPY.readyTitleShort}</b>
             <p className="iphone-stage-help">{IPHONE_COPY.readyHelpCapture}</p>
           </div>
