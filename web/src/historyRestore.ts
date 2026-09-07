@@ -86,6 +86,53 @@ export function sessionSaveKeep(opts: { audio?: boolean } = {}): { content: true
   return { content: true, audio: opts.audio !== false }
 }
 
+/**
+ * #36 rule 1/3: the Save UI must appear at most ONCE per live session. `offered`
+ * is true once this session generation has already shown the Save dialog (via a
+ * Stop offer, a reconnect Restore, or a New-session leave). Auto-offers are gated
+ * on it so the same session is never re-prompted; a user-initiated Save (retry
+ * after a failed keep, or an explicit click) bypasses it.
+ */
+export function shouldOfferSaveOnce(input: {
+  workspaceMode: string
+  ended: boolean
+  kept: boolean
+  hasContent: boolean
+  offered: boolean
+  listening?: boolean
+  paused?: boolean
+}): boolean {
+  if (input.offered) return false
+  return sessionShouldOfferSave({
+    workspaceMode: input.workspaceMode,
+    ended: input.ended,
+    kept: input.kept,
+    hasContent: input.hasContent,
+    listening: input.listening,
+    paused: input.paused,
+  })
+}
+
+/**
+ * #36 rule 4: a reconnect must not re-prompt the SAME unsaved (pending) session
+ * twice. `seen` holds the pending ids already offered; a repeat id → false. The
+ * id is recorded the first time it is offered.
+ */
+export function restoreIdOfferable(seen: Set<string>, id: string): boolean {
+  if (!id || seen.has(id)) return false
+  seen.add(id)
+  return true
+}
+
+/**
+ * #36 rule 4/5: do not surface a Restore while the user is listening, paused, or
+ * the current page already carries content — the reconnect is not interrupting a
+ * fresh view.
+ */
+export function restoreShouldNotAsk(input: { listening: boolean; paused: boolean; hasContent: boolean }): boolean {
+  return input.listening || input.paused || input.hasContent
+}
+
 export function restoreFromSession(session: HistorySession): RestorePayload {
   const scene = sceneOf(session)
   const mode = modeOf(session)

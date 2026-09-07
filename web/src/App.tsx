@@ -6,7 +6,7 @@ import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
-import { restoreFromSession, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
+import { restoreFromSession, restoreIdOfferable, restoreShouldNotAsk, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck, shouldOfferSaveOnce } from './historyRestore'
 import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
@@ -891,6 +891,14 @@ export default function App() {
   const pendingRestoreId = useRef<string | null>(null)
   const lastRestoredKeepId = useRef<string | null>(null)
   const offerSaveAfterMeetingStopRef = useRef<() => void>(() => undefined)
+  // #36: a live session may show at most ONE Save UI. Set when the Save dialog is
+  // first opened; gating the AUTO offers (Stop, save_prompt, reconnect Restore,
+  // New-session leave) so the same session is never re-prompted. A user-initiated
+  // Save (menu / phone button, a retry after a failed keep) bypasses it.
+  const saveOfferedRef = useRef(false)
+  // #36: pending (disconnected) session ids already offered for Restore, so a
+  // reconnect never re-prompts the same unsaved session.
+  const seenRestoreIds = useRef(new Set<string>())
   const watchAutoNotes = useRef(false)
   const autoReport = useRef(false)
   const recordHeard = useRef(false)
@@ -910,6 +918,8 @@ export default function App() {
     // purges the pending row after 24h rather than letting it shadow this one.
     setSavePrompt(false)
     pendingRestoreId.current = null
+    saveOfferedRef.current = false
+    seenRestoreIds.current.clear()
     if (!watchAutoNotes.current && !autoReport.current) {
       clearWatchReport()
       setWatchReportOpen(false)
@@ -997,7 +1007,15 @@ export default function App() {
       .then((out) => {
         const pending = (out.sessions || [])[0]
         if (!pending) return
+        // #36 rule 4/5: never interrupt a live/paused view, never re-prompt the
+        // same pending id on a reconnect, and never ask over a session that has
+        // already had its one Save UI.
+        const s = stateRef.current
+        if (restoreShouldNotAsk({ listening: listenWanted.current, paused: s.capture === 'paused', hasContent: meetingHasSaveableContent(s) })) return
+        if (!restoreIdOfferable(seenRestoreIds.current, pending.id)) return
+        if (saveOfferedRef.current) return
         pendingRestoreId.current = pending.id
+        saveOfferedRef.current = true
         setSavePrompt(true)
       })
       .catch(() => undefined)
@@ -1320,11 +1338,12 @@ export default function App() {
             api.send(watchSaveCommand())
             markHistoryKept(true)
           }
-        } else if (sessionShouldOpenSavePrompt({
+        } else if (!saveOfferedRef.current && sessionShouldOpenSavePrompt({
           workspaceMode: stateRef.current.workspaceMode,
           kept: historyKeptRef.current,
           paused: stateRef.current.capture === 'paused',
         })) {
+          saveOfferedRef.current = true
           setSavePrompt(true)
         }
       }
@@ -1528,6 +1547,8 @@ export default function App() {
     setClearOpen(false)
     markHistoryKept(false)
     pendingNewAfterSave.current = false
+    saveOfferedRef.current = false
+    seenRestoreIds.current.clear()
   }, [])
 
   const meetingHasSaveableContent = (s: AppState) =>
@@ -1539,6 +1560,8 @@ export default function App() {
   const offerSaveAfterMeetingStop = () => {
     const s = stateRef.current
     if (s.workspaceMode !== 'meeting' || historyKeptRef.current) return
+    if (saveOfferedRef.current) return
+    saveOfferedRef.current = true
     setSavePrompt(true)
   }
   offerSaveAfterMeetingStopRef.current = offerSaveAfterMeetingStop
@@ -1552,14 +1575,16 @@ export default function App() {
       })
       return
     }
-    if (sessionShouldOfferSave({
+    if (shouldOfferSaveOnce({
       workspaceMode: s.workspaceMode,
       ended: s.meetingEnded,
       kept: historyKept,
       hasContent: meetingHasSaveableContent(s),
+      offered: saveOfferedRef.current,
       listening: false,
     })) {
       pendingNewAfterSave.current = true
+      saveOfferedRef.current = true
       setSavePrompt(true)
       return
     }
@@ -2615,6 +2640,7 @@ export default function App() {
           setHistoryOpen(true)
           return
         }
+        saveOfferedRef.current = true
         setSavePrompt(true)
       }}
       canSaveSession={sessionShouldOfferSave({
@@ -2660,6 +2686,7 @@ export default function App() {
           setHistoryOpen(true)
           return
         }
+        saveOfferedRef.current = true
         setSavePrompt(true)
       }}
       onHistory={() => setHistoryOpen(true)}

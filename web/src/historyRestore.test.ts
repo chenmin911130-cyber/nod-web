@@ -1,4 +1,4 @@
-import { groupHistoryByDay, historyRowWhen, historySessionMatches, restoreFromSession, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt } from './historyRestore'
+import { groupHistoryByDay, historyRowWhen, historySessionMatches, restoreFromSession, restoreIdOfferable, restoreShouldNotAsk, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce } from './historyRestore'
 import type { HistorySession } from './components/HistoryPane'
 
 function at(h: number, m: number, s = 0): string {
@@ -180,3 +180,32 @@ const lgPay = restoreFromSession(legacy)
 eq(lgPay.pairs.length.toString(), '1', 'unmatched translate falls back to sequential pairs')
 eq(lgPay.pairs[0].translation, '你好世界', 'legacy no-qid pair keeps its translation')
 eq(lgPay.lines[0].translation || '', '', 'no qid match -> line translation stays empty')
+
+// ---- #36: one Save UI per session + restore dedupe ----
+
+// shouldOfferSaveOnce: a session that has already been offered is never re-offered.
+if (shouldOfferSaveOnce({ workspaceMode: 'meeting', ended: true, kept: false, hasContent: true, offered: true })) {
+  throw new Error('once offered, the same session must never be re-prompted (Stop/left/restore)')
+}
+if (!shouldOfferSaveOnce({ workspaceMode: 'meeting', ended: true, kept: false, hasContent: true, offered: false })) {
+  throw new Error('ended Meeting with content and no prior offer must offer Save once')
+}
+if (shouldOfferSaveOnce({ workspaceMode: 'meeting', ended: true, kept: false, hasContent: true, offered: false, paused: true })) {
+  throw new Error('paused never offers Save, even before a prior offer')
+}
+if (shouldOfferSaveOnce({ workspaceMode: 'meeting', ended: true, kept: true, hasContent: true, offered: false })) {
+  throw new Error('already-kept session never offers Save')
+}
+
+// restoreIdOfferable: the same pending id is only offerable once.
+const seen = new Set<string>()
+if (!restoreIdOfferable(seen, 'p1')) throw new Error('first offer of a pending id is allowed')
+if (restoreIdOfferable(seen, 'p1')) throw new Error('the same pending id must not re-offer on reconnect')
+if (!restoreIdOfferable(seen, 'p2')) throw new Error('a DIFFERENT pending id is allowed')
+if (restoreIdOfferable(seen, '')) throw new Error('an empty id is never offerable')
+
+// restoreShouldNotAsk: no restore while listening / paused / page has content.
+if (!restoreShouldNotAsk({ listening: true, paused: false, hasContent: false })) throw new Error('listening suppress restore')
+if (!restoreShouldNotAsk({ listening: false, paused: true, hasContent: false })) throw new Error('paused suppress restore')
+if (!restoreShouldNotAsk({ listening: false, paused: false, hasContent: true })) throw new Error('page content suppress restore')
+if (restoreShouldNotAsk({ listening: false, paused: false, hasContent: false })) throw new Error('idle empty view may offer restore')
