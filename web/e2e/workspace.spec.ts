@@ -20,10 +20,11 @@ test.describe('Workspace switcher', () => {
     const translateTab = page.getByRole('tab', { name: /translate/i })
     await expect(listenTab).toHaveAttribute('aria-selected', 'true')
 
-    // Switch to Translate.
+    // Switch to Translate. The selected tab is the source of truth — do not
+    // wait for a Mode · Translate toast (those stay off the title bar).
     await translateTab.click()
     await expect(translateTab).toHaveAttribute('aria-selected', 'true')
-    await expect(page.locator('body')).toContainText('Mode · Translate')
+    await expect(page.locator('.tr-voice-row')).toBeVisible()
 
     // Switch back to Listen (interview). Its scene shows "Notes · Meeting".
     await listenTab.click()

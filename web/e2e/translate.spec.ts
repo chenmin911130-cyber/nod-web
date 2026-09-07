@@ -91,7 +91,7 @@ test.describe('Translate desktop chrome', () => {
   test('keeps the desktop empty copy and does not use the phone start CTA', async ({ page }) => {
     await page.goto('/app')
     await page.getByRole('tab', { name: /translate/i }).click()
-    await expect(page.locator('body')).toContainText('Mode · Translate')
+    await expect(page.getByRole('tab', { name: /translate/i })).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByRole('button', { name: 'Start voice translation' })).toHaveCount(0)
     await expect(page.locator('.tr-voice-row')).toBeVisible()
     await expect(page.locator('.tr-swap')).toBeVisible()
