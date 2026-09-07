@@ -18,6 +18,7 @@ import {
   type MeetingSpeakerId,
   type NotesSectionId,
 } from '../listen'
+import { speakerSuggestions } from '../speakerSuggest'
 import {
   IPHONE_COPY,
   isListenReadyView,
@@ -27,6 +28,7 @@ import {
   notesPageTitle,
   notesSettingsValue,
   showLineTranslation,
+  speakerSuggestText,
   spokenSettingsValue,
 } from '../iphoneCopy'
 import { usePhoneChrome } from '../phoneChrome'
@@ -43,8 +45,10 @@ interface Props {
   notesLang: Lang
   lines: MeetingLine[]
   speakerNames: Record<string, string>
+  speakerDecided?: Record<string, 'confirmed' | 'dismissed'>
   partialSpeaker?: string
   onRenameSpeaker: (id: string, name: string) => void
+  onDismissSpeaker?: (id: string) => void
   partial: string
   listening: boolean
   paused?: boolean
@@ -717,6 +721,44 @@ function IphoneLiveAsk({
   )
 }
 
+function IphoneSpeakerSuggest({
+  suggestion,
+  label,
+  onConfirm,
+  onDismiss,
+}: {
+  suggestion: { speakerId: string; name: string; evidence?: string }
+  label: string
+  onConfirm: (id: string, name: string) => void
+  onDismiss: (id: string) => void
+}) {
+  const evidence = (suggestion.evidence || '').trim().slice(0, 60)
+  return (
+    <div className="iphone-speaker-suggest">
+      <div className="iphone-speaker-suggest-copy">
+        <b>{speakerSuggestText(label, suggestion.name)}</b>
+        {evidence ? <span>{evidence}</span> : null}
+      </div>
+      <button
+        type="button"
+        className="iphone-speaker-suggest-btn"
+        aria-label="Confirm"
+        onClick={() => onConfirm(suggestion.speakerId, suggestion.name)}
+      >
+        ✓
+      </button>
+      <button
+        type="button"
+        className="iphone-speaker-suggest-btn"
+        aria-label="Dismiss"
+        onClick={() => onDismiss(suggestion.speakerId)}
+      >
+        ✕
+      </button>
+    </div>
+  )
+}
+
 function IphoneLiveFeed({
   items,
   draft,
@@ -726,6 +768,7 @@ function IphoneLiveFeed({
   speakerNames,
   onRename,
   onRetry,
+  suggest,
 }: {
   items: LiveFeedItem[]
   draft: { speaker: string; text: string } | null
@@ -735,12 +778,14 @@ function IphoneLiveFeed({
   speakerNames: Record<string, string>
   onRename: (id: string, name: string) => void
   onRetry?: (noteId: string) => void
+  suggest?: ReactNode
 }) {
   const listRef = useRef<HTMLDivElement>(null)
   const stick = useStickToBottom(listRef, [items, draft?.text, draft?.speaker, listening, paused])
   const showDraft = Boolean(draft) && !ended
   return (
     <div className="iphone-live-feed-wrap">
+      {suggest}
       <div className="iphone-live-feed" ref={listRef}>
         {items.map((item) => (
           item.type === 'ask' ? (
@@ -1007,6 +1052,22 @@ export default function ListenPane(props: Props) {
   // the cost quadratic over a summary.
   const notes = useMemo(() => parseNotes(props.notesRaw), [props.notesRaw])
   const sections = useMemo(() => visibleSections(props.scene, notes), [props.scene, notes])
+  const speakerSuggest = useMemo(() => {
+    if (!phone || props.qa) return undefined
+    return speakerSuggestions({
+      speakers: notes.speakers,
+      speakerNames: props.speakerNames,
+      decided: props.speakerDecided || {},
+    })[0]
+  }, [phone, props.qa, notes.speakers, props.speakerNames, props.speakerDecided])
+  const speakerSuggestRow = speakerSuggest && props.onDismissSpeaker ? (
+    <IphoneSpeakerSuggest
+      suggestion={speakerSuggest}
+      label={props.speakerNames[speakerSuggest.speakerId] || speakerSuggest.name}
+      onConfirm={props.onRenameSpeaker}
+      onDismiss={props.onDismissSpeaker}
+    />
+  ) : null
   const lecture = props.scene === 'lecture'
   const notesHeading = notesPageTitle(props.scene)
   const paused = Boolean(props.paused)
@@ -1432,6 +1493,7 @@ export default function ListenPane(props: Props) {
           speakerNames={props.speakerNames}
           onRename={props.onRenameSpeaker}
           onRetry={props.onRetryAsk}
+          suggest={speakerSuggestRow}
         />
       ) : ready ? null : showStage && !props.qa ? (
         <IphoneMicStage listening={props.listening} />
@@ -1496,7 +1558,9 @@ export default function ListenPane(props: Props) {
                         : 'Start listening. The left side keeps what was said. Notes stay closed until you ask or tap Summarize.'}
                   </div>
                 ) : phone ? (
-                  trGroups.map((group, gi) => {
+                  <>
+                  {speakerSuggestRow}
+                  {trGroups.map((group, gi) => {
                     const groupText = [
                       ...group.lines.map((line) => line.text),
                       group.draft?.text || '',
@@ -1553,7 +1617,8 @@ export default function ListenPane(props: Props) {
                         ) : null}
                       </div>
                     )
-                  })
+                  })}
+                  </>
                 ) : (
                   <>
                   {props.lines.map((line, i) => (

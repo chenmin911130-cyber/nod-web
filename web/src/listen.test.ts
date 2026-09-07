@@ -1,4 +1,4 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, SCENE_HELP, applyListenSetting, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesPrompt, outLangRule, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakersExpected, transcriptBlock } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, SCENE_HELP, applyListenSetting, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesPrompt, outLangRule, parseNotes, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakersExpected, transcriptBlock } from './listen'
 import type { MeetingLine } from './types'
 
 function eq<T>(got: T, want: T, label?: string) {
@@ -168,6 +168,30 @@ if (zhNotes.includes(':bi]')) throw new Error('NOTES tag stays single-language')
 
 eq(notesBodyText('We ship Friday.\n>> 我们周五发。'), '我们周五发。', 'old bilingual notes keep the notes-language line')
 eq(notesBodyText('我们周五发。'), '我们周五发。', 'single-language notes stay as written')
+
+{
+  const parsed = parseNotes(JSON.stringify({
+    summary: 'Kickoff',
+    speakers: [
+      { label: 'Host', name: 'Tom', evidence: "Hi, I'm Tom" },
+      { label: 'Guest', name: '' },
+      { label: 'Host', name: 'Host' },
+      { label: '', name: 'Alice' },
+    ],
+  }))
+  eq(parsed.speakers, [{ label: 'Host', name: 'Tom', evidence: "Hi, I'm Tom" }], 'parseNotes keeps named speakers and drops empty / label-as-name')
+  eq(parseNotes('{"summary":"x"}').speakers, [], 'missing speakers defaults to empty')
+  const withSpeakers = { ...emptyNotes(), speakers: [{ label: 'Host', name: 'Tom' }] }
+  if (exportNoteSections('meeting', withSpeakers).some((s) => s.id === 'speakers' as never)) {
+    throw new Error('exportNoteSections does not render speakers')
+  }
+  if (!notesPrompt('meeting', [{ id: '1', ts: '0:01', text: 'Hi' }], 'en').includes('speakers')) {
+    throw new Error('notesPrompt lists speakers')
+  }
+  if (!notesPrompt('meeting', [{ id: '1', ts: '0:01', text: 'Hi' }], 'en').toLowerCase().includes('explicitly spoken')) {
+    throw new Error('notesPrompt requires explicitly spoken names')
+  }
+}
 
 // Same-language passthrough dedup: a translation identical to its source (after
 // whitespace normalization) is not a real translation — feed it once, source only.

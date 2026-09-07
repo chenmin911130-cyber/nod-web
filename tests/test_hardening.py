@@ -1211,6 +1211,26 @@ class ListenAskRoutingTests(unittest.TestCase):
         self.assertNotIn(mid, ask)
         self.assertNotIn(names, ask)
 
+    def test_notes_prompt_asks_for_spoken_speaker_names(self):
+        pipe = Pipeline.__new__(Pipeline)
+        pipe.cfg = {"llm": {}}
+        notes = pipe._build_messages(
+            "[NOD_NOTES:auto]\nWrite structured notes for a live session\nSome bullets\n",
+            "notes",
+        )[0]["content"]
+        ask = pipe._build_messages(
+            "[NOD_ASK:auto]\nListener question: Why?\nTranscript (use when relevant):\n(empty)",
+            "listen_ask",
+        )[0]["content"]
+        translate = pipe._build_messages(
+            "Translate to Chinese.\nSource language: English.\nTranslate only this line:\nHello",
+            "translate",
+        )[0]["content"]
+        self.assertIn("speakers is an array", notes)
+        self.assertIn("Never infer a name from topic, role, or context", notes)
+        self.assertNotIn("speakers is an array", ask)
+        self.assertNotIn("speakers is an array", translate)
+
 
 class MailerEscapeTests(unittest.TestCase):
     def test_feedback_html_is_escaped(self):

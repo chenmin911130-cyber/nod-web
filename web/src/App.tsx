@@ -209,6 +209,7 @@ const initial: AppState = {
   notesAskId: '',
   speakerNames: {},
   speakerNameLocked: {},
+  speakerDecided: {},
   partialSpeaker: '',
   quota: null as { stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; ok: boolean; sessions: number; session_limit: number; daily_cost_usd: number; daily_cost_limit: number; daily_stt_seconds: number; daily_stt_limit: number; quota_disabled?: boolean } | null,
 }
@@ -252,6 +253,7 @@ type Action =
   | { type: 'retry_ask'; noteId: string }
   | { type: 'expect_notes' }
   | { type: 'rename_speaker'; id: string; name: string }
+  | { type: 'dismiss_speaker_suggestion'; id: string }
   | {
       type: 'restore_session'
       mode: WorkspaceMode
@@ -668,6 +670,7 @@ function reducer(state: AppState, action: Action): AppState {
         meetingEnded: false,
         speakerNames: {},
         speakerNameLocked: {},
+        speakerDecided: {},
         partialSpeaker: '',
         translatePairs: [],
         translateAskId: '',
@@ -693,6 +696,7 @@ function reducer(state: AppState, action: Action): AppState {
         currentQId: lastTurn?.id || '',
         notesRaw: action.notes,
         translatePairs: action.pairs,
+        speakerDecided: {},
         ...clock,
         view: 'workspace',
       }
@@ -709,6 +713,15 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         speakerNames: { ...state.speakerNames, [id]: name },
         speakerNameLocked: { ...state.speakerNameLocked, [id]: true },
+        speakerDecided: { ...state.speakerDecided, [id]: 'confirmed' },
+      }
+    }
+    case 'dismiss_speaker_suggestion': {
+      const id = action.id.trim()
+      if (!id) return state
+      return {
+        ...state,
+        speakerDecided: { ...state.speakerDecided, [id]: 'dismissed' },
       }
     }
     case 'listen_new':
@@ -717,6 +730,7 @@ function reducer(state: AppState, action: Action): AppState {
         meetingLines: [],
         speakerNames: {},
         speakerNameLocked: {},
+        speakerDecided: {},
         partialSpeaker: '',
         catchNotes: [],
         catchPendingTitle: '',
@@ -2457,6 +2471,10 @@ export default function App() {
     dispatch({ type: 'rename_speaker', id, name })
   }, [])
 
+  const handleDismissSpeaker = useCallback((id: string) => {
+    dispatch({ type: 'dismiss_speaker_suggestion', id })
+  }, [])
+
   const handleTranslateTyped = useCallback((text: string, files?: AttachPayload[]) => {
     const original = text.trim() || (files?.length ? files.map((f) => f.name).join(', ') : '')
     const s = stateRef.current
@@ -3254,8 +3272,10 @@ export default function App() {
             notesLang={state.notesLang}
             lines={state.meetingLines}
             speakerNames={state.speakerNames}
+            speakerDecided={state.speakerDecided}
             partialSpeaker={state.partialSpeaker}
             onRenameSpeaker={handleRenameSpeaker}
+            onDismissSpeaker={handleDismissSpeaker}
             partial={state.partial}
             listening={listening}
             paused={iphonePaused}

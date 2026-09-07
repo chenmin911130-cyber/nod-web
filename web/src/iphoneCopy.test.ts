@@ -1,5 +1,6 @@
 import {
   IPHONE_COPY,
+  speakerSuggestText,
   canSwitchWorkspace,
   isListenReadyView,
   listenChipLabel,
@@ -144,6 +145,7 @@ eq(IPHONE_COPY.fullTranscript, 'Full transcript', 'Transcript header title')
 eq(IPHONE_COPY.allCapturedSpeech, 'All captured speech', 'Transcript header subtitle')
 eq(IPHONE_COPY.backToLatest, 'Back to latest', 'Transcript jump capsule')
 eq(IPHONE_COPY.emptyNotes, 'Start listening', 'Notes empty stays Start listening')
+eq(speakerSuggestText('Host', 'Tom'), 'Host is Tom?', 'speaker chip asks to confirm the spoken name')
 eq(IPHONE_COPY.listeningEmpty, 'Listening…', 'listening empty stage title is Listening…')
 eq(IPHONE_COPY.listeningEmptyHelp, "We'll show what's said here.", 'listening empty stage explains the feed')
 eq(IPHONE_COPY.askConversation, 'Ask about this conversation…', 'Live ask placeholder is about this conversation')

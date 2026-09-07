@@ -115,6 +115,7 @@ export interface AppState {
   notesAskId: string
   speakerNames: Record<string, string>
   speakerNameLocked: Record<string, boolean>
+  speakerDecided: Record<string, 'confirmed' | 'dismissed'>
   partialSpeaker: string
   quota: {
     ok: boolean
