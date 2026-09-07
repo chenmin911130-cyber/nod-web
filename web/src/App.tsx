@@ -40,7 +40,7 @@ import {
   type SaveBook,
 } from './sessionSave'
 import { isTranslateChunk, looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, sttTag, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough, wrongScriptForTarget } from './translateGate'
-import { meetingLinesAfterTargetChange, nextMeetingLineToTranslate } from './meetingTranslate'
+import { applyNotesTranslateTo, nextMeetingLineToTranslate } from './meetingTranslate'
 import { applyLineUpdate, applyLineTranslationRev, staleTranslateDone } from './meetingLines'
 import { doneAffectsInterview } from './interviewDone'
 import AnswerPane from './components/AnswerPane'
@@ -76,8 +76,6 @@ import {
   isCatchPrompt,
   isNotesPrompt,
   notesPrompt,
-  nodTag,
-  outLangRule,
   capTranscript,
   notesLangActions,
   MEETING_SPEAKER_OPTIONS,
@@ -109,6 +107,7 @@ const STATUS_READY = 'Ready · F2 record / F3 listen / F4 clear'
 const TRANSLATE_PREFIX = 'Translate to '
 const TRANSLATE_PAIR_KEY = 'nod_translate_pair'
 const NOTES_LANG_KEY = 'nod_notes_lang'
+const NOTES_TRANSLATE_TO_KEY = 'nod_notes_translate_to'
 
 function isPairLang(value: unknown): value is PairLang {
   return TRANSLATE_LANGS.some((l) => l.id === value)
@@ -140,9 +139,35 @@ function readStoredNotesLang(): Lang | null {
   return null
 }
 
+function readStoredNotesTranslateTo(): PairLang {
+  try {
+    const raw = localStorage.getItem(NOTES_TRANSLATE_TO_KEY)
+    if (isPairLang(raw)) return raw
+  } catch {
+    /* ignore */
+  }
+  const notes = readStoredNotesLang()
+  if (notes && isPairLang(notes)) return notes
+  try {
+    const nav = (navigator.language || '').slice(0, 2).toLowerCase()
+    if (isPairLang(nav)) return nav
+  } catch {
+    /* ignore */
+  }
+  return 'zh'
+}
+
 function persistNotesLang(lang: Lang) {
   try {
     localStorage.setItem(NOTES_LANG_KEY, lang)
+  } catch {
+    /* ignore */
+  }
+}
+
+function persistNotesTranslateTo(lang: PairLang) {
+  try {
+    localStorage.setItem(NOTES_TRANSLATE_TO_KEY, lang)
   } catch {
     /* ignore */
   }
@@ -200,6 +225,7 @@ const initial: AppState = {
   translateFrom: storedPair?.from ?? 'auto',
   translateTo: storedPair?.to ?? 'en',
   notesLang: readStoredNotesLang() ?? 'auto',
+  notesTranslateTo: readStoredNotesTranslateTo(),
   heardLang: null,
   translateAskId: '',
   translateBindId: '',
@@ -236,6 +262,7 @@ type Action =
   | { type: 'translate_from'; lang: Lang }
   | { type: 'translate_to'; lang: PairLang }
   | { type: 'notes_lang'; lang: Lang }
+  | { type: 'notes_translate_to'; lang: PairLang }
   | { type: 'mark_action' }
   | { type: 'meeting_clock'; startedAt: number | null; elapsedMs: number }
   | { type: 'meeting_ended' }
@@ -793,24 +820,23 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, notesAskId: '__pending__', notesRaw: '', busy: true, status: 'Writing notes…', translateBindId: '', translateAskId: '' }
     case 'translate_from':
       return { ...state, translateFrom: action.lang }
-    case 'translate_to': {
-      // Decoupled: changing the translation target must NOT rewrite the notes
-      // language. The Meeting notes selector dispatches notes_lang separately.
-      if (action.lang === state.translateTo) return { ...state, translateTo: action.lang }
-      // After End, settings apply to the next capture. Keep the same line
-      // objects so existing transcript text (and the pump effect) stay put.
-      if (state.meetingEnded) return { ...state, translateTo: action.lang }
-      // A meeting line that gave up (translateFailed) becomes retryable under a
-      // new target — reset the give-up flag. Its translation stays empty; the
-      // caller clears the asked/retry refs so pump re-picks these lines.
-      return {
-        ...state,
-        translateTo: action.lang,
-        meetingLines: meetingLinesAfterTargetChange(state.meetingLines, state.translateTo, action.lang),
-      }
-    }
+    case 'translate_to':
+      // Translate page only. Meeting bilingual target lives on notesTranslateTo.
+      return { ...state, translateTo: action.lang }
     case 'notes_lang':
       return { ...state, notesLang: action.lang }
+    case 'notes_translate_to': {
+      return {
+        ...state,
+        notesTranslateTo: action.lang,
+        meetingLines: applyNotesTranslateTo(
+          state.meetingLines,
+          state.notesTranslateTo,
+          action.lang,
+          state.meetingEnded,
+        ),
+      }
+    }
     case 'mark_action': {
       if (state.meetingLines.length === 0) return state
       const meetingLines = state.meetingLines.slice()
@@ -1407,7 +1433,7 @@ export default function App() {
         previous: face.previous,
         history: face.history,
         mode: watchStatusMode(state.workspaceMode, state.listenScene),
-        langPair: watchLangPair(state.translateTo),
+        langPair: watchLangPair(state.workspaceMode === 'translate' ? state.translateTo : state.notesTranslateTo),
       })
     }, 180)
     return () => window.clearTimeout(timer)
@@ -1424,6 +1450,7 @@ export default function App() {
     state.workspaceMode,
     state.listenScene,
     state.translateTo,
+    state.notesTranslateTo,
   ])
 
   const acceptConsent = () => {
@@ -2448,7 +2475,8 @@ export default function App() {
       dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.settingsLocked } })
       return
     }
-    const keepExisting = s.workspaceMode !== 'translate' && (s.meetingEnded || s.meetingLines.length > 0)
+    const meeting = s.workspaceMode !== 'translate'
+    const keepExisting = meeting && (s.meetingEnded || s.meetingLines.length > 0)
     if (lang === 'auto') {
       if (s.notesLang === 'auto') return
       persistNotesLang('auto')
@@ -2456,7 +2484,7 @@ export default function App() {
       if (s.lang === 'auto') {
         window.api.send({ type: 'set_lang', language: null })
       }
-      // Auto notes only: the translation target stays put (decoupled from notes).
+      // Auto notes only: the bilingual target stays put (decoupled from notes).
       dispatch({ type: 'notes_lang', lang: 'auto' })
       dispatch({
         type: 'engine',
@@ -2464,39 +2492,49 @@ export default function App() {
       })
       return
     }
-    // Specific language. In the Meeting / Lecture notes dropdown the one control
-    // drives both the notes language and the translation target; in the Translate
-    // workspace it changes only the target.
-    const meeting = s.workspaceMode !== 'translate'
-    if (lang === s.translateTo && (meeting ? s.notesLang === lang : true)) return
-    persistTranslatePair(s.translateFrom, lang)
-    if (meeting) persistNotesLang(lang)
-    const stuck = inflightTranslate.current
-    if (!keepExisting) window.api.send({ type: 'cancel_generate' })
-    window.api.send({ type: 'set_translate_to', lang })
-    if (!keepExisting) releaseTranslateGate(stuck)
-    // A meeting line that gave up (translateFailed) becomes eligible again under
-    // the new target — clear its give-up refs so pump re-picks it (the reducer
-    // resets the flag on translate_to). After End, leave existing lines alone.
-    if (!keepExisting) {
-      for (const ln of s.meetingLines.filter((ln) => ln.translateFailed)) {
-        askedTranslate.current.delete(ln.id)
-        translateRetries.current.delete(ln.id)
+    if (meeting) {
+      if (lang === s.notesTranslateTo && s.notesLang === lang) return
+      persistNotesTranslateTo(lang)
+      persistNotesLang(lang)
+      const stuck = inflightTranslate.current
+      if (!keepExisting) window.api.send({ type: 'cancel_generate' })
+      if (!keepExisting) releaseTranslateGate(stuck)
+      if (!keepExisting) {
+        for (const ln of s.meetingLines.filter((ln) => ln.translateFailed)) {
+          askedTranslate.current.delete(ln.id)
+          translateRetries.current.delete(ln.id)
+        }
       }
+      for (const action of notesLangActions(s.workspaceMode, lang)) dispatch(action as never)
+      dispatch({
+        type: 'engine',
+        ev: { type: 'status', text: `Notes language · ${targetName(lang)}` },
+      })
+      if (!keepExisting) queueMicrotask(() => pumpTranslateRef.current())
+      return
+    }
+    if (lang === s.translateTo) return
+    persistTranslatePair(s.translateFrom, lang)
+    const stuck = inflightTranslate.current
+    window.api.send({ type: 'cancel_generate' })
+    window.api.send({ type: 'set_translate_to', lang })
+    releaseTranslateGate(stuck)
+    for (const ln of s.meetingLines.filter((ln) => ln.translateFailed)) {
+      askedTranslate.current.delete(ln.id)
+      translateRetries.current.delete(ln.id)
     }
     for (const action of notesLangActions(s.workspaceMode, lang)) dispatch(action as never)
     dispatch({
       type: 'engine',
       ev: {
         type: 'status',
-        text: meeting
-          ? `Notes language · ${targetName(lang)}`
-          : s.translateFrom !== 'auto' && s.translateFrom === lang
+        text:
+          s.translateFrom !== 'auto' && s.translateFrom === lang
             ? `Translate to ${targetName(lang)} · same as From`
             : `Translate to ${targetName(lang)}`,
       },
     })
-    if (!keepExisting) queueMicrotask(() => pumpTranslateRef.current())
+    queueMicrotask(() => pumpTranslateRef.current())
   }, [])
 
   const handleMeetingSpeakers = useCallback((id: MeetingSpeakerId) => {
@@ -2534,7 +2572,8 @@ export default function App() {
     // no-passthrough rule.
     const fromTag =
       s.workspaceMode === 'meeting' ? s.meetingLines.find((ln) => ln.id === id)?.lang : pair?.from
-    const sameLang = !typed && translateShouldPassthrough(text, s.translateTo, fromTag)
+    const targetLang = s.workspaceMode === 'translate' ? s.translateTo : s.notesTranslateTo
+    const sameLang = !typed && translateShouldPassthrough(text, targetLang, fromTag)
     if (sameLang) {
       askedTranslate.current.add(id)
       translateRetries.current.delete(id)
@@ -2542,7 +2581,7 @@ export default function App() {
       queueMicrotask(() => pumpTranslateRef.current())
       return
     }
-    const target = targetName(s.translateTo)
+    const target = targetName(targetLang)
     const sourceHint =
       s.workspaceMode === 'translate'
         ? s.translateFrom !== 'auto'
@@ -2674,7 +2713,7 @@ export default function App() {
     killInflightTranslation()
     dispatch({ type: 'expect_notes' })
     const cap = capTranscript(s.meetingLines)
-    window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, cap.lines, s.notesLang, s.translateOn, s.speakerNames, cap), mode: 'notes' })
+    window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, cap.lines, s.notesLang, s.translateOn, s.speakerNames, cap, s.notesTranslateTo), mode: 'notes' })
     if (cap.dropped > 0) {
       dispatch({
         type: 'engine',
@@ -2816,7 +2855,7 @@ export default function App() {
         const attach_id = await parkAttaches(files)
         window.api.send({
           type: 'ask',
-          text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, s.translateOn, s.speakerNames),
+          text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, s.translateOn, s.speakerNames, s.notesTranslateTo),
           attach_id,
           mode: 'listen_ask',
         })
@@ -2839,7 +2878,7 @@ export default function App() {
       try {
         window.api.send({
           type: 'ask',
-          text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, s.translateOn, s.speakerNames),
+          text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, s.translateOn, s.speakerNames, s.notesTranslateTo),
           mode: 'listen_ask',
         })
       } catch (ex) {
@@ -3462,7 +3501,7 @@ export default function App() {
             heardLang={state.heardLang}
             onSpeechLang={handleLang}
             translateOn={state.translateOn}
-            translateTo={state.translateTo}
+            notesTranslateTo={state.notesTranslateTo}
             notesLang={state.notesLang}
             lines={state.meetingLines}
             speakerNames={state.speakerNames}

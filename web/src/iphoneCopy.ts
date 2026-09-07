@@ -136,8 +136,8 @@ export function listenChipParts(lang: Lang): { title: string; sub: string } {
   return { title: name, sub: '' }
 }
 
-export function notesChipParts(lang: Lang): { title: string; sub: string } {
-  return { title: notesInChip(lang), sub: '' }
+export function notesChipParts(lang: Lang, biTarget?: PairLang): { title: string; sub: string } {
+  return { title: notesInChip(lang, biTarget), sub: '' }
 }
 
 export function listenDetectChip(lang: Lang): string {
@@ -145,10 +145,23 @@ export function listenDetectChip(lang: Lang): string {
   return TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
 }
 
-export function notesInChip(lang: Lang): string {
-  if (lang === 'auto') return 'Notes · Auto'
+export function notesInChip(lang: Lang, biTarget?: PairLang): string {
+  if (lang === 'auto') {
+    if (biTarget) {
+      const name = TRANSLATE_LANGS.find((item) => item.id === biTarget)?.name || 'English'
+      return `Notes · Auto → ${name}`
+    }
+    return 'Notes · Auto'
+  }
   const name = TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
   return `Notes · ${name}`
+}
+
+export function bilingualButtonTitle(on: boolean, target: PairLang): string {
+  const name = TRANSLATE_LANGS.find((item) => item.id === target)?.name || 'Chinese'
+  return on
+    ? `Bilingual on → ${name} — tap to turn off`
+    : `Bilingual off — translations in ${name}`
 }
 
 export function notesChipLabel(lang: Lang): string {

@@ -1335,14 +1335,20 @@ class Pipeline:
             return ""
         return first[1:first.index("]")]
 
-    def _bilingual_from_tag(self, question: str) -> bool:
-        return ":bi" in self._tag_inner(question).split("]")[0]
+    def _bilingual_from_tag(self, question: str) -> str | None:
+        inner = self._tag_inner(question)
+        for p in inner.split(":")[1:]:
+            if p == "bi":
+                return "auto"
+            if p.startswith("bi-"):
+                return _normalize_stt_lang(p[3:]) or "auto"
+        return None
 
     def _out_lang_from_tag(self, question: str) -> str | None:
         inner = self._tag_inner(question)
         if not inner.startswith(("NOD_CATCH:", "NOD_ASK:", "NOD_NOTES:")):
             return None
-        parts = [p for p in inner.split(":")[1:] if p and p != "bi"]
+        parts = [p for p in inner.split(":")[1:] if p and not p.startswith("bi")]
         if not parts:
             return None
         last = parts[-1]
@@ -1350,14 +1356,18 @@ class Pipeline:
             return None
         return _normalize_stt_lang(last)
 
-    def _output_lang_rule(self, lang: str | None, bilingual: bool = False) -> str:
-        name = _LANG_NAMES.get(lang or "", "the notes language, or Chinese if unclear")
+    def _output_lang_rule(self, lang: str | None, bilingual: str | None = None) -> str:
         if bilingual:
+            if bilingual != "auto":
+                name = _LANG_NAMES.get(bilingual, bilingual)
+            else:
+                name = _LANG_NAMES.get(lang or "", "the notes language, or Chinese if unclear")
             return (
                 f"\nBILINGUAL (hard rule): Every sentence or bullet has TWO lines. "
                 f"Line 1 is the transcript / source language. Line 2 starts with '>> ' then the {name} translation. "
                 "Never output only one language."
             )
+        name = _LANG_NAMES.get(lang or "", "the notes language, or Chinese if unclear")
         if not lang:
             return ""
         return (
