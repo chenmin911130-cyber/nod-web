@@ -27,14 +27,6 @@ function StopIcon() {
   )
 }
 
-function StatusWave({ live }: { live: boolean }) {
-  return (
-    <span className={`iphone-status-wave${live ? ' live' : ''}`} aria-hidden="true">
-      {Array.from({ length: 7 }, (_, i) => <i key={i} />)}
-    </span>
-  )
-}
-
 function PdfIcon() {
   return (
     <svg width="22" height="22" viewBox="0 0 18 18" fill="none" aria-hidden="true">
@@ -142,11 +134,8 @@ export default function IphoneActions({
           listening ? (
           <div className="iphone-status-row">
             <span className="iphone-status rec" aria-live="polite">
-                <>
-                  <i className={`iphone-dot ${tone}`} />
-                  {IPHONE_COPY.translateStatus}
-                  <StatusWave live />
-                </>
+              <i className={`iphone-dot ${tone}`} />
+              {IPHONE_COPY.translateStatus}
             </span>
             <button type="button" className="iphone-pill" onClick={onPause}>
               <PauseIcon />

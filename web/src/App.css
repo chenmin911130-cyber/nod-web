@@ -6430,37 +6430,6 @@ html.nod-phone .app.iphone-v2 .iphone-clock {
   font-variant-numeric: tabular-nums;
 }
 
-html.nod-phone .app.iphone-v2 .iphone-status-wave {
-  display: inline-flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 14px;
-  margin-left: 2px;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-status-wave i {
-  display: block;
-  width: 2.5px;
-  height: 14px;
-  border-radius: 999px;
-  background: #00d2ff;
-  transform-origin: center bottom;
-  animation: iphone-bar 1s ease-in-out infinite;
-}
-
-html.nod-phone .app.iphone-v2 .iphone-status-wave i:nth-child(1) { animation-delay: 0s; height: 8px; }
-html.nod-phone .app.iphone-v2 .iphone-status-wave i:nth-child(2) { animation-delay: 0.1s; height: 12px; }
-html.nod-phone .app.iphone-v2 .iphone-status-wave i:nth-child(3) { animation-delay: 0.2s; height: 14px; }
-html.nod-phone .app.iphone-v2 .iphone-status-wave i:nth-child(4) { animation-delay: 0.3s; height: 10px; }
-html.nod-phone .app.iphone-v2 .iphone-status-wave i:nth-child(5) { animation-delay: 0.18s; height: 14px; }
-html.nod-phone .app.iphone-v2 .iphone-status-wave i:nth-child(6) { animation-delay: 0.08s; height: 11px; }
-html.nod-phone .app.iphone-v2 .iphone-status-wave i:nth-child(7) { animation-delay: 0.26s; height: 8px; }
-
-html.nod-phone .app.iphone-v2 .iphone-status-wave:not(.live) i {
-  animation: none;
-  opacity: 0.4;
-}
-
 html.nod-phone .app.iphone-v2 .iphone-status.hold {
   color: #f5c14a;
 }
@@ -7139,11 +7108,6 @@ html.nod-phone .app.iphone-v2 .iphone-viz.is-listening .iphone-viz-core {
 @keyframes iphone-rec {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(0.72); opacity: 0.55; }
-}
-
-@keyframes iphone-bar {
-  0%, 100% { transform: scaleY(0.4); opacity: 0.55; }
-  50% { transform: scaleY(1.35); opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
