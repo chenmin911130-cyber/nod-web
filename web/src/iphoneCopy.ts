@@ -104,6 +104,14 @@ export const IPHONE_COPY = {
   appliesToNextRecording: 'Applies to next recording',
   settingsLocked: 'Settings are locked while recording',
   settingsReadonlyAria: 'Session settings (read-only while recording)',
+  leaveTitle: 'Start a new session?',
+  leaveSubRecording: 'Recording will end first. Your notes stay until you choose.',
+  leaveSubEnded: "This session isn't saved yet.",
+  leaveSave: 'Save and start new',
+  leaveDiscard: 'Discard and start new',
+  leaveDiscardHelp: 'This cannot be undone.',
+  leaveWaitAnswer: 'Wait for the answer to finish',
+  leaveSavedStatus: 'Saved · new session',
 } as const
 
 export function nativeListenChipOrder(scene: ListenScene): ReadonlyArray<'scene' | 'speech' | 'notes'> {

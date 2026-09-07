@@ -23,6 +23,9 @@ export type KeepAckResult = {
 }
 
 export const KEEP_ACK_TIMEOUT_MS = 15_000
+export const KEEP_CAPTURE_SETTLE_MS = 800
+
+export type NewSessionDecision = 'clear' | 'sheet' | 'blocked'
 
 export function emptySaveBook(): SaveBook {
   return {
@@ -96,6 +99,32 @@ export function keepAfterNotesStillValid(
 ): boolean {
   if (!job.liveId || job.generation !== book.generation) return false
   return job.liveId === book.liveId
+}
+
+export function decideNewSession(input: {
+  capture: string
+  busy: boolean
+  hasContent: boolean
+  kept: boolean
+  workspaceMode: string
+}): NewSessionDecision {
+  if (input.workspaceMode === 'translate') return 'clear'
+  if (!input.hasContent) return 'clear'
+  if (input.kept && input.capture === 'off') return 'clear'
+  return 'sheet'
+}
+
+/** Wait until capture is off and the last line / line_update has been quiet. */
+export function keepShouldWaitForCapture(input: {
+  capture: string
+  lastLineAt: number | null
+  now: number
+  settleMs?: number
+}): boolean {
+  if (input.capture !== 'off') return true
+  if (input.lastLineAt == null) return false
+  const settle = input.settleMs ?? KEEP_CAPTURE_SETTLE_MS
+  return input.now - input.lastLineAt < settle
 }
 
 export function savePromptSurface(input: {

@@ -1,11 +1,14 @@
 import {
   KEEP_ACK_TIMEOUT_MS,
+  KEEP_CAPTURE_SETTLE_MS,
   applyKeepAck,
   applyKeepFailed,
   beginSave,
   bumpGeneration,
+  decideNewSession,
   emptySaveBook,
   keepAfterNotesStillValid,
+  keepShouldWaitForCapture,
   savePromptSurface,
   setPendingAfterSave,
 } from './sessionSave'
@@ -113,6 +116,82 @@ eq(
   if (keepAfterNotesStillValid({ liveId: 'other', generation: book.generation }, book)) {
     throw new Error('keepAfterNotes with a liveId mismatch must be discarded')
   }
+}
+
+eq(KEEP_CAPTURE_SETTLE_MS, 800, 'capture settle is 800ms')
+
+const baseLeave = {
+  capture: 'off',
+  busy: false,
+  hasContent: true,
+  kept: false,
+  workspaceMode: 'meeting',
+}
+
+eq(decideNewSession({ ...baseLeave, hasContent: false }), 'clear', 'no content → clear')
+eq(decideNewSession({ ...baseLeave, kept: true, capture: 'off' }), 'clear', 'kept and not recording → clear')
+eq(decideNewSession({ ...baseLeave, capture: 'listening' }), 'sheet', 'unsaved recording → sheet')
+eq(decideNewSession({ ...baseLeave, capture: 'paused' }), 'sheet', 'unsaved paused → sheet')
+eq(decideNewSession({ ...baseLeave, capture: 'off' }), 'sheet', 'unsaved ended → sheet')
+eq(decideNewSession({ ...baseLeave, capture: 'listening', busy: true }), 'sheet', 'busy + unsaved → sheet')
+eq(
+  decideNewSession({ ...baseLeave, workspaceMode: 'translate', capture: 'listening', hasContent: true }),
+  'clear',
+  'translate → clear',
+)
+
+eq(
+  keepShouldWaitForCapture({ capture: 'listening', lastLineAt: 1_000, now: 10_000 }),
+  true,
+  'listening still waits',
+)
+eq(
+  keepShouldWaitForCapture({ capture: 'paused', lastLineAt: 1_000, now: 10_000 }),
+  true,
+  'paused still waits',
+)
+eq(
+  keepShouldWaitForCapture({ capture: 'off', lastLineAt: 9_400, now: 10_000 }),
+  true,
+  'off + line within 800ms waits',
+)
+eq(
+  keepShouldWaitForCapture({ capture: 'off', lastLineAt: 9_200, now: 10_000 }),
+  false,
+  'off + silent 800ms goes',
+)
+eq(
+  keepShouldWaitForCapture({ capture: 'off', lastLineAt: null, now: 10_000 }),
+  false,
+  'off + no line goes',
+)
+
+// Save and start new: unmatched ack does not clear; matching ack clears once
+{
+  let book = setPendingAfterSave(beginSave(fresh, 'live-leave'), 'new')
+  const stale = applyKeepAck(book, 'other-id', 'live-leave', book.generation)
+  eq(stale.action, 'none', 'wrong id ack does not clear')
+  eq(stale.book.pendingAfterSave, 'new', 'wrong id keeps pending new')
+  eq(stale.book.status, 'saving', 'wrong id stays saving')
+  const hit = applyKeepAck(book, 'live-leave', 'live-leave', book.generation)
+  eq(hit.action, 'new', 'matching ack clears once')
+  eq(hit.book.status, 'saved', 'matching ack marks saved')
+  const twice = applyKeepAck(hit.book, 'live-leave', 'live-leave', hit.book.generation)
+  eq(twice.action, 'none', 'matching ack does not clear a second time')
+}
+
+// fail → stay on session → retry → matching ack → clear
+{
+  let book = setPendingAfterSave(beginSave(fresh, 'live-retry'), 'new')
+  book = applyKeepFailed(book, 'error')
+  eq(book.status, 'failed', 'save failure stays failed on the same book')
+  eq(book.pendingAfterSave, 'new', 'save failure keeps pending new')
+  eq(book.liveId, 'live-retry', 'save failure stays on the same session id')
+  book = beginSave(book, 'live-retry')
+  eq(book.status, 'saving', 'retry starts saving again')
+  const { book: saved, action } = applyKeepAck(book, 'live-retry', 'live-retry', book.generation)
+  eq(action, 'new', 'retry ack then clears')
+  eq(saved.status, 'saved', 'retry ack marks saved')
 }
 
 console.log('sessionSave.test.ts ok')

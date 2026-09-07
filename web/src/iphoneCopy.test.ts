@@ -161,6 +161,14 @@ eq(IPHONE_COPY.autoNotes, 'Auto notes', 'meta line auto notes segment')
 eq(IPHONE_COPY.appliesToNextRecording, 'Applies to next recording', 'ended settings help')
 eq(IPHONE_COPY.settingsLocked, 'Settings are locked while recording', 'locked settings toast')
 eq(IPHONE_COPY.settingsReadonlyAria, 'Session settings (read-only while recording)', 'meta line aria')
+eq(IPHONE_COPY.leaveTitle, 'Start a new session?', 'leave sheet title')
+eq(IPHONE_COPY.leaveSubRecording, 'Recording will end first. Your notes stay until you choose.', 'leave sheet while recording')
+eq(IPHONE_COPY.leaveSubEnded, "This session isn't saved yet.", 'leave sheet after End')
+eq(IPHONE_COPY.leaveSave, 'Save and start new', 'leave save action')
+eq(IPHONE_COPY.leaveDiscard, 'Discard and start new', 'leave discard action')
+eq(IPHONE_COPY.leaveDiscardHelp, 'This cannot be undone.', 'leave discard is irreversible')
+eq(IPHONE_COPY.leaveWaitAnswer, 'Wait for the answer to finish', 'leave save waits for Ask')
+eq(IPHONE_COPY.leaveSavedStatus, 'Saved · new session', 'leave save success toast')
 eq(
   listenMetaLine({ scene: 'meeting', speakersId: '2', speechLang: 'auto', notesLang: 'zh' }),
   'Meeting · Auto-detect · Chinese notes',

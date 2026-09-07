@@ -12,22 +12,27 @@ import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
 import { meetingRailIsPaused } from './meetingPause'
 import SavePrompt from './components/SavePrompt'
+import LeaveSessionSheet from './components/LeaveSessionSheet'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
 import { IPHONE_COPY, canSwitchWorkspace, sameSpokenLine, sessionListening } from './iphoneCopy'
 import SaveBanner from './components/SaveBanner'
 import {
   KEEP_ACK_TIMEOUT_MS,
+  KEEP_CAPTURE_SETTLE_MS,
   applyKeepAck,
   applyKeepFailed,
   beginSave,
   bindLiveId,
   bumpGeneration,
   cancelCollect,
+  decideNewSession,
   emptySaveBook,
   keepAfterNotesStillValid,
+  keepShouldWaitForCapture,
   markOffered,
   savePromptSurface,
+  setPendingAfterSave,
   type KeepAfterNotesJob,
   type SaveBook,
 } from './sessionSave'
@@ -916,6 +921,7 @@ export default function App() {
   const listenWanted = useRef(false)
   const [savePrompt, setSavePrompt] = useState(false)
   const [savePromptMode, setSavePromptMode] = useState<'discard' | 'cancel'>('discard')
+  const [leaveSheetOpen, setLeaveSheetOpen] = useState(false)
   const [saveBannerOpen, setSaveBannerOpen] = useState(false)
   const [saveBook, setSaveBook] = useState<SaveBook>(emptySaveBook)
   const saveBookRef = useRef(saveBook)
@@ -940,6 +946,11 @@ export default function App() {
   const keepTimerRef = useRef(0)
   const keepEpochRef = useRef<{ liveId: string | null; generation: number } | null>(null)
   const pendingKeepRef = useRef<{ content: boolean; audio: boolean; waitNotes: boolean } | null>(null)
+  const lastLineAtRef = useRef<number | null>(null)
+  const pendingLeaveSaveRef = useRef(false)
+  const skipOfferSavePromptRef = useRef(false)
+  const leaveCaptureTimerRef = useRef(0)
+  const armLeaveCaptureWaitRef = useRef<() => void>(() => undefined)
   const commitBook = (next: SaveBook) => {
     saveBookRef.current = next
     setSaveBook(next)
@@ -1417,6 +1428,16 @@ export default function App() {
           queueMicrotask(() => pumpTranslateRef.current())
         }
       }
+      if (e.type === 'line_update') {
+        lastLineAtRef.current = Date.now()
+        if (pendingLeaveSaveRef.current) queueMicrotask(() => armLeaveCaptureWaitRef.current())
+      } else if (e.type === 'question' && stateRef.current.workspaceMode === 'meeting') {
+        const text = e.text ?? ''
+        if (!isNotesPrompt(text) && !isTranslatePrompt(text) && !isCatchPrompt(text)) {
+          lastLineAtRef.current = Date.now()
+          if (pendingLeaveSaveRef.current) queueMicrotask(() => armLeaveCaptureWaitRef.current())
+        }
+      }
       if (e.type === 'line_update' && stateRef.current.workspaceMode === 'meeting') {
         // The source changed (extended); the old translation for this line is now
         // stale. Clear its ask/retry and let pump re-pick it under the new rev.
@@ -1693,12 +1714,21 @@ export default function App() {
 
   handleEngineKeepRef.current = (e) => {
     if (e.type === 'save_prompt') {
+      const leaving = saveBookRef.current.pendingAfterSave === 'new' || pendingLeaveSaveRef.current
+      if (skipOfferSavePromptRef.current && !leaving) {
+        skipOfferSavePromptRef.current = false
+        return
+      }
       bindLiveFromEngine(e.id)
       if (watchAutoNotes.current) {
         if (watchStopShouldAutoKeepHistory(watchAutoNotes.current)) {
           window.api.send(watchSaveCommand())
           markHistoryKept(true)
         }
+        return
+      }
+      if (leaving || skipOfferSavePromptRef.current) {
+        skipOfferSavePromptRef.current = false
         return
       }
       offerSaveUi()
@@ -1738,7 +1768,7 @@ export default function App() {
       if (action === 'new') {
         pendingNewAfterSave.current = false
         doClearRef.current()
-        dispatch({ type: 'engine', ev: { type: 'status', text: 'Saved · new session' } })
+        dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.leaveSavedStatus } })
       }
       return
     }
@@ -1759,6 +1789,13 @@ export default function App() {
     pendingKeepRef.current = null
     keepAfterNotes.current = null
     keepEpochRef.current = null
+    pendingLeaveSaveRef.current = false
+    lastLineAtRef.current = null
+    setLeaveSheetOpen(false)
+    if (leaveCaptureTimerRef.current) {
+      window.clearTimeout(leaveCaptureTimerRef.current)
+      leaveCaptureTimerRef.current = 0
+    }
     clearKeepTimer()
     setSaveBannerOpen(false)
     commitBook({
@@ -1781,30 +1818,85 @@ export default function App() {
 
   const handleNewSession = useCallback(() => {
     const s = stateRef.current
-    if (s.busy || s.capture !== 'off' || listenWanted.current) {
-      dispatch({
-        type: 'engine',
-        ev: { type: 'status', text: 'Stop listening or wait for the answer before starting a new session.' },
-      })
-      return
-    }
-    if (sessionShouldOfferSave({
-      workspaceMode: s.workspaceMode,
-      ended: s.meetingEnded,
-      kept: historyKept,
+    const decision = decideNewSession({
+      capture: s.capture,
+      busy: s.busy,
       hasContent: meetingHasSaveableContent(s),
-      listening: false,
-    })) {
-      pendingNewAfterSave.current = true
-      commitBook({ ...markOffered(saveBookRef.current), pendingAfterSave: 'new' })
-      setSaveBannerOpen(false)
-      setSavePromptMode('discard')
-      setSavePrompt(true)
+      kept: historyKeptRef.current,
+      workspaceMode: s.workspaceMode,
+    })
+    if (decision === 'clear') {
+      doClear()
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'New session' } })
       return
     }
+    if (decision === 'blocked') return
+    if (phoneRef.current) {
+      setLeaveSheetOpen(true)
+      return
+    }
+    pendingNewAfterSave.current = true
+    commitBook(markOffered(setPendingAfterSave(saveBookRef.current, 'new')))
+    setSaveBannerOpen(false)
+    setSavePromptMode('discard')
+    setSavePrompt(true)
+  }, [doClear])
+
+  const armLeaveCaptureWait = () => {
+    if (leaveCaptureTimerRef.current) {
+      window.clearTimeout(leaveCaptureTimerRef.current)
+      leaveCaptureTimerRef.current = 0
+    }
+    const tick = () => {
+      if (!pendingLeaveSaveRef.current) return
+      if (keepShouldWaitForCapture({
+        capture: stateRef.current.capture,
+        lastLineAt: lastLineAtRef.current,
+        now: Date.now(),
+      })) {
+        const last = lastLineAtRef.current
+        const delay = last == null
+          ? KEEP_CAPTURE_SETTLE_MS
+          : Math.max(16, KEEP_CAPTURE_SETTLE_MS - (Date.now() - last))
+        leaveCaptureTimerRef.current = window.setTimeout(tick, delay)
+        return
+      }
+      pendingLeaveSaveRef.current = false
+      leaveCaptureTimerRef.current = 0
+      saveLiveSession()
+    }
+    tick()
+  }
+  armLeaveCaptureWaitRef.current = armLeaveCaptureWait
+
+  const handleLeaveSaveAndNew = () => {
+    setLeaveSheetOpen(false)
+    commitBook(setPendingAfterSave(saveBookRef.current, 'new'))
+    const s = stateRef.current
+    if (s.capture !== 'off') {
+      skipOfferSavePromptRef.current = true
+      lastLineAtRef.current = Math.max(lastLineAtRef.current ?? 0, Date.now())
+      pendingLeaveSaveRef.current = true
+      stopListen()
+      if (s.workspaceMode === 'meeting') dispatch({ type: 'meeting_ended' })
+      armLeaveCaptureWait()
+      return
+    }
+    saveLiveSession()
+  }
+
+  const handleLeaveDiscardAndNew = () => {
+    setLeaveSheetOpen(false)
+    const s = stateRef.current
+    if (s.capture !== 'off') {
+      skipOfferSavePromptRef.current = true
+      stopListen()
+    }
+    markHistoryKept(false)
+    window.api.send({ type: 'discard_history' })
     doClear()
     dispatch({ type: 'engine', ev: { type: 'status', text: 'New session' } })
-  }, [doClear, historyKept])
+  }
 
   const handleClear = useCallback(() => {
     const s = stateRef.current
@@ -2764,6 +2856,11 @@ export default function App() {
     sendKeepNow({ content: job.content, audio: job.audio })
   }, [state.busy, state.notesAskId])
 
+  useEffect(() => {
+    if (!pendingLeaveSaveRef.current) return
+    armLeaveCaptureWaitRef.current()
+  }, [state.capture])
+
   // 'generating'/'transcribing' is an engine state, not a pause: it must not
   // freeze the clock, but it must not restart it either when paused.
   const [clockRunning, setClockRunning] = useState(false)
@@ -2954,6 +3051,16 @@ export default function App() {
         }
       />
       <HistoryPane open={historyOpen} onClose={() => setHistoryOpen(false)} onRestore={restoreHistory} />
+      {phone ? (
+        <LeaveSessionSheet
+          open={leaveSheetOpen}
+          capture={state.capture}
+          busy={state.busy}
+          onCancel={() => setLeaveSheetOpen(false)}
+          onSave={handleLeaveSaveAndNew}
+          onDiscard={handleLeaveDiscardAndNew}
+        />
+      ) : null}
       <SavePrompt
         open={savePrompt}
         secondary={savePromptMode}
