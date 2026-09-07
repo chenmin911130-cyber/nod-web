@@ -1,4 +1,4 @@
-import { groupHistoryByDay, historyRowWhen, historySessionMatches, restoreFromSession, restoreIdOfferable, restoreShouldNotAsk, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce } from './historyRestore'
+import { applyMeetingResume, groupHistoryByDay, historyRowWhen, historySessionMatches, restoreFromSession, restoreIdOfferable, restoreShouldNotAsk, resumeResetsKept, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce } from './historyRestore'
 import type { HistorySession } from './components/HistoryPane'
 
 function at(h: number, m: number, s = 0): string {
@@ -209,3 +209,22 @@ if (!restoreShouldNotAsk({ listening: true, paused: false, hasContent: false }))
 if (!restoreShouldNotAsk({ listening: false, paused: true, hasContent: false })) throw new Error('paused suppress restore')
 if (!restoreShouldNotAsk({ listening: false, paused: false, hasContent: true })) throw new Error('page content suppress restore')
 if (restoreShouldNotAsk({ listening: false, paused: false, hasContent: false })) throw new Error('idle empty view may offer restore')
+
+if (resumeResetsKept({ kept: false, hasContent: true })) throw new Error('unsaved resume must not clear kept')
+if (!resumeResetsKept({ kept: true, hasContent: true })) throw new Error('kept + content resume must reset kept')
+if (resumeResetsKept({ kept: true, hasContent: false })) throw new Error('kept empty resume must not reset kept')
+
+const resumed = applyMeetingResume({
+  meetingEnded: true,
+  meetingStartedAt: 1_000,
+  meetingElapsedMs: 90_000,
+  meetingLines: [{ id: 'a' }],
+  notesRaw: 'notes stay',
+  catchNotes: [{ id: 'c' }],
+}, 200_000)
+if (resumed.meetingEnded) throw new Error('meeting_resume must clear ended')
+if (resumed.meetingElapsedMs !== 90_000) throw new Error('meeting_resume must keep elapsedMs')
+if (resumed.meetingStartedAt !== 110_000) throw new Error('meeting_resume must rewind startedAt so the clock continues')
+if (resumed.meetingLines.length !== 1 || resumed.notesRaw !== 'notes stay' || resumed.catchNotes.length !== 1) {
+  throw new Error('meeting_resume must keep lines / notes / catchNotes')
+}

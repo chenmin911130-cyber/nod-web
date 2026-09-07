@@ -287,6 +287,22 @@ export function sessionHasAudio(session: Pick<HistorySession, 'files'>): boolean
   return (session.files || []).some((file) => file.kind === 'audio')
 }
 
+export function resumeResetsKept(input: { kept: boolean; hasContent: boolean }): boolean {
+  return input.kept && input.hasContent
+}
+
+export function applyMeetingResume<T extends {
+  meetingEnded: boolean
+  meetingStartedAt: number | null
+  meetingElapsedMs: number
+}>(state: T, now = Date.now()): T {
+  return {
+    ...state,
+    meetingEnded: false,
+    meetingStartedAt: now - state.meetingElapsedMs,
+  }
+}
+
 export async function copyText(text: string): Promise<boolean> {
   const body = (text || '').trim()
   if (!body) return false

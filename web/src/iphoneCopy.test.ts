@@ -13,6 +13,7 @@ import {
   listenShowsRecClock,
   listenDetectChip,
   listenStatusDot,
+  listenControlMode,
   sessionListening,
   notesInChip,
   recClock,
@@ -130,6 +131,14 @@ eq(
 eq(IPHONE_COPY.emptyNotes, 'Start listening', 'Notes empty stays Start listening')
 eq(IPHONE_COPY.readyHelp, 'Tap start to capture, transcribe, and organize your conversation in real time.', 'help stays under Ready to listen')
 eq(IPHONE_COPY.aiNote, 'Your AI listening assistant, ready when you are.', 'closing line is the product line')
+eq(IPHONE_COPY.pausedStatus, 'Paused', 'paused status stays Paused')
+eq(IPHONE_COPY.endedStatus, 'Ended', 'ended status is Ended')
+eq(listenControlMode({ listening: true, paused: false, ended: true, hasContent: true }), 'recording', 'live chrome wins over ended')
+eq(listenControlMode({ listening: false, paused: true, ended: false, hasContent: true }), 'paused', 'paused chrome stays paused')
+eq(listenControlMode({ listening: false, paused: false, ended: true, hasContent: true }), 'ended', 'ended with content shows Ended + Start')
+eq(listenControlMode({ listening: false, paused: false, ended: true, hasContent: false }), 'ready', 'ended without content stays Start')
+eq(listenControlMode({ listening: false, paused: false, ended: true, hasContent: true, variant: 'translate' }), 'ready', 'Translate ignores ended')
+eq(listenControlMode({ listening: false, paused: false, ended: false, hasContent: false }), 'ready', 'fresh session is Start')
 eq(listenStatusDot({ listening: false, paused: false }), 'standby', 'idle uses the gray standby dot')
 eq(listenStatusDot({ listening: true, paused: false }), 'recording', 'live uses the red recording dot')
 eq(listenStatusDot({ listening: false, paused: true }), 'paused', 'pause uses the yellow paused dot')

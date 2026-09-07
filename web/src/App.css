@@ -6296,7 +6296,8 @@ html.nod-phone .app.iphone-v2 .iphone-actions {
 
 html.nod-phone .app.iphone-v2 .iphone-actions.ready,
 html.nod-phone .app.iphone-v2 .iphone-actions.live,
-html.nod-phone .app.iphone-v2 .iphone-actions.paused {
+html.nod-phone .app.iphone-v2 .iphone-actions.paused,
+html.nod-phone .app.iphone-v2 .iphone-actions.ended {
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
@@ -6374,6 +6375,36 @@ html.nod-phone .app.iphone-v2 .iphone-actions:not(.translate) .iphone-dot.record
 html.nod-phone .app.iphone-v2 .iphone-actions:not(.translate) .iphone-dot.paused {
   background: var(--nod-pause);
   box-shadow: 0 0 8px rgba(255, 200, 87, 0.55);
+}
+
+html.nod-phone .app.iphone-v2 .iphone-actions:not(.translate).ended .iphone-status-row {
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px;
+  border: 1px solid var(--nod-line);
+  border-radius: 14px;
+  background: var(--nod-surface);
+}
+
+html.nod-phone .app.iphone-v2 .iphone-ended-clock {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-height: 44px;
+  min-width: 8em;
+  color: var(--nod-muted);
+  font-size: 15px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-actions:not(.translate).ended .iphone-start {
+  flex: 0 1 auto;
+  min-height: 48px;
+  padding: 0 16px;
+  font-size: 16px;
+  border-radius: 14px;
 }
 
 html.nod-phone .app.iphone-v2 .iphone-status {
