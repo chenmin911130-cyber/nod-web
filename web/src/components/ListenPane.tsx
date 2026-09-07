@@ -931,6 +931,7 @@ interface LineRowProps {
   onOpen?: () => void
   actions?: boolean
   compact?: boolean
+  showCopy?: boolean
 }
 
 // A two-hour session renders thousands of these. Without memo every partial
@@ -966,7 +967,7 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
             <div className="listen-tr">{p.translation || (p.busy ? '…' : '')}</div>
           )}
           {showFailed && <div className="listen-tr failed">Translation failed</div>}
-          {p.compact ? null : <IphoneLineActions text={p.text} />}
+          {p.compact && !p.showCopy ? null : <IphoneLineActions text={p.text} />}
         </div>
       </div>
     )
@@ -1540,6 +1541,7 @@ export default function ListenPane(props: Props) {
                             onRename={props.onRenameSpeaker}
                             actions
                             compact
+                            showCopy={openedLine === line.id}
                           />
                         ))}
                         {group.draft ? (

@@ -8009,7 +8009,7 @@ html.nod-phone .app.iphone-v2 .listen-tr {
 }
 
 html.nod-phone .app.iphone-v2 .listen-tr.failed {
-  color: #f87171;
+  color: var(--nod-rec);
 }
 
 html.nod-phone .app.iphone-v2 .save-prompt-keep {
