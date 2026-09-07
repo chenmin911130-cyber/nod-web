@@ -1,4 +1,5 @@
-import { IPHONE_COPY, listenClock, listenShowsRecClock, listenStatusDot, moreMenuEnabled } from '../iphoneCopy'
+import { useEffect, useRef } from 'react'
+import { IPHONE_COPY, listenClock, listenShowsRecClock, listenStatusDot, moreMenuEnabled, moreSaveRow } from '../iphoneCopy'
 
 function MicIcon() {
   return (
@@ -36,7 +37,7 @@ function StatusWave({ live }: { live: boolean }) {
 
 function PdfIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+    <svg width="22" height="22" viewBox="0 0 18 18" fill="none" aria-hidden="true">
       <rect x="4" y="2.5" width="10" height="13" rx="1.6" stroke="currentColor" strokeWidth="1.4" />
       <path d="M6.4 7h5.2M6.4 9.6h5.2M6.4 12.2h3.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
     </svg>
@@ -45,16 +46,24 @@ function PdfIcon() {
 
 function SaveIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+    <svg width="22" height="22" viewBox="0 0 18 18" fill="none" aria-hidden="true">
       <path d="M5 3.4h8.2L14.6 5.8V14.6H5V3.4z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
       <path d="M6.6 3.4v3.6h5.2V3.4M6.6 14.6v-4.2h4.8v4.2" stroke="currentColor" strokeWidth="1.3" />
     </svg>
   )
 }
 
+function CheckIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path d="M4.2 9.4l3.2 3.2 6.4-7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 function HistoryIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+    <svg width="22" height="22" viewBox="0 0 18 18" fill="none" aria-hidden="true">
       <path d="M4.2 9.2a4.8 4.8 0 1 0 1.3-3.3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
       <path d="M3.4 3.8v3.2h3.2M9 6.4V9.2l2 1.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
@@ -63,7 +72,7 @@ function HistoryIcon() {
 
 function NewIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+    <svg width="22" height="22" viewBox="0 0 18 18" fill="none" aria-hidden="true">
       <path d="M9 4v10M4 9h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   )
@@ -76,6 +85,7 @@ export default function IphoneActions({
   elapsedMs,
   canSave,
   hasContent,
+  saved = false,
   onStart,
   onPause,
   onResume,
@@ -95,6 +105,7 @@ export default function IphoneActions({
   elapsedMs: number
   canSave: boolean
   hasContent: boolean
+  saved?: boolean
   variant?: 'listen' | 'translate' | 'interview'
   onStart: () => void
   onPause: () => void
@@ -110,9 +121,25 @@ export default function IphoneActions({
 }) {
   const ready = !listening && !paused
   const menu = moreMenuEnabled({ hasContent, canSave })
+  const saveRow = moreSaveRow({ saved, canSave })
   const clock = listenClock(elapsedMs)
   const tone = listenStatusDot({ listening, paused })
   const recClock = listenShowsRecClock(variant)
+  const firstRowRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!moreOpen) return
+    firstRowRef.current?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCloseMore()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.querySelector<HTMLElement>('.tb-session')?.focus()
+    }
+  }, [moreOpen])
+
   return (
     <>
       <div className={`iphone-actions${ready ? ' ready' : ''}${listening ? ' live' : ''}${paused ? ' paused' : ''}${variant === 'translate' ? ' translate' : ''}`}>
@@ -123,27 +150,15 @@ export default function IphoneActions({
               {variant === 'translate' ? IPHONE_COPY.startTranslate : IPHONE_COPY.startListening}
             </button>
           </div>
-        ) : listening ? (
+        ) : variant === 'translate' ? (
+          listening ? (
           <div className="iphone-status-row">
             <span className="iphone-status rec" aria-live="polite">
-              {variant === 'translate' ? (
                 <>
                   <i className={`iphone-dot ${tone}`} />
-                  {IPHONE_COPY.recordingStatus}
+                  {IPHONE_COPY.translateStatus}
                   <StatusWave live />
                 </>
-              ) : recClock ? (
-                <>
-                  {IPHONE_COPY.recordingStatus}
-                  <i className={`iphone-dot ${tone}`} />
-                  <span className="iphone-clock">{clock}</span>
-                </>
-              ) : (
-                <>
-                  {IPHONE_COPY.recordingStatus}
-                  <StatusWave live />
-                </>
-              )}
             </span>
             <button type="button" className="iphone-pill" onClick={onPause}>
               <PauseIcon />
@@ -151,10 +166,10 @@ export default function IphoneActions({
             </button>
             <button type="button" className="iphone-pill stop" onClick={onStop}>
               <StopIcon />
-              {IPHONE_COPY.stop}
+              {IPHONE_COPY.translateStop}
             </button>
           </div>
-        ) : paused ? (
+          ) : paused ? (
           <div className="iphone-status-row">
             <span className="iphone-status hold">
               <i className={`iphone-dot ${tone}`} />
@@ -163,10 +178,53 @@ export default function IphoneActions({
             </span>
             <button type="button" className="iphone-cta" onClick={onResume}>
               <MicIcon />
-              {variant === 'translate' ? IPHONE_COPY.resume : IPHONE_COPY.startListening}
+              {IPHONE_COPY.resume}
             </button>
             <button type="button" className="iphone-pill stop" onClick={onStop}>
               <StopIcon />
+              {IPHONE_COPY.translateStop}
+            </button>
+          </div>
+          ) : null
+        ) : listening ? (
+          <div className="iphone-status-row" role="group" aria-label={IPHONE_COPY.recordingStatus}>
+            <span className="iphone-rec-cell iphone-status rec" aria-live="polite">
+              <i className={`iphone-dot ${tone}`} />
+              {IPHONE_COPY.recordingStatus}
+            </span>
+            {recClock ? (
+              <>
+                <span className="iphone-rec-rule" aria-hidden="true" />
+                <span className="iphone-rec-cell iphone-clock">{clock}</span>
+              </>
+            ) : null}
+            <span className="iphone-rec-rule" aria-hidden="true" />
+            <button type="button" className="iphone-rec-cell iphone-rec-pause" onClick={onPause} aria-label={IPHONE_COPY.pause}>
+              <PauseIcon />
+            </button>
+            <span className="iphone-rec-rule" aria-hidden="true" />
+            <button type="button" className="iphone-rec-cell iphone-rec-end" onClick={onStop}>
+              {IPHONE_COPY.stop}
+            </button>
+          </div>
+        ) : paused ? (
+          <div className="iphone-status-row" role="group" aria-label={IPHONE_COPY.pausedStatus}>
+            <span className="iphone-rec-cell iphone-status hold">
+              <i className={`iphone-dot ${tone}`} />
+              {IPHONE_COPY.pausedStatus}
+            </span>
+            {recClock ? (
+              <>
+                <span className="iphone-rec-rule" aria-hidden="true" />
+                <span className="iphone-rec-cell iphone-clock">{clock}</span>
+              </>
+            ) : null}
+            <span className="iphone-rec-rule" aria-hidden="true" />
+            <button type="button" className="iphone-rec-cell iphone-rec-resume" onClick={onResume}>
+              {IPHONE_COPY.resume}
+            </button>
+            <span className="iphone-rec-rule" aria-hidden="true" />
+            <button type="button" className="iphone-rec-cell iphone-rec-end" onClick={onStop}>
               {IPHONE_COPY.stop}
             </button>
           </div>
@@ -178,13 +236,20 @@ export default function IphoneActions({
           <button type="button" className="iphone-more-backdrop" aria-label={IPHONE_COPY.moreCancel} onClick={onCloseMore} />
           <div className="iphone-more-dock">
             <div className="iphone-more-sheet">
-              <button type="button" disabled={!menu.pdf} onClick={() => { onCloseMore(); onExportPdf() }}>
+              <span className="iphone-more-handle" aria-hidden="true" />
+              <h2 className="iphone-more-title">{IPHONE_COPY.more}</h2>
+              <p className="iphone-more-sub">{IPHONE_COPY.moreSession}</p>
+              <button type="button" ref={firstRowRef} disabled={!menu.pdf} onClick={() => { onCloseMore(); onExportPdf() }}>
                 <PdfIcon />
                 {IPHONE_COPY.morePdf}
               </button>
-              <button type="button" disabled={!menu.save} onClick={() => { onCloseMore(); onSave() }}>
-                <SaveIcon />
-                {IPHONE_COPY.moreSave}
+              <button type="button" disabled={saveRow.disabled} onClick={() => { onCloseMore(); onSave() }}>
+                {saved ? <CheckIcon /> : <SaveIcon />}
+                <span className="iphone-more-copy">
+                  <span>{saveRow.label}</span>
+                  {saveRow.hint ? <span className="iphone-more-hint">{saveRow.hint}</span> : null}
+                </span>
+                {saveRow.trailing ? <span className="iphone-more-trail">{saveRow.trailing}</span> : null}
               </button>
               <button type="button" disabled={!menu.history} onClick={() => { onCloseMore(); onHistory() }}>
                 <HistoryIcon />

@@ -269,6 +269,7 @@ export function TitleIcons(props: TitleIconsProps) {
             props.onMenuOpen?.()
           }}
           title="Settings"
+          aria-label="Settings"
           aria-expanded={menuOpen}
         >
           <SettingsIcon />
