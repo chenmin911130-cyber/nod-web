@@ -1,4 +1,4 @@
-import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, parseRestoreDismissed, rememberRestoreDismissed, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce, startMeetingKind } from './historyRestore'
+import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, mergePendingHistory, parseRestoreDismissed, rememberRestoreDismissed, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce, startMeetingKind } from './historyRestore'
 import type { HistorySession } from './components/HistoryPane'
 
 function at(h: number, m: number, s = 0): string {
@@ -221,18 +221,31 @@ const idleRestore = {
   hasContent: false,
   pendingId: 'pending-1',
   dismissedIds: [] as string[],
+  workspaceMode: 'meeting',
 }
-if (restoreLaunchSurface(idleRestore) !== 'banner') throw new Error('idle Ready with pending session shows a banner, not a modal')
+if (restoreLaunchSurface(idleRestore) !== 'page') throw new Error('crash reconnect lays the pending session onto the page, not a Ready ask')
 if (restoreLaunchSurface({ ...idleRestore, listening: true }) !== 'none') throw new Error('listening never launches restore')
 if (restoreLaunchSurface({ ...idleRestore, paused: true }) !== 'none') throw new Error('paused never launches restore')
 if (restoreLaunchSurface({ ...idleRestore, hasContent: true }) !== 'none') throw new Error('page content never launches restore')
 if (restoreLaunchSurface({ ...idleRestore, pendingId: '' }) !== 'none') throw new Error('empty pending id never launches restore')
-if (restoreLaunchSurface({ ...idleRestore, dismissedIds: ['pending-1'] }) !== 'none') throw new Error('dismissed pending id never launches restore')
+if (restoreLaunchSurface({ ...idleRestore, dismissedIds: ['pending-1'] }) !== 'none') throw new Error('End / Not now dismissed id never relaunches')
+if (restoreLaunchSurface({ ...idleRestore, workspaceMode: 'translate' }) !== 'none') throw new Error('Translate ready never auto-opens a pending meeting')
 {
   const again = rememberRestoreDismissed(['pending-1'], 'pending-1')
   if (restoreLaunchSurface({ ...idleRestore, dismissedIds: again }) !== 'none') {
-    throw new Error('Don\'t save must stick so the same id does not relaunch')
+    throw new Error('Not now must stick so the same id does not relaunch')
   }
+}
+{
+  const saved = { id: 'kept-1', title: 'Saved standup', kept: true as boolean | undefined }
+  const pending = { id: 'pending-1', title: 'Crash meeting' }
+  const merged = mergePendingHistory([saved], [pending])
+  eq(merged.map((row) => row.id).join('|'), 'pending-1|kept-1', 'unsaved pending sits above saved History')
+  if (!sessionIsUnsaved(merged[0])) throw new Error('pending History row is unsaved')
+  if (sessionIsUnsaved(merged[1])) throw new Error('kept History row stays saved')
+  const dup = mergePendingHistory([{ id: 'pending-1', kept: true }], [{ id: 'pending-1' }])
+  eq(dup.map((row) => row.id).join('|'), 'pending-1', 'the same id is not listed twice')
+  if (!sessionIsUnsaved(dup[0])) throw new Error('pending copy wins when the id collides')
 }
 if (JSON.stringify(rememberRestoreDismissed([], 'p1')) !== JSON.stringify(['p1'])) throw new Error('first dismiss is recorded')
 if (JSON.stringify(rememberRestoreDismissed(['p1'], 'p1')) !== JSON.stringify(['p1'])) throw new Error('repeat dismiss does not duplicate')
