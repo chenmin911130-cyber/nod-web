@@ -222,7 +222,20 @@ eq(
     'Action Items',
     '• David → Finish QA',
   ].join('\n'),
-  'Copy/Share uses the structured Summary, not raw JSON',
+    'Copy/Share uses the structured Summary, not raw JSON',
+)
+
+eq(
+  summaryPlainText({
+    scene: 'meeting',
+    notes: {
+      ...emptyNotes(),
+      summary: 'Kickoff.',
+      speakers: [{ label: 'Host', name: 'ZephyrName', evidence: "I'm ZephyrName" }],
+    },
+  }).includes('ZephyrName'),
+  false,
+  'speaker nominations stay out of Copy/Share notes',
 )
 
 // item1: lecture copy/Share order follows sceneSectionOrder('lecture') — the

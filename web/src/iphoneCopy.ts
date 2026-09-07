@@ -66,6 +66,7 @@ export const IPHONE_COPY = {
   fullTranscript: 'Full transcript',
   allCapturedSpeech: 'All captured speech',
   backToLatest: 'Back to latest',
+  speakerSuggestIs: '{label} is {name}?',
   emptyTranslateTitle: 'Ready to translate',
   emptyTranslateSub: 'Tap the mic below to speak, or type to translate.',
   histTitle: 'History',
@@ -319,6 +320,10 @@ export function isListenReadyView(input: {
     input.lines === 0 &&
     !input.partial
   )
+}
+
+export function speakerSuggestText(label: string, name: string): string {
+  return IPHONE_COPY.speakerSuggestIs.replace('{label}', label).replace('{name}', name)
 }
 
 export function spokenSettingsValue(lang: Lang): string {

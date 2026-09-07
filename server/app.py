@@ -1483,9 +1483,15 @@ class Pipeline:
                         "You write structured listening notes for a live session. The transcript may be mid-session; summarize what has been said so far and do not say the session has ended unless the transcript shows it.\n"
                         "Return JSON only. No markdown fence.\n"
                         "Keys: summary (string), takeaways, keyPoints, decisions, actionItems, "
-                        "importantDetails, followUps, revisionNotes.\n"
+                        "importantDetails, followUps, revisionNotes, speakers.\n"
                         "Lists are arrays of short strings. actionItems is an array of objects "
                         "{\"text\":\"...\",\"owner\":\"...\"} — omit owner if nobody was named.\n"
+                        "speakers is an array of {\"label\":\"...\",\"name\":\"...\",\"evidence\":\"...\"}: "
+                        "label = the speaker label exactly as it appears in the transcript (e.g. \"Host\"); "
+                        "name = the person's real name ONLY if it is explicitly spoken for that speaker "
+                        "(self-introduction, or another speaker addressing them by name); "
+                        "evidence = the short quote that proves it. Never infer a name from topic, role, or context. "
+                        "Empty array when nobody is named.\n"
                         "Use empty arrays when the transcript has nothing for that key. Do not invent."
                         + out_rule
                     ),

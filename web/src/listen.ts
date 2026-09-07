@@ -107,6 +107,7 @@ export type NotesDoc = {
   importantDetails: string[]
   followUps: string[]
   revisionNotes: string[]
+  speakers: Array<{ label: string; name: string; evidence?: string }>
 }
 
 export const LISTEN_SCENES: Array<{ id: ListenScene; label: string }> = [
@@ -225,6 +226,7 @@ export function emptyNotes(): NotesDoc {
     importantDetails: [],
     followUps: [],
     revisionNotes: [],
+    speakers: [],
   }
 }
 
@@ -251,6 +253,21 @@ function asActions(value: unknown): Array<{ text: string; owner?: string }> {
     .filter((row): row is { text: string; owner?: string } => Boolean(row))
 }
 
+function asSpeakers(value: unknown): NotesDoc['speakers'] {
+  if (!Array.isArray(value)) return []
+  const out: NotesDoc['speakers'] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const row = item as { label?: unknown; name?: unknown; evidence?: unknown }
+    const label = String(row.label || '').trim()
+    const name = String(row.name || '').trim()
+    if (!label || !name || name === label) continue
+    const evidence = String(row.evidence || '').trim()
+    out.push(evidence ? { label, name, evidence } : { label, name })
+  }
+  return out
+}
+
 export function parseNotes(raw: string): NotesDoc {
   const doc = emptyNotes()
   const text = (raw || '').trim()
@@ -272,6 +289,7 @@ export function parseNotes(raw: string): NotesDoc {
     doc.importantDetails = asList(parsed.importantDetails)
     doc.followUps = asList(parsed.followUps)
     doc.revisionNotes = asList(parsed.revisionNotes)
+    doc.speakers = asSpeakers(parsed.speakers)
     return doc
   } catch {
     // 解析失败：JSON 流没结束（嵌套对象中途）→ 不显示；否则原样显示
@@ -536,8 +554,9 @@ export function notesPrompt(
     `${nodTag('NOTES', outLang, false, scene)}\n` +
     outLangRule(outLang, 'json', false) +
     `Write structured notes for a ${scene}. Use only the transcript. Do not invent names, numbers, or commitments.\n` +
-    'Return JSON only with keys: summary (string), takeaways, keyPoints, decisions, actionItems, importantDetails, followUps, revisionNotes.\n' +
+    'Return JSON only with keys: summary (string), takeaways, keyPoints, decisions, actionItems, importantDetails, followUps, revisionNotes, speakers.\n' +
     'Lists are string arrays. actionItems is [{text, owner}] — owner only if spoken.\n' +
+    'speakers is [{label, name, evidence}]: label matches the transcript speaker label; name only if explicitly spoken for that speaker; evidence is the short proving quote. Empty array when nobody is named.\n' +
     `Empty arrays when the transcript has nothing. ${follow}. ` +
     (scene === 'lecture' ? 'revisionNotes = exam / formula items. ' : 'revisionNotes usually []. ') +
     (scene === 'interview' ? 'takeaways = questions asked and what they cared about. ' : 'takeaways usually []. ') +
