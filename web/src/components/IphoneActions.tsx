@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
 import { IPHONE_COPY, listenClock, listenControlMode, listenShowsRecClock, listenStatusDot, moreMenuEnabled, moreSaveRow } from '../iphoneCopy'
+import PhoneSheet from './PhoneSheet'
 
 function MicIcon() {
   return (
@@ -127,20 +127,6 @@ export default function IphoneActions({
   const clock = listenClock(elapsedMs)
   const tone = listenStatusDot({ listening, paused })
   const recClock = listenShowsRecClock(variant)
-  const firstRowRef = useRef<HTMLButtonElement>(null)
-
-  useEffect(() => {
-    if (!moreOpen) return
-    firstRowRef.current?.focus()
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCloseMore()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      document.querySelector<HTMLElement>('.tb-session')?.focus()
-    }
-  }, [moreOpen])
 
   return (
     <>
@@ -241,39 +227,38 @@ export default function IphoneActions({
         ) : null}
         {muted ? <span className="iphone-muted">{IPHONE_COPY.muted}</span> : null}
       </div>
-      {moreOpen && (
-        <div className="iphone-more" role="dialog" aria-label={IPHONE_COPY.more}>
-          <button type="button" className="iphone-more-backdrop" aria-label={IPHONE_COPY.moreCancel} onClick={onCloseMore} />
-          <div className="iphone-more-dock">
-            <div className="iphone-more-sheet">
-              <span className="iphone-more-handle" aria-hidden="true" />
-              <h2 className="iphone-more-title">{IPHONE_COPY.more}</h2>
-              <p className="iphone-more-sub">{IPHONE_COPY.moreSession}</p>
-              <button type="button" ref={firstRowRef} disabled={!menu.pdf} onClick={() => { onCloseMore(); onExportPdf() }}>
-                <PdfIcon />
-                {IPHONE_COPY.morePdf}
-              </button>
-              <button type="button" disabled={saveRow.disabled} onClick={() => { onCloseMore(); onSave() }}>
-                {saved ? <CheckIcon /> : <SaveIcon />}
-                <span className="iphone-more-copy">
-                  <span>{saveRow.label}</span>
-                  {saveRow.hint ? <span className="iphone-more-hint">{saveRow.hint}</span> : null}
-                </span>
-                {saveRow.trailing ? <span className="iphone-more-trail">{saveRow.trailing}</span> : null}
-              </button>
-              <button type="button" disabled={!menu.history} onClick={() => { onCloseMore(); onHistory() }}>
-                <HistoryIcon />
-                {IPHONE_COPY.moreHistory}
-              </button>
-              <button type="button" disabled={!menu.newSession} onClick={() => { onCloseMore(); onNew() }}>
-                <NewIcon />
-                {IPHONE_COPY.moreNew}
-              </button>
-            </div>
-            <button type="button" className="iphone-more-cancel" onClick={onCloseMore}>{IPHONE_COPY.moreCancel}</button>
-          </div>
+      <PhoneSheet
+        open={moreOpen}
+        title={IPHONE_COPY.more}
+        subtitle={IPHONE_COPY.moreSession}
+        onClose={onCloseMore}
+        footer={
+          <button type="button" className="iphone-more-cancel" onClick={onCloseMore}>{IPHONE_COPY.moreCancel}</button>
+        }
+      >
+        <div className="iphone-more-rows">
+          <button type="button" disabled={!menu.pdf} onClick={() => { onCloseMore(); onExportPdf() }}>
+            <PdfIcon />
+            {IPHONE_COPY.morePdf}
+          </button>
+          <button type="button" disabled={saveRow.disabled} onClick={() => { onCloseMore(); onSave() }}>
+            {saved ? <CheckIcon /> : <SaveIcon />}
+            <span className="iphone-more-copy">
+              <span>{saveRow.label}</span>
+              {saveRow.hint ? <span className="iphone-more-hint">{saveRow.hint}</span> : null}
+            </span>
+            {saveRow.trailing ? <span className="iphone-more-trail">{saveRow.trailing}</span> : null}
+          </button>
+          <button type="button" disabled={!menu.history} onClick={() => { onCloseMore(); onHistory() }}>
+            <HistoryIcon />
+            {IPHONE_COPY.moreHistory}
+          </button>
+          <button type="button" disabled={!menu.newSession} onClick={() => { onCloseMore(); onNew() }}>
+            <NewIcon />
+            {IPHONE_COPY.moreNew}
+          </button>
         </div>
-      )}
+      </PhoneSheet>
     </>
   )
 }

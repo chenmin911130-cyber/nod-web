@@ -2899,6 +2899,7 @@ export default function App() {
             onRenameSpeaker={handleRenameSpeaker}
             partial={state.partial}
             listening={listening}
+            paused={iphonePaused}
             ended={state.meetingEnded}
             catchNotes={state.catchNotes}
             notesRaw={state.notesRaw}
