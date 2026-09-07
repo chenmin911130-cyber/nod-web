@@ -93,6 +93,10 @@ export const IPHONE_COPY = {
   autoDetectFrom: 'Auto-detect',
   startTranslate: 'Start voice translation',
   copyTranslation: 'Copy translation',
+  autoNotes: 'Auto notes',
+  appliesToNextRecording: 'Applies to next recording',
+  settingsLocked: 'Settings are locked while recording',
+  settingsReadonlyAria: 'Session settings (read-only while recording)',
 } as const
 
 export function nativeListenChipOrder(scene: ListenScene): ReadonlyArray<'scene' | 'speech' | 'notes'> {

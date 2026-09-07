@@ -1,6 +1,6 @@
 import type { Lang, MeetingLine, PairLang } from './types'
 import { TRANSLATE_LANGS } from './types'
-import { sameSpokenLine } from './iphoneCopy'
+import { IPHONE_COPY, sameSpokenLine } from './iphoneCopy'
 
 function langName(lang: PairLang): string {
   return TRANSLATE_LANGS.find((item) => item.id === lang)?.name ?? 'Chinese'
@@ -170,6 +170,49 @@ export function sceneChipLabel(scene: ListenScene, speakersId: MeetingSpeakerId)
     return `${base} · ${opt?.chip ?? ''}`
   }
   return base
+}
+
+export function listenMetaLine(input: {
+  scene: ListenScene
+  speakersId: MeetingSpeakerId
+  speechLang: Lang
+  notesLang: Lang
+  qa?: boolean
+}): string {
+  const speech =
+    input.speechLang === 'auto'
+      ? IPHONE_COPY.autoDetectFrom
+      : (TRANSLATE_LANGS.find((item) => item.id === input.speechLang)?.name || 'English')
+  const parts = [sceneChipLabel(input.scene, input.speakersId), speech]
+  if (!input.qa) {
+    parts.push(
+      input.notesLang === 'auto'
+        ? IPHONE_COPY.autoNotes
+        : `${TRANSLATE_LANGS.find((item) => item.id === input.notesLang)?.name || 'English'} notes`,
+    )
+  }
+  return parts.join(' · ')
+}
+
+export function settingsLocked(input: { capture: string }): boolean {
+  return input.capture === 'listening' || input.capture === 'recording' || input.capture === 'paused'
+}
+
+export function listenSettingsBlocked(input: { capture: string; workspaceMode?: string }): boolean {
+  if (input.workspaceMode === 'translate') return false
+  return settingsLocked({ capture: input.capture })
+}
+
+export function applyListenSetting(opts: {
+  capture: string
+  workspaceMode: string
+  send: () => void
+  apply: () => void
+}): 'locked' | 'applied' {
+  if (listenSettingsBlocked({ capture: opts.capture, workspaceMode: opts.workspaceMode })) return 'locked'
+  opts.apply()
+  opts.send()
+  return 'applied'
 }
 
 export function emptyNotes(): NotesDoc {

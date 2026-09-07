@@ -14,7 +14,7 @@ import { meetingRailIsPaused } from './meetingPause'
 import SavePrompt from './components/SavePrompt'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
-import { canSwitchWorkspace, sameSpokenLine, sessionListening } from './iphoneCopy'
+import { IPHONE_COPY, canSwitchWorkspace, sameSpokenLine, sessionListening } from './iphoneCopy'
 import { isTranslateChunk, looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, sttTag, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough, wrongScriptForTarget } from './translateGate'
 import { meetingLinesAfterTargetChange, nextMeetingLineToTranslate } from './meetingTranslate'
 import { applyLineUpdate, applyLineTranslationRev, staleTranslateDone } from './meetingLines'
@@ -62,6 +62,7 @@ import {
   promoteMeetingSpeakers,
   resolveSpeakerName,
   speakersExpected,
+  listenSettingsBlocked,
   meetingSpeakerCount,
   meetingSpeakerId,
   setMeetingSpeaker,
@@ -738,6 +739,9 @@ function reducer(state: AppState, action: Action): AppState {
       // Decoupled: changing the translation target must NOT rewrite the notes
       // language. The Meeting notes selector dispatches notes_lang separately.
       if (action.lang === state.translateTo) return { ...state, translateTo: action.lang }
+      // After End, settings apply to the next capture. Keep the same line
+      // objects so existing transcript text (and the pump effect) stay put.
+      if (state.meetingEnded) return { ...state, translateTo: action.lang }
       // A meeting line that gave up (translateFailed) becomes retryable under a
       // new target — reset the give-up flag. Its translation stays empty; the
       // caller clears the asked/retry refs so pump re-picks these lines.
@@ -1692,6 +1696,11 @@ export default function App() {
   }, [state.view])
 
   const handleLang = useCallback((lang: Lang) => {
+    const s = stateRef.current
+    if (listenSettingsBlocked({ capture: s.capture, workspaceMode: s.workspaceMode })) {
+      dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.settingsLocked } })
+      return
+    }
     window.api.send({ type: 'set_lang', language: lang === 'auto' ? null : lang })
     dispatch({ type: 'lang', lang })
     dispatch({
@@ -1950,6 +1959,11 @@ export default function App() {
 
   const handleTranslateTo = useCallback((lang: Lang) => {
     const s = stateRef.current
+    if (listenSettingsBlocked({ capture: s.capture, workspaceMode: s.workspaceMode })) {
+      dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.settingsLocked } })
+      return
+    }
+    const keepExisting = s.workspaceMode !== 'translate' && (s.meetingEnded || s.meetingLines.length > 0)
     if (lang === 'auto') {
       if (s.notesLang === 'auto') return
       persistNotesLang('auto')
@@ -1973,15 +1987,17 @@ export default function App() {
     persistTranslatePair(s.translateFrom, lang)
     if (meeting) persistNotesLang(lang)
     const stuck = inflightTranslate.current
-    window.api.send({ type: 'cancel_generate' })
+    if (!keepExisting) window.api.send({ type: 'cancel_generate' })
     window.api.send({ type: 'set_translate_to', lang })
-    releaseTranslateGate(stuck)
+    if (!keepExisting) releaseTranslateGate(stuck)
     // A meeting line that gave up (translateFailed) becomes eligible again under
     // the new target — clear its give-up refs so pump re-picks it (the reducer
-    // resets the flag on translate_to).
-    for (const ln of s.meetingLines.filter((ln) => ln.translateFailed)) {
-      askedTranslate.current.delete(ln.id)
-      translateRetries.current.delete(ln.id)
+    // resets the flag on translate_to). After End, leave existing lines alone.
+    if (!keepExisting) {
+      for (const ln of s.meetingLines.filter((ln) => ln.translateFailed)) {
+        askedTranslate.current.delete(ln.id)
+        translateRetries.current.delete(ln.id)
+      }
     }
     for (const action of notesLangActions(s.workspaceMode, lang)) dispatch(action as never)
     dispatch({
@@ -1995,10 +2011,15 @@ export default function App() {
             : `Translate to ${targetName(lang)}`,
       },
     })
-    queueMicrotask(() => pumpTranslateRef.current())
+    if (!keepExisting) queueMicrotask(() => pumpTranslateRef.current())
   }, [])
 
   const handleMeetingSpeakers = useCallback((id: MeetingSpeakerId) => {
+    const locked = stateRef.current
+    if (listenSettingsBlocked({ capture: locked.capture, workspaceMode: locked.workspaceMode })) {
+      dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.settingsLocked } })
+      return
+    }
     setMeetingSpeaker(id)
     setMeetingSpeakersId(id)
     const s = stateRef.current
@@ -2070,6 +2091,7 @@ export default function App() {
     const s = stateRef.current
     if (inflightTranslate.current) return
     if (s.workspaceMode === 'meeting' && s.translateOn) {
+      if (s.meetingEnded) return
       // 最新的未翻译、未放弃、未被 asked 的行优先（实时字幕语义：先出当前句子，
       // 停顿期间回填旧行）。translateFailed 行被跳过，避免对坏模型的重发死循环。
       const next = nextMeetingLineToTranslate(s.meetingLines, askedTranslate.current)
@@ -2148,12 +2170,13 @@ export default function App() {
 
   useEffect(() => {
     if (state.workspaceMode === 'meeting' && state.translateOn) {
+      if (state.meetingEnded) return
       pumpTranslate()
       return
     }
     if (state.workspaceMode !== 'translate') return
     pumpTranslate()
-  }, [state.translatePairs, state.meetingLines, state.translateOn, state.workspaceMode, pumpTranslate])
+  }, [state.translatePairs, state.meetingLines, state.translateOn, state.workspaceMode, state.meetingEnded, pumpTranslate])
 
   const generateNotes = useCallback(() => {
     const s = stateRef.current
@@ -2920,15 +2943,9 @@ export default function App() {
               />
             }
             onScene={(scene) => {
-              // Scene switching must be locked while listening/paused, matching the
-              // workspace switch (handleMode → canSwitchWorkspace). The in-meeting
-              // scene switch (meeting↔lecture) used to bypass this gate.
               const s = stateRef.current
-              if (!canSwitchWorkspace({
-                listening: sessionListening({ capture: s.capture }),
-                paused: s.capture === 'paused',
-              })) {
-                dispatch({ type: 'engine', ev: { type: 'status', text: 'Stop listening first' } })
+              if (listenSettingsBlocked({ capture: s.capture, workspaceMode: s.workspaceMode })) {
+                dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.settingsLocked } })
                 return
               }
               dispatch({ type: 'listen_scene', scene })
@@ -2937,10 +2954,15 @@ export default function App() {
               else window.api.send({ type: 'set_workspace', mode: 'meeting', scene, speakers_expected: speakersExpected(scene, meetingSpeakerCount()) })
             }}
             onTranslate={(on) => {
-              if (on === state.translateOn) return
+              const s = stateRef.current
+              if (listenSettingsBlocked({ capture: s.capture, workspaceMode: s.workspaceMode })) {
+                dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.settingsLocked } })
+                return
+              }
+              if (on === s.translateOn) return
               dispatch({ type: 'translate_on', on })
               if (!on) killInflightTranslation()
-              if (on) queueMicrotask(() => pumpTranslateRef.current())
+              if (on && !s.meetingEnded) queueMicrotask(() => pumpTranslateRef.current())
             }}
             onTranslateTo={handleTranslateTo}
             meetingSpeakersId={meetingSpeakersId}
