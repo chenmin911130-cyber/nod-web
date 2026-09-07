@@ -92,7 +92,7 @@ test.describe('Translate phone chrome', () => {
     await page.getByRole('button', { name: 'Account' }).click()
     await expect(page.getByText('Sign out')).toBeVisible()
     await expect(page.getByText('Opacity')).toHaveCount(0)
-    await page.getByRole('button', { name: 'Back' }).click()
+    await page.getByRole('button', { name: 'Back', exact: true }).click()
     await expect(page.getByText('Ready to translate')).toBeVisible()
   })
 })
