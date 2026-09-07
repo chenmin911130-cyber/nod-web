@@ -2683,7 +2683,7 @@ export default function App() {
       canSave={canSaveSession}
       hasContent={meetingHasSaveableContent(state) || state.translatePairs.length > 0}
       saved={historyKept && meetingHasSaveableContent(state)}
-      ended={state.meetingEnded}
+      ended={state.workspaceMode === 'meeting' && state.meetingEnded}
       variant={state.workspaceMode === 'translate' ? 'translate' : state.workspaceMode === 'interview' ? 'interview' : 'listen'}
       onStart={handlePrimary}
       onPause={handlePause}
