@@ -144,8 +144,8 @@ def test_quota_llm_axis(meter_env):
     from server.meter import usage_snapshot
 
     _add_user(meter_env, plan="free")
-    # Free plan llm cap = 100k tokens. Push past it (cost stays under daily $).
-    _seed_usage_session(meter_env, "s1", inp=60_000, out=50_000)
+    # Free plan llm cap = 2M tokens. Push past it (cost stays under daily $).
+    _seed_usage_session(meter_env, "s1", inp=1_100_000, out=1_000_000)
     snap = usage_snapshot("u1")
     assert snap["ok"] is False
     assert snap["reason"] == "llm"
@@ -339,6 +339,7 @@ def test_usage_snapshot_shape(meter_env):
     snap = usage_snapshot("u1")
     assert snap["ok"] is True
     assert snap["plan"] == "free"
+    assert snap["llm_limit"] == 2_000_000
     for key in ("stt_seconds", "stt_limit", "llm_tokens", "llm_limit", "sessions", "session_limit"):
         assert key in snap
 
