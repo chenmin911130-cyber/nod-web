@@ -13,6 +13,15 @@ export type KeyboardFrame = {
 /** iOS toolbar / URL chrome can shrink the visual viewport a little. */
 export const KEYBOARD_OPEN_PX = 80
 
+export function visualBoxForFrame(visual: VisualBox | null, native = false): VisualBox | null {
+  if (!visual) return null
+  if (!native) return visual
+  // Native WKWebView already resizes to the visual viewport. Applying
+  // offsetTop as --vv-shift translates the pinned #root and shoves chrome
+  // off-screen (Ask dock then clips under overflow:hidden).
+  return { height: visual.height, offsetTop: 0 }
+}
+
 export function keyboardOverlap(layoutHeight: number, visual: VisualBox | null): number {
   if (!visual) return 0
   return Math.max(0, Math.round(layoutHeight - visual.height - visual.offsetTop))
@@ -67,7 +76,10 @@ export function installKeyboardInset(): () => void {
       root.classList,
       keyboardFrame(
         window.innerHeight,
-        vv ? { height: vv.height, offsetTop: vv.offsetTop } : null,
+        visualBoxForFrame(
+          vv ? { height: vv.height, offsetTop: vv.offsetTop } : null,
+          root.classList.contains('nod-native'),
+        ),
         isEditableTarget(document.activeElement),
       ),
     )
@@ -75,9 +87,16 @@ export function installKeyboardInset(): () => void {
   }
   sync()
   const vv = window.visualViewport
+  const onFocusIn = () => {
+    sync()
+    requestAnimationFrame(() => {
+      pinScroll()
+      sync()
+    })
+  }
   vv?.addEventListener('resize', sync)
   vv?.addEventListener('scroll', sync)
-  window.addEventListener('focusin', sync)
+  window.addEventListener('focusin', onFocusIn)
   window.addEventListener('focusout', () => {
     requestAnimationFrame(sync)
   })
@@ -85,7 +104,7 @@ export function installKeyboardInset(): () => void {
   return () => {
     vv?.removeEventListener('resize', sync)
     vv?.removeEventListener('scroll', sync)
-    window.removeEventListener('focusin', sync)
+    window.removeEventListener('focusin', onFocusIn)
     window.removeEventListener('orientationchange', sync)
   }
 }

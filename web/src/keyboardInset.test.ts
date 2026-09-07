@@ -1,4 +1,4 @@
-import { KEYBOARD_OPEN_PX, keyboardFrame, keyboardOverlap } from './keyboardInset'
+import { KEYBOARD_OPEN_PX, keyboardFrame, keyboardOverlap, visualBoxForFrame } from './keyboardInset'
 
 function eq<T>(got: T, want: T, label: string) {
   if (JSON.stringify(got) !== JSON.stringify(want)) {
@@ -51,3 +51,15 @@ eq(
 
 eq(KEYBOARD_OPEN_PX, 80, 'small toolbar jitter is not a keyboard')
 eq(keyboardFrame(852, { height: 800, offsetTop: 0 }).open, false, 'a 52px shrink stays closed')
+
+eq(visualBoxForFrame(null, true), null, 'native visual box stays null without a viewport')
+eq(
+  visualBoxForFrame({ height: 516, offsetTop: 60 }, true),
+  { height: 516, offsetTop: 0 },
+  'native keyboard does not shift the pinned frame by offsetTop',
+)
+eq(
+  visualBoxForFrame({ height: 516, offsetTop: 60 }, false),
+  { height: 516, offsetTop: 60 },
+  'web still reports iOS visualViewport offsetTop',
+)
