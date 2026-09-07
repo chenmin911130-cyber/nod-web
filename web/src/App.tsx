@@ -952,6 +952,17 @@ export default function App() {
       return
     }
     if (s.meetingEnded) {
+      if (!meetingHasSaveableContent(s)) {
+        dispatch({ type: 'listen_new' })
+        markHistoryKept(false)
+        commitBook({
+          ...bumpGeneration(saveBookRef.current),
+          status: 'undecided',
+          offered: false,
+        })
+        setSaveBannerOpen(false)
+        return
+      }
       dispatch({ type: 'meeting_resume' })
       if (resumeResetsKept({ kept: historyKeptRef.current, hasContent: meetingHasSaveableContent(s) })) {
         markHistoryKept(false)
