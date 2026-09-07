@@ -7,10 +7,14 @@ export default function SavePrompt({
   open,
   onKeep,
   onDiscard,
+  onCancel,
+  secondary = 'discard',
 }: {
   open: boolean
   onKeep: (opts: { content: true; audio: boolean }) => void
   onDiscard: () => void
+  onCancel?: () => void
+  secondary?: 'discard' | 'cancel'
 }) {
   const [audio, setAudio] = useState(true)
   const native = isNativeApp()
@@ -37,8 +41,12 @@ export default function SavePrompt({
           </label>
         )}
         <div className="save-prompt-actions">
-          <button type="button" className="save-prompt-discard" onClick={onDiscard}>
-            {IPHONE_COPY.saveNo}
+          <button
+            type="button"
+            className="save-prompt-discard"
+            onClick={secondary === 'cancel' ? (onCancel ?? onDiscard) : onDiscard}
+          >
+            {secondary === 'cancel' ? IPHONE_COPY.saveCancel : IPHONE_COPY.saveNo}
           </button>
           <button type="button" className="save-prompt-keep" onClick={() => onKeep(sessionSaveKeep({ audio: native ? true : audio }))}>
             {IPHONE_COPY.saveYes}

@@ -24,6 +24,7 @@ const EVENT_TYPES = new Set([
   'quota_exceeded',
   'save_prompt',
   'history_kept',
+  'history_keep_failed',
 ])
 
 function asText(v: unknown): string {
@@ -80,6 +81,12 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
       if (!id) return null
       return { ...o, type: 'done', id } as EngineEvent
     }
+    case 'history_keep_failed':
+      return {
+        type: 'history_keep_failed',
+        id: typeof o.id === 'string' ? o.id : undefined,
+        reason: asText(o.reason) || undefined,
+      }
     default:
       return { ...o, type } as EngineEvent
   }
@@ -277,6 +284,7 @@ export function installWebApi(): void {
       ws = null
       window.clearInterval(pingTimer)
       window.clearTimeout(reconnectTimer)
+      emit({ type: 'disconnected' })
       scheduleReconnect(ev.code === 4401)
     }
     socket.onerror = () => {

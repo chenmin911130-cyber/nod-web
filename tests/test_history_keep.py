@@ -91,6 +91,29 @@ class HistoryKeepTests(unittest.TestCase):
         types = [c.args[0]["type"] for c in sess.emit.call_args_list]
         self.assertNotIn("save_prompt", types)
 
+    def test_keep_history_emits_failed_without_session_id(self):
+        sess = self._session()
+        sess.usage_session_id = None
+        sess.pipeline.usage_session_id = None
+        sess.keep_history()
+        types = [c.args[0]["type"] for c in sess.emit.call_args_list]
+        self.assertIn("history_keep_failed", types)
+        self.assertNotIn("history_kept", types)
+        failed = next(c.args[0] for c in sess.emit.call_args_list if c.args[0]["type"] == "history_keep_failed")
+        self.assertEqual(failed["reason"], "no_session")
+        self.assertIsNone(failed["id"])
+
+    def test_keep_history_emits_failed_when_keep_throws(self):
+        sess = self._session()
+        with mock.patch("server.meter.keep_usage_session", side_effect=RuntimeError("db down")):
+            sess.keep_history()
+        types = [c.args[0]["type"] for c in sess.emit.call_args_list]
+        self.assertIn("history_keep_failed", types)
+        self.assertNotIn("history_kept", types)
+        failed = next(c.args[0] for c in sess.emit.call_args_list if c.args[0]["type"] == "history_keep_failed")
+        self.assertEqual(failed["id"], "sess-1")
+        self.assertEqual(failed["reason"], "db down")
+
     def test_meeting_stop_listen_does_not_offer_save_after_keep(self):
         sess = self._session()
         with (

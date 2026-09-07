@@ -54,6 +54,13 @@ eq(notesPageTitle('meeting'), 'Meeting notes', 'meeting notes heading')
 eq(notesPageTitle('lecture'), 'Study notes', 'lecture notes heading')
 eq(notesPageTitle('interview'), null, 'Live Q&A has no notes page title')
 eq(IPHONE_COPY.saveTitle, 'Save to History?', 'Stop asks save only')
+eq(IPHONE_COPY.saveBannerTitle, 'Save this session?', 'phone End banner title')
+eq(IPHONE_COPY.saveNotNow, 'Not now', 'banner dismisses without discard')
+eq(IPHONE_COPY.saveSaving, 'Saving…', 'in-flight keep copy')
+eq(IPHONE_COPY.saveFailed, "Couldn't save.", 'keep failed copy')
+eq(IPHONE_COPY.saveRetry, 'Retry save', 'failed banner retry')
+eq(IPHONE_COPY.saveSavedLine, 'Saved to History', 'ack-only saved line')
+eq(IPHONE_COPY.saveCancel, 'Cancel', 'non-native collect cancel')
 eq(IPHONE_COPY.keepRecording, 'Keep recording', 'Save can keep the WAV')
 eq(
   IPHONE_COPY.keepRecordingHelp.includes('30 days'),
