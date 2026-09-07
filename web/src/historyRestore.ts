@@ -10,6 +10,7 @@ export type RestorePayload = {
   notes: string
   summary: string
   pairs: TranslatePair[]
+  elapsedMs: number
 }
 
 export function sceneOf(session: Pick<HistorySession, 'mode' | 'scene'>): ListenScene {
@@ -208,6 +209,7 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
     notes: notes.join('\n\n'),
     summary: summaries.join('\n\n'),
     pairs,
+    elapsedMs: restoreElapsedMs({ lines, sttSeconds: session.stt_seconds }),
   }
 }
 
@@ -289,6 +291,52 @@ export function sessionHasAudio(session: Pick<HistorySession, 'files'>): boolean
 
 export function resumeResetsKept(input: { kept: boolean; hasContent: boolean }): boolean {
   return input.kept && input.hasContent
+}
+
+export function elapsedMsFromTranscriptTs(ts: string): number {
+  const parts = (ts || '').trim().split(':')
+  if (parts.length === 2 && parts.every((part) => /^\d+$/.test(part))) {
+    return (Number(parts[0]) * 60 + Number(parts[1])) * 1000
+  }
+  if (parts.length === 3 && parts.every((part) => /^\d+$/.test(part))) {
+    return (Number(parts[0]) * 3600 + Number(parts[1]) * 60 + Number(parts[2])) * 1000
+  }
+  return 0
+}
+
+export function restoreElapsedMs(input: { lines: Array<{ ts?: string }>; sttSeconds?: number }): number {
+  let fromTs = 0
+  for (const line of input.lines) {
+    fromTs = Math.max(fromTs, elapsedMsFromTranscriptTs(line.ts || ''))
+  }
+  const fromStt = Math.max(0, Math.round((input.sttSeconds || 0) * 1000))
+  return Math.max(fromTs, fromStt)
+}
+
+export function restoreSessionClock(elapsedMs: number, now = Date.now()): {
+  meetingStartedAt: number
+  meetingEnded: true
+  meetingElapsedMs: number
+  partial: string
+} {
+  const ms = Math.max(0, elapsedMs)
+  return {
+    meetingStartedAt: now - ms,
+    meetingEnded: true,
+    meetingElapsedMs: ms,
+    partial: '',
+  }
+}
+
+/** Which Start branch a restored or ended Meeting takes. Path A and B must agree. */
+export function startMeetingKind(s: {
+  meetingStartedAt: number | null
+  meetingEnded: boolean
+  hasContent: boolean
+}): 'listen_new' | 'meeting_resume' | 'meeting_clock' {
+  if (s.meetingStartedAt == null) return 'listen_new'
+  if (s.meetingEnded) return s.hasContent ? 'meeting_resume' : 'listen_new'
+  return 'meeting_clock'
 }
 
 export function applyMeetingResume<T extends {

@@ -6,7 +6,7 @@ import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
-import { restoreFromSession, restoreIdOfferable, restoreShouldNotAsk, applyMeetingResume, resumeResetsKept, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
+import { restoreFromSession, restoreIdOfferable, restoreShouldNotAsk, applyMeetingResume, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
 import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
@@ -261,6 +261,7 @@ type Action =
       notes: string
       summary: string
       pairs: TranslatePair[]
+      elapsedMs?: number
     }
 
 function formatClock(): string {
@@ -681,6 +682,7 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, workspaceMode: action.mode, view: 'workspace' }
     case 'restore_session': {
       const lastTurn = action.turns[action.turns.length - 1]
+      const clock = restoreSessionClock(action.elapsedMs ?? restoreElapsedMs({ lines: action.lines }))
       return {
         ...state,
         workspaceMode: action.mode,
@@ -691,11 +693,8 @@ function reducer(state: AppState, action: Action): AppState {
         currentQId: lastTurn?.id || '',
         notesRaw: action.notes,
         translatePairs: action.pairs,
-        meetingStartedAt: Date.now(),
-        meetingEnded: false,
-        meetingElapsedMs: 0,
+        ...clock,
         view: 'workspace',
-        partial: '',
       }
     }
     case 'listen_scene':
