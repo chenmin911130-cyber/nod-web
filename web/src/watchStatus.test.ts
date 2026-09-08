@@ -1,4 +1,13 @@
-import { buildWatchFace, watchEndedFor, watchPreviousCaption, watchReadingAnchor } from './watchStatus'
+import {
+  buildWatchFace,
+  watchEndedFor,
+  watchHaptic,
+  watchPreviousCaption,
+  watchReadingAnchor,
+  watchRmsToLevel,
+  type WatchHaptic,
+  type WatchHapticSnap,
+} from './watchStatus'
 
 const face = buildWatchFace({
   capture: 'listening',
@@ -352,4 +361,63 @@ eqEnded(
   false,
   'meeting live with content is not ended',
 )
+
+if (watchRmsToLevel(0) !== 0) throw new Error('silent RMS must be level 0')
+if (watchRmsToLevel(32768) !== 1) throw new Error('full-scale Int16 RMS must be level 1')
+if (watchRmsToLevel(65536) !== 1) throw new Error('above full-scale must clamp to 1')
+
+function hapticSnap(p: Partial<WatchHapticSnap> = {}): WatchHapticSnap {
+  return {
+    starting: false,
+    listening: false,
+    paused: false,
+    pending: null,
+    ending: false,
+    ended: false,
+    capture: 'off',
+    saveMatched: false,
+    failure: null,
+    blocked: '',
+    statusUnknown: false,
+    saveState: 'none',
+    failed: false,
+    ...p,
+  }
+}
+
+function eqHaptic(prev: Partial<WatchHapticSnap>, next: Partial<WatchHapticSnap>, want: WatchHaptic, label: string) {
+  const got = watchHaptic(hapticSnap(prev), hapticSnap(next))
+  if (got !== want) throw new Error(`${label}: expected ${want}, got ${got}`)
+}
+
+eqHaptic({ starting: true }, { listening: true }, 'start', 'starting → listening')
+eqHaptic({ pending: 'pause' }, { paused: true, pending: null }, 'click', 'pending pause → paused')
+eqHaptic({ pending: 'resume', paused: true }, { listening: true, pending: null }, 'click', 'pending resume → listening')
+eqHaptic({ ending: true }, { ending: false, ended: true }, 'stop', 'ending → ended')
+eqHaptic({ ending: true, capture: 'listening' }, { ending: false, capture: 'off' }, 'stop', 'ending → capture off')
+eqHaptic({ saveMatched: false }, { saveMatched: true }, 'success', 'saveMatched false → true')
+eqHaptic({ failure: null }, { failure: 'Couldn’t start' }, 'failure', 'failure nil → non-nil')
+eqHaptic({ blocked: '' }, { blocked: 'quota' }, 'failure', 'blocked empty → nonempty')
+eqHaptic({ statusUnknown: false }, { statusUnknown: true }, 'failure', 'statusUnknown false → true')
+eqHaptic({ saveState: 'saving' }, { saveState: 'failed' }, 'failure', 'saveState → failed')
+eqHaptic({ failed: false }, { failed: true }, 'failure', 'failed false → true')
+eqHaptic(
+  { failure: 'Couldn’t translate', failed: true },
+  { failure: 'Couldn’t translate', failed: true },
+  null,
+  'same failure two frames does not repeat',
+)
+eqHaptic(
+  { listening: true, translation: '' },
+  { listening: true, translation: '明天见' },
+  null,
+  'new translation no haptic',
+)
+eqHaptic(
+  { listening: true, reachable: false },
+  { listening: true, reachable: true },
+  null,
+  'reconnect no haptic',
+)
+eqHaptic({ listening: true, capture: 'listening' }, { listening: true, capture: 'listening' }, null, 'status push no haptic')
 
