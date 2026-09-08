@@ -165,6 +165,21 @@ export function watchStartOutcome(input: {
   return 'waiting'
 }
 
+/** Connection lost only when we cannot confirm phone capture. Watch mic recording is known. */
+export function watchStatusUnknown(input: {
+  reachable: boolean
+  recorderRunning: boolean
+  listening: boolean
+  paused: boolean
+  ended: boolean
+  staleSec: number
+  reconnectFailed?: boolean
+}): boolean {
+  if (input.recorderRunning) return false
+  if (!input.listening && !input.paused && !input.ended) return false
+  return !input.reachable || (input.staleSec > 20 && !!input.reconnectFailed)
+}
+
 /** A leftover Watch file transfer is PCM only. It must not start_listen. */
 export function watchFileShouldStartListen(): boolean {
   return false

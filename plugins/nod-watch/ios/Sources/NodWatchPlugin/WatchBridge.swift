@@ -126,26 +126,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
-        var payload: [String: Any] = [
-            "capture": lastCapture,
-            "hint": hint,
-            "original": original,
-            "translation": translation,
-            "previous": previous,
-            "history": history,
-            "engine": lastEngine,
-        ]
-        if !lastMode.isEmpty {
-            payload["mode"] = lastMode
-        }
-        if !lastLangPair.isEmpty {
-            payload["langPair"] = lastLangPair
-        }
-        payload["ended"] = lastEnded
-        payload["elapsedMs"] = lastElapsedMs
-        payload["save"] = lastSave
-        payload["sessionId"] = lastSessionId
-        payload["blocked"] = lastBlocked
+        let payload = statusPayload()
         guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
         do {
             try session.updateApplicationContext(payload)
@@ -171,14 +152,39 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         return now - at <= 30
     }
 
+    func statusPayload() -> [String: Any] {
+        var payload: [String: Any] = [
+            "capture": lastCapture,
+            "hint": lastHint,
+            "original": lastOriginal,
+            "translation": lastTranslation,
+            "previous": lastPrevious,
+            "history": lastHistory,
+            "engine": lastEngine,
+            "ended": lastEnded,
+            "elapsedMs": lastElapsedMs,
+            "save": lastSave,
+            "sessionId": lastSessionId,
+            "blocked": lastBlocked,
+        ]
+        if !lastMode.isEmpty {
+            payload["mode"] = lastMode
+        }
+        if !lastLangPair.isEmpty {
+            payload["langPair"] = lastLangPair
+        }
+        return payload
+    }
+
     private func handle(_ message: [String: Any], live: Bool) {
         if let pcm = message["pcm"] as? String, !pcm.isEmpty {
             emitPcm(pcm)
         }
         let raw = (message["action"] as? String ?? "").lowercased()
-        let allowed = ["stop", "start", "record", "pause", "resume", "speak", "save", "discard", "tts_live", "tts_tap", "tts_female", "tts_male"]
+        let allowed = ["stop", "start", "record", "pause", "resume", "speak", "save", "discard", "tts_live", "tts_tap", "tts_female", "tts_male", "sync"]
         let action = allowed.contains(raw) ? raw : ""
         guard !action.isEmpty else { return }
+        if action == "sync" { return }
         let mode = Self.watchListenMode(message["mode"] as? String ?? "")
         let at = message["at"] as? Double
         let now = Date().timeIntervalSince1970
@@ -351,19 +357,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
 
     public func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
         handle(message, live: true)
-        var reply: [String: Any] = ["ok": true, "capture": lastCapture, "hint": lastHint]
-        if !lastMode.isEmpty {
-            reply["mode"] = lastMode
-        }
-        if !lastLangPair.isEmpty {
-            reply["langPair"] = lastLangPair
-        }
-        reply["ended"] = lastEnded
-        reply["elapsedMs"] = lastElapsedMs
-        reply["save"] = lastSave
-        reply["sessionId"] = lastSessionId
-        reply["engine"] = lastEngine
-        reply["blocked"] = lastBlocked
+        var reply = statusPayload()
+        reply["ok"] = true
         replyHandler(reply)
     }
 

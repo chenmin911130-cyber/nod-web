@@ -30,6 +30,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var pending: String?
     @Published var blocked = ""
     @Published var failure: String?
+    @Published var lastStatusAt: Date?
+    @Published var reconnecting = false
+    @Published var reconnectFailed = false
 
     private var localModeHeld = false
     private var phoneModeSeen = false
@@ -42,6 +45,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     private var pendingWaitWork: DispatchWorkItem?
     private var startBeganAt: Date?
     private var lastCapture = ""
+    private var lastReconnectAt: Date?
+    private var staleWatch: DispatchWorkItem?
 
     struct WatchHistItem: Identifiable, Equatable {
         let id: String
@@ -114,6 +119,33 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             return sessionId == requestedId
         }
         return !sessionId.isEmpty
+    }
+
+    static func statusUnknown(
+        reachable: Bool,
+        recorderRunning: Bool,
+        listening: Bool,
+        paused: Bool,
+        ended: Bool,
+        staleSec: TimeInterval,
+        reconnectFailed: Bool
+    ) -> Bool {
+        if recorderRunning { return false }
+        if !listening, !paused, !ended { return false }
+        return !reachable || (staleSec > 20 && reconnectFailed)
+    }
+
+    var statusUnknown: Bool {
+        let stale = lastStatusAt.map { Date().timeIntervalSince($0) } ?? TimeInterval.infinity
+        return Self.statusUnknown(
+            reachable: reachable,
+            recorderRunning: WatchRecorder.shared.isRunning,
+            listening: listening,
+            paused: paused,
+            ended: ended,
+            staleSec: stale,
+            reconnectFailed: reconnectFailed
+        )
     }
 
     /// Crown is Start/Stop. Side is Pause/Resume. Do not call toggle() from the crown.
@@ -651,6 +683,55 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         }
     }
 
+    func reconnect(silent: Bool = false) {
+        if reconnecting { return }
+        if let lastReconnectAt, Date().timeIntervalSince(lastReconnectAt) < 2 { return }
+        lastReconnectAt = Date()
+        if !silent {
+            reconnecting = true
+        }
+        reconnectFailed = false
+        let payload: [String: Any] = ["action": "sync", "at": Date().timeIntervalSince1970]
+        guard WCSession.isSupported() else {
+            reconnecting = false
+            reconnectFailed = true
+            return
+        }
+        let session = WCSession.default
+        guard session.isReachable else {
+            reconnecting = false
+            reconnectFailed = true
+            return
+        }
+        session.sendMessage(payload, replyHandler: { [weak self] reply in
+            DispatchQueue.main.async {
+                self?.reconnecting = false
+                var r = reply
+                r.removeValue(forKey: "ok")
+                self?.apply(r, live: false)
+            }
+        }, errorHandler: { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.reconnecting = false
+                self?.reconnectFailed = true
+            }
+        })
+    }
+
+    private func scheduleStaleCheck() {
+        staleWatch?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if self.reachable {
+                self.reconnect(silent: true)
+            } else {
+                self.objectWillChange.send()
+            }
+        }
+        staleWatch = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 21, execute: work)
+    }
+
     func send(action: String) {
         var payload: [String: Any] = ["action": action, "at": Date().timeIntervalSince1970]
         if Self.commandShouldSendMode(action), phoneModeSeen {
@@ -741,6 +822,10 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         }
         if let capture = payload["capture"] as? String {
             lastCapture = capture
+            lastStatusAt = Date()
+            reconnecting = false
+            reconnectFailed = false
+            scheduleStaleCheck()
             syncFromCapture(capture)
         }
         if endedDropped {
@@ -817,11 +902,15 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
 
     func sessionReachabilityDidChange(_ session: WCSession) {
         DispatchQueue.main.async {
+            let wasReachable = self.reachable
             self.reachable = session.isReachable
             if Self.liveStreamShouldReset(listening: self.listening, reachable: session.isReachable) {
                 self.pcmLock.lock()
                 self.liveStreamed = false
                 self.pcmLock.unlock()
+            }
+            if !wasReachable, session.isReachable {
+                self.reconnect()
             }
             if self.listening {
                 if self.original.isEmpty, self.translation.isEmpty {
