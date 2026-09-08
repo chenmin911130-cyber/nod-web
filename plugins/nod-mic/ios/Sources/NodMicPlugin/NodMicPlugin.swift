@@ -11,6 +11,8 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "start", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stop", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "isActive", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "startKeepAlive", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stopKeepAlive", returnType: CAPPluginReturnPromise),
     ]
 
     private var engine = AVAudioEngine()
@@ -26,6 +28,7 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
     // (all-zero PCM) keeps the session genuinely in the playing state, so the app
     // and the JS stays alive and the tap keeps firing. Inaudible by construction.
     private var silentPlayer: AVAudioPlayer?
+    private var keepAlive = false
 
     @objc func start(_ call: CAPPluginCall) {
         if running {
@@ -56,6 +59,40 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func isActive(_ call: CAPPluginCall) {
         call.resolve(["active": running])
+    }
+
+    @objc func startKeepAlive(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            do {
+                if self.running {
+                    self.startSilentLoop()
+                    self.keepAlive = true
+                    call.resolve()
+                    return
+                }
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                try session.setActive(true)
+                self.startSilentLoop()
+                self.keepAlive = true
+                call.resolve()
+            } catch {
+                call.reject(error.localizedDescription)
+            }
+        }
+    }
+
+    @objc func stopKeepAlive(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            self.keepAlive = false
+            if self.running {
+                call.resolve()
+                return
+            }
+            self.stopSilentLoop()
+            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+            call.resolve()
+        }
     }
 
     private func startCapture(_ call: CAPPluginCall, attempt: Int, gen: Int) {
@@ -143,6 +180,9 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
 
         try engine.start()
         running = true
+        if self.silentPlayer?.isPlaying != true {
+            self.stopSilentLoop()
+        }
         startSilentLoop()
     }
 
@@ -175,6 +215,7 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func teardown() {
         running = false
+        keepAlive = false
         stopSilentLoop()
         engine.inputNode.removeTap(onBus: 0)
         if engine.isRunning {

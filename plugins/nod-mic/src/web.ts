@@ -13,4 +13,12 @@ export class NodMicWeb extends WebPlugin implements NodMicPlugin {
   async isActive(): Promise<{ active: boolean }> {
     return { active: false }
   }
+
+  async startKeepAlive(): Promise<void> {
+    return
+  }
+
+  async stopKeepAlive(): Promise<void> {
+    return
+  }
 }

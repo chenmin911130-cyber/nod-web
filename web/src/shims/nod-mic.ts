@@ -13,4 +13,10 @@ export const NodMic = {
   addListener(_event: 'pcm', _cb: (ev: PcmEvent) => void): Promise<PluginListenerHandle> {
     return Promise.resolve({ remove: () => Promise.resolve() })
   },
+  startKeepAlive(): Promise<void> {
+    return Promise.resolve()
+  },
+  stopKeepAlive(): Promise<void> {
+    return Promise.resolve()
+  },
 }
