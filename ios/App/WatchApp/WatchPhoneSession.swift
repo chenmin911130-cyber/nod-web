@@ -985,18 +985,24 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 guard !id.isEmpty, !text.isEmpty || !title.isEmpty else { return nil }
                 return WatchHistItem(id: id, title: title, text: text, failed: itemFailed)
             }
-            let latestId = next.first?.id ?? ""
-            if lastLatestId.isEmpty {
-                lastLatestId = latestId
-            } else if !latestId.isEmpty, latestId != lastLatestId {
-                let decision = Self.readingAnchor(atLatest: latestVisible, newUnit: true, pillShown: pillShown)
-                pillShown = decision.pill
-                if decision.scroll {
-                    scrollToId = latestId
-                }
-                lastLatestId = latestId
-            }
             self.history = next
+            if next.isEmpty {
+                pillShown = false
+                lastLatestId = ""
+                latestVisible = true
+            } else {
+                let latestId = next.first?.id ?? ""
+                if lastLatestId.isEmpty {
+                    lastLatestId = latestId
+                } else if !latestId.isEmpty, latestId != lastLatestId {
+                    let decision = Self.readingAnchor(atLatest: latestVisible, newUnit: true, pillShown: pillShown)
+                    pillShown = decision.pill
+                    if decision.scroll {
+                        scrollToId = latestId
+                    }
+                    lastLatestId = latestId
+                }
+            }
         }
     }
 

@@ -4,7 +4,7 @@ import { isNativeApp } from './native'
 type WatchCommand = { action?: string; mode?: string; id?: string }
 type WatchPcm = { data?: string }
 
-type WatchHistItem = { id: string; title: string; text: string }
+type WatchHistItem = { id: string; title: string; text: string; failed?: boolean }
 
 type WatchPlugin = {
   ready(): Promise<void>

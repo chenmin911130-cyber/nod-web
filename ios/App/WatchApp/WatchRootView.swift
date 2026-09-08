@@ -316,7 +316,7 @@ struct WatchRootView: View {
             }
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
+                    LazyVStack(alignment: .leading, spacing: 8) {
                         if units.isEmpty {
                             Image(systemName: "waveform")
                                 .font(.title2)
