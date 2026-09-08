@@ -1424,6 +1424,15 @@ export default function App() {
         setTtsVoice(voice)
         writeTtsVoice(voice)
       },
+      onRetry: (id) => {
+        if (!id) return
+        if (inflightTranslate.current === id) return
+        askedTranslate.current.delete(id)
+        translateRetries.current.delete(id)
+        spokenTranslate.current.delete(id)
+        dispatch({ type: 'retry_translate', id })
+        queueMicrotask(() => pumpTranslateRef.current())
+      },
     })
   }, [])
 
@@ -1461,6 +1470,7 @@ export default function App() {
           consentOpen,
           quotaOk: state.quota?.ok !== false,
         }),
+        failed: face.failed,
       })
     }, 180)
     return () => window.clearTimeout(timer)

@@ -19,7 +19,6 @@ export type WatchUiCopy = {
   drafting: string
   recording: string
   endRecording: string
-  keepsSession: string
   ended: string
   continueRecording: string
   sameSession: string
@@ -44,6 +43,12 @@ export type WatchUiCopy = {
   reconnecting: string
   openOnIphone: string
   recordingOnWatchOffline: string
+  newTranslation: string
+  newAnswer: string
+  couldntTranslate: string
+  couldntAnswer: string
+  retry: string
+  retrying: string
 }
 
 const COPY: Record<WatchUiLang, WatchUiCopy> = {
@@ -66,7 +71,6 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: '正在生成…',
     recording: '录音中',
     endRecording: '结束录音',
-    keepsSession: '保留本次会话',
     ended: '已结束',
     continueRecording: '继续录音',
     sameSession: '同一会话',
@@ -91,6 +95,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     reconnecting: '正在重新连接…',
     openOnIphone: '请在 iPhone 打开 Nodpilot',
     recordingOnWatchOffline: '手表录音中 · iPhone 离线',
+    newTranslation: '新译文 ↓',
+    newAnswer: '新回答 ↓',
+    couldntTranslate: '翻译失败',
+    couldntAnswer: '回答失败',
+    retry: '重试',
+    retrying: '正在重试…',
   },
   en: {
     listening: "I'm listening.",
@@ -111,7 +121,6 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: 'Drafting…',
     recording: 'Recording',
     endRecording: 'End recording',
-    keepsSession: 'Keeps this session',
     ended: 'Ended',
     continueRecording: 'Continue recording',
     sameSession: 'Same session',
@@ -136,6 +145,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     reconnecting: 'Reconnecting…',
     openOnIphone: 'Open Nodpilot on iPhone',
     recordingOnWatchOffline: 'Recording on Watch · iPhone offline',
+    newTranslation: 'New translation ↓',
+    newAnswer: 'New answer ↓',
+    couldntTranslate: "Couldn't translate",
+    couldntAnswer: "Couldn't answer",
+    retry: 'Retry',
+    retrying: 'Retrying…',
   },
   it: {
     listening: 'Ascolto',
@@ -156,7 +171,6 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: 'Sto scrivendo…',
     recording: 'Registrazione',
     endRecording: 'Termina registrazione',
-    keepsSession: 'Conserva questa sessione',
     ended: 'Terminato',
     continueRecording: 'Continua a registrare',
     sameSession: 'Stessa sessione',
@@ -181,6 +195,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     reconnecting: 'Riconnessione…',
     openOnIphone: 'Apri Nodpilot su iPhone',
     recordingOnWatchOffline: 'Registrazione su Watch · iPhone offline',
+    newTranslation: 'Nuova traduzione ↓',
+    newAnswer: 'Nuova risposta ↓',
+    couldntTranslate: 'Traduzione non riuscita',
+    couldntAnswer: 'Risposta non riuscita',
+    retry: 'Riprova',
+    retrying: 'Nuovo tentativo…',
   },
   es: {
     listening: 'Escuchando',
@@ -201,7 +221,6 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: 'Redactando…',
     recording: 'Grabando',
     endRecording: 'Terminar grabación',
-    keepsSession: 'Conserva esta sesión',
     ended: 'Terminado',
     continueRecording: 'Seguir grabando',
     sameSession: 'Misma sesión',
@@ -226,6 +245,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     reconnecting: 'Reconectando…',
     openOnIphone: 'Abre Nodpilot en iPhone',
     recordingOnWatchOffline: 'Grabando en Watch · iPhone offline',
+    newTranslation: 'Nueva traducción ↓',
+    newAnswer: 'Nueva respuesta ↓',
+    couldntTranslate: 'No se pudo traducir',
+    couldntAnswer: 'No se pudo responder',
+    retry: 'Reintentar',
+    retrying: 'Reintentando…',
   },
   fr: {
     listening: "J'écoute",
@@ -246,7 +271,6 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: 'Rédaction…',
     recording: 'Enregistrement',
     endRecording: "Arrêter l'enregistrement",
-    keepsSession: 'Conserve cette session',
     ended: 'Terminé',
     continueRecording: "Continuer l'enregistrement",
     sameSession: 'Même session',
@@ -271,6 +295,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     reconnecting: 'Reconnexion…',
     openOnIphone: 'Ouvre Nodpilot sur iPhone',
     recordingOnWatchOffline: 'Enregistrement Watch · iPhone hors ligne',
+    newTranslation: 'Nouvelle traduction ↓',
+    newAnswer: 'Nouvelle réponse ↓',
+    couldntTranslate: 'Traduction impossible',
+    couldntAnswer: 'Réponse impossible',
+    retry: 'Réessayer',
+    retrying: 'Nouvelle tentative…',
   },
   de: {
     listening: 'Ich höre zu',
@@ -291,7 +321,6 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: 'Schreibe…',
     recording: 'Aufnahme',
     endRecording: 'Aufnahme beenden',
-    keepsSession: 'Behält diese Sitzung',
     ended: 'Beendet',
     continueRecording: 'Aufnahme fortsetzen',
     sameSession: 'Dieselbe Sitzung',
@@ -316,6 +345,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     reconnecting: 'Verbinde…',
     openOnIphone: 'Nodpilot auf iPhone öffnen',
     recordingOnWatchOffline: 'Aufnahme auf Watch · iPhone offline',
+    newTranslation: 'Neue Übersetzung ↓',
+    newAnswer: 'Neue Antwort ↓',
+    couldntTranslate: 'Übersetzung fehlgeschlagen',
+    couldntAnswer: 'Antwort fehlgeschlagen',
+    retry: 'Erneut',
+    retrying: 'Wird wiederholt…',
   },
   pt: {
     listening: 'Ouvindo',
@@ -336,7 +371,6 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: 'Escrevendo…',
     recording: 'Gravando',
     endRecording: 'Encerrar gravação',
-    keepsSession: 'Mantém esta sessão',
     ended: 'Encerrado',
     continueRecording: 'Continuar gravação',
     sameSession: 'Mesma sessão',
@@ -361,6 +395,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     reconnecting: 'Reconectando…',
     openOnIphone: 'Abra o Nodpilot no iPhone',
     recordingOnWatchOffline: 'Gravando no Watch · iPhone offline',
+    newTranslation: 'Nova tradução ↓',
+    newAnswer: 'Nova resposta ↓',
+    couldntTranslate: 'Não foi possível traduzir',
+    couldntAnswer: 'Não foi possível responder',
+    retry: 'Tentar de novo',
+    retrying: 'Tentando…',
   },
   ja: {
     listening: '聞いています',
@@ -381,7 +421,6 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: '作成中…',
     recording: '録音中',
     endRecording: '録音を終了',
-    keepsSession: 'このセッションを保持',
     ended: '終了',
     continueRecording: '録音を続ける',
     sameSession: '同じセッション',
@@ -406,6 +445,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     reconnecting: '再接続中…',
     openOnIphone: 'iPhoneでNodpilotを開く',
     recordingOnWatchOffline: 'Watchで録音中 · iPhoneオフライン',
+    newTranslation: '新しい訳 ↓',
+    newAnswer: '新しい回答 ↓',
+    couldntTranslate: '翻訳できません',
+    couldntAnswer: '回答できません',
+    retry: '再試行',
+    retrying: '再試行中…',
   },
 }
 

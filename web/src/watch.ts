@@ -1,10 +1,10 @@
 import { registerPlugin } from '@capacitor/core'
 import { isNativeApp } from './native'
 
-type WatchCommand = { action?: string; mode?: string }
+type WatchCommand = { action?: string; mode?: string; id?: string }
 type WatchPcm = { data?: string }
 
-type WatchHistItem = { id: string; title: string; text: string }
+type WatchHistItem = { id: string; title: string; text: string; failed?: boolean }
 
 type WatchPlugin = {
   ready(): Promise<void>
@@ -23,6 +23,7 @@ type WatchPlugin = {
     sessionId?: string
     engine?: string
     blocked?: string
+    failed?: boolean
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {
@@ -41,8 +42,8 @@ let preferWatchMic = false
 let pcmSink: ((buf: ArrayBuffer) => void) | null = null
 const preRoll: ArrayBuffer[] = []
 
-export function watchAction(raw: unknown): 'start' | 'stop' | 'record' | 'pause' | 'resume' | 'speak' | 'tts_live' | 'tts_tap' | 'tts_female' | 'tts_male' | 'save' | 'discard' | '' {
-  return raw === 'start' || raw === 'stop' || raw === 'record' || raw === 'pause' || raw === 'resume' || raw === 'speak' || raw === 'tts_live' || raw === 'tts_tap' || raw === 'tts_female' || raw === 'tts_male' || raw === 'save' || raw === 'discard' ? raw : ''
+export function watchAction(raw: unknown): 'start' | 'stop' | 'record' | 'pause' | 'resume' | 'speak' | 'tts_live' | 'tts_tap' | 'tts_female' | 'tts_male' | 'save' | 'discard' | 'retry' | '' {
+  return raw === 'start' || raw === 'stop' || raw === 'record' || raw === 'pause' || raw === 'resume' || raw === 'speak' || raw === 'tts_live' || raw === 'tts_tap' || raw === 'tts_female' || raw === 'tts_male' || raw === 'save' || raw === 'discard' || raw === 'retry' ? raw : ''
 }
 
 export type WatchListenMode = 'meeting' | 'lecture' | 'interview' | 'translate'
@@ -301,6 +302,7 @@ export function installWatchRemote(handlers: {
   onTtsLive: () => void
   onTtsTap: () => void
   onTtsVoice: (voice: 'male' | 'female') => void
+  onRetry: (id: string) => void
 }): () => void {
   if (!isNativeApp()) return () => undefined
   let gone = false
@@ -334,6 +336,7 @@ export function installWatchRemote(handlers: {
       if (action === 'tts_tap') handlers.onTtsTap()
       if (action === 'tts_female') handlers.onTtsVoice('female')
       if (action === 'tts_male') handlers.onTtsVoice('male')
+      if (action === 'retry') handlers.onRetry(typeof ev.id === 'string' ? ev.id : '')
     })
     const pcm = await NodWatch.addListener('pcm', (ev) => {
       if (gone) return
@@ -365,6 +368,7 @@ export function pushWatchStatus(face: {
   sessionId?: string
   engine?: string
   blocked?: string
+  failed?: boolean
 }): void {
   if (!isNativeApp()) return
   void NodWatch.setStatus({
@@ -382,6 +386,7 @@ export function pushWatchStatus(face: {
     sessionId: face.sessionId || '',
     engine: face.engine,
     blocked: face.blocked || '',
+    failed: face.failed === true,
   }).catch(() => undefined)
 }
 

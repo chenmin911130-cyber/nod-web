@@ -2,6 +2,13 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-08 · 阅读页 VStack 让滚出屏幕不触发 onDisappear
+
+- 我以为：ForEach 单元的 `onAppear` / `onDisappear` 会在表冠滚出屏幕时翻转 `latestVisible`。
+- 实际：非 lazy 的 `VStack` 一次把所有单元放进层级；`onDisappear` 只在视图移出层级时触发，滚出屏幕不触发 → `latestVisible` 恒 true → `readingAnchor` 恒滚到最新，`New translation ↓` 永不出现。
+- 规则：用 appear/disappear 判断滚动可见性时必须 `LazyVStack`，禁止普通 `VStack`。
+- 涉及：`WatchRootView.readingPage`
+
 ## 2026-09-08 · 过期 capture:off 在 Start 在途时杀掉手表麦
 
 - 我以为：W5 等 `capture: listening` 才翻页就够；`syncFromCapture("off")` 见 `isRunning` 就停麦是正确镜像。
