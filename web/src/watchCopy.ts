@@ -14,6 +14,8 @@ export type WatchUiCopy = {
   resume: string
   hearQuestion: string
   drafting: string
+  starting: string
+  couldntStart: string
 }
 
 const COPY: Record<WatchUiLang, WatchUiCopy> = {
@@ -31,6 +33,8 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: '继续',
     hearQuestion: '听问题',
     drafting: '起草中',
+    starting: '正在开始…',
+    couldntStart: '无法开始 · 请在 iPhone 打开 Nodpilot',
   },
   en: {
     listening: "I'm listening.",
@@ -46,6 +50,8 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: 'Resume',
     hearQuestion: 'Listening',
     drafting: 'Drafting',
+    starting: 'Starting…',
+    couldntStart: "Couldn't start · open Nodpilot on iPhone",
   },
   it: {
     listening: 'Ascolto',
@@ -61,6 +67,8 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: 'Riprendi',
     hearQuestion: 'Ascolto',
     drafting: 'Sto scrivendo',
+    starting: 'Avvio…',
+    couldntStart: 'Impossibile avviare · apri Nodpilot su iPhone',
   },
   es: {
     listening: 'Escuchando',
@@ -76,6 +84,8 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: 'Seguir',
     hearQuestion: 'Escuchando',
     drafting: 'Redactando',
+    starting: 'Iniciando…',
+    couldntStart: 'No se pudo iniciar · abre Nodpilot en iPhone',
   },
   fr: {
     listening: "J'écoute",
@@ -91,6 +101,8 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: 'Reprendre',
     hearQuestion: "J'écoute",
     drafting: 'Rédaction',
+    starting: 'Démarrage…',
+    couldntStart: 'Impossible de démarrer · ouvre Nodpilot sur iPhone',
   },
   de: {
     listening: 'Ich höre zu',
@@ -106,6 +118,8 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: 'Weiter',
     hearQuestion: 'Ich höre zu',
     drafting: 'Schreibe…',
+    starting: 'Startet…',
+    couldntStart: 'Start fehlgeschlagen · Nodpilot auf dem iPhone öffnen',
   },
   pt: {
     listening: 'Ouvindo',
@@ -121,6 +135,8 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: 'Seguir',
     hearQuestion: 'Ouvindo',
     drafting: 'Escrevendo',
+    starting: 'Iniciando…',
+    couldntStart: 'Não foi possível iniciar · abra o Nodpilot no iPhone',
   },
   ja: {
     listening: '聞いています',
@@ -136,6 +152,8 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: '再開',
     hearQuestion: '質問を聞く',
     drafting: '作成中',
+    starting: '開始中…',
+    couldntStart: '開始できません · iPhoneでNodpilotを開く',
   },
 }
 

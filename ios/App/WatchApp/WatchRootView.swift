@@ -153,13 +153,21 @@ struct WatchRootView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
             }
+            .disabled(session.starting)
             .tint(cyan)
             .modifier(CrownStartStop())
-            HStack(spacing: 6) {
-                Circle().fill(ready).frame(width: 7, height: 7)
-                Text(WatchCopy.ready)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(ink)
+            if session.starting || session.hint == WatchCopy.couldntStart {
+                Text(session.hint)
+                    .font(.caption)
+                    .foregroundStyle(muted)
+                    .multilineTextAlignment(.center)
+            } else {
+                HStack(spacing: 6) {
+                    Circle().fill(ready).frame(width: 7, height: 7)
+                    Text(WatchCopy.ready)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(ink)
+                }
             }
         }
     }

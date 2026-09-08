@@ -109,6 +109,32 @@ enum WatchCopy {
         ])
     }
 
+    static var starting: String {
+        pick([
+            "zh": "正在开始…",
+            "en": "Starting…",
+            "it": "Avvio…",
+            "es": "Iniciando…",
+            "fr": "Démarrage…",
+            "de": "Startet…",
+            "pt": "Iniciando…",
+            "ja": "開始中…",
+        ])
+    }
+
+    static var couldntStart: String {
+        pick([
+            "zh": "无法开始 · 请在 iPhone 打开 Nodpilot",
+            "en": "Couldn't start · open Nodpilot on iPhone",
+            "it": "Impossibile avviare · apri Nodpilot su iPhone",
+            "es": "No se pudo iniciar · abre Nodpilot en iPhone",
+            "fr": "Impossible de démarrer · ouvre Nodpilot sur iPhone",
+            "de": "Start fehlgeschlagen · Nodpilot auf dem iPhone öffnen",
+            "pt": "Não foi possível iniciar · abra o Nodpilot no iPhone",
+            "ja": "開始できません · iPhoneでNodpilotを開く",
+        ])
+    }
+
     static var stop: String {
         pick([
             "zh": "停止",
