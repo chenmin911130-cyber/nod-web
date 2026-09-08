@@ -13,6 +13,7 @@ import {
   watchShouldApplyMode,
   watchStartShouldAttachMode,
   watchStartShouldPreferWatchMic,
+  watchResumeShouldChangeMic,
   watchStartListenPayload,
   backlogShouldFlush,
   watchFallbackStopSequence,
@@ -217,6 +218,15 @@ for (const mode of ['meeting', 'lecture', 'interview', 'translate']) {
   if (watchStartShouldPreferWatchMic({ fromWatch: false })) {
     throw new Error(`phone Start must keep the phone mic (mode ${mode} is irrelevant)`)
   }
+}
+
+setPreferWatchMic(false)
+if (watchResumeShouldChangeMic()) {
+  throw new Error('Watch Resume must not flip preferWatchMic; a phone-started Meeting would lose the phone mic')
+}
+if (watchResumeShouldChangeMic()) setPreferWatchMic(true)
+if (isWatchMicPreferred()) {
+  throw new Error('Watch Resume must leave a phone-mic session on the phone mic')
 }
 
 const idle = { listening: false, paused: false }
