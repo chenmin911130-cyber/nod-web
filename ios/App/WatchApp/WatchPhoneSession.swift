@@ -176,6 +176,15 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         return "waiting"
     }
 
+    static func offShouldStopRecorder(
+        starting: Bool,
+        listening: Bool,
+        paused: Bool,
+        recorderRunning: Bool
+    ) -> Bool {
+        !starting && (listening || paused || recorderRunning)
+    }
+
     private func failureCopy(forBlocked blocked: String) -> String {
         switch blocked {
         case "signin": return WatchCopy.signInOnIphone
@@ -520,6 +529,13 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 ended = false
                 failure = nil
                 WKInterfaceDevice.current().play(.start)
+                if Self.usesWatchMic(mode), !WatchRecorder.shared.isRunning {
+                    beginMic(
+                        hint: reachable ? "Watch mic" : "Recording on Watch",
+                        resetClock: false,
+                        setListening: false
+                    )
+                }
             }
             if pending == "resume" {
                 pending = nil
@@ -562,8 +578,14 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         case "off":
             ending = false
             endWaitWork?.cancel()
+            if starting { break }
             // Session capture is off. ended is owned by the payload, not this branch.
-            if listening || paused || WatchRecorder.shared.isRunning {
+            if Self.offShouldStopRecorder(
+                starting: starting,
+                listening: listening,
+                paused: paused,
+                recorderRunning: WatchRecorder.shared.isRunning
+            ) {
                 WatchRecorder.shared.stop()
                 stopRuntime()
                 listening = false

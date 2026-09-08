@@ -2,6 +2,13 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-08 · 过期 capture:off 在 Start 在途时杀掉手表麦
+
+- 我以为：W5 等 `capture: listening` 才翻页就够；`syncFromCapture("off")` 见 `isRunning` 就停麦是正确镜像。
+- 实际：W2 把 `saveBook` 加进 `pushWatchStatus` 依赖。手表 Start 立刻开 `WatchRecorder` 且 `starting=true`，手机 `commitBook` 180ms 后推的仍是 `capture: off`（Railway + AssemblyAI 握手还没完）。手表按过期 off 停麦；随后 `listening` 进阅读页但不重开麦 → 服务端 `audio_s=0`。Meeting / Lecture 手机麦没事。
+- 规则：Start 在途时过期 `off` 不许停手表麦；`listening` 确认时若是手表麦模式且录音器已停，要补开。先读 `pushWatchStatus` 依赖会不会在 `phase(listening)` 之前发出 `off`。
+- 涉及：`WatchPhoneSession.syncFromCapture` · `saveBook` / `pushWatchStatus` · Translate / Q&A 手表麦
+
 ## 2026-09-08 · Notes Auto 当成「隐藏目标语」而不是 Follow speech
 
 - 我以为：#107 的 `notesTranslateTo` 默认 navigator/`zh` + `translateOn: true` 可以让 Auto 继续双语（Ask `:bi-zh`、Live 翻中文）。真机 Listen 仍翻成中文时，我先解释成「没关 More accurate」。
