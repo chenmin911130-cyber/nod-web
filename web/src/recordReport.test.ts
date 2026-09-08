@@ -27,10 +27,19 @@ eq(report({ capture: 'off', engine: 'idle', workspaceMode: 'interview', busy: fa
 eq(report({ capture: 'paused', engine: 'idle', workspaceMode: 'meeting', busy: false, lineCount: 2 }), 'wait')
 eq(report({ capture: 'off', engine: 'generating', workspaceMode: 'meeting', busy: false, lineCount: 2 }), 'wait')
 
-// A Save while Notes are still streaming must wait for them.
-if (keepShouldWaitForNotes('ask-1') !== true) throw new Error('streaming notes => save waits')
-if (keepShouldWaitForNotes('__pending__') !== true) throw new Error('pending notes => save waits')
-if (keepShouldWaitForNotes('') !== false) throw new Error('no notes in flight => save now')
+// Wait for Notes only when leaving this session after Save — not Watch, not a stay-put phone Save.
+if (keepShouldWaitForNotes({ notesAskId: 'ask-1', pendingAfterSave: 'new', fromWatch: true }) !== false) {
+  throw new Error('notesAskId set + fromWatch => keep now')
+}
+if (keepShouldWaitForNotes({ notesAskId: 'ask-1', pendingAfterSave: null, fromWatch: false }) !== false) {
+  throw new Error('notes + phone + pendingAfterSave null => keep now')
+}
+if (keepShouldWaitForNotes({ notesAskId: 'ask-1', pendingAfterSave: 'new', fromWatch: false }) !== true) {
+  throw new Error('notes + phone + pendingAfterSave new => wait')
+}
+if (keepShouldWaitForNotes({ notesAskId: '', pendingAfterSave: 'new', fromWatch: false }) !== false) {
+  throw new Error('empty notesAskId => keep now')
+}
 
 // A Meeting stopped while paused must release the server listener, or capture
 // stays 'paused' and auto-notes never fire.

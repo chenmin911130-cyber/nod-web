@@ -31,6 +31,8 @@ eq(watchSaveCommand().type, 'keep_history', 'Save is not start_listen')
 eq(watchDiscardCommand().type, 'discard_history', 'Discard is not start_listen')
 eq(watchSaveWireStatus('undecided'), 'none', 'undecided is none on the Watch wire')
 eq(watchSaveWireStatus('saving'), 'saving', 'saving stays saving')
+eq(watchSaveWireStatus('saved'), 'saved', 'saved stays saved so an already-kept Watch Save can push saved')
+eq(watchSaveWireStatus('failed'), 'failed', 'failed stays failed')
 
 eq(
   watchSaveView({ save: 'saved', sessionId: 'old', requestedId: 'new', waitedMs: 0 }),
