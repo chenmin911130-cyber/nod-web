@@ -1,4 +1,4 @@
-import { shouldReacquirePhoneMic, shouldReleasePhoneMicForWatch } from './audio'
+import { phoneShouldKeepAlive, shouldReacquirePhoneMic, shouldReleasePhoneMicForWatch } from './audio'
 
 if (
   !shouldReacquirePhoneMic({
@@ -76,4 +76,14 @@ if (
   })
 ) {
   throw new Error('phone Start must keep the phone mic')
+}
+
+if (!phoneShouldKeepAlive({ nativeApp: true, watchPreferred: true })) {
+  throw new Error('Watch-mic native listen must start phone keep-alive')
+}
+if (phoneShouldKeepAlive({ nativeApp: false, watchPreferred: true })) {
+  throw new Error('web listen must not start native keep-alive')
+}
+if (phoneShouldKeepAlive({ nativeApp: true, watchPreferred: false })) {
+  throw new Error('phone mic keep-alive is owned by beginCapture, not startKeepAlive')
 }

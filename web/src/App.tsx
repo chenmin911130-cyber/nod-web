@@ -1311,15 +1311,13 @@ export default function App() {
         listenScene: next.scene ?? (next.workspace === 'interview' ? 'interview' : stateRef.current.listenScene),
       }
     }
-    const applyWatchMic = (raw?: string) => {
-      const s = stateRef.current
-      const mode = watchListenMode(raw) || watchStatusMode(s.workspaceMode, s.listenScene)
-      if (watchStartShouldPreferWatchMic(mode)) setPreferWatchMic(true)
+    const applyWatchMic = () => {
+      if (watchStartShouldPreferWatchMic({ fromWatch: true })) setPreferWatchMic(true)
       else takePhoneMic()
     }
     return installWatchRemote({
       onStart: (mode) => {
-        applyWatchMic(mode)
+        applyWatchMic()
         const s = stateRef.current
         if (!watchListenControlShouldApplyMode({ action: 'start', paused: s.capture === 'paused', capture: s.capture })) {
           guardMic(() => startListen({ fromWatch: true }))
@@ -1338,7 +1336,7 @@ export default function App() {
         guardMic(() => startListen({ fromWatch: true }))
       },
       onRecord: (mode) => {
-        applyWatchMic(mode)
+        applyWatchMic()
         const s = stateRef.current
         if (!watchListenControlShouldApplyMode({ action: 'record', paused: s.capture === 'paused', capture: s.capture })) {
           if (s.capture === 'paused') {
