@@ -14,6 +14,9 @@ export type WatchUiCopy = {
   resume: string
   hearQuestion: string
   drafting: string
+  recording: string
+  endRecording: string
+  keepsSession: string
 }
 
 const COPY: Record<WatchUiLang, WatchUiCopy> = {
@@ -31,6 +34,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: '继续',
     hearQuestion: '听问题',
     drafting: '起草中',
+    recording: '录音中',
+    endRecording: '结束录音',
+    keepsSession: '保留本次会话',
   },
   en: {
     listening: "I'm listening.",
@@ -46,6 +52,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: 'Resume',
     hearQuestion: 'Listening',
     drafting: 'Drafting',
+    recording: 'Recording',
+    endRecording: 'End recording',
+    keepsSession: 'Keeps this session',
   },
   it: {
     listening: 'Ascolto',
@@ -61,6 +70,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: 'Riprendi',
     hearQuestion: 'Ascolto',
     drafting: 'Sto scrivendo',
+    recording: 'Registrazione',
+    endRecording: 'Termina registrazione',
+    keepsSession: 'Conserva questa sessione',
   },
   es: {
     listening: 'Escuchando',
@@ -76,6 +88,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: 'Seguir',
     hearQuestion: 'Escuchando',
     drafting: 'Redactando',
+    recording: 'Grabando',
+    endRecording: 'Terminar grabación',
+    keepsSession: 'Conserva esta sesión',
   },
   fr: {
     listening: "J'écoute",
@@ -91,6 +106,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: 'Reprendre',
     hearQuestion: "J'écoute",
     drafting: 'Rédaction',
+    recording: 'Enregistrement',
+    endRecording: "Arrêter l'enregistrement",
+    keepsSession: 'Conserve cette session',
   },
   de: {
     listening: 'Ich höre zu',
@@ -106,6 +124,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: 'Weiter',
     hearQuestion: 'Ich höre zu',
     drafting: 'Schreibe…',
+    recording: 'Aufnahme',
+    endRecording: 'Aufnahme beenden',
+    keepsSession: 'Behält diese Sitzung',
   },
   pt: {
     listening: 'Ouvindo',
@@ -121,6 +142,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: 'Seguir',
     hearQuestion: 'Ouvindo',
     drafting: 'Escrevendo',
+    recording: 'Gravando',
+    endRecording: 'Encerrar gravação',
+    keepsSession: 'Mantém esta sessão',
   },
   ja: {
     listening: '聞いています',
@@ -136,6 +160,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     resume: '再開',
     hearQuestion: '質問を聞く',
     drafting: '作成中',
+    recording: '録音中',
+    endRecording: '録音を終了',
+    keepsSession: 'このセッションを保持',
   },
 }
 

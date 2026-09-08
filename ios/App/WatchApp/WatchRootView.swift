@@ -5,12 +5,12 @@ struct WatchRootView: View {
     @Environment(\.isLuminanceReduced) private var dimmed
     @State private var listenPage = 0
 
-    private let ink = Color(red: 244 / 255, green: 248 / 255, blue: 252 / 255)
-    private let muted = Color(red: 142 / 255, green: 163 / 255, blue: 184 / 255)
-    private let cyan = Color(red: 0, green: 210 / 255, blue: 1)
-    private let panel = Color(red: 10 / 255, green: 16 / 255, blue: 24 / 255)
+    private let canvas = Color(red: 5 / 255, green: 6 / 255, blue: 7 / 255)
+    private let ink = Color(red: 245 / 255, green: 247 / 255, blue: 248 / 255)
+    private let muted = Color(red: 164 / 255, green: 171 / 255, blue: 177 / 255)
+    private let cyan = Color(red: 0, green: 196 / 255, blue: 232 / 255)
+    private let panel = Color(red: 17 / 255, green: 21 / 255, blue: 24 / 255)
     private let slate = Color(red: 168 / 255, green: 182 / 255, blue: 196 / 255)
-    private let ready = Color(red: 61 / 255, green: 220 / 255, blue: 132 / 255)
     private let timer = Color(red: 245 / 255, green: 197 / 255, blue: 66 / 255)
 
     var body: some View {
@@ -101,10 +101,13 @@ struct WatchRootView: View {
             } else if session.listening || session.paused {
                 TabView(selection: $listenPage) {
                     sessionPage.tag(0)
-                    stopPage.tag(1)
+                    controlsPage.tag(1)
                 }
+                .tabViewStyle(.page)
+                .background(canvas)
             } else {
                 readyStart
+                    .background(canvas)
             }
         }
         .padding(.horizontal, 6)
@@ -127,14 +130,35 @@ struct WatchRootView: View {
         }
     }
 
-    private var stopPage: some View {
+    private var controlsPage: some View {
         VStack(spacing: 10) {
-            Text(WatchCopy.stopListening)
-                .font(.caption)
+            capsule(WatchPhoneSession.modeLabel(session.mode))
+            if session.paused {
+                pausedStatus
+                Text(clock(session.elapsedMs))
+                    .font(.title3.monospacedDigit())
+                    .foregroundStyle(muted)
+            } else {
+                recordingStatus
+                if let startedAt = session.startedAt {
+                    Text(startedAt, style: .timer)
+                        .font(.title3.monospacedDigit())
+                        .foregroundStyle(muted)
+                }
+            }
+            Button {
+                session.finish()
+            } label: {
+                Label(WatchCopy.endRecording, systemImage: "stop.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Color.red.opacity(0.18))
+            .foregroundStyle(Color.red)
+            Text(WatchCopy.keepsSession)
+                .font(.caption2)
                 .foregroundStyle(muted)
-            Button(WatchCopy.stop) { session.finish() }
-                .tint(cyan)
-                .modifier(CrownStartStop())
+                .multilineTextAlignment(.center)
         }
     }
 
@@ -155,43 +179,65 @@ struct WatchRootView: View {
             }
             .tint(cyan)
             .modifier(CrownStartStop())
-            HStack(spacing: 6) {
-                Circle().fill(ready).frame(width: 7, height: 7)
-                Text(WatchCopy.ready)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(ink)
-            }
         }
     }
 
     private var listeningControls: some View {
         VStack(spacing: 8) {
             capsule(WatchPhoneSession.modeLabel(session.mode))
-            Text(WatchCopy.listening)
-                .font(.caption)
-                .foregroundStyle(timer)
+            recordingStatus
             if let startedAt = session.startedAt {
                 Text(startedAt, style: .timer)
-                    .font(.title3.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(timer)
+                    .font(.title.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(ink)
             }
-            recChip
-            Button(WatchCopy.pause) { session.pause() }
-                .tint(panel)
-            listeningWave
+            Button {
+                session.pause()
+            } label: {
+                Label(WatchCopy.pause, systemImage: "pause.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(panel)
+            .foregroundStyle(ink)
         }
     }
 
     private var pausedControls: some View {
         VStack(spacing: 8) {
             capsule(WatchPhoneSession.modeLabel(session.mode))
+            pausedStatus
+            Text(clock(session.elapsedMs))
+                .font(.title.monospacedDigit().weight(.semibold))
+                .foregroundStyle(ink)
+            Button {
+                session.resume()
+            } label: {
+                Label(WatchCopy.resume, systemImage: "play.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(cyan)
+            .foregroundStyle(Color.black)
+        }
+    }
+
+    private var recordingStatus: some View {
+        HStack(spacing: 6) {
+            Circle().fill(Color.red).frame(width: 6, height: 6)
+            Text(WatchCopy.recording)
+                .font(.caption)
+                .foregroundStyle(ink)
+        }
+    }
+
+    private var pausedStatus: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "pause.fill")
+                .foregroundStyle(timer)
             Text(WatchCopy.paused)
                 .font(.caption)
-            Text(clock(session.elapsedMs))
-                .font(.title3.monospacedDigit().weight(.semibold))
                 .foregroundStyle(timer)
-            Button(WatchCopy.resume) { session.resume() }
-                .tint(cyan)
         }
     }
 
@@ -282,15 +328,6 @@ struct WatchRootView: View {
                 .foregroundStyle(cyan)
             Text(WatchCopy.saved)
                 .font(.headline)
-        }
-    }
-
-    private var recChip: some View {
-        HStack(spacing: 4) {
-            Circle().fill(Color.red).frame(width: 6, height: 6)
-            Text("REC")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(cyan)
         }
     }
 

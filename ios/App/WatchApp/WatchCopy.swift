@@ -187,6 +187,45 @@ enum WatchCopy {
         ])
     }
 
+    static var recording: String {
+        pick([
+            "zh": "录音中",
+            "en": "Recording",
+            "it": "Registrazione",
+            "es": "Grabando",
+            "fr": "Enregistrement",
+            "de": "Aufnahme",
+            "pt": "Gravando",
+            "ja": "録音中",
+        ])
+    }
+
+    static var endRecording: String {
+        pick([
+            "zh": "结束录音",
+            "en": "End recording",
+            "it": "Termina registrazione",
+            "es": "Terminar grabación",
+            "fr": "Arrêter l'enregistrement",
+            "de": "Aufnahme beenden",
+            "pt": "Encerrar gravação",
+            "ja": "録音を終了",
+        ])
+    }
+
+    static var keepsSession: String {
+        pick([
+            "zh": "保留本次会话",
+            "en": "Keeps this session",
+            "it": "Conserva questa sessione",
+            "es": "Conserva esta sesión",
+            "fr": "Conserve cette session",
+            "de": "Behält diese Sitzung",
+            "pt": "Mantém esta sessão",
+            "ja": "このセッションを保持",
+        ])
+    }
+
     static var saveAsk: String {
         pick([
             "zh": "存进 History？",
