@@ -14,7 +14,7 @@ struct WatchRootView: View {
 
     var body: some View {
         Group {
-            if dimmed {
+            if dimmed && !keepsAlwaysOnTree {
                 alwaysOnPage
             } else {
                 livePage
@@ -25,6 +25,15 @@ struct WatchRootView: View {
                 session.toggle()
             }
         }
+    }
+
+    /// Translate / Live Q&A keep the reading TabView while dimmed so wrist-up
+    /// restores the same ScrollView offset. Meeting and terminal states still swap.
+    private var keepsAlwaysOnTree: Bool {
+        (session.mode == "translate" || session.mode == "interview")
+            && (session.listening || session.paused)
+            && !session.ended
+            && !session.statusUnknown
     }
 
     private var alwaysOnPage: some View {
@@ -52,31 +61,7 @@ struct WatchRootView: View {
                     }
                 }
             } else if translate {
-                // Always-On bilingual: source (muted, small) above target (ink, large),
-                // mirroring the live page but static (no animation — AOD is dim/battery-lean).
-                VStack(spacing: 4) {
-                    if session.original.isEmpty, session.translation.isEmpty {
-                        Text(WatchCopy.listening)
-                            .font(.caption2)
-                            .foregroundStyle(muted)
-                            .multilineTextAlignment(.center)
-                    } else {
-                        if !session.original.isEmpty {
-                            Text(session.original)
-                                .font(.caption2)
-                                .foregroundStyle(muted)
-                                .multilineTextAlignment(.center)
-                                .lineLimit(2)
-                        }
-                        if !session.translation.isEmpty {
-                            Text(session.translation)
-                                .font(.caption)
-                                .foregroundStyle(ink)
-                                .multilineTextAlignment(.center)
-                                .lineLimit(3)
-                        }
-                    }
-                }
+                dimReadingChrome
             } else {
                 VStack(spacing: 8) {
                     if let startedAt = session.startedAt {
@@ -295,59 +280,104 @@ struct WatchRootView: View {
     private var readingPage: some View {
         let units = session.readingUnits
         let latestId = units.last?.id
-        return VStack(spacing: 6) {
-            if session.mode == "translate" {
-                capsule(session.langPair)
-            } else {
-                capsule("Live Q&A")
-            }
-            if session.pillShown {
-                Button {
-                    session.openLatest()
-                } label: {
-                    Text(session.mode == "translate" ? WatchCopy.newTranslation : WatchCopy.newAnswer)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(Color.black)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(cyan, in: Capsule())
+        return ZStack {
+            VStack(spacing: 6) {
+                if session.mode == "translate" {
+                    capsule(session.langPair)
+                } else {
+                    capsule("Live Q&A")
                 }
-                .buttonStyle(.plain)
-            }
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        if units.isEmpty {
-                            Image(systemName: "waveform")
-                                .font(.title2)
-                                .foregroundStyle(cyan)
-                            Text(session.mode == "translate" ? WatchCopy.speakNaturally : WatchCopy.waitingForQuestion)
-                                .font(.caption)
-                                .foregroundStyle(muted)
-                        } else {
-                            ForEach(units) { unit in
-                                readingUnit(unit, isLatest: unit.id == latestId)
-                                    .id(unit.id)
-                                    .onAppear {
-                                        if unit.id == latestId { session.markLatestVisible(true) }
-                                    }
-                                    .onDisappear {
-                                        if unit.id == latestId { session.markLatestVisible(false) }
-                                    }
+                if session.pillShown {
+                    Button {
+                        session.openLatest()
+                    } label: {
+                        Text(session.mode == "translate" ? WatchCopy.newTranslation : WatchCopy.newAnswer)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color.black)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(cyan, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 8) {
+                            if units.isEmpty {
+                                Image(systemName: "waveform")
+                                    .font(.title2)
+                                    .foregroundStyle(cyan)
+                                Text(session.mode == "translate" ? WatchCopy.speakNaturally : WatchCopy.waitingForQuestion)
+                                    .font(.caption)
+                                    .foregroundStyle(muted)
+                            } else {
+                                ForEach(units) { unit in
+                                    readingUnit(unit, isLatest: unit.id == latestId)
+                                        .id(unit.id)
+                                        .onAppear {
+                                            if unit.id == latestId { session.markLatestVisible(true) }
+                                        }
+                                        .onDisappear {
+                                            if unit.id == latestId { session.markLatestVisible(false) }
+                                        }
+                                }
                             }
                         }
+                        .opacity(dimmed ? 0 : 1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .focusable()
-                .onChange(of: session.scrollToId) { id in
-                    if let id {
+                    .focusable()
+                    .onChange(of: session.scrollToId) { id in
+                        guard let id else { return }
+                        if dimmed {
+                            session.clearScroll()
+                            return
+                        }
                         proxy.scrollTo(id, anchor: .top)
                         session.clearScroll()
                     }
                 }
+                captureRow
             }
-            captureRow
+            if dimmed {
+                Color.black
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
+                dimReadingChrome
+            }
+        }
+    }
+
+    /// Always-on chrome for the reading page: capsule + status, never body copy.
+    private var dimReadingChrome: some View {
+        let translate = session.mode == "translate"
+        return VStack(spacing: 6) {
+            dimCapsule(translate ? session.langPair : "Live Q&A")
+            if translate {
+                if session.paused {
+                    Text(WatchCopy.paused)
+                        .font(.caption2)
+                        .foregroundStyle(muted)
+                    Text(clock(session.elapsedMs))
+                        .font(.title3.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(timer)
+                } else {
+                    HStack(spacing: 6) {
+                        Circle().fill(Color.red).frame(width: 7, height: 7)
+                        Text(WatchCopy.listeningStatus)
+                            .font(.caption2)
+                            .foregroundStyle(muted)
+                    }
+                }
+            } else if session.paused {
+                Text(clock(session.elapsedMs))
+                    .font(.title3.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(timer)
+            } else if let startedAt = session.startedAt {
+                Text(startedAt, style: .timer)
+                    .font(.title3.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(timer)
+            }
         }
     }
 
@@ -369,8 +399,10 @@ struct WatchRootView: View {
                 }
             } else if unit.result.isEmpty, isLatest, session.engine == "generating" {
                 HStack(spacing: 6) {
-                    ProgressView()
-                        .scaleEffect(0.7)
+                    if !dimmed {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                    }
                     Text(session.mode == "translate" ? WatchCopy.translating : WatchCopy.drafting)
                         .font(.caption)
                         .foregroundStyle(muted)
