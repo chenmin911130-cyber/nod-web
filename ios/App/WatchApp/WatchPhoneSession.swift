@@ -48,6 +48,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     /// actually recording on the Watch — not for a phone-mic session (which
     /// would otherwise double the audio into one transcription).
     private var micWasRunningBeforePause = false
+    /// True when this session opened the Watch recorder from a local Start / Record.
+    /// Phone-initiated sessions stay false so Pause / Resume / speech do not seize the mic.
+    private var localWatchMic = false
 
     override private init() {
         super.init()
@@ -89,8 +92,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         localModeHeld = true
     }
 
-    static func usesWatchMic(_ mode: String) -> Bool {
-        mode == "interview" || mode == "translate"
+    static func usesWatchMic(localStart: Bool) -> Bool {
+        localStart
     }
 
     /// Crown is Start/Stop. Side is Pause/Resume. Do not call toggle() from the crown.
@@ -159,7 +162,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         startBeganAt = Date()
         hint = WatchCopy.starting
         send(action: "record")
-        if Self.usesWatchMic(mode) {
+        localWatchMic = true
+        if Self.usesWatchMic(localStart: true) {
             beginMic(hint: WatchCopy.starting, setListening: false)
         }
         armStartWait()
@@ -184,7 +188,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         paused = false
         startedAt = Date().addingTimeInterval(-elapsedMs)
         send(action: "resume")
-        if Self.usesWatchMic(mode) {
+        if Self.usesWatchMic(localStart: localWatchMic) {
             beginMic(hint: reachable ? "Watch mic" : "Recording on Watch", resetClock: false)
         } else {
             listening = true
@@ -208,7 +212,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     func playSpeech(_ data: Data) {
-        let resumeMic = listening && Self.usesWatchMic(mode) && WatchRecorder.shared.isRunning
+        let resumeMic = listening && Self.usesWatchMic(localStart: localWatchMic) && WatchRecorder.shared.isRunning
         if resumeMic {
             WatchRecorder.shared.stop()
             stopRuntime()
@@ -237,7 +241,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
 
     private func resumeMicAfterSpeech() {
         speechPlayer = nil
-        guard listening, !paused, Self.usesWatchMic(mode), !WatchRecorder.shared.isRunning else { return }
+        guard listening, !paused, Self.usesWatchMic(localStart: localWatchMic), !WatchRecorder.shared.isRunning else { return }
         beginMic(hint: reachable ? "Watch mic" : "Recording on Watch", resetClock: false)
     }
 
@@ -256,6 +260,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         savedAck = false
         hint = hadContent ? WatchCopy.saveAsk : WatchCopy.ready
         localModeHeld = false
+        localWatchMic = false
         send(action: "stop")
         flushUnsent()
         resetPcmBuffer()
@@ -291,7 +296,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         startBeganAt = Date()
         hint = WatchCopy.starting
         send(action: "start")
-        if Self.usesWatchMic(mode) {
+        localWatchMic = true
+        if Self.usesWatchMic(localStart: true) {
             beginMic(hint: WatchCopy.starting, setListening: false)
         }
         armStartWait()
@@ -328,6 +334,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         resetPcmBuffer()
         WatchGlanceStore.clear()
         hint = WatchCopy.couldntStart
+        localWatchMic = false
         send(action: "stop")
     }
 
@@ -409,7 +416,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 startedAt = Date()
                 elapsedMs = 0
                 WatchGlanceStore.setStartedAt(startedAt)
-                hint = Self.usesWatchMic(mode)
+                hint = Self.usesWatchMic(localStart: true)
                     ? (reachable ? "Watch mic" : "Recording on Watch")
                     : "Phone mic"
                 return
@@ -461,6 +468,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 elapsedMs = 0
                 WatchGlanceStore.clear()
                 localModeHeld = false
+                localWatchMic = false
                 flushUnsent()
                 resetPcmBuffer()
                 if !offeringSave, !savedAck {
@@ -628,7 +636,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let capture = payload["capture"] as? String {
             syncFromCapture(capture)
         }
-        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck, !starting {
+        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck, !starting, !localWatchMic {
             self.hint = hint
         }
         if let original = payload["original"] as? String {

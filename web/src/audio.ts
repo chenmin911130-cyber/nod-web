@@ -88,6 +88,23 @@ export function shouldReleasePhoneMicForWatch(opts: {
   return opts.running && opts.watchPreferred && opts.hasPhoneCapture
 }
 
+/** Watch-mic sessions keep the phone process alive without opening the phone mic. */
+export function keepAliveShouldRun(opts: { nativeApp: boolean; watchPreferred: boolean }): boolean {
+  return opts.nativeApp && opts.watchPreferred
+}
+
+/** Lock screen must not tear down native capture just because JS missed PCM. */
+export function nativeFallbackShouldSwitch(opts: {
+  hidden: boolean
+  appActive?: boolean
+  running: boolean
+  hasStream: boolean
+}): boolean {
+  if (opts.hidden) return false
+  if (opts.appActive === false) return false
+  return opts.running && !opts.hasStream
+}
+
 export class MicCapture {
   private ctx: AudioContext | null = null
   private stream: MediaStream | null = null
@@ -101,6 +118,10 @@ export class MicCapture {
   // instead of leaving a live MediaStream with no reference to it.
   private stopSeq = 0
   private silenceTimer = 0
+  private keepAlive = false
+  private nativeTeardown: Promise<void> = Promise.resolve()
+  private appActive = true
+  private appStateBound = false
   private resampler = new PcmDownsampler()
   onPcm: (buf: ArrayBuffer) => void = () => undefined
   onFallbackFailed: () => void = () => undefined
@@ -139,10 +160,16 @@ export class MicCapture {
   }
 
   private async acquire(): Promise<void> {
+    await this.nativeTeardown
     const seq = this.stopSeq
     try {
       if (isNativeApp()) {
         if (isWatchMicPreferred()) {
+          if (keepAliveShouldRun({ nativeApp: true, watchPreferred: true })) {
+            const { NodMic } = await import('nod-mic')
+            await NodMic.startKeepAlive().catch(() => undefined)
+            this.keepAlive = true
+          }
           this.running = true
           return
         }
@@ -162,6 +189,7 @@ export class MicCapture {
   }
 
   private async acquireNative(seq: number): Promise<void> {
+    await this.bindAppState()
     const { NodMic } = await import('nod-mic')
     this.nativeHandle = await NodMic.addListener('pcm', (ev) => {
       const pcm = base64ToPcm(ev.data || '')
@@ -219,15 +247,74 @@ export class MicCapture {
     this.running = true
   }
 
+  private async bindAppState(): Promise<void> {
+    if (this.appStateBound || !isNativeApp()) return
+    this.appStateBound = true
+    try {
+      const { App } = await import('@capacitor/app')
+      const state = await App.getState()
+      this.appActive = state.isActive
+      await App.addListener('appStateChange', ({ isActive }) => {
+        this.appActive = isActive
+        if (isActive) void this.resumeNative()
+      })
+    } catch {
+      this.appActive = true
+    }
+  }
+
+  private async refreshAppState(): Promise<void> {
+    if (!isNativeApp()) return
+    try {
+      const { App } = await import('@capacitor/app')
+      this.appActive = (await App.getState()).isActive
+    } catch {
+      /* keep last known */
+    }
+  }
+
+  private async resumeNative(): Promise<void> {
+    if (!this.running) return
+    try {
+      const { NodMic } = await import('nod-mic')
+      await NodMic.resume().catch(() => undefined)
+    } catch {
+      /* keep current capture */
+    }
+  }
+
+  private pageIsBackground(): boolean {
+    if (typeof document !== 'undefined' && document.hidden) return true
+    return this.appActive === false
+  }
+
   private armSilenceFallback(seq: number): void {
     this.clearSilenceTimer()
     this.silenceTimer = window.setTimeout(() => {
-      if (seq !== this.stopSeq || !this.running || this.stream) return
-      void this.switchNativeToWeb(seq)
+      void this.onNativeSilence(seq)
     }, NATIVE_SILENCE_MS)
   }
 
+  private async onNativeSilence(seq: number): Promise<void> {
+    if (seq !== this.stopSeq || !this.running || this.stream) return
+    await this.refreshAppState()
+    if (
+      !nativeFallbackShouldSwitch({
+        hidden: typeof document !== 'undefined' && document.hidden,
+        appActive: this.appActive,
+        running: this.running,
+        hasStream: this.stream !== null,
+      })
+    ) {
+      this.armSilenceFallback(seq)
+      return
+    }
+    void this.switchNativeToWeb(seq)
+  }
+
   private async switchNativeToWeb(seq: number): Promise<void> {
+    await this.refreshAppState()
+    if (this.pageIsBackground()) return
     const handle = this.nativeHandle
     this.nativeHandle = null
     if (handle) {
@@ -255,12 +342,24 @@ export class MicCapture {
     this.clearSilenceTimer()
     this.resampler.reset()
     this.running = false
+    const jobs: Promise<void>[] = []
+    if (this.keepAlive) {
+      this.keepAlive = false
+      jobs.push(import('nod-mic').then(({ NodMic }) => NodMic.stopKeepAlive()).then(() => undefined).catch(() => undefined))
+    }
     const handle = this.nativeHandle
     this.nativeHandle = null
     if (handle) {
-      void handle.remove()
-      void import('nod-mic').then(({ NodMic }) => NodMic.stop()).catch(() => undefined)
+      jobs.push(
+        handle
+          .remove()
+          .then(() => import('nod-mic'))
+          .then(({ NodMic }) => NodMic.stop())
+          .then(() => undefined)
+          .catch(() => undefined),
+      )
     }
+    if (jobs.length) this.nativeTeardown = Promise.all(jobs).then(() => undefined)
     try {
       this.proc?.disconnect()
       this.source?.disconnect()

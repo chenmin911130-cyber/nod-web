@@ -53,7 +53,7 @@ import { api as authApi, deleteAccount, fetchMe, logout, type Me } from './auth'
 import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
-import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchListenMode, watchShouldApplyMode, watchStartShouldPreferWatchMic } from './watch'
+import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode } from './watch'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
 import { keepShouldWaitForNotes, shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
@@ -1307,15 +1307,12 @@ export default function App() {
         listenScene: next.scene ?? (next.workspace === 'interview' ? 'interview' : stateRef.current.listenScene),
       }
     }
-    const applyWatchMic = (raw?: string) => {
-      const s = stateRef.current
-      const mode = watchListenMode(raw) || watchStatusMode(s.workspaceMode, s.listenScene)
-      if (watchStartShouldPreferWatchMic(mode)) setPreferWatchMic(true)
-      else takePhoneMic()
+    const applyWatchMic = () => {
+      setPreferWatchMic(true)
     }
     return installWatchRemote({
       onStart: (mode) => {
-        applyWatchMic(mode)
+        applyWatchMic()
         const s = stateRef.current
         if (!watchListenControlShouldApplyMode({ action: 'start', paused: s.capture === 'paused', capture: s.capture })) {
           guardMic(() => startListen({ fromWatch: true }))
@@ -1334,7 +1331,7 @@ export default function App() {
         guardMic(() => startListen({ fromWatch: true }))
       },
       onRecord: (mode) => {
-        applyWatchMic(mode)
+        applyWatchMic()
         const s = stateRef.current
         if (!watchListenControlShouldApplyMode({ action: 'record', paused: s.capture === 'paused', capture: s.capture })) {
           if (s.capture === 'paused') {
@@ -1369,7 +1366,6 @@ export default function App() {
         }
       },
       onResume: () => {
-        applyWatchMic()
         const s = stateRef.current
         if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
           dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
@@ -1878,6 +1874,9 @@ export default function App() {
       if (leaving || skipOfferSavePromptRef.current) {
         skipOfferSavePromptRef.current = false
         return
+      }
+      if (sessionListening({ capture: stateRef.current.capture })) {
+        dispatch({ type: 'engine', ev: { type: 'phase', capture: 'off', engine: 'idle' } })
       }
       offerSaveUi()
       return
