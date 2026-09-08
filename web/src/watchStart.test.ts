@@ -11,6 +11,16 @@ eq(watchStartOutcome({ capture: 'off', blocked: 'quota', waitedMs: 9000 }), 'blo
 eq(watchStartOutcome({ capture: 'off', blocked: '', waitedMs: 8000 }), 'timeout', '8s without capture is timeout')
 eq(watchStartOutcome({ capture: 'paused', blocked: '', waitedMs: 1000 }), 'waiting', 'paused is not a start confirm')
 eq(watchStartOutcome({ capture: 'off', blocked: '', waitedMs: 7999 }), 'waiting', 'under 8s still waiting')
+eq(
+  watchStartOutcome({ capture: 'off', blocked: '', waitedMs: 8000, recorderRunning: true }),
+  'waiting',
+  'wrist already recording waits past 8s for phone listening',
+)
+eq(
+  watchStartOutcome({ capture: 'off', blocked: '', waitedMs: 20_000, recorderRunning: true }),
+  'timeout',
+  'watch-mic Start still times out at 20s',
+)
 
 eq(watchBlockedReason({ signIn: true, consentOpen: true, quotaOk: false }), 'signin', 'signin wins over consent and quota')
 eq(watchBlockedReason({ signIn: false, consentOpen: true, quotaOk: false }), 'consent', 'consent wins over quota')

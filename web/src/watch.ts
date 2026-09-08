@@ -159,16 +159,42 @@ export function watchBlockedReason(input: {
   return ''
 }
 
-/** Watch Start wait: capture confirm wins, then blocked, then 8s timeout. */
+/** Watch Start wait: capture confirm wins, then blocked.
+ *  No recorder → 8s timeout. Wrist already recording → wait up to 20s for phone listening
+ *  (AssemblyAI handshake) instead of killing the mic and leaving a mute reading page.
+ */
 export function watchStartOutcome(input: {
   capture: string
   blocked: string
   waitedMs: number
+  recorderRunning?: boolean
 }): string {
   if (input.capture === 'listening' || input.capture === 'recording') return 'started'
   if (input.blocked) return `blocked:${input.blocked}`
-  if (input.waitedMs >= 8000) return 'timeout'
+  const limit = input.recorderRunning ? 20_000 : 8_000
+  if (input.waitedMs >= limit) return 'timeout'
   return 'waiting'
+}
+
+/** A failed Start already sent `start` to the phone — cancel that listen. */
+export function watchFailStartShouldSendStop(didSendStart: boolean): boolean {
+  return didSendStart
+}
+
+/**
+ * Phone confirmed listening. If this session started on the wrist and the
+ * recorder is down, reopen it — including after `starting` was already cleared
+ * (8s timeout / late `listening`). Phone-mic sessions must not open the Watch mic.
+ */
+export function watchShouldEnsureMic(input: {
+  capture: string
+  paused: boolean
+  localMic: boolean
+  recorderRunning: boolean
+}): boolean {
+  if (input.paused) return false
+  if (!input.localMic || input.recorderRunning) return false
+  return input.capture === 'listening' || input.capture === 'recording'
 }
 
 /** Stale phone `capture:off` during local Start must not kill the Watch recorder. */

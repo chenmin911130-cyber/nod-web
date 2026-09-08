@@ -261,11 +261,27 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         return ""
     }
 
-    static func startOutcome(capture: String, blocked: String, waitedMs: Int) -> String {
+    static func startOutcome(capture: String, blocked: String, waitedMs: Int, recorderRunning: Bool = false) -> String {
         if capture == "listening" || capture == "recording" { return "started" }
         if !blocked.isEmpty { return "blocked:\(blocked)" }
-        if waitedMs >= 8000 { return "timeout" }
+        let limit = recorderRunning ? 20_000 : 8_000
+        if waitedMs >= limit { return "timeout" }
         return "waiting"
+    }
+
+    static func failStartShouldSendStop(didSendStart: Bool) -> Bool {
+        didSendStart
+    }
+
+    static func shouldEnsureMic(
+        capture: String,
+        paused: Bool,
+        localMic: Bool,
+        recorderRunning: Bool
+    ) -> Bool {
+        if paused { return false }
+        if !localMic || recorderRunning { return false }
+        return capture == "listening" || capture == "recording"
     }
 
     static func offShouldStopRecorder(
@@ -326,6 +342,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if Self.usesWatchMic(localStart: localMic) {
             WatchRecorder.shared.stop()
             stopRuntime()
+        }
+        if Self.failStartShouldSendStop(didSendStart: true) {
+            send(action: "stop")
         }
         localMic = false
         listening = false
@@ -570,8 +589,17 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.starting else { return }
             let waited = Int((Date().timeIntervalSince(self.startBeganAt ?? Date())) * 1000)
-            let outcome = Self.startOutcome(capture: self.lastCapture, blocked: self.blocked, waitedMs: max(waited, 8000))
+            let outcome = Self.startOutcome(
+                capture: self.lastCapture,
+                blocked: self.blocked,
+                waitedMs: waited,
+                recorderRunning: WatchRecorder.shared.isRunning
+            )
             if outcome == "started" { return }
+            if outcome == "waiting" {
+                self.armStartWait()
+                return
+            }
             let prev = self.snapshot()
             if outcome.hasPrefix("blocked:") {
                 self.failStart(reason: outcome)
@@ -581,7 +609,10 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             self.playHaptic(from: prev)
         }
         startWaitWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
+        let waited = startBeganAt.map { Date().timeIntervalSince($0) } ?? 0
+        let limit = WatchRecorder.shared.isRunning ? 20.0 : 8.0
+        let remaining = max(0.05, limit - waited)
+        DispatchQueue.main.asyncAfter(deadline: .now() + remaining, execute: work)
     }
 
     private func armPendingWait() {
@@ -667,13 +698,41 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 startBeganAt = nil
                 ended = false
                 failure = nil
-                if Self.usesWatchMic(localStart: self.localMic), !WatchRecorder.shared.isRunning {
-                    beginMic(
-                        hint: reachable ? "Watch mic" : "Recording on Watch",
-                        resetClock: false,
-                        setListening: false
-                    )
+            }
+            if pending == "resume" {
+                pending = nil
+                pendingWaitWork?.cancel()
+            }
+            // Live session: the Watch shows listening. It does NOT seize the mic
+            // from local Watch Start; a phone-initiated session just mirrors.
+            var openedMic = false
+            if !listening || paused {
+                let resuming = paused
+                paused = false
+                listening = true
+                startedAt = Date().addingTimeInterval(-elapsedMs)
+                WatchGlanceStore.setStartedAt(startedAt)
+                // Only reopen the Watch mic after a pause of a session that was
+                // recording on the Watch. A plain off->listening for a phone-mic
+                // session must NOT start the Watch recorder, or both mics feed
+                // one transcription (double audio).
+                if resuming && micWasRunningBeforePause && !WatchRecorder.shared.isRunning {
+                    beginMic(hint: reachable ? "Watch mic" : "Recording on Watch", resetClock: false)
+                    openedMic = true
                 }
+                micWasRunningBeforePause = false
+            }
+            if !openedMic, Self.shouldEnsureMic(
+                capture: capture,
+                paused: paused,
+                localMic: localMic,
+                recorderRunning: WatchRecorder.shared.isRunning
+            ) {
+                beginMic(
+                    hint: reachable ? "Watch mic" : "Recording on Watch",
+                    resetClock: false,
+                    setListening: false
+                )
             }
             if pending == "resume" {
                 pending = nil
