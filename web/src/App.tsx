@@ -6,7 +6,7 @@ import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
-import { restoreFromSession, restoreLaunchSurface, restoreOfferBody, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck, type RestoreOffer } from './historyRestore'
+import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
 import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
@@ -1003,7 +1003,6 @@ export default function App() {
   const [savePromptMode, setSavePromptMode] = useState<'discard' | 'cancel'>('discard')
   const [leaveSheetOpen, setLeaveSheetOpen] = useState(false)
   const [saveBannerOpen, setSaveBannerOpen] = useState(false)
-  const [restoreOffer, setRestoreOffer] = useState<RestoreOffer | null>(null)
   const dismissedRestoreIds = useRef<string[]>(loadRestoreDismissed())
   const persistRestoreDismissed = (id: string) => {
     const next = rememberRestoreDismissed(dismissedRestoreIds.current, id)
@@ -1021,6 +1020,7 @@ export default function App() {
   }
   const pendingNewAfterSave = useRef(false)
   const pendingRestoreId = useRef<string | null>(null)
+  const restoreHistoryRef = useRef<(session: HistorySession) => void>(() => undefined)
   const lastRestoredKeepId = useRef<string | null>(null)
   const offerSaveAfterMeetingStopRef = useRef<() => void>(() => undefined)
   const doClearRef = useRef<() => void>(() => undefined)
@@ -1099,7 +1099,6 @@ export default function App() {
     // purges the pending row after 24h rather than letting it shadow this one.
     setSavePrompt(false)
     pendingRestoreId.current = null
-    setRestoreOffer(null)
     commitBook({ ...saveBookRef.current, offered: false })
     setSaveBannerOpen(false)
     seenRestoreIds.current.clear()
@@ -1180,31 +1179,48 @@ export default function App() {
       speakers_expected: speakersExpected(payload.scene, meetingSpeakerCount()),
     })
     dispatch({ type: 'restore_session', ...payload })
-    markHistoryKept(true)
+    persistRestoreDismissed(session.id)
     setSavePrompt(false)
-    setSaveBannerOpen(false)
-    setRestoreOffer(null)
+    setRailDismissed(false)
+    setHistoryOpen(false)
+    if (sessionIsUnsaved(session)) {
+      markHistoryKept(false)
+      pendingRestoreId.current = session.id
+      commitBook({
+        ...saveBookRef.current,
+        liveId: session.id,
+        status: 'undecided',
+        offered: true,
+      })
+      setSaveBannerOpen(true)
+      dispatch({
+        type: 'engine',
+        ev: { type: 'status', text: `Opened unsaved ${payload.scene} session` },
+      })
+      return
+    }
+    markHistoryKept(true)
     pendingRestoreId.current = null
+    setSaveBannerOpen(false)
     commitBook({
       ...saveBookRef.current,
       liveId: session.id,
       status: 'saved',
       offered: true,
     })
-    setRailDismissed(false)
-    setHistoryOpen(false)
     dispatch({
       type: 'engine',
       ev: { type: 'status', text: `Opened ${payload.scene} session` },
     })
   }, [])
+  restoreHistoryRef.current = restoreHistory
   const [railDismissed, setRailDismissed] = useState(inQa)
   const wasInQa = useRef(inQa)
   const requestClearRef = useRef<() => void>(() => {})
   const handleRecordRef = useRef<() => void>(() => {})
 
-  // After a disconnect, a meeting session that produced content but was never
-  // saved is offered as a non-blocking Ready banner — never a SavePrompt modal.
+  // Crash leftover: lay the pending meeting onto Listen with the in-page Save
+  // banner. Opening the app never asks Save on Ready.
   const checkPendingRestore = () => {
     void authApi<{ sessions: HistorySession[] }>('/api/account/history?pending=1')
       .then((out) => {
@@ -1216,19 +1232,13 @@ export default function App() {
           hasContent: meetingHasSaveableContent(s),
           pendingId: pending?.id || '',
           dismissedIds: dismissedRestoreIds.current,
+          workspaceMode: s.workspaceMode,
         })
-        if (surface !== 'banner' || !pending) {
+        if (surface !== 'page' || !pending) {
           pendingRestoreId.current = null
-          setRestoreOffer(null)
           return
         }
-        pendingRestoreId.current = pending.id
-        setRestoreOffer({
-          id: pending.id,
-          title: pending.title,
-          startedAt: pending.started_at,
-          sttSeconds: pending.stt_seconds,
-        })
+        restoreHistoryRef.current({ ...pending, kept: false })
       })
       .catch(() => undefined)
   }
@@ -1783,6 +1793,7 @@ export default function App() {
   const bindLiveFromEngine = (id?: string) => {
     if (!id) return
     commitBook(bindLiveId(saveBookRef.current, id))
+    if (saveBookRef.current.offered) persistRestoreDismissed(id)
     if (keepEpochRef.current && !keepEpochRef.current.liveId) {
       keepEpochRef.current = { ...keepEpochRef.current, liveId: id }
     }
@@ -1805,6 +1816,8 @@ export default function App() {
     })
     if (surface === 'none') return
     commitBook(markOffered(saveBookRef.current))
+    const liveId = saveBookRef.current.liveId
+    if (liveId) persistRestoreDismissed(liveId)
     if (surface === 'banner') {
       setSaveBannerOpen(true)
       return
@@ -1940,7 +1953,6 @@ export default function App() {
     }
     clearKeepTimer()
     setSaveBannerOpen(false)
-    setRestoreOffer(null)
     pendingRestoreId.current = null
     commitBook({
       ...bumpGeneration(saveBookRef.current),
@@ -3568,32 +3580,7 @@ export default function App() {
             actions={phoneActions}
             showSavedLine={phone && state.workspaceMode === 'meeting' && historyKept && meetingHasSaveableContent(state)}
             saveBanner={
-              restoreOffer ? (
-                <SaveBanner
-                  status="undecided"
-                  title={IPHONE_COPY.saveRestoreTitle}
-                  detail={restoreOfferBody(restoreOffer)}
-                  declineLabel={IPHONE_COPY.saveNo}
-                  onSave={() => {
-                    const id = pendingRestoreId.current || restoreOffer.id
-                    setRestoreOffer(null)
-                    pendingRestoreId.current = null
-                    if (!id) return
-                    persistRestoreDismissed(id)
-                    lastRestoredKeepId.current = id
-                    window.api.send({ type: 'keep_history', id, content: true, audio: true })
-                  }}
-                  onNotNow={() => {
-                    const id = pendingRestoreId.current || restoreOffer.id
-                    setRestoreOffer(null)
-                    pendingRestoreId.current = null
-                    if (!id) return
-                    persistRestoreDismissed(id)
-                    window.api.send({ type: 'discard_history', id })
-                  }}
-                  onRetry={() => undefined}
-                />
-              ) : saveBannerOpen && saveBook.status !== 'saved' ? (
+              saveBannerOpen && saveBook.status !== 'saved' ? (
                 <SaveBanner
                   status={saveBook.status}
                   onSave={() => saveLiveSession()}
@@ -3601,6 +3588,7 @@ export default function App() {
                     setSaveBannerOpen(false)
                     pendingNewAfterSave.current = false
                     commitBook(setPendingAfterSave(saveBookRef.current, 'none'))
+                    persistRestoreDismissed(saveBookRef.current.liveId || pendingRestoreId.current || '')
                   }}
                   onRetry={() => saveLiveSession()}
                 />

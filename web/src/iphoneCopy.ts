@@ -96,7 +96,7 @@ export const IPHONE_COPY = {
   saveYes: 'Save',
   saveNo: "Don't save",
   saveBannerTitle: 'Save this session?',
-  saveRestoreTitle: 'Unsaved session',
+  saveRestoreTitle: 'Unsaved',
   saveNotNow: 'Not now',
   saveSaving: 'Saving…',
   saveFailed: "Couldn't save.",

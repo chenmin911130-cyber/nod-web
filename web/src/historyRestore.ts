@@ -141,26 +141,49 @@ export type RestoreOffer = {
   sttSeconds?: number
 }
 
-export type RestoreLaunchSurface = 'none' | 'banner'
+export type RestoreLaunchSurface = 'none' | 'page'
 
 export const RESTORE_DISMISSED_KEY = 'nod.restoreDismissed'
 
-/** Opening the app never uses a blocking SavePrompt. Idle Ready may show a banner. */
+/**
+ * Opening the app never asks Save. A crash leftover (pending, never End / Not now)
+ * is laid back onto Listen. End / Not now write the id into dismissedIds so the
+ * next launch is a clean Ready.
+ */
 export function restoreLaunchSurface(input: {
   listening: boolean
   paused: boolean
   hasContent: boolean
   pendingId: string
   dismissedIds: readonly string[]
+  workspaceMode?: string
 }): RestoreLaunchSurface {
   if (!input.pendingId) return 'none'
   if (input.dismissedIds.includes(input.pendingId)) return 'none'
+  if (input.workspaceMode && input.workspaceMode !== 'meeting') return 'none'
   if (restoreShouldNotAsk({
     listening: input.listening,
     paused: input.paused,
     hasContent: input.hasContent,
   })) return 'none'
-  return 'banner'
+  return 'page'
+}
+
+export function sessionIsUnsaved(session: { kept?: boolean } | null | undefined): boolean {
+  return session?.kept === false
+}
+
+/** Pending unsaved rows sit above saved History; the same id is not listed twice. */
+export function mergePendingHistory<T extends { id: string }>(saved: T[], pending: T[]): Array<T & { kept: boolean }> {
+  const unsaved = pending.filter((row) => row.id).map((row) => ({ ...row, kept: false }))
+  const ids = new Set(unsaved.map((row) => row.id))
+  return [
+    ...unsaved,
+    ...saved.filter((row) => !ids.has(row.id)).map((row) => ({
+      ...row,
+      kept: (row as T & { kept?: boolean }).kept !== false,
+    })),
+  ]
 }
 
 export function rememberRestoreDismissed(ids: readonly string[], id: string): string[] {

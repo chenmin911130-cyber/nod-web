@@ -5,8 +5,10 @@ import {
   copyText,
   historyRowWhen,
   historySessionMatches,
+  mergePendingHistory,
   sceneOf,
   sessionHasAudio,
+  sessionIsUnsaved,
 } from '../historyRestore'
 import { IPHONE_COPY } from '../iphoneCopy'
 import { isNativeApp } from '../native'
@@ -24,6 +26,7 @@ export type HistorySession = {
   items: HistoryItem[]
   copy_text?: string
   files?: HistoryFile[]
+  kept?: boolean
 }
 
 function DocIcon() {
@@ -133,8 +136,13 @@ export default function HistoryPane({
     }
     setLoading(true)
     setErr('')
-    void api<{ sessions: HistorySession[] }>('/api/account/history')
-      .then((out) => setSessions(out.sessions || []))
+    void Promise.all([
+      api<{ sessions: HistorySession[] }>('/api/account/history'),
+      api<{ sessions: HistorySession[] }>('/api/account/history?pending=1').catch(() => ({ sessions: [] as HistorySession[] })),
+    ])
+      .then(([saved, pending]) => {
+        setSessions(mergePendingHistory(saved.sessions || [], pending.sessions || []))
+      })
       .catch((ex: Error) => setErr(ex.message))
       .finally(() => setLoading(false))
   }, [open])
@@ -217,7 +225,10 @@ export default function HistoryPane({
                     <DocIcon />
                     <span className="hist-pick-copy">
                       <b>{s.title || 'Session'}</b>
-                      <small>{historyRowWhen(s.started_at, s.stt_seconds)}</small>
+                      <small>
+                        {sessionIsUnsaved(s) ? `${IPHONE_COPY.saveRestoreTitle} · ` : ''}
+                        {historyRowWhen(s.started_at, s.stt_seconds)}
+                      </small>
                     </span>
                   </button>
                   <button

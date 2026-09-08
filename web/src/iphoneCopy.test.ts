@@ -38,7 +38,7 @@ function eq<T>(got: T, want: T, label: string) {
 }
 
 eq(IPHONE_COPY.saveBannerTitle, 'Save this session?', 'End banner asks to save this session')
-eq(IPHONE_COPY.saveRestoreTitle, 'Unsaved session', 'launch banner names the old session')
+eq(IPHONE_COPY.saveRestoreTitle, 'Unsaved', 'History names a pending session Unsaved')
 eq(IPHONE_COPY.startTranslate, 'Start voice translation', 'Translate ready CTA is Start voice translation')
 eq(IPHONE_COPY.recordingStatus, 'Recording', 'live status is Recording')
 eq(IPHONE_COPY.stop, 'End', 'listen control stop label is End')
