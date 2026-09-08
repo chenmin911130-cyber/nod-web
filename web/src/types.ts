@@ -1,6 +1,6 @@
 export type CaptureState = 'off' | 'listening' | 'recording' | 'paused'
 export type EngineState = 'idle' | 'transcribing' | 'generating'
-export type Turn = { id: string; q: string; a: string; failed?: boolean }
+export type Turn = { id: string; q: string; a: string }
 export type CatchNote = {
   id: string
   title: string
@@ -160,7 +160,7 @@ export type EngineEvent =
 export type EngineMsg =
   | { type: 'manual' }
   | { type: 'toggle_listen' }
-  | { type: 'start_listen'; mic?: 'watch' | 'phone' }
+  | { type: 'start_listen' }
   | { type: 'stop_listen' }
   | { type: 'pause_listen' }
   | { type: 'resume_listen' }

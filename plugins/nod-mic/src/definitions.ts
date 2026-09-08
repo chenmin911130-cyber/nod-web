@@ -8,8 +8,6 @@ export type PcmEvent = {
 export interface NodMicPlugin {
   start(): Promise<void>
   stop(): Promise<void>
-  startKeepAlive(): Promise<void>
-  stopKeepAlive(): Promise<void>
   isActive(): Promise<{ active: boolean }>
   addListener(eventName: 'pcm', listenerFunc: (event: PcmEvent) => void): Promise<PluginListenerHandle>
   removeAllListeners(): Promise<void>

@@ -1,10 +1,10 @@
 import { registerPlugin } from '@capacitor/core'
 import { isNativeApp } from './native'
 
-type WatchCommand = { action?: string; mode?: string; id?: string }
+type WatchCommand = { action?: string; mode?: string }
 type WatchPcm = { data?: string }
 
-type WatchHistItem = { id: string; title: string; text: string; failed?: boolean }
+type WatchHistItem = { id: string; title: string; text: string }
 
 type WatchPlugin = {
   ready(): Promise<void>
@@ -17,13 +17,6 @@ type WatchPlugin = {
     history?: WatchHistItem[]
     mode?: string
     langPair?: string
-    ended?: boolean
-    elapsedMs?: number
-    save?: string
-    sessionId?: string
-    engine?: string
-    blocked?: string
-    failed?: boolean
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {
@@ -42,8 +35,8 @@ let preferWatchMic = false
 let pcmSink: ((buf: ArrayBuffer) => void) | null = null
 const preRoll: ArrayBuffer[] = []
 
-export function watchAction(raw: unknown): 'start' | 'stop' | 'record' | 'pause' | 'resume' | 'speak' | 'tts_live' | 'tts_tap' | 'tts_female' | 'tts_male' | 'save' | 'discard' | 'retry' | '' {
-  return raw === 'start' || raw === 'stop' || raw === 'record' || raw === 'pause' || raw === 'resume' || raw === 'speak' || raw === 'tts_live' || raw === 'tts_tap' || raw === 'tts_female' || raw === 'tts_male' || raw === 'save' || raw === 'discard' || raw === 'retry' ? raw : ''
+export function watchAction(raw: unknown): 'start' | 'stop' | 'record' | 'pause' | 'resume' | 'speak' | 'tts_live' | 'tts_tap' | 'tts_female' | 'tts_male' | 'save' | 'discard' | '' {
+  return raw === 'start' || raw === 'stop' || raw === 'record' || raw === 'pause' || raw === 'resume' || raw === 'speak' || raw === 'tts_live' || raw === 'tts_tap' || raw === 'tts_female' || raw === 'tts_male' || raw === 'save' || raw === 'discard' ? raw : ''
 }
 
 export type WatchListenMode = 'meeting' | 'lecture' | 'interview' | 'translate'
@@ -111,14 +104,9 @@ export function watchPcmShouldClaimMic(): boolean {
   return false
 }
 
-/** Watch Start uses the watch mic. Phone Start keeps the phone mic. Mode does not matter. */
-export function watchStartShouldPreferWatchMic(input: { fromWatch: boolean }): boolean {
-  return input.fromWatch
-}
-
-/** Pause / Resume inherit Start / Record mic ownership. Never flip preferWatchMic. */
-export function watchResumeShouldChangeMic(): boolean {
-  return false
+/** Meeting / Lecture stay on the phone mic. Live Q&A / Translate may use the watch. */
+export function watchStartShouldPreferWatchMic(mode: string): boolean {
+  return mode === 'interview' || mode === 'translate'
 }
 
 export type WatchHardwareKey = 'crown' | 'side'
@@ -126,18 +114,9 @@ export type WatchHardwareKey = 'crown' | 'side'
 /** Crown is Start/Stop. Side is Pause/Resume. Never bind the crown to toggle(). */
 export function watchHardwareAction(
   key: WatchHardwareKey,
-  state: {
-    listening: boolean
-    paused: boolean
-    ended?: boolean
-    saving?: boolean
-    saved?: boolean
-    starting?: boolean
-    pending?: string | null
-  },
+  state: { listening: boolean; paused: boolean; offeringSave: boolean; saved: boolean },
 ): 'start' | 'stop' | 'pause' | 'resume' | '' {
-  if (state.ended || state.saving || state.saved) return ''
-  if (state.starting || state.pending) return ''
+  if (state.offeringSave || state.saved) return ''
   if (key === 'crown') {
     if (state.listening || state.paused) return 'stop'
     return 'start'
@@ -145,81 +124,6 @@ export function watchHardwareAction(
   if (state.paused) return 'resume'
   if (state.listening) return 'pause'
   return ''
-}
-
-/** Phone → Watch `blocked`. signin > consent > quota. */
-export function watchBlockedReason(input: {
-  signIn: boolean
-  consentOpen: boolean
-  quotaOk: boolean
-}): string {
-  if (input.signIn) return 'signin'
-  if (input.consentOpen) return 'consent'
-  if (!input.quotaOk) return 'quota'
-  return ''
-}
-
-/** Watch Start wait: capture confirm wins, then blocked.
- *  No recorder → 8s timeout. Wrist already recording → wait up to 20s for phone listening
- *  (AssemblyAI handshake) instead of killing the mic and leaving a mute reading page.
- */
-export function watchStartOutcome(input: {
-  capture: string
-  blocked: string
-  waitedMs: number
-  recorderRunning?: boolean
-}): string {
-  if (input.capture === 'listening' || input.capture === 'recording') return 'started'
-  if (input.blocked) return `blocked:${input.blocked}`
-  const limit = input.recorderRunning ? 20_000 : 8_000
-  if (input.waitedMs >= limit) return 'timeout'
-  return 'waiting'
-}
-
-/** A failed Start already sent `start` to the phone — cancel that listen. */
-export function watchFailStartShouldSendStop(didSendStart: boolean): boolean {
-  return didSendStart
-}
-
-/**
- * Phone confirmed listening. If this session started on the wrist and the
- * recorder is down, reopen it — including after `starting` was already cleared
- * (8s timeout / late `listening`). Phone-mic sessions must not open the Watch mic.
- */
-export function watchShouldEnsureMic(input: {
-  capture: string
-  paused: boolean
-  localMic: boolean
-  recorderRunning: boolean
-}): boolean {
-  if (input.paused) return false
-  if (!input.localMic || input.recorderRunning) return false
-  return input.capture === 'listening' || input.capture === 'recording'
-}
-
-/** Stale phone `capture:off` during local Start must not kill the Watch recorder. */
-export function watchOffShouldStopRecorder(input: {
-  starting: boolean
-  listening: boolean
-  paused: boolean
-  recorderRunning: boolean
-}): boolean {
-  return !input.starting && (input.listening || input.paused || input.recorderRunning)
-}
-
-/** Connection lost only when we cannot confirm phone capture. Watch mic recording is known. */
-export function watchStatusUnknown(input: {
-  reachable: boolean
-  recorderRunning: boolean
-  listening: boolean
-  paused: boolean
-  ended: boolean
-  staleSec: number
-  reconnectFailed?: boolean
-}): boolean {
-  if (input.recorderRunning) return false
-  if (!input.listening && !input.paused && !input.ended) return false
-  return !input.reachable || (input.staleSec > 20 && !!input.reconnectFailed)
 }
 
 /** A leftover Watch file transfer is PCM only. It must not start_listen. */
@@ -271,21 +175,6 @@ export function watchPhoneModeShouldApply(input: {
 /** Done must send leftover PCM even if some chunks already went live. */
 export function watchFlushShouldSend(pendingBytes: number): boolean {
   return pendingBytes > 0
-}
-
-/** Unsent Watch PCM flushes when the phone is reachable, or every 20s in the background. */
-export function backlogShouldFlush(input: {
-  unsentBytes: number
-  reachable: boolean
-  sinceLastFlushSec: number
-}): boolean {
-  return input.unsentBytes > 0 && (input.reachable || input.sinceLastFlushSec >= 20)
-}
-
-/** Watch Start tells the server this session's mic is the wrist, so zero-PCM waits. */
-export function watchStartListenPayload(fromWatch: boolean): { type: 'start_listen'; mic?: 'watch' } {
-  if (fromWatch) return { type: 'start_listen', mic: 'watch' }
-  return { type: 'start_listen' }
 }
 
 /**
@@ -348,7 +237,6 @@ export function installWatchRemote(handlers: {
   onTtsLive: () => void
   onTtsTap: () => void
   onTtsVoice: (voice: 'male' | 'female') => void
-  onRetry: (id: string) => void
 }): () => void {
   if (!isNativeApp()) return () => undefined
   let gone = false
@@ -382,7 +270,6 @@ export function installWatchRemote(handlers: {
       if (action === 'tts_tap') handlers.onTtsTap()
       if (action === 'tts_female') handlers.onTtsVoice('female')
       if (action === 'tts_male') handlers.onTtsVoice('male')
-      if (action === 'retry') handlers.onRetry(typeof ev.id === 'string' ? ev.id : '')
     })
     const pcm = await NodWatch.addListener('pcm', (ev) => {
       if (gone) return
@@ -408,13 +295,6 @@ export function pushWatchStatus(face: {
   history?: WatchHistItem[]
   mode?: string
   langPair?: string
-  ended?: boolean
-  elapsedMs?: number
-  save?: string
-  sessionId?: string
-  engine?: string
-  blocked?: string
-  failed?: boolean
 }): void {
   if (!isNativeApp()) return
   void NodWatch.setStatus({
@@ -426,13 +306,6 @@ export function pushWatchStatus(face: {
     history: (face.history || []).slice(0, 8),
     mode: face.mode,
     langPair: face.langPair,
-    ended: face.ended === true,
-    elapsedMs: face.elapsedMs || 0,
-    save: face.save || 'none',
-    sessionId: face.sessionId || '',
-    engine: face.engine,
-    blocked: face.blocked || '',
-    failed: face.failed === true,
   }).catch(() => undefined)
 }
 

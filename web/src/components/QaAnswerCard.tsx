@@ -1,31 +1,24 @@
 import { useState } from 'react'
 import { qaAnswerParts, qaDetectedLine } from '../qaCard'
-import { IPHONE_COPY } from '../iphoneCopy'
 
 export function QaAnswerCard({
   question,
   answer,
   listening = false,
   generating = false,
-  failed = false,
-  retryDisabled = false,
   msAgo,
   onFollowUp,
-  onRetry,
 }: {
   question: string
   answer: string
   listening?: boolean
   generating?: boolean
-  failed?: boolean
-  retryDisabled?: boolean
   msAgo: number
   onFollowUp?: () => void
-  onRetry?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const parts = qaAnswerParts(answer)
-  const pending = !failed && (generating || listening || !answer.trim())
+  const pending = generating || listening || !answer.trim()
   const status = listening ? 'Listening…' : generating ? 'Generating answer…' : ''
 
   return (
@@ -40,16 +33,7 @@ export function QaAnswerCard({
           <Sparkle />
           AI Answer
         </p>
-        {failed && !answer.trim() ? (
-          <div className="iphone-live-a-fail">
-            <p>{IPHONE_COPY.askCouldntAnswer}</p>
-            {onRetry ? (
-              <button type="button" className="iphone-ask-retry" disabled={retryDisabled} onClick={onRetry}>
-                {IPHONE_COPY.askRetry}
-              </button>
-            ) : null}
-          </div>
-        ) : pending ? (
+        {pending ? (
           <p className="qa-summary pending">{status}</p>
         ) : (
           <>

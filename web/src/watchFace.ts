@@ -5,18 +5,12 @@ export type WatchPhase =
   | 'listening'
   | 'paused'
   | 'translateListening'
-  | 'translateGenerating'
   | 'translateResult'
   | 'qaWaiting'
   | 'qaDrafting'
   | 'qaAnswer'
-  | 'ended'
-  | 'saving'
+  | 'savePrompt'
   | 'saved'
-  | 'saveFailed'
-  | 'connectionLost'
-  | 'translateFailed'
-  | 'qaFailed'
 
 export type WatchScreen = {
   phase: WatchPhase
@@ -34,18 +28,15 @@ export type WatchScreen = {
   answer?: string
   primary?: string
   secondary?: string
-  tertiary?: string
   playLabel?: string
   rec?: boolean
-  paused?: boolean
+  readyDot?: boolean
   clipLines?: number
   crownScroll?: boolean
   swipeStop?: boolean
   waveform?: boolean
   saveStacked?: boolean
   secondaryTone?: 'bright'
-  newContent?: 'translation' | 'answer'
-  captureLine?: string
 }
 
 export type WatchAlwaysOn = {
@@ -58,7 +49,7 @@ export type WatchAlwaysOn = {
 
 export function watchLangPair(to: string): string {
   const tags: Record<string, string> = {
-    zh: 'ZH',
+    zh: 'CH',
     ja: 'JA',
     en: 'EN',
     it: 'IT',
@@ -67,7 +58,7 @@ export function watchLangPair(to: string): string {
     de: 'DE',
     pt: 'PT',
   }
-  return `Auto → ${tags[to] || 'ZH'}`
+  return `Auto → ${tags[to] || 'CH'}`
 }
 
 export function buildWatchScreen(input: {
@@ -75,9 +66,8 @@ export function buildWatchScreen(input: {
   listenScene: string
   listening: boolean
   paused: boolean
-  ended?: boolean
-  save?: string
-  elapsedMs?: number
+  offeringSave: boolean
+  saved: boolean
   original: string
   translation: string
   previous?: string
@@ -85,17 +75,7 @@ export function buildWatchScreen(input: {
   answer: string
   drafting: boolean
   translateTo?: string
-  engine?: string
-  starting?: boolean
-  failure?: string
-  statusUnknown?: boolean
-  failed?: boolean
-  newContent?: 'translation' | 'answer'
 }): WatchScreen {
-  const engine = input.engine || ''
-  const endedReading = endedReadingFace(input)
-  const reading = input.listening || input.paused || endedReading
-  const endedCapture = endedReading ? { captureLine: 'Ended' } : {}
   const base = {
     mascot: false as const,
     showModePicker: false,
@@ -103,186 +83,91 @@ export function buildWatchScreen(input: {
     modeLabel: modeCapsule(input.workspaceMode, input.listenScene),
   }
 
-  if (input.statusUnknown) {
+  if (input.offeringSave) {
     return {
       ...base,
-      phase: 'connectionLost',
-      status: '与 iPhone 连接中断',
-      statusEn: 'iPhone disconnected',
-      primary: 'Reconnect',
+      phase: 'savePrompt',
+      status: '保存？',
+      statusEn: 'Save?',
+      primary: '保存',
+      secondary: '不保存',
+      saveStacked: true,
+      secondaryTone: 'bright',
     }
   }
 
-  const readingFlags = {
-    ...(input.listening ? { rec: true } : {}),
-    ...(input.paused ? { paused: true } : {}),
-  }
-
-  if (meetingEndedFace(input)) {
-    const save = input.save || 'none'
-    if (save === 'saving') {
-      return {
-        ...base,
-        phase: 'saving',
-        status: '保存中…',
-        statusEn: 'Saving…',
-      }
-    }
-    if (save === 'saved') {
-      return {
-        ...base,
-        phase: 'saved',
-        status: '已保存到历史记录',
-        statusEn: 'Saved to History',
-        primary: 'Continue recording',
-      }
-    }
-    if (save === 'failed') {
-      return {
-        ...base,
-        phase: 'saveFailed',
-        status: '未能保存',
-        statusEn: "Couldn't save",
-        primary: 'Retry save',
-      }
-    }
+  if (input.saved) {
     return {
       ...base,
-      phase: 'ended',
-      status: '已结束',
-      statusEn: 'Ended',
-      primary: 'Save',
-      secondary: 'Continue recording',
-      tertiary: "Don't save",
+      phase: 'saved',
+      status: '已同步到手机',
+      statusEn: 'Saved to iPhone',
     }
   }
 
   if (input.workspaceMode === 'interview' || input.listenScene === 'interview') {
-    if (input.failed && !input.answer.trim()) {
-      return {
-        ...base,
-        ...readingFlags,
-        ...endedCapture,
-        phase: 'qaFailed',
-        question: input.question,
-        status: '回答失败',
-        statusEn: "Couldn't answer",
-        primary: 'Retry',
-        swipeStop: true,
-        ...(input.newContent ? { newContent: input.newContent } : {}),
-      }
-    }
     if (input.answer.trim()) {
       return {
         ...base,
-        ...readingFlags,
-        ...endedCapture,
         phase: 'qaAnswer',
         question: input.question,
         answer: input.answer,
+        previous: input.previous || undefined,
         clipLines: 3,
         crownScroll: true,
         swipeStop: true,
         waveform: true,
       }
     }
-    if (input.question.trim() && !input.answer.trim() && engine === 'generating') {
+    if (input.drafting && input.question.trim()) {
       return {
         ...base,
-        ...readingFlags,
-        ...endedCapture,
         phase: 'qaDrafting',
         question: input.question,
-        status: '正在生成…',
-        statusEn: 'Drafting…',
+        status: '起草中',
+        statusEn: 'Drafting',
         swipeStop: true,
       }
     }
-    if (reading) {
+    if (input.listening) {
       return {
         ...base,
-        ...readingFlags,
-        ...endedCapture,
         phase: 'qaWaiting',
-        status: '等待问题',
-        statusEn: 'Waiting for a question',
+        status: '听问题',
+        statusEn: 'Listening for a question',
+        rec: true,
         swipeStop: true,
       }
     }
   }
 
-  if (input.workspaceMode === 'translate' && reading && input.failed && !input.translation.trim()) {
+  if (input.workspaceMode === 'translate' && input.listening && input.translation.trim()) {
     return {
       ...base,
-      ...readingFlags,
-      ...endedCapture,
-      phase: 'translateFailed',
-      langPair: watchLangPair(input.translateTo || 'zh'),
-      original: watchVisibleOriginal(input.original, input.translation),
-      status: '翻译失败',
-      statusEn: "Couldn't translate",
-      primary: 'Retry',
-      swipeStop: true,
-      ...(input.newContent ? { newContent: input.newContent } : {}),
-    }
-  }
-
-  if (input.workspaceMode === 'translate' && reading && input.translation.trim()) {
-    return {
-      ...base,
-      ...readingFlags,
-      ...endedCapture,
       phase: 'translateResult',
       langPair: watchLangPair(input.translateTo || 'zh'),
       original: watchVisibleOriginal(input.original, input.translation),
       translation: input.translation,
+      previous: input.previous || undefined,
       clipLines: 3,
       crownScroll: true,
       swipeStop: true,
       waveform: true,
+      rec: true,
     }
   }
 
-  if (
-    input.workspaceMode === 'translate' &&
-    reading &&
-    input.original.trim() &&
-    !input.translation.trim() &&
-    engine === 'generating'
-  ) {
+  if (input.workspaceMode === 'translate' && input.listening && !input.translation.trim()) {
     return {
       ...base,
-      ...readingFlags,
-      ...endedCapture,
-      phase: 'translateGenerating',
-      langPair: watchLangPair(input.translateTo || 'zh'),
-      original: watchVisibleOriginal(input.original, input.translation),
-      status: '正在翻译…',
-      statusEn: 'Translating…',
-      swipeStop: true,
-    }
-  }
-
-  if (input.workspaceMode === 'translate' && reading && !input.translation.trim()) {
-    return {
-      ...base,
-      ...readingFlags,
-      ...endedCapture,
       phase: 'translateListening',
       langPair: watchLangPair(input.translateTo || 'zh'),
-      original: input.original.trim() || undefined,
-      status: '自然说话即可',
-      statusEn: 'Speak naturally',
+      previous: input.previous || undefined,
+      status: '听着',
+      statusEn: 'listening',
+      rec: true,
       swipeStop: true,
       waveform: true,
-    }
-  }
-
-  if (input.starting) {
-    return {
-      ...base,
-      phase: 'ready',
-      primary: 'Starting…',
     }
   }
 
@@ -293,8 +178,7 @@ export function buildWatchScreen(input: {
       status: '已暂停',
       statusEn: 'Paused',
       primary: 'Resume',
-      secondary: 'End recording',
-      swipeStop: true,
+      secondary: 'Stop',
     }
   }
 
@@ -302,12 +186,11 @@ export function buildWatchScreen(input: {
     return {
       ...base,
       phase: 'listening',
-      status: '录音中',
-      statusEn: 'Recording',
-      primary: 'Pause',
-      secondary: 'End recording',
+      status: '听着',
+      statusEn: "I'm listening.",
+      primary: 'Stop',
+      secondary: 'Pause',
       rec: true,
-      swipeStop: true,
     }
   }
 
@@ -315,7 +198,8 @@ export function buildWatchScreen(input: {
     ...base,
     phase: 'ready',
     primary: 'Start',
-    ...(input.failure ? { status: input.failure, statusEn: input.failure } : {}),
+    readyDot: true,
+    status: 'Ready',
   }
 }
 
@@ -329,30 +213,17 @@ export function watchStatusMode(workspaceMode: string, listenScene: string): Wat
 
 type WatchListenMode = 'meeting' | 'lecture' | 'interview' | 'translate'
 
-export function watchAlwaysOnKeepsTree(
-  mode: string,
-  listening: boolean,
-  paused: boolean,
-  ended: boolean,
-  statusUnknown: boolean,
-): boolean {
-  const reading = mode === 'translate' || mode === 'interview'
-  return reading && (listening || paused) && !ended && !statusUnknown
-}
-
 export function buildWatchAlwaysOn(input: {
   workspaceMode: string
   listenScene: string
   listening: boolean
   paused: boolean
-  ended?: boolean
-  save?: string
+  offeringSave: boolean
+  saved: boolean
   translation: string
   answer: string
-  statusUnknown?: boolean
-  langPair?: string
 }): WatchAlwaysOn {
-  if (input.statusUnknown || input.ended || (!input.listening && !input.paused)) {
+  if (input.offeringSave || input.saved || (!input.listening && !input.paused)) {
     return { show: false, showTimer: false, recDot: false }
   }
   if (input.paused) {
@@ -362,7 +233,8 @@ export function buildWatchAlwaysOn(input: {
     return { show: true, modeLabel: 'Live Q&A', showTimer: true, recDot: false }
   }
   if (input.workspaceMode === 'translate') {
-    return { show: true, modeLabel: input.langPair, showTimer: false, recDot: true }
+    const line = input.translation.trim()
+    return { show: true, line: line || undefined, showTimer: false, recDot: false }
   }
   return { show: true, showTimer: true, recDot: true }
 }
@@ -372,38 +244,6 @@ export function watchListenPane(mode: string, _hasCopy: boolean): 'translate' | 
   if (mode === 'translate') return 'translate'
   if (mode === 'interview') return 'qa'
   return 'listen'
-}
-
-function meetingEndedFace(input: {
-  workspaceMode: string
-  listenScene: string
-  ended?: boolean
-}): boolean {
-  if (!input.ended) return false
-  if (input.workspaceMode === 'translate' || input.workspaceMode === 'interview') return false
-  if (input.listenScene === 'interview') return false
-  return true
-}
-
-function endedReadingFace(input: {
-  workspaceMode: string
-  listenScene: string
-  listening: boolean
-  paused: boolean
-  ended?: boolean
-  original: string
-  translation: string
-  question: string
-  answer: string
-}): boolean {
-  if (!input.ended || input.listening || input.paused) return false
-  if (input.workspaceMode === 'translate') {
-    return Boolean(input.original.trim() || input.translation.trim())
-  }
-  if (input.workspaceMode === 'interview' || input.listenScene === 'interview') {
-    return Boolean(input.question.trim() || input.answer.trim())
-  }
-  return false
 }
 
 function modeCapsule(workspaceMode: string, listenScene: string): string {

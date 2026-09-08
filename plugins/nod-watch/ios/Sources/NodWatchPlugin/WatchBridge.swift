@@ -9,27 +9,18 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
 
     weak var plugin: NodWatchPlugin?
     private(set) var jsReady = false
-    private var pending: [(action: String, at: Double?, live: Bool, mode: String, id: String)] = []
+    private var pending: [(action: String, at: Double?, live: Bool, mode: String)] = []
     private var pendingPcm: [String] = []
     private var lastCapture = ""
     private var lastHint = "Ready"
     private var lastOriginal = ""
     private var lastTranslation = ""
     private var lastPrevious = ""
-    private var lastHistory: [[String: Any]] = []
+    private var lastHistory: [[String: String]] = []
     private var lastMode = ""
     private var lastLangPair = ""
-    private var lastEnded = false
-    private var lastElapsedMs = 0
-    private var lastSave = "none"
-    private var lastSessionId = ""
-    private var lastEngine = ""
-    private var lastBlocked = ""
-    private var lastFailed = false
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
-    private var nextPcmSeq = 1
-    private var heldPcm: [Int: Data] = [:]
 
     override private init() {
         super.init()
@@ -61,7 +52,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let now = Date().timeIntervalSince1970
         for item in queued {
             if Self.shouldRunWatchCommand(item.action, at: item.at, live: item.live, now: now) {
-                emit(item.action, mode: item.mode, id: item.id)
+                emit(item.action, mode: item.mode)
             }
         }
         let pcm = pendingPcm
@@ -85,16 +76,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         original: String = "",
         translation: String = "",
         previous: String = "",
-        history: [[String: Any]] = [],
+        history: [[String: String]] = [],
         mode: String = "",
-        langPair: String = "",
-        ended: Bool? = nil,
-        elapsedMs: Int? = nil,
-        save: String? = nil,
-        sessionId: String? = nil,
-        engine: String? = nil,
-        blocked: String? = nil,
-        failed: Bool? = nil
+        langPair: String = ""
     ) {
         if !capture.isEmpty {
             lastCapture = capture
@@ -110,30 +94,22 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         if !langPair.isEmpty {
             lastLangPair = langPair
         }
-        if let ended {
-            lastEnded = ended
-        }
-        if let elapsedMs {
-            lastElapsedMs = elapsedMs
-        }
-        if let save {
-            lastSave = save.isEmpty ? "none" : save
-        }
-        if let sessionId {
-            lastSessionId = sessionId
-        }
-        if let engine, !engine.isEmpty {
-            lastEngine = engine
-        }
-        if let blocked {
-            lastBlocked = blocked
-        }
-        if let failed {
-            lastFailed = failed
-        }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
-        let payload = statusPayload()
+        var payload: [String: Any] = [
+            "capture": lastCapture,
+            "hint": hint,
+            "original": original,
+            "translation": translation,
+            "previous": previous,
+            "history": history,
+        ]
+        if !lastMode.isEmpty {
+            payload["mode"] = lastMode
+        }
+        if !lastLangPair.isEmpty {
+            payload["langPair"] = lastLangPair
+        }
         guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
         do {
             try session.updateApplicationContext(payload)
@@ -159,53 +135,22 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         return now - at <= 30
     }
 
-    func statusPayload() -> [String: Any] {
-        var payload: [String: Any] = [
-            "capture": lastCapture,
-            "hint": lastHint,
-            "original": lastOriginal,
-            "translation": lastTranslation,
-            "previous": lastPrevious,
-            "history": lastHistory,
-            "engine": lastEngine,
-            "ended": lastEnded,
-            "elapsedMs": lastElapsedMs,
-            "save": lastSave,
-            "sessionId": lastSessionId,
-            "blocked": lastBlocked,
-            "failed": lastFailed,
-        ]
-        if !lastMode.isEmpty {
-            payload["mode"] = lastMode
-        }
-        if !lastLangPair.isEmpty {
-            payload["langPair"] = lastLangPair
-        }
-        return payload
-    }
-
     private func handle(_ message: [String: Any], live: Bool) {
         if let pcm = message["pcm"] as? String, !pcm.isEmpty {
             emitPcm(pcm)
         }
         let raw = (message["action"] as? String ?? "").lowercased()
-        let allowed = ["stop", "start", "record", "pause", "resume", "speak", "save", "discard", "tts_live", "tts_tap", "tts_female", "tts_male", "sync", "retry"]
+        let allowed = ["stop", "start", "record", "pause", "resume", "speak", "save", "discard", "tts_live", "tts_tap", "tts_female", "tts_male"]
         let action = allowed.contains(raw) ? raw : ""
         guard !action.isEmpty else { return }
-        if action == "sync" { return }
         let mode = Self.watchListenMode(message["mode"] as? String ?? "")
-        let id = message["id"] as? String ?? ""
         let at = message["at"] as? Double
         let now = Date().timeIntervalSince1970
         guard Self.shouldRunWatchCommand(action, at: at, live: live, now: now) else { return }
-        if action == "start" || action == "record" {
-            nextPcmSeq = 1
-            heldPcm.removeAll()
-        }
         if jsReady {
-            emit(action, mode: mode, id: id)
+            emit(action, mode: mode)
         } else {
-            pending.append((action, at, live, mode, id))
+            pending.append((action, at, live, mode))
         }
     }
 
@@ -316,13 +261,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
     }
 
-    private func emit(_ action: String, mode: String = "", id: String = "") {
+    private func emit(_ action: String, mode: String = "") {
         var data: [String: Any] = ["action": action]
         if !mode.isEmpty {
             data["mode"] = mode
-        }
-        if !id.isEmpty {
-            data["id"] = id
         }
         plugin?.notifyListeners("command", data: data)
     }
@@ -345,18 +287,6 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             let end = min(offset + chunk, data.count)
             emitPcm(data.subdata(in: offset ..< end).base64EncodedString())
             offset = end
-        }
-    }
-
-    private func ingestPcmFile(_ data: Data, seq: Int?) {
-        guard let seq else {
-            emitPcmData(data)
-            return
-        }
-        heldPcm[seq] = data
-        while let chunk = heldPcm.removeValue(forKey: nextPcmSeq) {
-            emitPcmData(chunk)
-            nextPcmSeq += 1
         }
     }
 
@@ -385,8 +315,13 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
 
     public func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
         handle(message, live: true)
-        var reply = statusPayload()
-        reply["ok"] = true
+        var reply: [String: Any] = ["ok": true, "capture": lastCapture, "hint": lastHint]
+        if !lastMode.isEmpty {
+            reply["mode"] = lastMode
+        }
+        if !lastLangPair.isEmpty {
+            reply["langPair"] = lastLangPair
+        }
         replyHandler(reply)
     }
 
@@ -399,25 +334,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     }
 
     public func session(_ session: WCSession, didReceive file: WCSessionFile) {
-        let kind = file.metadata?["kind"] as? String
-        if kind == "speech" { return }
-        if kind != nil && kind != "pcm16" { return }
         guard let data = try? Data(contentsOf: file.fileURL), !data.isEmpty else { return }
         // Leftover PCM files must not start_listen. Watch already sent start/record live.
-        let seq: Int?
-        if let raw = file.metadata?["seq"] {
-            if let value = raw as? Int {
-                seq = value
-            } else if let value = raw as? NSNumber {
-                seq = value.intValue
-            } else if let value = raw as? String {
-                seq = Int(value)
-            } else {
-                seq = nil
-            }
-        } else {
-            seq = nil
-        }
-        ingestPcmFile(data, seq: seq)
+        emitPcmData(data)
     }
 }
