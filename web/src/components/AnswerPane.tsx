@@ -13,7 +13,6 @@ interface Props {
   busy: boolean
   listening?: boolean
   onAsk: (text: string, files?: AttachPayload[]) => void
-  onRetryTurn?: (id: string) => void
   onCompose?: (on: boolean) => void
 }
 
@@ -26,7 +25,7 @@ function Sparkle() {
   )
 }
 
-export default function AnswerPane({ currentQ, partial, turns, busy, listening, onAsk, onRetryTurn, onCompose }: Props) {
+export default function AnswerPane({ currentQ, partial, turns, busy, listening, onAsk, onCompose }: Props) {
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<LocalAttach[]>([])
   const [now, setNow] = useState(() => Date.now())
@@ -102,12 +101,9 @@ export default function AnswerPane({ currentQ, partial, turns, busy, listening, 
                   key={t.id}
                   question={t.q}
                   answer={t.a}
-                  generating={busy && t.id === last?.id && !t.a && !t.failed}
-                  failed={Boolean(t.failed && !t.a)}
-                  retryDisabled={busy}
+                  generating={busy && t.id === last?.id && !t.a}
                   msAgo={msAgo(t.id)}
                   onFollowUp={followUp}
-                  onRetry={onRetryTurn ? () => onRetryTurn(t.id) : undefined}
                 />
               ))}
               {orphanQ && (

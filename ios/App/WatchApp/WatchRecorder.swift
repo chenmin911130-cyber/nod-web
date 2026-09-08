@@ -1,59 +1,26 @@
 import AVFoundation
-import Combine
 import Foundation
 
 /// 16 kHz mono PCM16 from the Watch microphone. Prefers a live engine tap;
 /// if watchOS refuses the engine, falls back to a WAV recorder and streams
-/// new bytes. Both paths append a raw PCM spool so unsent audio can be
-/// retransmitted after a drop. The spool file is kept until the session
-/// confirms delivery — teardown must not delete it.
-final class WatchRecorder: ObservableObject {
+/// new bytes. Leftover bytes are handed back on stop for a file transfer.
+final class WatchRecorder {
     static let shared = WatchRecorder()
 
-    var onPcm: ((Data, Int) -> Void)?
-    var onWriteFailed: (() -> Void)?
-    @Published var level: Float = 0
+    var onPcm: ((Data) -> Void)?
 
     private var engine: AVAudioEngine?
     private var converter: AVAudioConverter?
     private var fileRecorder: AVAudioRecorder?
-    private var wavURL: URL?
-    private var wavReadOffset = 0
-    private var spoolHandle: FileHandle?
-    private(set) var fileURL: URL?
-    private(set) var fileOffset = 0
+    private var fileURL: URL?
+    private var fileOffset = 0
     private var pump: DispatchSourceTimer?
     private var running = false
-    private var writeFailed = false
     private let targetSampleRate: Double = 16_000
     private let queue = DispatchQueue(label: "nod.watch.recorder")
-    private let spoolQueue = DispatchQueue(label: "nod.watch.spool")
     private let wavHeaderBytes = 44
-    private var envelope: Float = 0
-    private var lastLevelAt = Date.distantPast
-    private let levelLock = NSLock()
 
     var isRunning: Bool { running }
-
-    /// Raw Int16 RMS → 0…1. Full-scale is 32768 (2^15).
-    static func rmsToLevel(_ rms: Float) -> Float {
-        guard rms > 0 else { return 0 }
-        return min(1, rms / 32768)
-    }
-
-    static func pcmRms(_ data: Data) -> Float {
-        let count = data.count / 2
-        guard count > 0 else { return 0 }
-        var sum: Double = 0
-        data.withUnsafeBytes { raw in
-            let samples = raw.bindMemory(to: Int16.self)
-            for i in 0..<min(count, samples.count) {
-                let s = Double(samples[i])
-                sum += s * s
-            }
-        }
-        return Float(sqrt(sum / Double(count)))
-    }
 
     func start(completion: @escaping (Error?) -> Void) {
         if running {
@@ -72,7 +39,6 @@ final class WatchRecorder: ObservableObject {
             DispatchQueue.main.async {
                 do {
                     try self.prepareSession()
-                    try self.openSpool()
                     do {
                         try self.beginEngine()
                         Self.persist("engine-ok")
@@ -107,36 +73,6 @@ final class WatchRecorder: ObservableObject {
 
     func stop() {
         teardown()
-        resetLevel()
-    }
-
-    func bytes(from offset: Int, length: Int) -> Data? {
-        spoolQueue.sync {
-            try? spoolHandle?.synchronize()
-            guard let fileURL, offset >= 0, length > 0 else { return nil }
-            guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
-            defer { try? handle.close() }
-            do {
-                try handle.seek(toOffset: UInt64(offset))
-                let data = handle.readData(ofLength: length)
-                return data.isEmpty ? nil : data
-            } catch {
-                return nil
-            }
-        }
-    }
-
-    func discardSpool() {
-        spoolQueue.sync {
-            try? spoolHandle?.close()
-            spoolHandle = nil
-            if let fileURL {
-                try? FileManager.default.removeItem(at: fileURL)
-            }
-            fileURL = nil
-            fileOffset = 0
-            writeFailed = false
-        }
     }
 
     private func requestMic(_ done: @escaping (Bool) -> Void) {
@@ -151,45 +87,6 @@ final class WatchRecorder: ObservableObject {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .default, options: [])
         try session.setActive(true)
-    }
-
-    private func openSpool() throws {
-        try spoolQueue.sync {
-            if spoolHandle != nil { return }
-            if let fileURL {
-                let handle = try FileHandle(forWritingTo: fileURL)
-                handle.seekToEndOfFile()
-                spoolHandle = handle
-                return
-            }
-            let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("nod-watch-spool.pcm")
-            try? FileManager.default.removeItem(at: url)
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-            spoolHandle = try FileHandle(forWritingTo: url)
-            fileURL = url
-            fileOffset = 0
-            writeFailed = false
-        }
-    }
-
-    private func writeSpool(_ data: Data) -> Int? {
-        spoolQueue.sync {
-            guard !writeFailed else { return nil }
-            do {
-                if spoolHandle == nil {
-                    return nil
-                }
-                let start = fileOffset
-                try spoolHandle?.write(contentsOf: data)
-                fileOffset += data.count
-                return start
-            } catch {
-                writeFailed = true
-                DispatchQueue.main.async { self.onWriteFailed?() }
-                return nil
-            }
-        }
     }
 
     private func beginEngine() throws {
@@ -252,8 +149,8 @@ final class WatchRecorder: ObservableObject {
             throw Self.fail(4, "Watch microphone would not start")
         }
         fileRecorder = rec
-        wavURL = url
-        wavReadOffset = wavHeaderBytes
+        fileURL = url
+        fileOffset = wavHeaderBytes
         running = true
         startPump()
     }
@@ -269,17 +166,17 @@ final class WatchRecorder: ObservableObject {
     }
 
     private func pumpFile() {
-        guard running, let wavURL else { return }
-        guard let handle = try? FileHandle(forReadingFrom: wavURL) else { return }
+        guard running, let fileURL else { return }
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return }
         defer { try? handle.close() }
         let size = Int((try? handle.seekToEnd()) ?? 0)
-        guard size > wavReadOffset else { return }
+        guard size > fileOffset else { return }
         do {
-            try handle.seek(toOffset: UInt64(wavReadOffset))
-            let data = handle.readData(ofLength: size - wavReadOffset)
-            wavReadOffset += data.count
+            try handle.seek(toOffset: UInt64(fileOffset))
+            let data = handle.readData(ofLength: size - fileOffset)
+            fileOffset += data.count
             if !data.isEmpty {
-                emitPcm(data)
+                onPcm?(data)
             }
         } catch {
             return
@@ -306,45 +203,8 @@ final class WatchRecorder: ObservableObject {
         if error != nil { return }
         guard let channel = out.int16ChannelData?[0], out.frameLength > 0 else { return }
         let data = Data(bytes: channel, count: Int(out.frameLength) * MemoryLayout<Int16>.size)
-        emitPcm(data)
-    }
-
-    private func emitPcm(_ data: Data) {
-        guard !data.isEmpty else { return }
-        publishLevel(from: data)
-        guard let offset = writeSpool(data) else { return }
-        onPcm?(data, offset)
-    }
-
-    private func publishLevel(from data: Data) {
-        let raw = Self.rmsToLevel(Self.pcmRms(data))
-        let now = Date()
-        levelLock.lock()
-        let elapsed = now.timeIntervalSince(lastLevelAt)
-        if lastLevelAt != .distantPast, elapsed < 1.0 / 20.0 {
-            levelLock.unlock()
-            return
-        }
-        let dt = Float(lastLevelAt == .distantPast ? 1.0 / 20.0 : min(max(elapsed, 1.0 / 20.0), 0.25))
-        lastLevelAt = now
-        let tau: Float = raw >= envelope ? 0.080 : 0.220
-        envelope += (raw - envelope) * (1 - exp(-dt / tau))
-        let next = envelope
-        levelLock.unlock()
-        DispatchQueue.main.async { [weak self] in
-            self?.level = next
-        }
-    }
-
-    private func resetLevel() {
-        levelLock.lock()
-        envelope = 0
-        lastLevelAt = .distantPast
-        levelLock.unlock()
-        if Thread.isMainThread {
-            level = 0
-        } else {
-            DispatchQueue.main.async { [weak self] in self?.level = 0 }
+        if !data.isEmpty {
+            onPcm?(data)
         }
     }
 
@@ -370,14 +230,9 @@ final class WatchRecorder: ObservableObject {
         pump?.cancel()
         pump = nil
         fileRecorder = nil
-        wavURL = nil
-        wavReadOffset = 0
+        fileURL = nil
+        fileOffset = 0
         teardownEngine()
-        spoolQueue.sync {
-            try? spoolHandle?.synchronize()
-            try? spoolHandle?.close()
-            spoolHandle = nil
-        }
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 

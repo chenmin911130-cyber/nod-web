@@ -1,4 +1,4 @@
-export type WatchHistItem = { id: string; title: string; text: string; failed?: boolean }
+export type WatchHistItem = { id: string; title: string; text: string }
 
 export interface NodWatchPlugin {
   ready(): Promise<void>
@@ -13,13 +13,6 @@ export interface NodWatchPlugin {
     history?: WatchHistItem[]
     mode?: string
     langPair?: string
-    ended?: boolean
-    elapsedMs?: number
-    save?: string
-    sessionId?: string
-    engine?: string
-    blocked?: string
-    failed?: boolean
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {

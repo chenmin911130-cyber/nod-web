@@ -34,26 +34,15 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
         let previous = call.getString("previous") ?? ""
         let mode = call.getString("mode") ?? ""
         let langPair = call.getString("langPair") ?? ""
-        let ended = call.getBool("ended") ?? false
-        let elapsedMs = call.getInt("elapsedMs") ?? 0
-        let save = call.getString("save") ?? "none"
-        let sessionId = call.getString("sessionId") ?? ""
-        let engine = call.getString("engine") ?? ""
-        let blocked = call.getString("blocked") ?? ""
-        let failed = call.getBool("failed") ?? false
-        var history: [[String: Any]] = []
+        var history: [[String: String]] = []
         if let rows = call.getArray("history") {
             for row in rows {
                 guard let dict = row as? JSObject else { continue }
-                var item: [String: Any] = [
+                history.append([
                     "id": (dict["id"] as? String) ?? "",
                     "title": (dict["title"] as? String) ?? "",
                     "text": (dict["text"] as? String) ?? "",
-                ]
-                if dict["failed"] as? Bool == true {
-                    item["failed"] = true
-                }
-                history.append(item)
+                ])
             }
         }
         WatchBridge.shared.pushStatus(
@@ -64,14 +53,7 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
             previous: previous,
             history: history,
             mode: mode,
-            langPair: langPair,
-            ended: ended,
-            elapsedMs: elapsedMs,
-            save: save,
-            sessionId: sessionId,
-            engine: engine,
-            blocked: blocked,
-            failed: failed
+            langPair: langPair
         )
         call.resolve()
     }

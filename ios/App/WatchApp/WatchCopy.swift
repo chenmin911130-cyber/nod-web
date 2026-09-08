@@ -70,16 +70,16 @@ enum WatchCopy {
         ])
     }
 
-    static var savedToHistory: String {
+    static var saved: String {
         pick([
-            "zh": "已保存到历史记录",
-            "en": "Saved to History",
-            "it": "Salvato in Cronologia",
-            "es": "Guardado en Historial",
-            "fr": "Enregistré dans l'historique",
-            "de": "In Verlauf gespeichert",
-            "pt": "Salvo no Histórico",
-            "ja": "履歴に保存済み",
+            "zh": "已同步到手机",
+            "en": "Saved to iPhone",
+            "it": "Salvato su iPhone",
+            "es": "Guardado en iPhone",
+            "fr": "Sauvé sur iPhone",
+            "de": "Auf iPhone",
+            "pt": "Salvo no iPhone",
+            "ja": "iPhoneに保存",
         ])
     }
 
@@ -161,510 +161,42 @@ enum WatchCopy {
         ])
     }
 
-    static var speakNaturally: String {
+    static var hearQuestion: String {
         pick([
-            "zh": "自然说话即可",
-            "en": "Speak naturally",
-            "it": "Parla naturalmente",
-            "es": "Habla con naturalidad",
-            "fr": "Parlez naturellement",
-            "de": "Sprich natürlich",
-            "pt": "Fale naturalmente",
-            "ja": "自然に話してください",
-        ])
-    }
-
-    static var waitingForQuestion: String {
-        pick([
-            "zh": "等待问题",
-            "en": "Waiting for a question",
-            "it": "In attesa di una domanda",
-            "es": "Esperando una pregunta",
-            "fr": "En attente d'une question",
-            "de": "Warte auf eine Frage",
-            "pt": "Aguardando uma pergunta",
-            "ja": "質問を待っています",
-        ])
-    }
-
-    static var listeningStatus: String {
-        pick([
-            "zh": "聆听中",
+            "zh": "听问题",
             "en": "Listening",
             "it": "Ascolto",
             "es": "Escuchando",
             "fr": "J'écoute",
             "de": "Ich höre zu",
             "pt": "Ouvindo",
-            "ja": "聞いています",
-        ])
-    }
-
-    static var translating: String {
-        pick([
-            "zh": "正在翻译…",
-            "en": "Translating…",
-            "it": "Traduco…",
-            "es": "Traduciendo…",
-            "fr": "Traduction…",
-            "de": "Übersetze…",
-            "pt": "Traduzindo…",
-            "ja": "翻訳中…",
+            "ja": "質問を聞く",
         ])
     }
 
     static var drafting: String {
         pick([
-            "zh": "正在生成…",
-            "en": "Drafting…",
-            "it": "Sto scrivendo…",
-            "es": "Redactando…",
-            "fr": "Rédaction…",
+            "zh": "起草中",
+            "en": "Drafting",
+            "it": "Sto scrivendo",
+            "es": "Redactando",
+            "fr": "Rédaction",
             "de": "Schreibe…",
-            "pt": "Escrevendo…",
-            "ja": "作成中…",
+            "pt": "Escrevendo",
+            "ja": "作成中",
         ])
     }
 
-    static var recording: String {
+    static var saveAsk: String {
         pick([
-            "zh": "录音中",
-            "en": "Recording",
-            "it": "Registrazione",
-            "es": "Grabando",
-            "fr": "Enregistrement",
-            "de": "Aufnahme",
-            "pt": "Gravando",
-            "ja": "録音中",
-        ])
-    }
-
-    static var transcribing: String {
-        pick([
-            "zh": "转写中…",
-            "en": "Transcribing…",
-            "it": "Trascrizione…",
-            "es": "Transcribiendo…",
-            "fr": "Transcription…",
-            "de": "Transkribieren…",
-            "pt": "Transcrevendo…",
-            "ja": "文字起こし中…",
-        ])
-    }
-
-    static var endRecording: String {
-        pick([
-            "zh": "结束录音",
-            "en": "End recording",
-            "it": "Termina registrazione",
-            "es": "Terminar grabación",
-            "fr": "Arrêter l'enregistrement",
-            "de": "Aufnahme beenden",
-            "pt": "Encerrar gravação",
-            "ja": "録音を終了",
-        ])
-    }
-
-    static var ended: String {
-        pick([
-            "zh": "已结束",
-            "en": "Ended",
-            "it": "Terminato",
-            "es": "Terminado",
-            "fr": "Terminé",
-            "de": "Beendet",
-            "pt": "Encerrado",
-            "ja": "終了",
-        ])
-    }
-
-    static var continueRecording: String {
-        pick([
-            "zh": "继续录音",
-            "en": "Continue recording",
-            "it": "Continua a registrare",
-            "es": "Seguir grabando",
-            "fr": "Continuer l'enregistrement",
-            "de": "Aufnahme fortsetzen",
-            "pt": "Continuar gravação",
-            "ja": "録音を続ける",
-        ])
-    }
-
-    static var sameSession: String {
-        pick([
-            "zh": "同一会话",
-            "en": "Same session",
-            "it": "Stessa sessione",
-            "es": "Misma sesión",
-            "fr": "Même session",
-            "de": "Dieselbe Sitzung",
-            "pt": "Mesma sessão",
-            "ja": "同じセッション",
-        ])
-    }
-
-    static var saving: String {
-        pick([
-            "zh": "保存中…",
-            "en": "Saving…",
-            "it": "Salvataggio…",
-            "es": "Guardando…",
-            "fr": "Enregistrement…",
-            "de": "Speichern…",
-            "pt": "Salvando…",
-            "ja": "保存中…",
-        ])
-    }
-
-    static var waitingConfirmation: String {
-        pick([
-            "zh": "等待确认",
-            "en": "Waiting for confirmation",
-            "it": "In attesa di conferma",
-            "es": "Esperando confirmación",
-            "fr": "En attente de confirmation",
-            "de": "Warte auf Bestätigung",
-            "pt": "Aguardando confirmação",
-            "ja": "確認待ち",
-        ])
-    }
-
-    static var viewOnIphone: String {
-        pick([
-            "zh": "在 iPhone 上查看",
-            "en": "View on iPhone",
-            "it": "Vedi su iPhone",
-            "es": "Ver en iPhone",
-            "fr": "Voir sur iPhone",
-            "de": "Auf iPhone ansehen",
-            "pt": "Ver no iPhone",
-            "ja": "iPhoneで見る",
-        ])
-    }
-
-    static var couldntSave: String {
-        pick([
-            "zh": "未能保存",
-            "en": "Couldn't save",
-            "it": "Salvataggio non riuscito",
-            "es": "No se pudo guardar",
-            "fr": "Échec de l'enregistrement",
-            "de": "Speichern fehlgeschlagen",
-            "pt": "Não foi possível salvar",
-            "ja": "保存できませんでした",
-        ])
-    }
-
-    static var saveFailedHelp: String {
-        pick([
-            "zh": "请在 iPhone 上重试，或在此再试一次。",
-            "en": "Try again on iPhone or retry here.",
-            "it": "Riprova su iPhone o da qui.",
-            "es": "Reintenta en iPhone o aquí.",
-            "fr": "Réessayez sur iPhone ou ici.",
-            "de": "Auf iPhone oder hier erneut versuchen.",
-            "pt": "Tente de novo no iPhone ou aqui.",
-            "ja": "iPhoneかここで再試行してください。",
-        ])
-    }
-
-    static var retrySave: String {
-        pick([
-            "zh": "重试保存",
-            "en": "Retry save",
-            "it": "Riprova a salvare",
-            "es": "Reintentar guardar",
-            "fr": "Réessayer d'enregistrer",
-            "de": "Speichern wiederholen",
-            "pt": "Tentar salvar de novo",
-            "ja": "保存を再試行",
-        ])
-    }
-
-    static var ending: String {
-        pick([
-            "zh": "正在结束…",
-            "en": "Ending…",
-            "it": "Chiusura…",
-            "es": "Finalizando…",
-            "fr": "Fin…",
-            "de": "Beenden…",
-            "pt": "Encerrando…",
-            "ja": "終了中…",
-        ])
-    }
-
-    static var couldntEnd: String {
-        pick([
-            "zh": "未能结束 · 请重试",
-            "en": "Couldn't end · try again",
-            "it": "Chiusura non riuscita · riprova",
-            "es": "No se pudo terminar · reintenta",
-            "fr": "Impossible d'arrêter · réessayer",
-            "de": "Beenden fehlgeschlagen · erneut",
-            "pt": "Não foi possível encerrar · tente de novo",
-            "ja": "終了できません · 再試行",
-        ])
-    }
-
-    static var couldntDiscard: String {
-        pick([
-            "zh": "未能丢弃 · 请重试",
-            "en": "Couldn't discard · try again",
-            "it": "Eliminazione non riuscita · riprova",
-            "es": "No se pudo descartar · reintenta",
-            "fr": "Impossible d'ignorer · réessayer",
-            "de": "Verwerfen fehlgeschlagen · erneut",
-            "pt": "Não foi possível descartar · tente de novo",
-            "ja": "破棄できません · 再試行",
-        ])
-    }
-
-    static var starting: String {
-        pick([
-            "zh": "正在开始…",
-            "en": "Starting…",
-            "it": "Avvio…",
-            "es": "Iniciando…",
-            "fr": "Démarrage…",
-            "de": "Start…",
-            "pt": "Iniciando…",
-            "ja": "開始中…",
-        ])
-    }
-
-    static var signInOnIphone: String {
-        pick([
-            "zh": "请在 iPhone 打开 Nodpilot 登录",
-            "en": "Open Nodpilot on iPhone to sign in",
-            "it": "Apri Nodpilot su iPhone per accedere",
-            "es": "Abre Nodpilot en iPhone para entrar",
-            "fr": "Ouvre Nodpilot sur iPhone pour te connecter",
-            "de": "Nodpilot auf iPhone öffnen zum Anmelden",
-            "pt": "Abra o Nodpilot no iPhone para entrar",
-            "ja": "iPhoneでNodpilotを開いてサインイン",
-        ])
-    }
-
-    static var confirmOnIphone: String {
-        pick([
-            "zh": "请在 iPhone 确认",
-            "en": "Confirm on iPhone",
-            "it": "Conferma su iPhone",
-            "es": "Confirma en iPhone",
-            "fr": "Confirme sur iPhone",
-            "de": "Auf iPhone bestätigen",
-            "pt": "Confirme no iPhone",
-            "ja": "iPhoneで確認",
-        ])
-    }
-
-    static var limitReached: String {
-        pick([
-            "zh": "已达上限 · 查看 iPhone",
-            "en": "Limit reached · see iPhone",
-            "it": "Limite raggiunto · vedi iPhone",
-            "es": "Límite alcanzado · mira iPhone",
-            "fr": "Limite atteinte · voir iPhone",
-            "de": "Limit erreicht · iPhone prüfen",
-            "pt": "Limite atingido · veja o iPhone",
-            "ja": "上限です · iPhoneを見てください",
-        ])
-    }
-
-    static var couldntStart: String {
-        pick([
-            "zh": "无法开始 · 请重试",
-            "en": "Couldn't start · try again",
-            "it": "Avvio non riuscito · riprova",
-            "es": "No se pudo iniciar · reintenta",
-            "fr": "Impossible de démarrer · réessayer",
-            "de": "Start fehlgeschlagen · erneut",
-            "pt": "Não foi possível iniciar · tente de novo",
-            "ja": "開始できません · 再試行",
-        ])
-    }
-
-    static var couldntChange: String {
-        pick([
-            "zh": "未能更新 · 请重试",
-            "en": "Couldn't update · try again",
-            "it": "Aggiornamento non riuscito · riprova",
-            "es": "No se pudo actualizar · reintenta",
-            "fr": "Mise à jour impossible · réessayer",
-            "de": "Aktualisieren fehlgeschlagen · erneut",
-            "pt": "Não foi possível atualizar · tente de novo",
-            "ja": "更新できません · 再試行",
-        ])
-    }
-
-    static var storageFull: String {
-        pick([
-            "zh": "存储已满 · 录音已停止",
-            "en": "Storage full · recording stopped",
-            "it": "Memoria piena · registrazione fermata",
-            "es": "Almacenamiento lleno · grabación detenida",
-            "fr": "Stockage plein · enregistrement arrêté",
-            "de": "Speicher voll · Aufnahme gestoppt",
-            "pt": "Armazenamento cheio · gravação parada",
-            "ja": "容量不足 · 録音を停止しました",
-        ])
-    }
-
-    static var iphoneDisconnected: String {
-        pick([
-            "zh": "与 iPhone 连接中断",
-            "en": "iPhone disconnected",
-            "it": "iPhone disconnesso",
-            "es": "iPhone desconectado",
-            "fr": "iPhone déconnecté",
-            "de": "iPhone getrennt",
-            "pt": "iPhone desconectado",
-            "ja": "iPhone切断",
-        ])
-    }
-
-    static var statusUnavailable: String {
-        pick([
-            "zh": "暂时无法确认录音状态",
-            "en": "Recording status unavailable",
-            "it": "Stato registrazione non disponibile",
-            "es": "Estado de grabación no disponible",
-            "fr": "État d’enregistrement indisponible",
-            "de": "Aufnahmestatus unbekannt",
-            "pt": "Estado da gravação indisponível",
-            "ja": "録音状態を確認できません",
-        ])
-    }
-
-    static var reconnect: String {
-        pick([
-            "zh": "重新连接",
-            "en": "Reconnect",
-            "it": "Riconnetti",
-            "es": "Reconectar",
-            "fr": "Reconnecter",
-            "de": "Erneut verbinden",
-            "pt": "Reconectar",
-            "ja": "再接続",
-        ])
-    }
-
-    static var reconnecting: String {
-        pick([
-            "zh": "正在重新连接…",
-            "en": "Reconnecting…",
-            "it": "Riconnessione…",
-            "es": "Reconectando…",
-            "fr": "Reconnexion…",
-            "de": "Verbinde…",
-            "pt": "Reconectando…",
-            "ja": "再接続中…",
-        ])
-    }
-
-    static var openOnIphone: String {
-        pick([
-            "zh": "请在 iPhone 打开 Nodpilot",
-            "en": "Open Nodpilot on iPhone",
-            "it": "Apri Nodpilot su iPhone",
-            "es": "Abre Nodpilot en iPhone",
-            "fr": "Ouvre Nodpilot sur iPhone",
-            "de": "Nodpilot auf iPhone öffnen",
-            "pt": "Abra o Nodpilot no iPhone",
-            "ja": "iPhoneでNodpilotを開く",
-        ])
-    }
-
-    static var recordingOnWatchOffline: String {
-        pick([
-            "zh": "手表录音中 · iPhone 离线",
-            "en": "Recording on Watch · iPhone offline",
-            "it": "Registrazione su Watch · iPhone offline",
-            "es": "Grabando en Watch · iPhone offline",
-            "fr": "Enregistrement Watch · iPhone hors ligne",
-            "de": "Aufnahme auf Watch · iPhone offline",
-            "pt": "Gravando no Watch · iPhone offline",
-            "ja": "Watchで録音中 · iPhoneオフライン",
-        ])
-    }
-
-    static var newTranslation: String {
-        pick([
-            "zh": "新译文 ↓",
-            "en": "New translation ↓",
-            "it": "Nuova traduzione ↓",
-            "es": "Nueva traducción ↓",
-            "fr": "Nouvelle traduction ↓",
-            "de": "Neue Übersetzung ↓",
-            "pt": "Nova tradução ↓",
-            "ja": "新しい訳 ↓",
-        ])
-    }
-
-    static var newAnswer: String {
-        pick([
-            "zh": "新回答 ↓",
-            "en": "New answer ↓",
-            "it": "Nuova risposta ↓",
-            "es": "Nueva respuesta ↓",
-            "fr": "Nouvelle réponse ↓",
-            "de": "Neue Antwort ↓",
-            "pt": "Nova resposta ↓",
-            "ja": "新しい回答 ↓",
-        ])
-    }
-
-    static var couldntTranslate: String {
-        pick([
-            "zh": "翻译失败",
-            "en": "Couldn't translate",
-            "it": "Traduzione non riuscita",
-            "es": "No se pudo traducir",
-            "fr": "Traduction impossible",
-            "de": "Übersetzung fehlgeschlagen",
-            "pt": "Não foi possível traduzir",
-            "ja": "翻訳できません",
-        ])
-    }
-
-    static var couldntAnswer: String {
-        pick([
-            "zh": "回答失败",
-            "en": "Couldn't answer",
-            "it": "Risposta non riuscita",
-            "es": "No se pudo responder",
-            "fr": "Réponse impossible",
-            "de": "Antwort fehlgeschlagen",
-            "pt": "Não foi possível responder",
-            "ja": "回答できません",
-        ])
-    }
-
-    static var retry: String {
-        pick([
-            "zh": "重试",
-            "en": "Retry",
-            "it": "Riprova",
-            "es": "Reintentar",
-            "fr": "Réessayer",
-            "de": "Erneut",
-            "pt": "Tentar de novo",
-            "ja": "再試行",
-        ])
-    }
-
-    static var retrying: String {
-        pick([
-            "zh": "正在重试…",
-            "en": "Retrying…",
-            "it": "Nuovo tentativo…",
-            "es": "Reintentando…",
-            "fr": "Nouvelle tentative…",
-            "de": "Wird wiederholt…",
-            "pt": "Tentando…",
-            "ja": "再試行中…",
+            "zh": "存进 History？",
+            "en": "Save to History?",
+            "it": "Salvare?",
+            "es": "¿Guardar?",
+            "fr": "Enregistrer ?",
+            "de": "Speichern?",
+            "pt": "Salvar?",
+            "ja": "保存しますか？",
         ])
     }
 }

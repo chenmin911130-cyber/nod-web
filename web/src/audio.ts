@@ -79,15 +79,7 @@ export function shouldReacquirePhoneMic(opts: {
   return opts.nativeApp && opts.running && !opts.watchPreferred && !opts.hasNativeHandle && !opts.hasStream
 }
 
-/** Watch-mic sessions keep the iPhone JS alive without opening the phone mic. */
-export function phoneShouldKeepAlive(opts: {
-  nativeApp: boolean
-  watchPreferred: boolean
-}): boolean {
-  return opts.nativeApp && opts.watchPreferred
-}
-
-/** Watch Start must drop the phone mic so the wrist is the only capture. */
+/** Watch Translate / Live Q&A Start must drop the phone mic so the wrist is the only capture. */
 export function shouldReleasePhoneMicForWatch(opts: {
   running: boolean
   watchPreferred: boolean
@@ -109,7 +101,6 @@ export class MicCapture {
   // instead of leaving a live MediaStream with no reference to it.
   private stopSeq = 0
   private silenceTimer = 0
-  private keepAlive = false
   private resampler = new PcmDownsampler()
   onPcm: (buf: ArrayBuffer) => void = () => undefined
   onFallbackFailed: () => void = () => undefined
@@ -152,11 +143,6 @@ export class MicCapture {
     try {
       if (isNativeApp()) {
         if (isWatchMicPreferred()) {
-          if (phoneShouldKeepAlive({ nativeApp: true, watchPreferred: true })) {
-            const { NodMic } = await import('nod-mic')
-            await NodMic.startKeepAlive()
-            this.keepAlive = true
-          }
           this.running = true
           return
         }
@@ -269,11 +255,6 @@ export class MicCapture {
     this.clearSilenceTimer()
     this.resampler.reset()
     this.running = false
-    const keepAlive = this.keepAlive
-    this.keepAlive = false
-    if (keepAlive) {
-      void import('nod-mic').then(({ NodMic }) => NodMic.stopKeepAlive()).catch(() => undefined)
-    }
     const handle = this.nativeHandle
     this.nativeHandle = null
     if (handle) {

@@ -1,4 +1,4 @@
-export type WatchHistItem = { id: string; title: string; text: string; failed?: boolean }
+export type WatchHistItem = { id: string; title: string; text: string }
 
 export type WatchFace = {
   listening: boolean
@@ -7,12 +7,11 @@ export type WatchFace = {
   translation: string
   previous: string
   history: WatchHistItem[]
-  failed: boolean
 }
 
-type Pair = { id: string; original: string; translation: string; failed?: boolean }
+type Pair = { id: string; original: string; translation: string }
 type Line = { id: string; text: string; translation?: string }
-type Turn = { id: string; q: string; a: string; failed?: boolean }
+type Turn = { id: string; q: string; a: string }
 
 export function watchVisibleOriginal(original: string, translation: string): string {
   const src = original.replace(/\s+/g, ' ').trim()
@@ -30,18 +29,6 @@ export function watchVisibleTranslation(text: string): string {
   return raw
 }
 
-export function watchReadingAnchor(input: {
-  atLatest: boolean
-  newUnit: boolean
-  pillShown: boolean
-}): { scroll: boolean; pill: boolean } {
-  if (input.atLatest) {
-    return { scroll: input.newUnit, pill: false }
-  }
-  if (input.newUnit) return { scroll: false, pill: true }
-  return { scroll: false, pill: input.pillShown }
-}
-
 /** One muted line: the finished sentence before the current one. */
 export function watchPreviousCaption(pairs: Pair[]): string {
   const done = pairs.filter((p) => (p.translation || p.original).trim())
@@ -52,30 +39,6 @@ export function watchPreviousCaption(pairs: Pair[]): string {
   const now = watchVisibleTranslation(current.translation) || current.original.replace(/\s+/g, ' ').trim()
   if (!line || line.toLowerCase() === now.toLowerCase()) return ''
   return line
-}
-
-export function watchEndedFor(input: {
-  workspaceMode: string
-  capture: string
-  meetingEnded?: boolean
-  hasSaveableContent?: boolean
-  translatePairs?: Array<{ original: string; translation: string }>
-  turns?: Array<{ q: string; a: string }>
-}): boolean {
-  if (input.workspaceMode === 'meeting') {
-    return Boolean(input.meetingEnded && input.hasSaveableContent)
-  }
-  if (input.workspaceMode === 'translate') {
-    return input.capture === 'off' && (input.translatePairs || []).some(
-      (p) => p.original.trim() || p.translation.trim(),
-    )
-  }
-  if (input.workspaceMode === 'interview') {
-    return input.capture === 'off' && (input.turns || []).some(
-      (t) => t.q.trim() || t.a.trim(),
-    )
-  }
-  return false
 }
 
 export function clipWatch(text: string, max: number): string {
@@ -132,32 +95,15 @@ export function buildWatchFace(input: {
   else if (input.notesRaw.trim()) hint = 'Open iPhone to read the report'
   else if (translation.trim()) hint = 'Translated'
 
-  const latestPair = [...input.translatePairs].reverse().find((p) => p.original.trim() || p.translation.trim())
-  const failed = input.workspaceMode === 'translate'
-    ? latestPair?.failed === true
-    : input.workspaceMode === 'interview'
-      ? lastTurn?.failed === true
-      : false
-
   const history: WatchHistItem[] = []
   if (input.workspaceMode === 'translate') {
     for (const p of input.translatePairs.slice(-8).reverse()) {
-      if (!p.original.trim() && !p.translation.trim()) continue
+      const text = (p.translation || p.original).trim()
+      if (!text) continue
       history.push({
         id: p.id,
         title: clipWatch(p.original, 40),
-        text: clipWatch(p.translation, 280),
-        ...(p.failed ? { failed: true } : {}),
-      })
-    }
-  } else if (input.workspaceMode === 'interview') {
-    for (const t of (input.turns || []).slice(-8).reverse()) {
-      if (!t.q.trim() && !t.a.trim()) continue
-      history.push({
-        id: t.id,
-        title: clipWatch(t.q, 40),
-        text: clipWatch(t.a, 280),
-        ...(t.failed ? { failed: true } : {}),
+        text: clipWatch(text, 280),
       })
     }
   } else {
@@ -186,47 +132,5 @@ export function buildWatchFace(input: {
     translation: clipWatch(translation, 800),
     previous,
     history,
-    failed,
   }
-}
-
-/** Int16 PCM RMS → 0…1. Full-scale is 32768 (2^15). */
-export function watchRmsToLevel(rms: number): number {
-  if (rms <= 0) return 0
-  return Math.min(1, rms / 32768)
-}
-
-export type WatchHaptic = 'start' | 'click' | 'stop' | 'success' | 'failure' | null
-
-export type WatchHapticSnap = {
-  starting: boolean
-  listening: boolean
-  paused: boolean
-  pending: string | null
-  ending: boolean
-  ended: boolean
-  capture: string
-  saveMatched: boolean
-  failure: string | null
-  blocked: string
-  statusUnknown: boolean
-  saveState: string
-  failed: boolean
-  translation?: string
-  reachable?: boolean
-}
-
-/** One-shot Watch haptic from prev→next values, not from “a status arrived”. */
-export function watchHaptic(prev: WatchHapticSnap, next: WatchHapticSnap): WatchHaptic {
-  if (prev.starting && next.listening) return 'start'
-  if (prev.pending === 'pause' && next.paused) return 'click'
-  if (prev.pending === 'resume' && next.listening) return 'click'
-  if (prev.ending && (next.ended || next.capture === 'off')) return 'stop'
-  if (!prev.saveMatched && next.saveMatched) return 'success'
-  if (prev.failure == null && next.failure != null) return 'failure'
-  if (!prev.blocked && !!next.blocked) return 'failure'
-  if (!prev.statusUnknown && next.statusUnknown) return 'failure'
-  if (prev.saveState !== 'failed' && next.saveState === 'failed') return 'failure'
-  if (!prev.failed && next.failed) return 'failure'
-  return null
 }

@@ -28,27 +28,6 @@ eq(fresh.generation, 0, 'empty book starts at generation 0')
 eq(fresh.offered, false, 'empty book is not offered')
 eq(fresh.pendingAfterSave, 'none', 'empty book has no pending leave')
 
-// #136: keep ack is the session id; another session's history_kept must not flip this book.
-{
-  const book = beginSave(fresh, 'live-watch')
-  const hit = applyKeepAck(book, 'live-watch', 'live-watch', book.generation)
-  eq(hit.book.status, 'saved', 'ack id matching liveId marks saved')
-  eq(hit.action, 'none', 'stay-put keep has no leave action')
-  const other = applyKeepAck(book, 'live-other', 'live-watch', book.generation)
-  if (other.book !== book) throw new Error('other session history_kept must leave the book untouched')
-  eq(other.book.status, 'saving', 'other session history_kept does not flip')
-  eq(other.action, 'none', 'other session history_kept returns no pending action')
-}
-
-// #136: after failKeep timeout, Retry/beginSave is allowed.
-{
-  let book = beginSave(fresh, 'live-timeout')
-  book = applyKeepFailed(book, 'timeout')
-  eq(book.status, 'failed', 'failKeep timeout marks failed')
-  book = beginSave(book, 'live-timeout')
-  eq(book.status, 'saving', 'after failKeep timeout beginSave is allowed')
-}
-
 // ack id ≠ liveId → state unchanged, no pending action
 {
   const book = setPendingAfterSave(beginSave(fresh, 'live-a'), 'new')

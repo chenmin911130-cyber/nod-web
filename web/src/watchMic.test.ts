@@ -13,9 +13,6 @@ import {
   watchShouldApplyMode,
   watchStartShouldAttachMode,
   watchStartShouldPreferWatchMic,
-  watchResumeShouldChangeMic,
-  watchStartListenPayload,
-  backlogShouldFlush,
   watchFallbackStopSequence,
   watchFlushShouldSend,
   watchLiveStreamShouldReset,
@@ -166,26 +163,6 @@ if (!watchFlushShouldSend(3200) || watchFlushShouldSend(0)) {
   throw new Error('Done must flush leftover PCM and skip an empty buffer')
 }
 
-if (backlogShouldFlush({ unsentBytes: 3200, reachable: false, sinceLastFlushSec: 5 })) {
-  throw new Error('unreachable Watch PCM must wait 20s before a background flush')
-}
-if (!backlogShouldFlush({ unsentBytes: 3200, reachable: false, sinceLastFlushSec: 20 })) {
-  throw new Error('unreachable Watch PCM must flush after 20s')
-}
-if (!backlogShouldFlush({ unsentBytes: 3200, reachable: true, sinceLastFlushSec: 1 })) {
-  throw new Error('reachable Watch PCM with a backlog must flush immediately')
-}
-if (backlogShouldFlush({ unsentBytes: 0, reachable: true, sinceLastFlushSec: 30 })) {
-  throw new Error('an empty Watch backlog must not flush')
-}
-
-if (watchStartListenPayload(false).mic) {
-  throw new Error('phone Start must not mark the listen session as watch mic')
-}
-if (watchStartListenPayload(true).mic !== 'watch') {
-  throw new Error('Watch Start must send start_listen with mic=watch')
-}
-
 const fallbackStop = watchFallbackStopSequence()
 if (fallbackStop[0] !== 'pump' || fallbackStop.indexOf('pump') > fallbackStop.indexOf('clearRunning')) {
   throw new Error('Watch fallback stop must pump leftover WAV bytes before clearing running')
@@ -201,9 +178,6 @@ if (watchFileShouldStartListen()) {
 if (watchAction('save') !== 'save' || watchAction('discard') !== 'discard') {
   throw new Error('Watch Save / Don\'t save must be session actions, not start_listen')
 }
-if (watchAction('retry') !== 'retry') {
-  throw new Error('Watch Translate Retry must be a session action')
-}
 if (
   watchListenControlShouldApplyMode({ action: 'save', paused: false, capture: 'off' })
   || watchListenControlShouldApplyMode({ action: 'discard', paused: false, capture: 'off' })
@@ -211,28 +185,17 @@ if (
   throw new Error('Watch Save / Don\'t save must not switch Meeting / Interview / Translate')
 }
 
-for (const mode of ['meeting', 'lecture', 'interview', 'translate']) {
-  if (!watchStartShouldPreferWatchMic({ fromWatch: true })) {
-    throw new Error(`Watch Start must prefer the watch mic (mode ${mode} is irrelevant)`)
-  }
-  if (watchStartShouldPreferWatchMic({ fromWatch: false })) {
-    throw new Error(`phone Start must keep the phone mic (mode ${mode} is irrelevant)`)
-  }
+if (watchStartShouldPreferWatchMic('meeting') || watchStartShouldPreferWatchMic('lecture')) {
+  throw new Error('Meeting / Lecture Watch Start must keep the phone mic')
+}
+if (!watchStartShouldPreferWatchMic('interview') || !watchStartShouldPreferWatchMic('translate')) {
+  throw new Error('Live Q&A / Translate Watch Start may use the watch mic')
 }
 
-setPreferWatchMic(false)
-if (watchResumeShouldChangeMic()) {
-  throw new Error('Watch Resume must not flip preferWatchMic; a phone-started Meeting would lose the phone mic')
-}
-if (watchResumeShouldChangeMic()) setPreferWatchMic(true)
-if (isWatchMicPreferred()) {
-  throw new Error('Watch Resume must leave a phone-mic session on the phone mic')
-}
-
-const idle = { listening: false, paused: false }
-const live = { listening: true, paused: false }
-const held = { listening: false, paused: true }
-const saving = { listening: false, paused: false, ended: true, saving: true }
+const idle = { listening: false, paused: false, offeringSave: false, saved: false }
+const live = { listening: true, paused: false, offeringSave: false, saved: false }
+const held = { listening: false, paused: true, offeringSave: false, saved: false }
+const saving = { listening: false, paused: false, offeringSave: true, saved: false }
 
 if (watchHardwareAction('crown', live) !== 'stop') {
   throw new Error('Digital Crown while listening must Stop, not Pause')
@@ -247,13 +210,7 @@ if (watchHardwareAction('side', live) !== 'pause' || watchHardwareAction('side',
   throw new Error('Side button is Pause / Resume only')
 }
 if (watchHardwareAction('crown', saving) || watchHardwareAction('side', saving)) {
-  throw new Error('hardware keys must not fire on Ended / Saving / Saved')
-}
-if (watchHardwareAction('crown', { listening: false, paused: false, ended: true }) || watchHardwareAction('side', { listening: false, paused: false, saved: true })) {
-  throw new Error('hardware keys must not fire on Ended or Saved')
-}
-if (watchHardwareAction('crown', { listening: false, paused: false, starting: true }) || watchHardwareAction('side', { listening: true, paused: false, pending: 'pause' })) {
-  throw new Error('hardware keys must not fire while Starting or Pause/Resume is pending')
+  throw new Error('hardware keys must not fire on the Save prompt')
 }
 
 if (!watchCommandShouldSendMode('start') || !watchCommandShouldSendMode('record')) {

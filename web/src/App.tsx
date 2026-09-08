@@ -7,7 +7,7 @@ import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
 import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
-import { watchDiscardCommand, watchSaveWireStatus, watchStopShouldOpenPhoneSave } from './watchSave'
+import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
 import { meetingRailIsPaused } from './meetingPause'
@@ -42,7 +42,7 @@ import {
 import { isTranslateChunk, looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, sttTag, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough, wrongScriptForTarget } from './translateGate'
 import { applyNotesTranslateTo, nextMeetingLineToTranslate } from './meetingTranslate'
 import { applyLineUpdate, applyLineTranslationRev, staleTranslateDone } from './meetingLines'
-import { doneAffectsInterview, markTurnFailed, retryTurn } from './interviewDone'
+import { doneAffectsInterview } from './interviewDone'
 import AnswerPane from './components/AnswerPane'
 import ListenPane from './components/ListenPane'
 import TranslatePane from './components/TranslatePane'
@@ -53,8 +53,8 @@ import { api as authApi, deleteAccount, fetchMe, logout, type Me } from './auth'
 import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
-import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchBlockedReason, watchListenControlShouldApplyMode, watchListenMode, watchResumeShouldChangeMic, watchShouldApplyMode, watchStartListenPayload } from './watch'
-import { buildWatchFace, watchEndedFor } from './watchStatus'
+import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchListenMode, watchShouldApplyMode, watchStartShouldPreferWatchMic } from './watch'
+import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
 import { keepShouldWaitForNotes, shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
 import {
@@ -273,7 +273,6 @@ type Action =
   | { type: 'fill_translate'; id: string; translation: string; passthrough?: boolean }
   | { type: 'clear_translation'; id: string }
   | { type: 'retry_translate'; id: string }
-  | { type: 'retry_turn'; id: string }
   | { type: 'fail_translate'; id: string }
   | { type: 'ask_start' }
   | { type: 'seed_ask'; text: string }
@@ -536,7 +535,7 @@ function reducer(state: AppState, action: Action): AppState {
           }
           const pending = state.turns.findIndex((t) => t.id === '__pending_ask__')
           const turns = state.turns.slice()
-          if (pending >= 0) turns[pending] = { ...turns[pending], id: qid, q: text, failed: false }
+          if (pending >= 0) turns[pending] = { ...turns[pending], id: qid, q: text }
           else turns.push({ id: qid, q: text, a: '' })
           return { ...state, turns, currentQ: text, currentQId: qid, partial: '', busy: true, heardLang: heard ?? state.heardLang }
         }
@@ -594,7 +593,7 @@ function reducer(state: AppState, action: Action): AppState {
           }
           if (state.workspaceMode === 'interview' && state.turns.length) {
             const byId = ev.id ? state.turns.findIndex((t) => t.id === ev.id) : -1
-            const fallback = byId < 0 && !ev.id ? state.turns.length - 1 : state.turns.findIndex((t) => !t.a && !t.failed)
+            const fallback = byId < 0 && !ev.id ? state.turns.length - 1 : state.turns.findIndex((t) => !t.a)
             const idx = byId >= 0 ? byId : fallback
             if (idx >= 0) {
               const turns = state.turns.slice()
@@ -611,8 +610,12 @@ function reducer(state: AppState, action: Action): AppState {
           }
           const waitingAsk = state.catchNotes.some((note) => isPendingCatchId(note.id))
           let turns = state.turns
-          if (state.workspaceMode === 'interview' && ev.ok === false) {
-            turns = markTurnFailed(turns, ev.id || undefined)
+          if (state.workspaceMode === 'interview' && ev.ok === false && ev.id && turns.length) {
+            const i = turns.findIndex((t) => t.id === ev.id)
+            if (i >= 0 && !turns[i].a) {
+              turns = turns.slice()
+              turns[i] = { ...turns[i], a: state.status.startsWith('Generation failed') ? state.status : 'Generation stopped. Please try again.' }
+            }
           }
           return {
             ...state,
@@ -627,8 +630,10 @@ function reducer(state: AppState, action: Action): AppState {
         case 'error': {
           const msg = ev.text || 'Generation failed'
           if (state.workspaceMode === 'interview' && state.turns.length) {
-            const turns = markTurnFailed(state.turns)
-            if (turns !== state.turns) {
+            const i = state.turns.findIndex((t) => !t.a)
+            if (i >= 0) {
+              const turns = state.turns.slice()
+              turns[i] = { ...turns[i], a: msg }
               return { ...state, turns, status: msg, busy: false }
             }
           }
@@ -906,11 +911,6 @@ function reducer(state: AppState, action: Action): AppState {
       )
       return { ...state, translatePairs, translateBindId: action.id }
     }
-    case 'retry_turn': {
-      const turns = retryTurn(state.turns, action.id)
-      if (turns === state.turns) return state
-      return { ...state, turns, busy: true, status: 'Asking…' }
-    }
     case 'ask_start':
       return { ...state, busy: true, status: 'Asking…' }
     case 'seed_ask': {
@@ -918,7 +918,9 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, turns, currentQ: action.text, busy: true, status: 'Asking…' }
     }
     case 'fail_ask': {
-      const turns = markTurnFailed(state.turns, '__pending_ask__')
+      const turns = state.turns.map((t) =>
+        t.id === '__pending_ask__' && !t.a ? { ...t, a: action.text } : t,
+      )
       return { ...state, turns, busy: false, status: action.text }
     }
     case 'fail_translate': {
@@ -997,7 +999,6 @@ export default function App() {
   const stateRef = useRef(state)
   stateRef.current = state
   const listenWanted = useRef(false)
-  const listenFromWatch = useRef(false)
   const [savePrompt, setSavePrompt] = useState(false)
   const [savePromptMode, setSavePromptMode] = useState<'discard' | 'cancel'>('discard')
   const [leaveSheetOpen, setLeaveSheetOpen] = useState(false)
@@ -1093,7 +1094,6 @@ export default function App() {
   const startListen = (opts?: { fromWatch?: boolean }) => {
     if (!opts?.fromWatch) takePhoneMic()
     listenWanted.current = true
-    listenFromWatch.current = !!opts?.fromWatch
     // Starting a fresh listen abandons any pending recovery of a previously
     // disconnected meeting session — its prompt is dropped and the server
     // purges the pending row after 24h rather than letting it shadow this one.
@@ -1111,11 +1111,10 @@ export default function App() {
     if (s.workspaceMode === 'translate' || s.translateOn) {
       unlockSpeech()
     }
-    window.api.send(watchStartListenPayload(!!opts?.fromWatch))
+    window.api.send({ type: 'start_listen' })
   }
   const stopListen = () => {
     listenWanted.current = false
-    listenFromWatch.current = false
     window.api.send({ type: 'stop_listen' })
   }
   const askedTranslate = useRef<Set<string>>(new Set())
@@ -1124,7 +1123,6 @@ export default function App() {
   const translateFiles = useRef<Map<string, AttachPayload[]>>(new Map())
   const translateTimer = useRef(0)
   const pumpTranslateRef = useRef<() => void>(() => {})
-  const handleRetryTurnRef = useRef<(id: string) => void>(() => {})
   const generateNotesRef = useRef<() => void>(() => {})
   const exportAfterNotes = useRef(false)
   const keepAfterNotes = useRef<KeepAfterNotesJob | null>(null)
@@ -1139,7 +1137,6 @@ export default function App() {
   ttsVoiceRef.current = ttsVoice
   const consentRef = useRef<boolean | null>(demoScene ? true : null)
   const [consentOpen, setConsentOpen] = useState(false)
-  const [watchSignInBlocked, setWatchSignInBlocked] = useState(false)
   const pendingMic = useRef<(() => void) | null>(null)
   const [composeOpen, setComposeOpen] = useState(false)
   const [railHover, setRailHover] = useState(false)
@@ -1263,10 +1260,7 @@ export default function App() {
 
   useEffect(() => {
     void fetchMe().then((user) => {
-      if (user) {
-        setMe(user)
-        setWatchSignInBlocked(false)
-      }
+      if (user) setMe(user)
       const ok = user ? Boolean(user.consent) : true
       consentRef.current = ok
       setConsent(ok)
@@ -1313,12 +1307,15 @@ export default function App() {
         listenScene: next.scene ?? (next.workspace === 'interview' ? 'interview' : stateRef.current.listenScene),
       }
     }
-    const applyWatchMic = () => {
-      setPreferWatchMic(true)
+    const applyWatchMic = (raw?: string) => {
+      const s = stateRef.current
+      const mode = watchListenMode(raw) || watchStatusMode(s.workspaceMode, s.listenScene)
+      if (watchStartShouldPreferWatchMic(mode)) setPreferWatchMic(true)
+      else takePhoneMic()
     }
     return installWatchRemote({
       onStart: (mode) => {
-        applyWatchMic()
+        applyWatchMic(mode)
         const s = stateRef.current
         if (!watchListenControlShouldApplyMode({ action: 'start', paused: s.capture === 'paused', capture: s.capture })) {
           guardMic(() => startListen({ fromWatch: true }))
@@ -1337,7 +1334,7 @@ export default function App() {
         guardMic(() => startListen({ fromWatch: true }))
       },
       onRecord: (mode) => {
-        applyWatchMic()
+        applyWatchMic(mode)
         const s = stateRef.current
         if (!watchListenControlShouldApplyMode({ action: 'record', paused: s.capture === 'paused', capture: s.capture })) {
           if (s.capture === 'paused') {
@@ -1372,7 +1369,7 @@ export default function App() {
         }
       },
       onResume: () => {
-        if (watchResumeShouldChangeMic()) applyWatchMic()
+        applyWatchMic()
         const s = stateRef.current
         if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
           dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
@@ -1389,15 +1386,12 @@ export default function App() {
         }
       },
       onSave: () => {
-        const book = saveBookRef.current
-        if (book.status === 'saving' && book.liveId) return
-        saveLiveSession({ fromWatch: true })
+        window.api.send(watchSaveCommand())
+        markHistoryKept(true)
       },
       onDiscard: () => {
-        if (saveBookRef.current.status === 'saving') return
-        markHistoryKept(false)
         window.api.send(watchDiscardCommand())
-        doClearRef.current()
+        markHistoryKept(false)
       },
       onSpeak: () => {
         const s = stateRef.current
@@ -1423,22 +1417,6 @@ export default function App() {
       onTtsVoice: (voice) => {
         setTtsVoice(voice)
         writeTtsVoice(voice)
-      },
-      onRetry: (id) => {
-        if (!id) return
-        const mode = stateRef.current.workspaceMode
-        if (mode === 'translate') {
-          if (inflightTranslate.current === id) return
-          askedTranslate.current.delete(id)
-          translateRetries.current.delete(id)
-          spokenTranslate.current.delete(id)
-          dispatch({ type: 'retry_translate', id })
-          queueMicrotask(() => pumpTranslateRef.current())
-          return
-        }
-        if (mode === 'interview') {
-          handleRetryTurnRef.current(id)
-        }
       },
     })
   }, [])
@@ -1467,31 +1445,12 @@ export default function App() {
         history: face.history,
         mode: watchStatusMode(state.workspaceMode, state.listenScene),
         langPair: watchLangPair(state.workspaceMode === 'translate' ? state.translateTo : state.notesTranslateTo),
-        ended: watchEndedFor({
-          workspaceMode: state.workspaceMode,
-          capture: state.capture,
-          meetingEnded: state.meetingEnded,
-          hasSaveableContent: meetingHasSaveableContent(state),
-          translatePairs: state.translatePairs,
-          turns: state.turns,
-        }),
-        elapsedMs: state.meetingElapsedMs,
-        save: watchSaveWireStatus(saveBook.status),
-        sessionId: saveBook.liveId || '',
-        engine: state.engine,
-        blocked: watchBlockedReason({
-          signIn: watchSignInBlocked,
-          consentOpen,
-          quotaOk: state.quota?.ok !== false,
-        }),
-        failed: face.failed,
       })
     }, 180)
     return () => window.clearTimeout(timer)
   }, [
     consentOpen,
     state.capture,
-    state.engine,
     state.meetingLines,
     state.notesAskId,
     state.notesRaw,
@@ -1504,11 +1463,6 @@ export default function App() {
     state.listenScene,
     state.translateTo,
     state.notesTranslateTo,
-    state.meetingEnded,
-    state.meetingElapsedMs,
-    saveBook,
-    watchSignInBlocked,
-    state.quota,
   ])
 
   const acceptConsent = () => {
@@ -1589,7 +1543,7 @@ export default function App() {
         syncWorkspace()
         checkPendingRestore()
         if (listenWanted.current) {
-          queueMicrotask(() => api.send(watchStartListenPayload(listenFromWatch.current)))
+          queueMicrotask(() => api.send({ type: 'start_listen' }))
         }
       }
       // Every chunk of the current translate ask re-arms the 25s timeout, so a
@@ -1599,7 +1553,6 @@ export default function App() {
       }
       if (shouldReleaseListen(e)) {
         listenWanted.current = false
-        listenFromWatch.current = false
       }
       if (
         e.type === 'save_prompt'
@@ -1610,7 +1563,6 @@ export default function App() {
         handleEngineKeepRef.current(e)
       }
       const translateAskBefore = stateRef.current.translateAskId
-      if (e.type === 'auth_required') setWatchSignInBlocked(true)
       dispatch({ type: 'engine', ev: e })
       if (e.type === 'question' && stateRef.current.workspaceMode === 'meeting' && notesBilingualOn(stateRef.current.notesLang, stateRef.current.translateOn)) {
         const text = e.text ?? ''
@@ -1816,12 +1768,7 @@ export default function App() {
   }
 
   const sendKeepNow = (opts: { content: boolean; audio: boolean }) => {
-    const liveId = saveBookRef.current.liveId
-    window.api.send(
-      liveId
-        ? { type: 'keep_history', content: opts.content, audio: opts.audio, id: liveId }
-        : { type: 'keep_history', content: opts.content, audio: opts.audio },
-    )
+    window.api.send({ type: 'keep_history', content: opts.content, audio: opts.audio })
     clearKeepTimer()
     keepTimerRef.current = window.setTimeout(() => failKeep('timeout'), KEEP_ACK_TIMEOUT_MS)
   }
@@ -1831,11 +1778,7 @@ export default function App() {
     const book = saveBookRef.current
     if (!pending || !book.liveId || book.status !== 'saving') return
     pendingKeepRef.current = null
-    if (pending.waitNotes && keepShouldWaitForNotes({
-      notesAskId: stateRef.current.notesAskId,
-      pendingAfterSave: book.pendingAfterSave === 'none' ? null : book.pendingAfterSave,
-      fromWatch: false,
-    })) {
+    if (pending.waitNotes && keepShouldWaitForNotes(stateRef.current.notesAskId)) {
       keepAfterNotes.current = {
         content: pending.content,
         audio: pending.audio,
@@ -1883,12 +1826,9 @@ export default function App() {
     setSavePrompt(true)
   }
 
-  const saveLiveSession = (opts?: { content?: boolean; audio?: boolean; fromPrompt?: boolean; fromWatch?: boolean }) => {
+  const saveLiveSession = (opts?: { content?: boolean; audio?: boolean; fromPrompt?: boolean }) => {
     if (historyKeptRef.current) {
       setHistoryOpen(true)
-      if (opts?.fromWatch && saveBookRef.current.status !== 'saved') {
-        commitBook({ ...saveBookRef.current, status: 'saved' })
-      }
       return
     }
     if (!isNativeApp() && !opts?.fromPrompt) {
@@ -1902,11 +1842,7 @@ export default function App() {
     commitBook(book)
     keepEpochRef.current = { liveId: book.liveId, generation: book.generation }
     if (phoneRef.current) setSaveBannerOpen(true)
-    const waitNotes = keepShouldWaitForNotes({
-      notesAskId: stateRef.current.notesAskId,
-      pendingAfterSave: book.pendingAfterSave === 'none' ? null : book.pendingAfterSave,
-      fromWatch: Boolean(opts?.fromWatch),
-    })
+    const waitNotes = keepShouldWaitForNotes(stateRef.current.notesAskId)
     if (!book.liveId) {
       pendingKeepRef.current = { content, audio, waitNotes }
       clearKeepTimer()
@@ -1932,6 +1868,13 @@ export default function App() {
         return
       }
       bindLiveFromEngine(e.id)
+      if (watchAutoNotes.current) {
+        if (watchStopShouldAutoKeepHistory(watchAutoNotes.current)) {
+          window.api.send(watchSaveCommand())
+          markHistoryKept(true)
+        }
+        return
+      }
       if (leaving || skipOfferSavePromptRef.current) {
         skipOfferSavePromptRef.current = false
         return
@@ -2140,10 +2083,7 @@ export default function App() {
   }, [performSignOut])
 
   const handleAccountMe = useCallback((user: Me | null) => {
-    if (user) {
-      setMe(user)
-      setWatchSignInBlocked(false)
-    }
+    if (user) setMe(user)
   }, [])
 
   const armLeaveCaptureWait = () => {
@@ -2984,14 +2924,6 @@ export default function App() {
     queueMicrotask(() => pumpTranslateRef.current())
   }, [])
 
-  const handleRetryTurn = useCallback((id: string) => {
-    const turn = stateRef.current.turns.find((t) => t.id === id)
-    if (!turn?.q.trim()) return
-    dispatch({ type: 'retry_turn', id })
-    window.api.send({ type: 'ask', text: turn.q })
-  }, [])
-  handleRetryTurnRef.current = handleRetryTurn
-
   const writePdf = useCallback(async () => {
     const s = stateRef.current
     const when = new Date().toLocaleString()
@@ -3611,7 +3543,6 @@ export default function App() {
                 busy={state.busy}
                 listening={listening}
                 onAsk={handleAsk}
-                onRetryTurn={handleRetryTurn}
                 onCompose={setComposeOpen}
               />
             }

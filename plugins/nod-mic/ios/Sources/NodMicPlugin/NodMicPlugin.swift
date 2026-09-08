@@ -10,8 +10,6 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "start", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stop", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "startKeepAlive", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "stopKeepAlive", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "isActive", returnType: CAPPluginReturnPromise),
     ]
 
@@ -58,36 +56,6 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func isActive(_ call: CAPPluginCall) {
         call.resolve(["active": running])
-    }
-
-    @objc func startKeepAlive(_ call: CAPPluginCall) {
-        DispatchQueue.main.async {
-            if self.running {
-                call.resolve()
-                return
-            }
-            do {
-                let session = AVAudioSession.sharedInstance()
-                try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-                try session.setActive(true)
-                self.startSilentLoop()
-                call.resolve()
-            } catch {
-                call.reject(error.localizedDescription)
-            }
-        }
-    }
-
-    @objc func stopKeepAlive(_ call: CAPPluginCall) {
-        DispatchQueue.main.async {
-            if self.running {
-                call.resolve()
-                return
-            }
-            self.stopSilentLoop()
-            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-            call.resolve()
-        }
     }
 
     private func startCapture(_ call: CAPPluginCall, attempt: Int, gen: Int) {
