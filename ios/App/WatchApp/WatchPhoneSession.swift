@@ -428,7 +428,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             self.saveState = "failed"
         }
         saveWaitWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: work)
     }
 
     func discardSession() {
