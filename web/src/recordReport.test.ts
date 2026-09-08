@@ -1,4 +1,4 @@
-import { keepShouldWaitForNotes, shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
+import { keepShouldWaitForNotes, meetingEndedReady, shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
 
 function eq(got: string, want: string) {
   if (got !== want) throw new Error(`expected ${want}, got ${got}`)
@@ -26,6 +26,7 @@ eq(report({ capture: 'off', engine: 'idle', workspaceMode: 'meeting', busy: fals
 eq(report({ capture: 'off', engine: 'idle', workspaceMode: 'interview', busy: false, lineCount: 2 }), 'generate')
 eq(report({ capture: 'paused', engine: 'idle', workspaceMode: 'meeting', busy: false, lineCount: 2 }), 'wait')
 eq(report({ capture: 'off', engine: 'generating', workspaceMode: 'meeting', busy: false, lineCount: 2 }), 'wait')
+eq(report({ capture: 'off', engine: 'transcribing', workspaceMode: 'meeting', busy: false, lineCount: 2 }), 'wait')
 
 // Wait for Notes only when leaving this session after Save — not Watch, not a stay-put phone Save.
 if (keepShouldWaitForNotes({ notesAskId: 'ask-1', pendingAfterSave: 'new', fromWatch: true }) !== false) {
@@ -45,3 +46,16 @@ if (keepShouldWaitForNotes({ notesAskId: '', pendingAfterSave: 'new', fromWatch:
 // stays 'paused' and auto-notes never fire.
 if (stopShouldReleaseListener('paused') !== true) throw new Error('paused => release the listener')
 if (stopShouldReleaseListener('off') !== false) throw new Error('off => no listener to release')
+
+if (meetingEndedReady({ deferred: false, workspaceMode: 'meeting', capture: 'off', engine: 'idle' })) {
+  throw new Error('not deferred => do not end')
+}
+if (meetingEndedReady({ deferred: true, workspaceMode: 'meeting', capture: 'off', engine: 'transcribing' })) {
+  throw new Error('transcribing => wait')
+}
+if (meetingEndedReady({ deferred: true, workspaceMode: 'meeting', capture: 'listening', engine: 'idle' })) {
+  throw new Error('still listening => wait')
+}
+if (!meetingEndedReady({ deferred: true, workspaceMode: 'meeting', capture: 'off', engine: 'idle' })) {
+  throw new Error('off + idle after stop => end')
+}

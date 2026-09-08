@@ -135,9 +135,10 @@ class TranscriptKeepTests(unittest.TestCase):
         client.__enter__ = mock.Mock(return_value=client)
         client.__exit__ = mock.Mock(return_value=False)
         with mock.patch("server.app.httpx.Client", return_value=client):
-            text, lang = assemblyai_transcribe_accurate("key", b"\x00\x00" * 1600, {"stt": {}})
+            text, lang, _utt = assemblyai_transcribe_accurate("key", b"\x00\x00" * 1600, {"stt": {}})
         self.assertEqual(text, "Hello from file STT.")
         self.assertEqual(lang, "en")
+        self.assertEqual(_utt, [])
         self.assertEqual(client.post.call_count, 2)
         self.assertIn("/v2/upload", client.post.call_args_list[0].args[0])
         self.assertIn("/v2/transcript", client.post.call_args_list[1].args[0])

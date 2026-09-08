@@ -655,4 +655,21 @@ eq(qaFailed.phase, 'qaFailed', 'empty failed answer is Couldn\'t answer')
 eq(qaFailed.statusEn, "Couldn't answer", 'qa failed copy')
 eq(qaFailed.primary, undefined, 'Q&A has no Retry')
 
+const meetingTranscribing = buildWatchScreen({
+  workspaceMode: 'meeting',
+  listenScene: 'meeting',
+  listening: false,
+  paused: false,
+  original: '',
+  translation: '',
+  question: '',
+  answer: '',
+  drafting: false,
+  engine: 'transcribing',
+})
+eq(meetingTranscribing.phase, 'transcribing', 'Meeting file STT must not look Ready')
+eq(meetingTranscribing.primary, undefined, 'Transcribing has no Resume')
+eq(meetingTranscribing.statusEn, 'Transcribing…', 'web transcribing line')
+
+
 

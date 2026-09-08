@@ -576,6 +576,7 @@ def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
 # Nod-WS reconnect run on the thread pool, so three start_listen frames in the
 # same second used to open three sockets and keep only the last reference.
 _LIVE_STT: dict[str, tuple[CloudListener, Session]] = {}
+_BATCH_LISTEN: dict[str, Session] = {}
 _LIVE_STT_MU = threading.Lock()
 _IDLE_WATCH_INTERVAL_SEC = 5.0
 _idle_watch_thread: threading.Thread | None = None
@@ -610,6 +611,20 @@ def _drop_live_stt(slot: str, listener: CloudListener) -> None:
 def _reset_live_stt() -> None:
     with _LIVE_STT_MU:
         _LIVE_STT.clear()
+        _BATCH_LISTEN.clear()
+
+
+def _adopt_batch_listen(slot: str, owner: Session) -> Session | None:
+    with _LIVE_STT_MU:
+        prev = _BATCH_LISTEN.get(slot)
+        _BATCH_LISTEN[slot] = owner
+        return prev if prev is not owner else None
+
+
+def _drop_batch_listen(slot: str, owner: Session) -> None:
+    with _LIVE_STT_MU:
+        if _BATCH_LISTEN.get(slot) is owner:
+            _BATCH_LISTEN.pop(slot, None)
 
 
 def _tick_live_idle_watches() -> None:
@@ -620,6 +635,7 @@ def _tick_live_idle_watches() -> None:
     """
     with _LIVE_STT_MU:
         owners = [sess for _, sess in list(_LIVE_STT.values())]
+        owners.extend(list(_BATCH_LISTEN.values()))
     for sess in owners:
         try:
             sess._maybe_stop_forgotten_listen()
@@ -681,7 +697,49 @@ def assemblyai_prerecorded_body(cfg: dict[str, Any], audio_url: str) -> dict[str
     keyterms = _stt_keyterms(cfg)
     if keyterms:
         body["keyterms_prompt"] = keyterms
+    if stt.get("speaker_labels"):
+        body["speaker_labels"] = True
+        raw_cap = stt.get("speakers_expected")
+        try:
+            cap = int(raw_cap) if raw_cap is not None else 0
+        except (TypeError, ValueError):
+            cap = 0
+        if cap >= 2:
+            body["speakers_expected"] = cap
     return body
+
+
+def assemblyai_utterances_from_payload(data: dict[str, Any]) -> list[tuple[str, str | None]]:
+    out: list[tuple[str, str | None]] = []
+    for row in data.get("utterances") or []:
+        text = str((row or {}).get("text") or "").strip()
+        if not text:
+            continue
+        speaker = str((row or {}).get("speaker") or "").strip() or None
+        out.append((text, speaker))
+    return out
+
+
+_FILE_SENTENCE_SPLIT = re.compile(r"(?<=[.!?。！？])\s+")
+
+
+def meeting_lines_from_file(
+    text: str,
+    utterances: list[tuple[str, str | None]] | None = None,
+) -> list[tuple[str, str | None]]:
+    """Turn a file-STT result into meeting transcript lines.
+
+    Prefer speaker utterances when the async API returns them. Otherwise split
+    the punctuated transcript on sentence boundaries — do not run the live
+    half-sentence hold/merge path.
+    """
+    if utterances:
+        return [(piece.strip(), speaker) for piece, speaker in utterances if (piece or "").strip()]
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    parts = [piece.strip() for piece in _FILE_SENTENCE_SPLIT.split(raw) if piece.strip()]
+    return [(piece, None) for piece in parts] or [(raw, None)]
 
 
 def clean_transcript(text: str, recent_finals=None, last_answer=None, keep_fillers=False) -> tuple[str, str]:
@@ -1052,7 +1110,7 @@ def assemblyai_transcribe_accurate(
     pcm: bytes,
     cfg: dict[str, Any],
     timeout: float | None = None,
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, list[tuple[str, str | None]]]:
     from server.r2 import pcm_to_wav
 
     wav = pcm_to_wav(pcm)
@@ -1088,7 +1146,7 @@ def assemblyai_transcribe_accurate(
             status = data.get("status")
             if status == "completed":
                 text = (data.get("text") or "").strip()
-                return text, heard_lang_from_code(data.get("language_code"))
+                return text, heard_lang_from_code(data.get("language_code")), assemblyai_utterances_from_payload(data)
             if status == "error":
                 raise RuntimeError(data.get("error") or "AssemblyAI file transcription failed")
             time.sleep(1.5)
@@ -2090,6 +2148,9 @@ class Session:
         # ship for backward compatibility, then a `phase` event pairs them.
         self._paused = False
         self._engine = "idle"
+        self._batch_listen = False
+        self._batch_buf = bytearray()
+        self._batch_thread: threading.Thread | None = None
 
     def _archive_prefix(self) -> str:
         return f"users/{self.user_id}/sessions/{self.usage_session_id}/audio/"
@@ -2279,7 +2340,8 @@ class Session:
     def push_pcm(self, pcm: bytes) -> None:
         if not pcm:
             return
-        if self._listener:
+        batch = getattr(self, "_batch_listen", False)
+        if self._listener or batch:
             # ANY byte (even silence, even while muted or consent-blocked) proves the
             # client is alive and streaming — refresh the zero-PCM clock BEFORE the
             # mute/consent gates. Mute is server-side (the client keeps streaming and
@@ -2291,7 +2353,7 @@ class Session:
             return
         if self.user_id and not self._has_consent():
             return
-        if self.user_id:
+        if self.user_id and not batch:
             self._pcm_unmetered += len(pcm)
             if self._pcm_unmetered >= 16000:
                 seconds = self._pcm_unmetered / float(SR * 2)
@@ -2323,6 +2385,15 @@ class Session:
                 self._stop_manual()
             else:
                 self._maybe_flush_manual_chunk()
+            return
+        if batch:
+            if getattr(self, "_paused", False):
+                return
+            self._batch_buf.extend(pcm)
+            self._archive_append(pcm)
+            if _pcm_has_voice(pcm):
+                self._last_voice_at = time.time()
+            self._maybe_stop_forgotten_listen()
             return
         if self._listener:
             self._archive_append(pcm)
@@ -2496,6 +2567,8 @@ class Session:
             if getattr(self, "_listen_starting", False):
                 return False
             if self._listener is not None and not resume:
+                return False
+            if getattr(self, "_batch_listen", False) and not resume:
                 return False
             self._listen_starting = True
             return True
@@ -3103,7 +3176,7 @@ class Session:
         self._paused = False
         self._listen_wanted = True
         with self._listen_lock():
-            if self._listener or getattr(self, "_listen_starting", False):
+            if self._listener or getattr(self, "_batch_listen", False) or getattr(self, "_listen_starting", False):
                 return
         if not self._ensure_consent() or not self._ensure_usage():
             self._listen_wanted = False
@@ -3115,6 +3188,9 @@ class Session:
         self._listen_wanted = False
         if self._manual:
             self._stop_manual()
+            return
+        if getattr(self, "_batch_listen", False):
+            self._stop_batch_listen()
             return
         if self._listener:
             self._stop_listening()
@@ -3130,7 +3206,7 @@ class Session:
         ``capture`` stays ``paused`` so the Watch does not treat this as Stop.
         The cloud socket is Terminated; Resume opens a new stream.
         """
-        if self._listener is None and not self._manual:
+        if self._listener is None and not self._manual and not getattr(self, "_batch_listen", False):
             self.emit({"type": "status", "text": "Not listening"})
             return
         if self._manual:
@@ -3139,6 +3215,13 @@ class Session:
             self.emit({"type": "status", "text": "Not listening"})
             return
         self._paused = True
+        if getattr(self, "_batch_listen", False):
+            self._listen_accum_sec = getattr(self, "_listen_accum_sec", 0.0) + (
+                time.time() - (self._listen_started_at or time.time())
+            )
+            self._emit_phase()
+            self.emit({"type": "status", "text": "Listening paused"})
+            return
         if self._listener:
             # Bank the just-listened segment into the accumulated 2h quota so
             # the wall-clock pause doesn't keep consuming the cap.
@@ -3240,18 +3323,116 @@ class Session:
         self.emit({"type": "status", "text": "Session discarded"})
 
     def toggle_listen(self) -> None:
-        if self._listener or self._listen_wanted:
+        if self._listener or getattr(self, "_batch_listen", False) or self._listen_wanted:
             self.stop_listen()
         else:
             self.start_listen()
 
     def _start_listening(self, resume: bool = False) -> None:
+        if getattr(self, "_workspace", "") == "meeting":
+            if not self._claim_listen_start(resume):
+                return
+            try:
+                self._open_batch_listen(resume)
+            finally:
+                self._release_listen_start()
+            return
         if not self._claim_listen_start(resume):
             return
         try:
             self._open_listener(resume)
         finally:
             self._release_listen_start()
+
+    def _open_batch_listen(self, resume: bool = False) -> None:
+        """Meeting / Lecture: keep PCM without opening a live AssemblyAI socket."""
+        self._batch_listen = True
+        if not resume:
+            self._batch_buf = bytearray()
+            self._listen_accum_sec = 0.0
+        now = time.time()
+        if not resume or not self._listen_started_at:
+            self._listen_started_at = now
+            self._last_voice_at = now
+        self._idle_check_at = 0.0
+        self._last_pcm_at = now
+        _adopt_batch_listen(self._stt_slot(), self)
+        _ensure_idle_watch_thread()
+        self._emit_phase()
+        if not resume:
+            self.emit({"type": "status", "text": STATUS_LISTEN})
+
+    def _stop_batch_listen(self) -> None:
+        if getattr(self, "_engine", "idle") == "transcribing" and not getattr(self, "_batch_listen", False):
+            return
+        pcm = bytes(getattr(self, "_batch_buf", b"") or b"")
+        self._batch_buf = bytearray()
+        self._batch_listen = False
+        self._paused = False
+        self._listen_wanted = False
+        self._listen_accum_sec = 0.0
+        self._last_pcm_at = 0.0
+        _drop_batch_listen(self._stt_slot(), self)
+        self._flush_cloud_archive(final=False)
+        self._set_engine("transcribing")
+        self._emit_phase()
+        self.emit({"type": "status", "text": STATUS_TRANSCRIBE})
+        thread = threading.Thread(target=self._finish_batch_listen, args=(pcm,), daemon=True)
+        self._batch_thread = thread
+        thread.start()
+
+    def _transcribe_batch_pcm(self, pcm: bytes) -> tuple[str, str | None, list[tuple[str, str | None]]]:
+        key = self.pipeline.assemblyai_key()
+        if not key:
+            raise RuntimeError("Missing AssemblyAI key")
+        cfg = self._stt_cfg()
+        try:
+            return assemblyai_transcribe_accurate(key, pcm, cfg)
+        except Exception as e:
+            log.warning("accurate STT failed, falling back to realtime: %s", e)
+            dur = len(pcm) / float(SR * 2)
+            text, lang = assemblyai_transcribe_pcm(key, pcm, cfg, timeout=min(90.0, max(24.0, dur * 2 + 12)))
+            return text, lang, []
+
+    def _finish_batch_listen(self, pcm: bytes) -> None:
+        min_bytes = int(MANUAL_MIN_SEC * SR * 2)
+        try:
+            if len(pcm) < min_bytes:
+                self.emit({"type": "status", "text": "Recording too short, try again"})
+                return
+            from server.r2 import PART_BYTES
+
+            parts = [pcm[i : i + PART_BYTES] for i in range(0, len(pcm), PART_BYTES)] or [pcm]
+            billed = 0.0
+            any_text = False
+            for part in parts:
+                if len(part) < min_bytes and any_text:
+                    continue
+                text, lang, utterances = self._transcribe_batch_pcm(part)
+                lines = meeting_lines_from_file(text, utterances)
+                for piece, speaker in lines:
+                    cleaned = (piece or "").strip()
+                    if not cleaned:
+                        continue
+                    self._emit_meeting_line(cleaned, lang, speaker)
+                    any_text = True
+                billed += len(part) / float(SR * 2)
+            if billed and self.user_id:
+                if self._ensure_usage():
+                    from server.meter import consume_stt
+
+                    ok, snap = consume_stt(self.user_id, billed, self.usage_session_id)
+                    self.emit({"type": "quota", **snap})
+                    if not ok:
+                        self._quota_block(snap)
+            if not any_text:
+                self.emit({"type": "status", "text": STATUS_EMPTY})
+        except Exception as e:
+            self.emit({"type": "error", "text": f"Transcription failed:{e}"})
+        finally:
+            self._set_engine("idle")
+            self._emit_phase()
+            self._offer_save_history()
 
     def _open_listener(self, resume: bool = False) -> None:
         key = self.pipeline.assemblyai_key()
@@ -3319,7 +3500,12 @@ class Session:
         self._last_voice_at = time.time()
 
     def _maybe_stop_forgotten_listen(self) -> None:
-        if not self._listener:
+        if getattr(self, "_engine", "idle") == "transcribing":
+            return
+        if getattr(self, "_paused", False):
+            return
+        batch = getattr(self, "_batch_listen", False)
+        if not self._listener and not batch:
             return
         now = time.time()
         if now - self._idle_check_at < 5:
@@ -3327,12 +3513,19 @@ class Session:
         self._idle_check_at = now
         started = self._listen_started_at or now
         last = self._last_voice_at or started
-        if getattr(self, "_listen_accum_sec", 0.0) + (now - started) >= LISTEN_MAX_SECONDS:
+
+        def _stop_forgotten(message: str) -> None:
             self._paused = False
             self._listen_wanted = False
-            self._stop_listening()
-            self.emit({"type": "status", "text": "Listening stopped after 2 hours. Start again if you still need it."})
-            self._offer_save_history()
+            if batch:
+                self._stop_batch_listen()
+            else:
+                self._stop_listening()
+                self._offer_save_history()
+            self.emit({"type": "status", "text": message})
+
+        if getattr(self, "_listen_accum_sec", 0.0) + (now - started) >= LISTEN_MAX_SECONDS:
+            _stop_forgotten("Listening stopped after 2 hours. Start again if you still need it.")
             return
         last_pcm = getattr(self, "_last_pcm_at", 0.0) or now
         zero_limit = (
@@ -3341,18 +3534,12 @@ class Session:
             else LISTEN_ZERO_PCM_SECONDS
         )
         if now - last_pcm >= zero_limit:
-            self._paused = False
-            self._listen_wanted = False
-            self._stop_listening()
-            self.emit({"type": "status", "text": f"No microphone audio received for {int(zero_limit)} seconds — stopped listening. Tap Start to retry."})
-            self._offer_save_history()
+            _stop_forgotten(
+                f"No microphone audio received for {int(zero_limit)} seconds — stopped listening. Tap Start to retry."
+            )
             return
         if now - last >= LISTEN_IDLE_SECONDS:
-            self._paused = False
-            self._listen_wanted = False
-            self._stop_listening()
-            self.emit({"type": "status", "text": "Listening stopped after 15 minutes of silence."})
-            self._offer_save_history()
+            _stop_forgotten("Listening stopped after 15 minutes of silence.")
 
     def _stop_listening(self) -> None:
         self._listen_accum_sec = 0.0  # session over; reset the accumulated quota
@@ -3417,6 +3604,8 @@ class Session:
             return "paused"
         if getattr(self, "_listener", None) is not None:
             return "listening"
+        if getattr(self, "_batch_listen", False):
+            return "listening"
         return "off"
 
     def _set_engine(self, engine: str) -> None:
@@ -3472,7 +3661,8 @@ class Session:
             raise RuntimeError("Missing AssemblyAI key")
         cfg = self._stt_cfg()
         try:
-            return assemblyai_transcribe_accurate(key, pcm, cfg)
+            text, lang, _utt = assemblyai_transcribe_accurate(key, pcm, cfg)
+            return text, lang
         except Exception as e:
             log.warning("accurate STT failed, falling back to realtime: %s", e)
             dur = len(pcm) / float(SR * 2)

@@ -3,6 +3,7 @@ import {
   speakerSuggestText,
   canSwitchWorkspace,
   isListenReadyView,
+  listenAskEnabled,
   listenChipLabel,
   listenChipParts,
   moreMenuEnabled,
@@ -218,6 +219,10 @@ eq(isListenReadyView({ ...readyBase, ended: true, lines: 1 }), false, 'ended wit
 eq(isListenReadyView({ ...readyBase, lines: 1 }), false, 'lines are not ready')
 eq(isListenReadyView({ ...readyBase, partial: true }), false, 'partial is not ready')
 eq(isListenReadyView({ ...readyBase, phone: false }), false, 'desktop is not the ready page')
+eq(isListenReadyView({ ...readyBase, engine: 'transcribing' }), false, 'file STT is not ready')
+eq(listenAskEnabled({ lineCount: 0, busy: false }), false, 'Ask waits for a transcript')
+eq(listenAskEnabled({ lineCount: 1, busy: false }), true, 'Ask works after lines exist')
+eq(listenAskEnabled({ lineCount: 1, busy: true }), false, 'Ask waits while busy')
 eq(IPHONE_COPY.pausedStatus, 'Paused', 'paused status stays Paused')
 eq(IPHONE_COPY.endedStatus, 'Ended', 'ended status is Ended')
 eq(listenControlMode({ listening: true, paused: false, ended: true, hasContent: true }), 'recording', 'live chrome wins over ended')

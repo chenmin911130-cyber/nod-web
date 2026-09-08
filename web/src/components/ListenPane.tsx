@@ -24,6 +24,7 @@ import {
   IPHONE_COPY,
   bilingualButtonTitle,
   isListenReadyView,
+  listenAskEnabled,
   listenChipParts,
   nativeListenChipOrder,
   notesChipParts,
@@ -55,6 +56,7 @@ interface Props {
   listening: boolean
   paused?: boolean
   ended: boolean
+  engine?: string
   catchNotes: CatchNote[]
   notesRaw: string
   busy: boolean
@@ -1097,7 +1099,10 @@ export default function ListenPane(props: Props) {
     ended: props.ended,
     lines: props.lines.length,
     partial: Boolean(props.partial),
+    engine: props.engine,
   })
+  const hideLiveCaptions = !props.qa && (props.listening || paused)
+  const askEnabled = listenAskEnabled({ lineCount: props.lines.length, busy: props.busy })
   const [sheet, setSheet] = useState<null | 'scene' | 'speech' | 'notes'>(null)
   const [draftScene, setDraftScene] = useState(props.scene)
   const [draftSpeakers, setDraftSpeakers] = useState(props.meetingSpeakersId)
@@ -1174,7 +1179,7 @@ export default function ListenPane(props: Props) {
 
   const submit = () => {
     const text = input.trim()
-    if (!text || props.busy) return
+    if (!text || !askEnabled) return
     if (!phone) openNotes()
     props.onAsk(text)
     setInput('')
@@ -1511,7 +1516,7 @@ export default function ListenPane(props: Props) {
         </>
       )}
 
-      {ready ? null : showStage && !props.qa && liveMode === 'content' && hasFeed ? (
+      {ready ? null : showStage && !props.qa && !hideLiveCaptions && liveMode === 'content' && hasFeed ? (
         <IphoneLiveFeed
           items={feed.items}
           draft={feed.draft}
@@ -1580,7 +1585,7 @@ export default function ListenPane(props: Props) {
                 {props.lines.length === 0 && !(props.partial && !props.ended) ? (
                   <div className={`listen-empty${phone ? ' iphone-tr-empty' : ''}`}>
                     {phone
-                      ? IPHONE_COPY.emptyTranscript
+                      ? (props.listening || paused ? IPHONE_COPY.emptyTranscriptAfterStop : IPHONE_COPY.emptyTranscript)
                       : lecture
                         ? 'Start listening. This side is the lecture stream. Notes stay closed until you ask or tap Summarize.'
                         : 'Start listening. The left side keeps what was said. Notes stay closed until you ask or tap Summarize.'}
@@ -1856,7 +1861,7 @@ export default function ListenPane(props: Props) {
             ) : null}
             <input
               value={input}
-              disabled={phone && props.busy}
+              disabled={phone && !askEnabled}
               placeholder={phone ? (hadAskAnswer ? IPHONE_COPY.askFollowUp : IPHONE_COPY.askConversation) : 'Ask anything — the answer shows in Notes'}
               onChange={(e) => {
                 setInput(e.target.value)
@@ -1865,7 +1870,7 @@ export default function ListenPane(props: Props) {
                 if (e.key === 'Enter') submit()
               }}
             />
-            <button type="button" className="listen-go" disabled={props.busy || !input.trim()} onClick={submit}>
+            <button type="button" className="listen-go" disabled={!askEnabled || !input.trim()} onClick={submit}>
               {phone && props.busy ? (
                 <span className="iphone-ask-spin" aria-hidden="true" />
               ) : phone ? (

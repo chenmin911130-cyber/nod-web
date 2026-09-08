@@ -239,6 +239,19 @@ enum WatchCopy {
         ])
     }
 
+    static var transcribing: String {
+        pick([
+            "zh": "转写中…",
+            "en": "Transcribing…",
+            "it": "Trascrizione…",
+            "es": "Transcribiendo…",
+            "fr": "Transcription…",
+            "de": "Transkribieren…",
+            "pt": "Transcrevendo…",
+            "ja": "文字起こし中…",
+        ])
+    }
+
     static var endRecording: String {
         pick([
             "zh": "结束录音",
