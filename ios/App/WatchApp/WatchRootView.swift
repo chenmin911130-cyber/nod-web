@@ -98,6 +98,9 @@ struct WatchRootView: View {
                 }
                 .tabViewStyle(.page)
                 .background(canvas)
+            } else if session.engine == "transcribing", !readingSession {
+                transcribingPage
+                    .background(canvas)
             } else {
                 readyStart
                     .background(canvas)
@@ -111,6 +114,17 @@ struct WatchRootView: View {
 
     private var readingSession: Bool {
         session.mode == "translate" || session.mode == "interview"
+    }
+
+    private var transcribingPage: some View {
+        VStack(spacing: 10) {
+            capsule(WatchPhoneSession.modeLabel(session.mode))
+            Text(WatchCopy.transcribing)
+                .font(.headline)
+                .foregroundStyle(ink)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var waveAnimating: Bool {

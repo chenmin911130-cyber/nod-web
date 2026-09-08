@@ -38,3 +38,15 @@ export function keepShouldWaitForNotes(input: {
 export function stopShouldReleaseListener(capture: string): boolean {
   return capture === 'paused'
 }
+
+/** Meeting Stop must not flip Ended until file STT has finished (engine idle + capture off). */
+export function meetingEndedReady(input: {
+  deferred: boolean
+  workspaceMode: string
+  capture: string
+  engine: string
+}): boolean {
+  if (!input.deferred || input.workspaceMode !== 'meeting') return false
+  if (input.engine === 'transcribing') return false
+  return input.capture === 'off'
+}
