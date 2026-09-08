@@ -17,7 +17,6 @@ export type WatchPhase =
   | 'connectionLost'
   | 'translateFailed'
   | 'qaFailed'
-  | 'transcribing'
 
 export type WatchScreen = {
   phase: WatchPhase
@@ -309,15 +308,6 @@ export function buildWatchScreen(input: {
       secondary: 'End recording',
       rec: true,
       swipeStop: true,
-    }
-  }
-
-  if (input.workspaceMode === 'meeting' && (input.engine || '') === 'transcribing') {
-    return {
-      ...base,
-      phase: 'transcribing',
-      status: '转写中…',
-      statusEn: 'Transcribing…',
     }
   }
 

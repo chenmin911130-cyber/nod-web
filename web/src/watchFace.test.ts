@@ -680,21 +680,3 @@ const qaFailedHasAnswer = buildWatchScreen({
 })
 eq(qaFailedHasAnswer.phase, 'qaAnswer', 'failed but answer nonempty → normal result phase')
 
-const meetingTranscribing = buildWatchScreen({
-  workspaceMode: 'meeting',
-  listenScene: 'meeting',
-  listening: false,
-  paused: false,
-  original: '',
-  translation: '',
-  question: '',
-  answer: '',
-  drafting: false,
-  engine: 'transcribing',
-})
-eq(meetingTranscribing.phase, 'transcribing', 'Meeting file STT must not look Ready')
-eq(meetingTranscribing.primary, undefined, 'Transcribing has no Resume')
-eq(meetingTranscribing.statusEn, 'Transcribing…', 'web transcribing line')
-
-
-

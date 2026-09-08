@@ -7,7 +7,7 @@ import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
 import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
-import { watchDiscardCommand, watchSaveWireStatus } from './watchSave'
+import { watchDiscardCommand, watchSaveWireStatus, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
 import { meetingRailIsPaused } from './meetingPause'
@@ -56,7 +56,7 @@ import { usePhoneChrome } from './phoneChrome'
 import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchBlockedReason, watchListenControlShouldApplyMode, watchListenMode, watchResumeShouldChangeMic, watchShouldApplyMode, watchStartListenPayload } from './watch'
 import { buildWatchFace, watchEndedFor } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
-import { keepShouldWaitForNotes, meetingEndedReady, shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
+import { keepShouldWaitForNotes, shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
 import {
   clearWatchReport,
   markWatchReport,
@@ -1081,7 +1081,6 @@ export default function App() {
   const seenRestoreIds = useRef(new Set<string>())
   const watchAutoNotes = useRef(false)
   const autoReport = useRef(false)
-  const deferMeetingEnded = useRef(false)
   const recordHeard = useRef(false)
   const watchRestoreTried = useRef(false)
   const handleModeRef = useRef<(mode: WorkspaceMode, scene?: ListenScene) => void>(() => undefined)
@@ -1383,9 +1382,10 @@ export default function App() {
       onStop: () => {
         stopListen()
         if (stateRef.current.workspaceMode === 'meeting') {
-          autoReport.current = true
-          recordHeard.current = true
-          deferMeetingEnded.current = true
+          dispatch({ type: 'meeting_ended' })
+          if (watchStopShouldOpenPhoneSave()) {
+            queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
+          }
         }
       },
       onSave: () => {
@@ -2165,10 +2165,6 @@ export default function App() {
         leaveCaptureTimerRef.current = window.setTimeout(tick, delay)
         return
       }
-      if (stateRef.current.engine === 'transcribing') {
-        leaveCaptureTimerRef.current = window.setTimeout(tick, 80)
-        return
-      }
       pendingLeaveSaveRef.current = false
       leaveCaptureTimerRef.current = 0
       saveLiveSession()
@@ -2186,10 +2182,7 @@ export default function App() {
       lastLineAtRef.current = Math.max(lastLineAtRef.current ?? 0, Date.now())
       pendingLeaveSaveRef.current = true
       stopListen()
-      if (s.workspaceMode === 'meeting') {
-        autoReport.current = true
-        deferMeetingEnded.current = true
-      }
+      if (s.workspaceMode === 'meeting') dispatch({ type: 'meeting_ended' })
       armLeaveCaptureWait()
       return
     }
@@ -2458,9 +2451,10 @@ export default function App() {
       if (live) {
         autoReport.current = true
         recordHeard.current = true
-        deferMeetingEnded.current = true
         stopListen()
+        dispatch({ type: 'meeting_ended' })
         dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped · writing notes' } })
+        queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
         return
       }
       startOrResumeMeeting(s)
@@ -2490,8 +2484,9 @@ export default function App() {
       autoReport.current = true
       recordHeard.current = true
       if (stopShouldReleaseListener(s.capture)) stopListen()
-      deferMeetingEnded.current = true
+      dispatch({ type: 'meeting_ended' })
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped · writing notes' } })
+      queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
     }
   }, [handlePrimary])
 
@@ -2505,17 +2500,19 @@ export default function App() {
     if (s.capture === 'paused') {
       autoReport.current = true
       recordHeard.current = true
-      deferMeetingEnded.current = true
       stopListen()
+      dispatch({ type: 'meeting_ended' })
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Recording stopped · writing report' } })
+      queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
       return
     }
     if (sessionListening({ capture: s.capture })) {
       autoReport.current = true
       recordHeard.current = true
-      deferMeetingEnded.current = true
       stopListen()
+      dispatch({ type: 'meeting_ended' })
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Recording stopped · writing report' } })
+      queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
       return
     }
     autoReport.current = true
@@ -2833,19 +2830,7 @@ export default function App() {
     if (!snap) return
     markWatchReport()
     writeWatchReportSnapshot(snap)
-  }, [state.capture, state.engine, state.busy, state.workspaceMode, state.meetingLines.length])
-
-  useEffect(() => {
-    if (!meetingEndedReady({
-      deferred: deferMeetingEnded.current,
-      workspaceMode: state.workspaceMode,
-      capture: state.capture,
-      engine: state.engine,
-    })) return
-    deferMeetingEnded.current = false
-    dispatch({ type: 'meeting_ended' })
-    queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
-  }, [state.capture, state.engine, state.workspaceMode])
+  }, [state.busy, state.meetingLines.length, state.capture, state.engine, state.workspaceMode])
 
   useEffect(() => {
     if (!isNativeApp() || !readWatchReport()) return
@@ -3611,7 +3596,6 @@ export default function App() {
             listening={listening}
             paused={iphonePaused}
             ended={state.meetingEnded}
-            engine={state.engine}
             catchNotes={state.catchNotes}
             notesRaw={state.notesRaw}
             busy={state.busy}
