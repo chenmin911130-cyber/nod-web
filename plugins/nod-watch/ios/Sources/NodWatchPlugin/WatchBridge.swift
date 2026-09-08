@@ -19,6 +19,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastHistory: [[String: String]] = []
     private var lastMode = ""
     private var lastLangPair = ""
+    private var lastEnded = false
+    private var lastElapsedMs = 0
+    private var lastSave = "none"
+    private var lastSessionId = ""
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
 
@@ -78,7 +82,11 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         previous: String = "",
         history: [[String: String]] = [],
         mode: String = "",
-        langPair: String = ""
+        langPair: String = "",
+        ended: Bool? = nil,
+        elapsedMs: Int? = nil,
+        save: String? = nil,
+        sessionId: String? = nil
     ) {
         if !capture.isEmpty {
             lastCapture = capture
@@ -93,6 +101,18 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         if !langPair.isEmpty {
             lastLangPair = langPair
+        }
+        if let ended {
+            lastEnded = ended
+        }
+        if let elapsedMs {
+            lastElapsedMs = elapsedMs
+        }
+        if let save {
+            lastSave = save.isEmpty ? "none" : save
+        }
+        if let sessionId {
+            lastSessionId = sessionId
         }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
@@ -110,6 +130,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         if !lastLangPair.isEmpty {
             payload["langPair"] = lastLangPair
         }
+        payload["ended"] = lastEnded
+        payload["elapsedMs"] = lastElapsedMs
+        payload["save"] = lastSave
+        payload["sessionId"] = lastSessionId
         guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
         do {
             try session.updateApplicationContext(payload)
@@ -322,6 +346,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         if !lastLangPair.isEmpty {
             reply["langPair"] = lastLangPair
         }
+        reply["ended"] = lastEnded
+        reply["elapsedMs"] = lastElapsedMs
+        reply["save"] = lastSave
+        reply["sessionId"] = lastSessionId
         replyHandler(reply)
     }
 

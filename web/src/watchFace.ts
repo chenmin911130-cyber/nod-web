@@ -9,8 +9,10 @@ export type WatchPhase =
   | 'qaWaiting'
   | 'qaDrafting'
   | 'qaAnswer'
-  | 'savePrompt'
+  | 'ended'
+  | 'saving'
   | 'saved'
+  | 'saveFailed'
 
 export type WatchScreen = {
   phase: WatchPhase
@@ -28,6 +30,7 @@ export type WatchScreen = {
   answer?: string
   primary?: string
   secondary?: string
+  tertiary?: string
   playLabel?: string
   rec?: boolean
   clipLines?: number
@@ -65,8 +68,9 @@ export function buildWatchScreen(input: {
   listenScene: string
   listening: boolean
   paused: boolean
-  offeringSave: boolean
-  saved: boolean
+  ended?: boolean
+  save?: string
+  elapsedMs?: number
   original: string
   translation: string
   previous?: string
@@ -82,25 +86,42 @@ export function buildWatchScreen(input: {
     modeLabel: modeCapsule(input.workspaceMode, input.listenScene),
   }
 
-  if (input.offeringSave) {
-    return {
-      ...base,
-      phase: 'savePrompt',
-      status: '保存？',
-      statusEn: 'Save?',
-      primary: '保存',
-      secondary: '不保存',
-      saveStacked: true,
-      secondaryTone: 'bright',
+  if (meetingEndedFace(input)) {
+    const save = input.save || 'none'
+    if (save === 'saving') {
+      return {
+        ...base,
+        phase: 'saving',
+        status: '保存中…',
+        statusEn: 'Saving…',
+      }
     }
-  }
-
-  if (input.saved) {
+    if (save === 'saved') {
+      return {
+        ...base,
+        phase: 'saved',
+        status: '已保存到历史记录',
+        statusEn: 'Saved to History',
+        primary: 'Continue recording',
+      }
+    }
+    if (save === 'failed') {
+      return {
+        ...base,
+        phase: 'saveFailed',
+        status: '未能保存',
+        statusEn: "Couldn't save",
+        primary: 'Retry save',
+      }
+    }
     return {
       ...base,
-      phase: 'saved',
-      status: '已同步到手机',
-      statusEn: 'Saved to iPhone',
+      phase: 'ended',
+      status: '已结束',
+      statusEn: 'Ended',
+      primary: 'Save',
+      secondary: 'Continue recording',
+      tertiary: "Don't save",
     }
   }
 
@@ -217,12 +238,12 @@ export function buildWatchAlwaysOn(input: {
   listenScene: string
   listening: boolean
   paused: boolean
-  offeringSave: boolean
-  saved: boolean
+  ended?: boolean
+  save?: string
   translation: string
   answer: string
 }): WatchAlwaysOn {
-  if (input.offeringSave || input.saved || (!input.listening && !input.paused)) {
+  if (input.ended || (!input.listening && !input.paused)) {
     return { show: false, showTimer: false, recDot: false }
   }
   if (input.paused) {
@@ -243,6 +264,17 @@ export function watchListenPane(mode: string, _hasCopy: boolean): 'translate' | 
   if (mode === 'translate') return 'translate'
   if (mode === 'interview') return 'qa'
   return 'listen'
+}
+
+function meetingEndedFace(input: {
+  workspaceMode: string
+  listenScene: string
+  ended?: boolean
+}): boolean {
+  if (!input.ended) return false
+  if (input.workspaceMode === 'translate' || input.workspaceMode === 'interview') return false
+  if (input.listenScene === 'interview') return false
+  return true
 }
 
 function modeCapsule(workspaceMode: string, listenScene: string): string {

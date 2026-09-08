@@ -1,7 +1,8 @@
 import {
   watchDiscardCommand,
   watchSaveCommand,
-  watchSavedAckMs,
+  watchSaveView,
+  watchSaveWireStatus,
   watchStopShouldAutoKeepHistory,
   watchStopShouldOpenPhoneSave,
 } from './watchSave'
@@ -13,7 +14,7 @@ function eq<T>(got: T, want: T, label: string) {
 }
 
 eq(watchStopShouldAutoKeepHistory(), false, 'Watch Stop must not silently keep History')
-eq(watchStopShouldAutoKeepHistory(true), true, 'AutoNotes auto-keeps History on save_prompt')
+eq(watchStopShouldAutoKeepHistory(true), false, 'Watch-started sessions no longer auto-keep on save_prompt')
 eq(watchStopShouldOpenPhoneSave(), false, 'Watch Stop must not open the iPhone Save dialog')
 
 eq(
@@ -28,4 +29,41 @@ if ('keepRecording' in watchSaveCommand()) {
 eq(watchDiscardCommand(), { type: 'discard_history' }, 'Don\'t save discards on the server')
 eq(watchSaveCommand().type, 'keep_history', 'Save is not start_listen')
 eq(watchDiscardCommand().type, 'discard_history', 'Discard is not start_listen')
-eq(watchSavedAckMs(), 2000, 'saved ack returns to Ready by itself')
+eq(watchSaveWireStatus('undecided'), 'none', 'undecided is none on the Watch wire')
+eq(watchSaveWireStatus('saving'), 'saving', 'saving stays saving')
+
+eq(
+  watchSaveView({ save: 'saved', sessionId: 'old', requestedId: 'new', waitedMs: 0 }),
+  'idle',
+  'a leftover history_kept for another session must not confirm Save',
+)
+eq(
+  watchSaveView({ save: 'saving', sessionId: 'a', requestedId: 'a', waitedMs: 15_000 }),
+  'failed',
+  '15s with no matching saved ack is failed',
+)
+eq(
+  watchSaveView({ save: 'saving', sessionId: 'a', requestedId: 'a', waitedMs: 1_000 }),
+  'saving',
+  'in-flight keep is saving',
+)
+eq(
+  watchSaveView({ save: 'failed', sessionId: 'a', requestedId: 'a', waitedMs: 16_000 }),
+  'failed',
+  'failed stays failed until another save',
+)
+eq(
+  watchSaveView({ save: 'saving', sessionId: 'a', requestedId: 'a', waitedMs: 500 }),
+  'saving',
+  'retry save returns to saving',
+)
+eq(
+  watchSaveView({ save: 'saved', sessionId: 'a', requestedId: 'a', waitedMs: 500 }),
+  'saved',
+  'matching sessionId + saved is Saved',
+)
+eq(
+  watchSaveView({ save: 'saved', sessionId: 'live-1', requestedId: '', waitedMs: 0 }),
+  'saved',
+  'phone Save with no wrist request still confirms when sessionId is set',
+)

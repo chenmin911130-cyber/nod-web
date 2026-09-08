@@ -19,15 +19,21 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var reachable = false
     @Published var speechLive = false
     @Published var speechVoice = "female"
-    @Published var offeringSave = false
-    @Published var savedAck = false
+    @Published var ending = false
+    @Published var ended = false
+    @Published var saveState = "none"
+    @Published var sessionId = ""
     @Published var langPair = "Auto → CH"
     @Published var mode = "meeting"
 
     private var localModeHeld = false
     private var phoneModeSeen = false
     private var speechPlayer: AVAudioPlayer?
-    private var savedAckWork: DispatchWorkItem?
+    private var saveRequestedId: String?
+    private var saveWaitWork: DispatchWorkItem?
+    private var endWaitWork: DispatchWorkItem?
+    private var discardWaitWork: DispatchWorkItem?
+    private var lastCapture = ""
 
     struct WatchHistItem: Identifiable, Equatable {
         let id: String
@@ -90,15 +96,28 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         mode == "interview" || mode == "translate"
     }
 
+    var saveMatched: Bool {
+        WatchPhoneSession.saveIsConfirmed(saveState: saveState, sessionId: sessionId, requestedId: saveRequestedId)
+    }
+
+    static func saveIsConfirmed(saveState: String, sessionId: String, requestedId: String?) -> Bool {
+        guard saveState == "saved" else { return false }
+        if let requestedId, !requestedId.isEmpty {
+            return sessionId == requestedId
+        }
+        return !sessionId.isEmpty
+    }
+
     /// Crown is Start/Stop. Side is Pause/Resume. Do not call toggle() from the crown.
     static func hardwareAction(
         key: String,
         listening: Bool,
         paused: Bool,
-        offeringSave: Bool,
+        ended: Bool,
+        saving: Bool,
         saved: Bool
     ) -> String {
-        if offeringSave || saved { return "" }
+        if ended || saving || saved { return "" }
         if key == "crown" {
             return (listening || paused) ? "stop" : "start"
         }
@@ -112,8 +131,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             key: key,
             listening: listening,
             paused: paused,
-            offeringSave: offeringSave,
-            saved: savedAck
+            ended: ended,
+            saving: saveState == "saving",
+            saved: saveMatched
         ) {
         case "start": startSession()
         case "stop": finish()
@@ -230,49 +250,89 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     func finish() {
-        let hadContent = !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !translation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if let startedAt {
+            elapsedMs = Date().timeIntervalSince(startedAt)
+        }
         paused = false
         WatchRecorder.shared.stop()
         stopRuntime()
         listening = false
-        startedAt = nil
-        elapsedMs = 0
+        ending = true
         WatchGlanceStore.clear()
-        offeringSave = hadContent
-        savedAck = false
-        hint = hadContent ? WatchCopy.saveAsk : WatchCopy.ready
         localModeHeld = false
         send(action: "stop")
         flushUnsent()
         resetPcmBuffer()
+        endWaitWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.ending else { return }
+            self.ending = false
+            self.syncFromCapture(self.lastCapture)
+            self.hint = WatchCopy.couldntEnd
+        }
+        endWaitWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
     }
 
-    func confirmSave() {
-        offeringSave = false
-        savedAck = true
-        hint = WatchCopy.saved
+    func requestSave() {
+        guard ended, saveState != "saving" else { return }
+        saveRequestedId = sessionId
+        saveState = "saving"
         send(action: "save")
-        scheduleReady()
+        saveWaitWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if self.saveState == "saved" || self.saveState == "failed" { return }
+            self.saveState = "failed"
+        }
+        saveWaitWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)
     }
 
-    func declineSave() {
-        offeringSave = false
-        savedAck = false
-        hint = WatchCopy.ready
+    func discardSession() {
+        guard ended, saveState != "saving" else { return }
         send(action: "discard")
+        discardWaitWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.ended else { return }
+            self.hint = WatchCopy.couldntDiscard
+        }
+        discardWaitWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
+    }
+
+    func continueSession() {
+        guard ended else { return }
+        ended = false
+        ending = false
+        saveState = "none"
+        saveRequestedId = nil
+        saveWaitWork?.cancel()
+        endWaitWork?.cancel()
+        discardWaitWork?.cancel()
+        startedAt = Date().addingTimeInterval(-elapsedMs)
+        send(action: "start")
+        listening = true
+        paused = false
+        WatchGlanceStore.setStartedAt(startedAt)
+        hint = "Phone mic"
     }
 
     func startSession() {
         guard !listening, !paused else { return }
-        savedAckWork?.cancel()
+        saveWaitWork?.cancel()
+        endWaitWork?.cancel()
+        discardWaitWork?.cancel()
         resetPcmBuffer()
         original = ""
         translation = ""
         previous = ""
         elapsedMs = 0
-        offeringSave = false
-        savedAck = false
+        ending = false
+        ended = false
+        saveState = "none"
+        saveRequestedId = nil
+        sessionId = ""
         localModeHeld = phoneModeSeen
         send(action: "start")
         if Self.usesWatchMic(mode) {
@@ -285,17 +345,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             WatchGlanceStore.setStartedAt(startedAt)
             hint = "Phone mic"
         }
-    }
-
-    private func scheduleReady() {
-        savedAckWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.savedAck else { return }
-            self.savedAck = false
-            self.hint = WatchCopy.ready
-        }
-        savedAckWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
     }
 
     private func beginMic(hint: String, resetClock: Bool = true) {
@@ -381,21 +430,20 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 hint = WatchCopy.paused
             }
         case "off":
-            // Session is over. Stop the Watch side, but leave offeringSave /
-            // savedAck alone — the Watch's own Stop->Save flow owns them, and a
-            // phone-initiated stop arrives with them already false.
+            ending = false
+            endWaitWork?.cancel()
+            // Session capture is off. ended is owned by the payload, not this branch.
             if listening || paused || WatchRecorder.shared.isRunning {
                 WatchRecorder.shared.stop()
                 stopRuntime()
                 listening = false
                 paused = false
-                startedAt = nil
-                elapsedMs = 0
                 WatchGlanceStore.clear()
                 localModeHeld = false
                 flushUnsent()
                 resetPcmBuffer()
-                if !offeringSave, !savedAck {
+                if !ended {
+                    startedAt = nil
                     hint = WatchCopy.ready
                 }
             }
@@ -555,10 +603,41 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let pair = payload["langPair"] as? String, !pair.isEmpty {
             langPair = pair
         }
+        if let endedVal = Self.payloadBool(payload["ended"]) {
+            let wasEnded = ended
+            ended = endedVal
+            if endedVal {
+                ending = false
+                endWaitWork?.cancel()
+            } else if wasEnded {
+                discardWaitWork?.cancel()
+                saveWaitWork?.cancel()
+                saveRequestedId = nil
+                if saveState != "saving" {
+                    saveState = "none"
+                }
+                if !listening, !paused {
+                    hint = WatchCopy.ready
+                }
+            }
+        }
+        if let ms = Self.payloadInt(payload["elapsedMs"]), ms != 0 {
+            elapsedMs = TimeInterval(ms) / 1000.0
+        }
+        if let save = payload["save"] as? String {
+            saveState = save.isEmpty ? "none" : save
+            if save == "saved" || save == "failed" {
+                saveWaitWork?.cancel()
+            }
+        }
+        if let sid = payload["sessionId"] as? String {
+            sessionId = sid
+        }
         if let capture = payload["capture"] as? String {
+            lastCapture = capture
             syncFromCapture(capture)
         }
-        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck {
+        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !ended, !ending {
             self.hint = hint
         }
         if let original = payload["original"] as? String {
@@ -589,6 +668,19 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 return WatchHistItem(id: id, title: title, text: text)
             }
         }
+    }
+
+    private static func payloadBool(_ raw: Any?) -> Bool? {
+        if let value = raw as? Bool { return value }
+        if let value = raw as? NSNumber { return value.boolValue }
+        return nil
+    }
+
+    private static func payloadInt(_ raw: Any?) -> Int? {
+        if let value = raw as? Int { return value }
+        if let value = raw as? NSNumber { return value.intValue }
+        if let value = raw as? Double { return Int(value) }
+        return nil
     }
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
