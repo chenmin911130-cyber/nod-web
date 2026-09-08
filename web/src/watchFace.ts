@@ -45,6 +45,7 @@ export type WatchScreen = {
   saveStacked?: boolean
   secondaryTone?: 'bright'
   newContent?: 'translation' | 'answer'
+  captureLine?: string
 }
 
 export type WatchAlwaysOn = {
@@ -92,7 +93,9 @@ export function buildWatchScreen(input: {
   newContent?: 'translation' | 'answer'
 }): WatchScreen {
   const engine = input.engine || ''
-  const reading = input.listening || input.paused
+  const endedReading = endedReadingFace(input)
+  const reading = input.listening || input.paused || endedReading
+  const endedCapture = endedReading ? { captureLine: 'Ended' } : {}
   const base = {
     mascot: false as const,
     showModePicker: false,
@@ -159,6 +162,7 @@ export function buildWatchScreen(input: {
       return {
         ...base,
         ...readingFlags,
+        ...endedCapture,
         phase: 'qaFailed',
         question: input.question,
         status: '回答失败',
@@ -171,6 +175,7 @@ export function buildWatchScreen(input: {
       return {
         ...base,
         ...readingFlags,
+        ...endedCapture,
         phase: 'qaAnswer',
         question: input.question,
         answer: input.answer,
@@ -184,6 +189,7 @@ export function buildWatchScreen(input: {
       return {
         ...base,
         ...readingFlags,
+        ...endedCapture,
         phase: 'qaDrafting',
         question: input.question,
         status: '正在生成…',
@@ -195,6 +201,7 @@ export function buildWatchScreen(input: {
       return {
         ...base,
         ...readingFlags,
+        ...endedCapture,
         phase: 'qaWaiting',
         status: '等待问题',
         statusEn: 'Waiting for a question',
@@ -207,6 +214,7 @@ export function buildWatchScreen(input: {
     return {
       ...base,
       ...readingFlags,
+      ...endedCapture,
       phase: 'translateFailed',
       langPair: watchLangPair(input.translateTo || 'zh'),
       original: watchVisibleOriginal(input.original, input.translation),
@@ -222,6 +230,7 @@ export function buildWatchScreen(input: {
     return {
       ...base,
       ...readingFlags,
+      ...endedCapture,
       phase: 'translateResult',
       langPair: watchLangPair(input.translateTo || 'zh'),
       original: watchVisibleOriginal(input.original, input.translation),
@@ -243,6 +252,7 @@ export function buildWatchScreen(input: {
     return {
       ...base,
       ...readingFlags,
+      ...endedCapture,
       phase: 'translateGenerating',
       langPair: watchLangPair(input.translateTo || 'zh'),
       original: watchVisibleOriginal(input.original, input.translation),
@@ -256,6 +266,7 @@ export function buildWatchScreen(input: {
     return {
       ...base,
       ...readingFlags,
+      ...endedCapture,
       phase: 'translateListening',
       langPair: watchLangPair(input.translateTo || 'zh'),
       original: input.original.trim() || undefined,
@@ -360,6 +371,27 @@ function meetingEndedFace(input: {
   if (input.workspaceMode === 'translate' || input.workspaceMode === 'interview') return false
   if (input.listenScene === 'interview') return false
   return true
+}
+
+function endedReadingFace(input: {
+  workspaceMode: string
+  listenScene: string
+  listening: boolean
+  paused: boolean
+  ended?: boolean
+  original: string
+  translation: string
+  question: string
+  answer: string
+}): boolean {
+  if (!input.ended || input.listening || input.paused) return false
+  if (input.workspaceMode === 'translate') {
+    return Boolean(input.original.trim() || input.translation.trim())
+  }
+  if (input.workspaceMode === 'interview' || input.listenScene === 'interview') {
+    return Boolean(input.question.trim() || input.answer.trim())
+  }
+  return false
 }
 
 function modeCapsule(workspaceMode: string, listenScene: string): string {

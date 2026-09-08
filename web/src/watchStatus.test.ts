@@ -1,4 +1,4 @@
-import { buildWatchFace, watchPreviousCaption, watchReadingAnchor } from './watchStatus'
+import { buildWatchFace, watchEndedFor, watchPreviousCaption, watchReadingAnchor } from './watchStatus'
 
 const face = buildWatchFace({
   capture: 'listening',
@@ -288,4 +288,33 @@ const failedFace = buildWatchFace({
 })
 if (!failedFace.failed) throw new Error('failed follows the latest nonempty pair')
 if (failedFace.history[0]?.failed !== true) throw new Error('latest history item carries failed')
+
+function eqEnded(got: boolean, want: boolean, label: string) {
+  if (got !== want) throw new Error(`${label}: expected ${want}, got ${got}`)
+}
+const pair = [{ id: '1', original: 'hello', translation: '你好' }]
+const emptyPair = [{ id: '1', original: '  ', translation: '' }]
+const turn = [{ id: 'q1', q: 'Why?', a: 'Because.' }]
+const emptyTurn = [{ id: 'q1', q: '  ', a: '' }]
+eqEnded(watchEndedFor({ workspaceMode: 'translate', capture: 'off', translatePairs: pair }), true, 'translate off+content')
+eqEnded(watchEndedFor({ workspaceMode: 'translate', capture: 'off', translatePairs: emptyPair }), false, 'translate off empty')
+eqEnded(watchEndedFor({ workspaceMode: 'translate', capture: 'listening', translatePairs: pair }), false, 'translate listening+content')
+eqEnded(watchEndedFor({ workspaceMode: 'interview', capture: 'off', turns: turn }), true, 'interview off+content')
+eqEnded(watchEndedFor({ workspaceMode: 'interview', capture: 'off', turns: emptyTurn }), false, 'interview off empty')
+eqEnded(watchEndedFor({ workspaceMode: 'interview', capture: 'listening', turns: turn }), false, 'interview listening+content')
+eqEnded(
+  watchEndedFor({ workspaceMode: 'meeting', capture: 'off', meetingEnded: true, hasSaveableContent: true }),
+  true,
+  'meeting ended+content',
+)
+eqEnded(
+  watchEndedFor({ workspaceMode: 'meeting', capture: 'off', meetingEnded: true, hasSaveableContent: false }),
+  false,
+  'meeting ended without content',
+)
+eqEnded(
+  watchEndedFor({ workspaceMode: 'meeting', capture: 'listening', meetingEnded: false, hasSaveableContent: true }),
+  false,
+  'meeting live with content is not ended',
+)
 

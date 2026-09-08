@@ -101,9 +101,9 @@ struct WatchRootView: View {
                 savedPage
             } else if session.ended, session.saveState == "failed" {
                 saveFailedPage
-            } else if session.ended {
+            } else if session.ended, !readingSession {
                 endedPage
-            } else if session.listening || session.paused || session.ending {
+            } else if session.listening || session.paused || session.ending || (session.ended && readingSession) {
                 TabView(selection: $listenPage) {
                     sessionPage.tag(0)
                     controlsPage.tag(1)
@@ -121,10 +121,13 @@ struct WatchRootView: View {
         }
     }
 
+    private var readingSession: Bool {
+        session.mode == "translate" || session.mode == "interview"
+    }
+
     private var sessionPage: some View {
         Group {
-            if (session.mode == "translate" || session.mode == "interview"),
-               session.listening || session.paused {
+            if readingSession, session.listening || session.paused || session.ended {
                 readingPage
             } else if session.paused {
                 pausedControls
@@ -137,54 +140,79 @@ struct WatchRootView: View {
     private var controlsPage: some View {
         VStack(spacing: 10) {
             capsule(WatchPhoneSession.modeLabel(session.mode))
-            if session.paused {
-                pausedStatus
-                Text(clock(session.elapsedMs))
-                    .font(.title3.monospacedDigit())
-                    .foregroundStyle(muted)
-            } else {
-                recordingStatus
-                if let startedAt = session.startedAt {
-                    Text(startedAt, style: .timer)
+            if readingSession, session.ended, !session.listening, !session.paused {
+                Text(WatchCopy.ended)
+                    .font(.headline)
+                    .foregroundStyle(ink)
+                if session.elapsedMs > 0 {
+                    Text(clock(session.elapsedMs))
                         .font(.title3.monospacedDigit())
                         .foregroundStyle(muted)
                 }
-            }
-            if session.mode == "translate" || session.mode == "interview" {
-                if session.listening {
-                    Button {
-                        session.pause()
-                    } label: {
-                        Label(session.pending == "pause" ? "…" : WatchCopy.pause, systemImage: "pause.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(panel)
-                    .foregroundStyle(ink)
-                    .disabled(session.pending != nil)
-                } else if session.paused {
-                    Button {
-                        session.resume()
-                    } label: {
-                        Label(session.pending == "resume" ? "…" : WatchCopy.resume, systemImage: "play.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(cyan)
-                    .foregroundStyle(Color.black)
-                    .disabled(session.pending != nil)
+                Button {
+                    session.startSession()
+                } label: {
+                    Text(session.starting ? WatchCopy.starting : WatchCopy.continueRecording)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(cyan)
+                .foregroundStyle(Color.black)
+                .disabled(session.starting)
+                Text(WatchCopy.sameSession)
+                    .font(.caption2)
+                    .foregroundStyle(muted)
+            } else {
+                if session.paused {
+                    pausedStatus
+                    Text(clock(session.elapsedMs))
+                        .font(.title3.monospacedDigit())
+                        .foregroundStyle(muted)
+                } else {
+                    recordingStatus
+                    if let startedAt = session.startedAt {
+                        Text(startedAt, style: .timer)
+                            .font(.title3.monospacedDigit())
+                            .foregroundStyle(muted)
+                    }
+                }
+                if readingSession {
+                    if session.listening {
+                        Button {
+                            session.pause()
+                        } label: {
+                            Label(session.pending == "pause" ? "…" : WatchCopy.pause, systemImage: "pause.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(panel)
+                        .foregroundStyle(ink)
+                        .disabled(session.pending != nil)
+                    } else if session.paused {
+                        Button {
+                            session.resume()
+                        } label: {
+                            Label(session.pending == "resume" ? "…" : WatchCopy.resume, systemImage: "play.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(cyan)
+                        .foregroundStyle(Color.black)
+                        .disabled(session.pending != nil)
+                    }
+                }
+                Button {
+                    session.finish()
+                } label: {
+                    Label(session.ending ? WatchCopy.ending : WatchCopy.endRecording, systemImage: "stop.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.red.opacity(0.18))
+                .foregroundStyle(Color.red)
+                .disabled(session.ending)
             }
-            Button {
-                session.finish()
-            } label: {
-                Label(session.ending ? WatchCopy.ending : WatchCopy.endRecording, systemImage: "stop.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Color.red.opacity(0.18))
-            .foregroundStyle(Color.red)
-            .disabled(session.ending)
         }
     }
 
@@ -405,7 +433,11 @@ struct WatchRootView: View {
 
     private var captureRow: some View {
         HStack(spacing: 6) {
-            if session.paused {
+            if session.ended, !session.listening, !session.paused {
+                Text(WatchCopy.ended)
+                    .font(.caption2)
+                    .foregroundStyle(muted)
+            } else if session.paused {
                 Image(systemName: "pause.fill")
                     .foregroundStyle(timer)
                 Text(WatchCopy.paused)
