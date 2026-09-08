@@ -12,7 +12,7 @@ export type WatchFace = {
 
 type Pair = { id: string; original: string; translation: string; failed?: boolean }
 type Line = { id: string; text: string; translation?: string }
-type Turn = { id: string; q: string; a: string }
+type Turn = { id: string; q: string; a: string; failed?: boolean }
 
 export function watchVisibleOriginal(original: string, translation: string): string {
   const src = original.replace(/\s+/g, ' ').trim()
@@ -109,7 +109,11 @@ export function buildWatchFace(input: {
   else if (translation.trim()) hint = 'Translated'
 
   const latestPair = [...input.translatePairs].reverse().find((p) => p.original.trim() || p.translation.trim())
-  const failed = input.workspaceMode === 'translate' && latestPair?.failed === true
+  const failed = input.workspaceMode === 'translate'
+    ? latestPair?.failed === true
+    : input.workspaceMode === 'interview'
+      ? lastTurn?.failed === true
+      : false
 
   const history: WatchHistItem[] = []
   if (input.workspaceMode === 'translate') {
@@ -129,6 +133,7 @@ export function buildWatchFace(input: {
         id: t.id,
         title: clipWatch(t.q, 40),
         text: clipWatch(t.a, 280),
+        ...(t.failed ? { failed: true } : {}),
       })
     }
   } else {

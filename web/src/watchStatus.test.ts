@@ -253,7 +253,42 @@ const qaHist = buildWatchFace({
 if (qaHist.history[0]?.id !== 'q2' || qaHist.history[1]?.id !== 'q1') {
   throw new Error(`interview history must be newest first from turns, got ${JSON.stringify(qaHist.history)}`)
 }
-if (qaHist.failed) throw new Error('interview failed is always false this round')
+if (qaHist.failed) throw new Error('interview history with answers is not failed')
+
+const qaFailedFace = buildWatchFace({
+  capture: 'listening',
+  consentOpen: false,
+  notesAskId: '',
+  notesRaw: '',
+  partial: '',
+  workspaceMode: 'interview',
+  translateOn: false,
+  translatePairs: [],
+  meetingLines: [],
+  turns: [
+    { id: 'q1', q: 'Why ship Friday?', a: 'QA 还没完，建议下周一。' },
+    { id: 'q2', q: 'Who owns launch?', a: '', failed: true },
+  ],
+})
+if (!qaFailedFace.failed) throw new Error('interview latest failed turn must set face.failed')
+if (qaFailedFace.history[0]?.failed !== true) throw new Error('interview history[0] must carry failed')
+
+const qaAnsweredAfterFail = buildWatchFace({
+  capture: 'listening',
+  consentOpen: false,
+  notesAskId: '',
+  notesRaw: '',
+  partial: '',
+  workspaceMode: 'interview',
+  translateOn: false,
+  translatePairs: [],
+  meetingLines: [],
+  turns: [
+    { id: 'q2', q: 'Who owns launch?', a: '', failed: true },
+    { id: 'q3', q: 'Next step?', a: 'Sync Monday.' },
+  ],
+})
+if (qaAnsweredAfterFail.failed) throw new Error('latest answered turn must clear interview failed')
 
 const nineTurns = Array.from({ length: 9 }, (_, i) => ({ id: `t${i}`, q: `Q${i}`, a: `A${i}` }))
 const qaCap = buildWatchFace({

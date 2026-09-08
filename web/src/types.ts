@@ -1,6 +1,6 @@
 export type CaptureState = 'off' | 'listening' | 'recording' | 'paused'
 export type EngineState = 'idle' | 'transcribing' | 'generating'
-export type Turn = { id: string; q: string; a: string }
+export type Turn = { id: string; q: string; a: string; failed?: boolean }
 export type CatchNote = {
   id: string
   title: string
