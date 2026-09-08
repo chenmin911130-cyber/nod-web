@@ -11,6 +11,7 @@ export interface NodMicPlugin {
   isActive(): Promise<{ active: boolean }>
   startKeepAlive(): Promise<void>
   stopKeepAlive(): Promise<void>
+  resume(): Promise<void>
   addListener(eventName: 'pcm', listenerFunc: (event: PcmEvent) => void): Promise<PluginListenerHandle>
   removeAllListeners(): Promise<void>
 }

@@ -21,4 +21,8 @@ export class NodMicWeb extends WebPlugin implements NodMicPlugin {
   async stopKeepAlive(): Promise<void> {
     return
   }
+
+  async resume(): Promise<void> {
+    return
+  }
 }

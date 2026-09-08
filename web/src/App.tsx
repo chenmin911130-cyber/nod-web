@@ -1875,6 +1875,9 @@ export default function App() {
         skipOfferSavePromptRef.current = false
         return
       }
+      if (sessionListening({ capture: stateRef.current.capture })) {
+        dispatch({ type: 'engine', ev: { type: 'phase', capture: 'off', engine: 'idle' } })
+      }
       offerSaveUi()
       return
     }

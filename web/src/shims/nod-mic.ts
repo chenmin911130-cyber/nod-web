@@ -19,4 +19,7 @@ export const NodMic = {
   stopKeepAlive(): Promise<void> {
     return Promise.resolve()
   },
+  resume(): Promise<void> {
+    return Promise.resolve()
+  },
 }

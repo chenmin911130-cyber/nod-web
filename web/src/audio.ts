@@ -256,6 +256,7 @@ export class MicCapture {
       this.appActive = state.isActive
       await App.addListener('appStateChange', ({ isActive }) => {
         this.appActive = isActive
+        if (isActive) void this.resumeNative()
       })
     } catch {
       this.appActive = true
@@ -269,6 +270,16 @@ export class MicCapture {
       this.appActive = (await App.getState()).isActive
     } catch {
       /* keep last known */
+    }
+  }
+
+  private async resumeNative(): Promise<void> {
+    if (!this.running) return
+    try {
+      const { NodMic } = await import('nod-mic')
+      await NodMic.resume().catch(() => undefined)
+    } catch {
+      /* keep current capture */
     }
   }
 
