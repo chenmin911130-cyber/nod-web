@@ -8,6 +8,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     static let shared = WatchPhoneSession()
 
     @Published var listening = false
+    @Published var starting = false
     @Published var paused = false
     @Published var startedAt: Date?
     @Published var elapsedMs: TimeInterval = 0
@@ -28,6 +29,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     private var phoneModeSeen = false
     private var speechPlayer: AVAudioPlayer?
     private var savedAckWork: DispatchWorkItem?
+    private var startBeganAt: Date?
+    private var startWaitWork: DispatchWorkItem?
 
     struct WatchHistItem: Identifiable, Equatable {
         let id: String
@@ -108,6 +111,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     func applyHardware(_ key: String) {
+        guard !starting else { return }
         switch Self.hardwareAction(
             key: key,
             listening: listening,
@@ -124,6 +128,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     func toggle() {
+        guard !starting else { return }
         if paused {
             resume()
             return
@@ -136,6 +141,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     func record() {
+        guard !starting else { return }
         if paused {
             resume()
             return
@@ -149,8 +155,14 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         previous = ""
         elapsedMs = 0
         localModeHeld = phoneModeSeen
+        starting = true
+        startBeganAt = Date()
+        hint = WatchCopy.starting
         send(action: "record")
-        beginMic(hint: "Recording · Pause anytime, Done for report")
+        if Self.usesWatchMic(mode) {
+            beginMic(hint: WatchCopy.starting, setListening: false)
+        }
+        armStartWait()
     }
 
     func pause() {
@@ -230,6 +242,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     func finish() {
+        guard !starting else { return }
         let hadContent = !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !translation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         paused = false
@@ -264,7 +277,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     func startSession() {
-        guard !listening, !paused else { return }
+        guard !listening, !paused, !starting else { return }
         savedAckWork?.cancel()
         resetPcmBuffer()
         original = ""
@@ -274,17 +287,48 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         offeringSave = false
         savedAck = false
         localModeHeld = phoneModeSeen
+        starting = true
+        startBeganAt = Date()
+        hint = WatchCopy.starting
         send(action: "start")
         if Self.usesWatchMic(mode) {
-            beginMic(hint: reachable ? "Watch mic" : "Recording on Watch")
-        } else {
-            listening = true
-            paused = false
-            startedAt = Date()
-            elapsedMs = 0
-            WatchGlanceStore.setStartedAt(startedAt)
-            hint = "Phone mic"
+            beginMic(hint: WatchCopy.starting, setListening: false)
         }
+        armStartWait()
+    }
+
+    /// Phone capture wins until 8s. `off` while waiting is not a timeout.
+    static func startOutcome(capture: String, waitedMs: Int) -> String {
+        if capture == "listening" || capture == "recording" { return "started" }
+        if waitedMs >= 8000 { return "timeout" }
+        return "waiting"
+    }
+
+    private func armStartWait() {
+        startWaitWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.starting else { return }
+            self.failStart()
+        }
+        startWaitWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
+    }
+
+    private func failStart() {
+        startWaitWork?.cancel()
+        startWaitWork = nil
+        starting = false
+        startBeganAt = nil
+        listening = false
+        paused = false
+        startedAt = nil
+        elapsedMs = 0
+        WatchRecorder.shared.stop()
+        stopRuntime()
+        resetPcmBuffer()
+        WatchGlanceStore.clear()
+        hint = WatchCopy.couldntStart
+        send(action: "stop")
     }
 
     private func scheduleReady() {
@@ -298,12 +342,16 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
     }
 
-    private func beginMic(hint: String, resetClock: Bool = true) {
+    private func beginMic(hint: String, resetClock: Bool = true, setListening: Bool = true) {
         WatchRecorder.shared.start { [weak self] error in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let error {
                     self.stopRuntime()
+                    if self.starting {
+                        self.failStart()
+                        return
+                    }
                     self.listening = false
                     self.paused = false
                     self.startedAt = nil
@@ -311,14 +359,16 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                     self.hint = error.localizedDescription
                     return
                 }
-                self.listening = true
-                self.paused = false
-                if resetClock || self.startedAt == nil {
-                    self.startedAt = Date()
-                    self.elapsedMs = 0
+                if setListening {
+                    self.listening = true
+                    self.paused = false
+                    if resetClock || self.startedAt == nil {
+                        self.startedAt = Date()
+                        self.elapsedMs = 0
+                    }
+                    WatchGlanceStore.setStartedAt(self.startedAt)
+                    self.hint = hint
                 }
-                WatchGlanceStore.setStartedAt(self.startedAt)
-                self.hint = hint
                 self.startRuntime()
             }
         }
@@ -349,6 +399,21 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     private func syncFromCapture(_ capture: String) {
         switch capture {
         case "listening", "recording":
+            if starting {
+                startWaitWork?.cancel()
+                startWaitWork = nil
+                starting = false
+                startBeganAt = nil
+                paused = false
+                listening = true
+                startedAt = Date()
+                elapsedMs = 0
+                WatchGlanceStore.setStartedAt(startedAt)
+                hint = Self.usesWatchMic(mode)
+                    ? (reachable ? "Watch mic" : "Recording on Watch")
+                    : "Phone mic"
+                return
+            }
             // Live session: the Watch shows listening. It does NOT seize the mic
             // from local Watch Start; a phone-initiated session just mirrors.
             if !listening || paused {
@@ -381,6 +446,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 hint = WatchCopy.paused
             }
         case "off":
+            // Start in flight: phone often pushes a stale capture:off before
+            // listening. Do not treat it as failure or kill the Watch recorder.
+            if starting { return }
             // Session is over. Stop the Watch side, but leave offeringSave /
             // savedAck alone — the Watch's own Stop->Save flow owns them, and a
             // phone-initiated stop arrives with them already false.
@@ -522,7 +590,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         }
         session.transferUserInfo(payload)
         DispatchQueue.main.async {
-            if self.listening {
+            if self.starting {
+                self.hint = WatchCopy.starting
+            } else if self.listening {
                 self.hint = "Recording on Watch"
             } else if self.paused {
                 self.hint = WatchCopy.paused
@@ -558,7 +628,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let capture = payload["capture"] as? String {
             syncFromCapture(capture)
         }
-        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck {
+        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck, !starting {
             self.hint = hint
         }
         if let original = payload["original"] as? String {
