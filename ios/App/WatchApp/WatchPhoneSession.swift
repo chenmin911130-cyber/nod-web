@@ -369,6 +369,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         translation = ""
         previous = ""
         elapsedMs = 0
+        startedAt = nil
         ending = false
         ended = false
         saveState = "none"
@@ -499,10 +500,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 let resuming = paused
                 paused = false
                 listening = true
-                if startedAt == nil {
-                    startedAt = Date()
-                    elapsedMs = 0
-                }
+                startedAt = Date().addingTimeInterval(-elapsedMs)
                 WatchGlanceStore.setStartedAt(startedAt)
                 // Only reopen the Watch mic after a pause of a session that was
                 // recording on the Watch. A plain off->listening for a phone-mic
@@ -703,6 +701,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let pair = payload["langPair"] as? String, !pair.isEmpty {
             langPair = pair
         }
+        var endedDropped = false
         if let endedVal = Self.payloadBool(payload["ended"]) {
             let wasEnded = ended
             ended = endedVal
@@ -710,6 +709,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 ending = false
                 endWaitWork?.cancel()
             } else if wasEnded {
+                endedDropped = true
                 discardWaitWork?.cancel()
                 saveWaitWork?.cancel()
                 saveRequestedId = nil
@@ -742,6 +742,13 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let capture = payload["capture"] as? String {
             lastCapture = capture
             syncFromCapture(capture)
+        }
+        if endedDropped {
+            let cap = payload["capture"] as? String ?? ""
+            if cap != "listening", cap != "recording", cap != "paused" {
+                startedAt = nil
+                elapsedMs = 0
+            }
         }
         if starting, !blocked.isEmpty {
             let waited = Int((Date().timeIntervalSince(startBeganAt ?? Date())) * 1000)
