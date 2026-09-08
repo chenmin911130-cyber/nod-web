@@ -40,15 +40,20 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
         let sessionId = call.getString("sessionId") ?? ""
         let engine = call.getString("engine") ?? ""
         let blocked = call.getString("blocked") ?? ""
-        var history: [[String: String]] = []
+        let failed = call.getBool("failed") ?? false
+        var history: [[String: Any]] = []
         if let rows = call.getArray("history") {
             for row in rows {
                 guard let dict = row as? JSObject else { continue }
-                history.append([
+                var item: [String: Any] = [
                     "id": (dict["id"] as? String) ?? "",
                     "title": (dict["title"] as? String) ?? "",
                     "text": (dict["text"] as? String) ?? "",
-                ])
+                ]
+                if dict["failed"] as? Bool == true {
+                    item["failed"] = true
+                }
+                history.append(item)
             }
         }
         WatchBridge.shared.pushStatus(
@@ -65,7 +70,8 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
             save: save,
             sessionId: sessionId,
             engine: engine,
-            blocked: blocked
+            blocked: blocked,
+            failed: failed
         )
         call.resolve()
     }

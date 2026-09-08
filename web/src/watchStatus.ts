@@ -1,4 +1,4 @@
-export type WatchHistItem = { id: string; title: string; text: string }
+export type WatchHistItem = { id: string; title: string; text: string; failed?: boolean }
 
 export type WatchFace = {
   listening: boolean
@@ -7,9 +7,10 @@ export type WatchFace = {
   translation: string
   previous: string
   history: WatchHistItem[]
+  failed: boolean
 }
 
-type Pair = { id: string; original: string; translation: string }
+type Pair = { id: string; original: string; translation: string; failed?: boolean }
 type Line = { id: string; text: string; translation?: string }
 type Turn = { id: string; q: string; a: string }
 
@@ -27,6 +28,18 @@ export function watchVisibleTranslation(text: string): string {
   const lines = raw.split(/\n+/).map((line) => line.trim()).filter(Boolean)
   if (lines.length === 2 && lines[0].toLowerCase() === lines[1].toLowerCase()) return lines[0]
   return raw
+}
+
+export function watchReadingAnchor(input: {
+  atLatest: boolean
+  newUnit: boolean
+  pillShown: boolean
+}): { scroll: boolean; pill: boolean } {
+  if (input.atLatest) {
+    return { scroll: input.newUnit, pill: false }
+  }
+  if (input.newUnit) return { scroll: false, pill: true }
+  return { scroll: false, pill: input.pillShown }
 }
 
 /** One muted line: the finished sentence before the current one. */
@@ -95,15 +108,27 @@ export function buildWatchFace(input: {
   else if (input.notesRaw.trim()) hint = 'Open iPhone to read the report'
   else if (translation.trim()) hint = 'Translated'
 
+  const latestPair = [...input.translatePairs].reverse().find((p) => p.original.trim() || p.translation.trim())
+  const failed = input.workspaceMode === 'translate' && latestPair?.failed === true
+
   const history: WatchHistItem[] = []
   if (input.workspaceMode === 'translate') {
     for (const p of input.translatePairs.slice(-8).reverse()) {
-      const text = (p.translation || p.original).trim()
-      if (!text) continue
+      if (!p.original.trim() && !p.translation.trim()) continue
       history.push({
         id: p.id,
         title: clipWatch(p.original, 40),
-        text: clipWatch(text, 280),
+        text: clipWatch(p.translation, 280),
+        ...(p.failed ? { failed: true } : {}),
+      })
+    }
+  } else if (input.workspaceMode === 'interview') {
+    for (const t of (input.turns || []).slice(-8).reverse()) {
+      if (!t.q.trim() && !t.a.trim()) continue
+      history.push({
+        id: t.id,
+        title: clipWatch(t.q, 40),
+        text: clipWatch(t.a, 280),
       })
     }
   } else {
@@ -132,5 +157,6 @@ export function buildWatchFace(input: {
     translation: clipWatch(translation, 800),
     previous,
     history,
+    failed,
   }
 }

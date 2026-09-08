@@ -252,19 +252,6 @@ enum WatchCopy {
         ])
     }
 
-    static var keepsSession: String {
-        pick([
-            "zh": "保留本次会话",
-            "en": "Keeps this session",
-            "it": "Conserva questa sessione",
-            "es": "Conserva esta sesión",
-            "fr": "Conserve cette session",
-            "de": "Behält diese Sitzung",
-            "pt": "Mantém esta sessão",
-            "ja": "このセッションを保持",
-        ])
-    }
-
     static var ended: String {
         pick([
             "zh": "已结束",
@@ -574,6 +561,84 @@ enum WatchCopy {
             "de": "Aufnahme auf Watch · iPhone offline",
             "pt": "Gravando no Watch · iPhone offline",
             "ja": "Watchで録音中 · iPhoneオフライン",
+        ])
+    }
+
+    static var newTranslation: String {
+        pick([
+            "zh": "新译文 ↓",
+            "en": "New translation ↓",
+            "it": "Nuova traduzione ↓",
+            "es": "Nueva traducción ↓",
+            "fr": "Nouvelle traduction ↓",
+            "de": "Neue Übersetzung ↓",
+            "pt": "Nova tradução ↓",
+            "ja": "新しい訳 ↓",
+        ])
+    }
+
+    static var newAnswer: String {
+        pick([
+            "zh": "新回答 ↓",
+            "en": "New answer ↓",
+            "it": "Nuova risposta ↓",
+            "es": "Nueva respuesta ↓",
+            "fr": "Nouvelle réponse ↓",
+            "de": "Neue Antwort ↓",
+            "pt": "Nova resposta ↓",
+            "ja": "新しい回答 ↓",
+        ])
+    }
+
+    static var couldntTranslate: String {
+        pick([
+            "zh": "翻译失败",
+            "en": "Couldn't translate",
+            "it": "Traduzione non riuscita",
+            "es": "No se pudo traducir",
+            "fr": "Traduction impossible",
+            "de": "Übersetzung fehlgeschlagen",
+            "pt": "Não foi possível traduzir",
+            "ja": "翻訳できません",
+        ])
+    }
+
+    static var couldntAnswer: String {
+        pick([
+            "zh": "回答失败",
+            "en": "Couldn't answer",
+            "it": "Risposta non riuscita",
+            "es": "No se pudo responder",
+            "fr": "Réponse impossible",
+            "de": "Antwort fehlgeschlagen",
+            "pt": "Não foi possível responder",
+            "ja": "回答できません",
+        ])
+    }
+
+    static var retry: String {
+        pick([
+            "zh": "重试",
+            "en": "Retry",
+            "it": "Riprova",
+            "es": "Reintentar",
+            "fr": "Réessayer",
+            "de": "Erneut",
+            "pt": "Tentar de novo",
+            "ja": "再試行",
+        ])
+    }
+
+    static var retrying: String {
+        pick([
+            "zh": "正在重试…",
+            "en": "Retrying…",
+            "it": "Nuovo tentativo…",
+            "es": "Reintentando…",
+            "fr": "Nouvelle tentative…",
+            "de": "Wird wiederholt…",
+            "pt": "Tentando…",
+            "ja": "再試行中…",
         ])
     }
 }
