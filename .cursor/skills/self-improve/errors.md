@@ -2,6 +2,13 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-08 · 手表 Resume 把手机麦会话翻成表麦
+
+- 我以为：#134 把 `onResume` 列入 `applyWatchMic` 调用方，Resume 也要确认表麦。
+- 实际：`applyWatchMic` 无条件 `setPreferWatchMic(true)`。手机 Start 的 Meeting 再手表 Pause→Resume：`preferWatchMic` 翻真 → `syncMic` 释放手机麦；手表 `localMic == false` 不开麦 → 两边无麦，25s 停听。
+- 规则：麦归属只在 Start / Record 决定；Pause / Resume 继承，禁止 `applyWatchMic` / `setPreferWatchMic`。
+- 涉及：`App.tsx` `installWatchRemote.onResume` · `watchResumeShouldChangeMic`
+
 ## 2026-09-08 · 阅读页 VStack 让滚出屏幕不触发 onDisappear
 
 - 我以为：ForEach 单元的 `onAppear` / `onDisappear` 会在表冠滚出屏幕时翻转 `latestVisible`。
