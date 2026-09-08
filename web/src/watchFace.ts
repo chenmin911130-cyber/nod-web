@@ -5,6 +5,7 @@ export type WatchPhase =
   | 'listening'
   | 'paused'
   | 'translateListening'
+  | 'translateGenerating'
   | 'translateResult'
   | 'qaWaiting'
   | 'qaDrafting'
@@ -33,6 +34,7 @@ export type WatchScreen = {
   tertiary?: string
   playLabel?: string
   rec?: boolean
+  paused?: boolean
   clipLines?: number
   crownScroll?: boolean
   swipeStop?: boolean
@@ -51,7 +53,7 @@ export type WatchAlwaysOn = {
 
 export function watchLangPair(to: string): string {
   const tags: Record<string, string> = {
-    zh: 'CH',
+    zh: 'ZH',
     ja: 'JA',
     en: 'EN',
     it: 'IT',
@@ -60,7 +62,7 @@ export function watchLangPair(to: string): string {
     de: 'DE',
     pt: 'PT',
   }
-  return `Auto → ${tags[to] || 'CH'}`
+  return `Auto → ${tags[to] || 'ZH'}`
 }
 
 export function buildWatchScreen(input: {
@@ -78,12 +80,19 @@ export function buildWatchScreen(input: {
   answer: string
   drafting: boolean
   translateTo?: string
+  engine?: string
 }): WatchScreen {
+  const engine = input.engine || ''
+  const reading = input.listening || input.paused
   const base = {
     mascot: false as const,
     showModePicker: false,
     showHistoryList: false as const,
     modeLabel: modeCapsule(input.workspaceMode, input.listenScene),
+  }
+  const readingFlags = {
+    ...(input.listening ? { rec: true } : {}),
+    ...(input.paused ? { paused: true } : {}),
   }
 
   if (meetingEndedFace(input)) {
@@ -129,63 +138,82 @@ export function buildWatchScreen(input: {
     if (input.answer.trim()) {
       return {
         ...base,
+        ...readingFlags,
         phase: 'qaAnswer',
         question: input.question,
         answer: input.answer,
-        previous: input.previous || undefined,
         clipLines: 3,
         crownScroll: true,
         swipeStop: true,
         waveform: true,
       }
     }
-    if (input.drafting && input.question.trim()) {
+    if (input.question.trim() && !input.answer.trim() && engine === 'generating') {
       return {
         ...base,
+        ...readingFlags,
         phase: 'qaDrafting',
         question: input.question,
-        status: '起草中',
-        statusEn: 'Drafting',
+        status: '正在生成…',
+        statusEn: 'Drafting…',
         swipeStop: true,
       }
     }
-    if (input.listening) {
+    if (reading) {
       return {
         ...base,
+        ...readingFlags,
         phase: 'qaWaiting',
-        status: '听问题',
-        statusEn: 'Listening for a question',
-        rec: true,
+        status: '等待问题',
+        statusEn: 'Waiting for a question',
         swipeStop: true,
       }
     }
   }
 
-  if (input.workspaceMode === 'translate' && input.listening && input.translation.trim()) {
+  if (input.workspaceMode === 'translate' && reading && input.translation.trim()) {
     return {
       ...base,
+      ...readingFlags,
       phase: 'translateResult',
       langPair: watchLangPair(input.translateTo || 'zh'),
       original: watchVisibleOriginal(input.original, input.translation),
       translation: input.translation,
-      previous: input.previous || undefined,
       clipLines: 3,
       crownScroll: true,
       swipeStop: true,
       waveform: true,
-      rec: true,
     }
   }
 
-  if (input.workspaceMode === 'translate' && input.listening && !input.translation.trim()) {
+  if (
+    input.workspaceMode === 'translate' &&
+    reading &&
+    input.original.trim() &&
+    !input.translation.trim() &&
+    engine === 'generating'
+  ) {
     return {
       ...base,
+      ...readingFlags,
+      phase: 'translateGenerating',
+      langPair: watchLangPair(input.translateTo || 'zh'),
+      original: watchVisibleOriginal(input.original, input.translation),
+      status: '正在翻译…',
+      statusEn: 'Translating…',
+      swipeStop: true,
+    }
+  }
+
+  if (input.workspaceMode === 'translate' && reading && !input.translation.trim()) {
+    return {
+      ...base,
+      ...readingFlags,
       phase: 'translateListening',
       langPair: watchLangPair(input.translateTo || 'zh'),
-      previous: input.previous || undefined,
-      status: '听着',
-      statusEn: 'listening',
-      rec: true,
+      original: input.original.trim() || undefined,
+      status: '自然说话即可',
+      statusEn: 'Speak naturally',
       swipeStop: true,
       waveform: true,
     }

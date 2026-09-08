@@ -23,7 +23,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var ended = false
     @Published var saveState = "none"
     @Published var sessionId = ""
-    @Published var langPair = "Auto → CH"
+    @Published var langPair = "Auto → ZH"
+    @Published var engine = "idle"
     @Published var mode = "meeting"
 
     private var localModeHeld = false
@@ -632,6 +633,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         }
         if let sid = payload["sessionId"] as? String {
             sessionId = sid
+        }
+        if let engine = payload["engine"] as? String {
+            self.engine = engine
         }
         if let capture = payload["capture"] as? String {
             lastCapture = capture

@@ -101,7 +101,7 @@ struct WatchRootView: View {
                 saveFailedPage
             } else if session.ended {
                 endedPage
-            } else if session.listening || session.paused {
+            } else if session.listening || session.paused || session.ending {
                 TabView(selection: $listenPage) {
                     sessionPage.tag(0)
                     controlsPage.tag(1)
@@ -121,10 +121,9 @@ struct WatchRootView: View {
 
     private var sessionPage: some View {
         Group {
-            if session.mode == "translate", session.listening {
-                translatePage
-            } else if session.mode == "interview", session.listening {
-                qaPage
+            if (session.mode == "translate" || session.mode == "interview"),
+               session.listening || session.paused {
+                readingPage
             } else if session.paused {
                 pausedControls
             } else {
@@ -147,6 +146,29 @@ struct WatchRootView: View {
                     Text(startedAt, style: .timer)
                         .font(.title3.monospacedDigit())
                         .foregroundStyle(muted)
+                }
+            }
+            if session.mode == "translate" || session.mode == "interview" {
+                if session.listening {
+                    Button {
+                        session.pause()
+                    } label: {
+                        Label(WatchCopy.pause, systemImage: "pause.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(panel)
+                    .foregroundStyle(ink)
+                } else if session.paused {
+                    Button {
+                        session.resume()
+                    } label: {
+                        Label(WatchCopy.resume, systemImage: "play.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(cyan)
+                    .foregroundStyle(Color.black)
                 }
             }
             Button {
@@ -245,71 +267,69 @@ struct WatchRootView: View {
         }
     }
 
-    private var translatePage: some View {
+    private var readingPage: some View {
         VStack(spacing: 6) {
-            Text(session.langPair)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(cyan)
-            if !session.previous.isEmpty {
-                Text(session.previous)
-                    .font(.caption2)
-                    .foregroundStyle(muted)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if session.original.isEmpty, session.translation.isEmpty {
-                Text(WatchCopy.listening)
-                    .font(.headline)
-                    .foregroundStyle(ink)
+            if session.mode == "translate" {
+                capsule(session.langPair)
             } else {
-                if !session.original.isEmpty {
-                    Text(session.original)
-                        .font(.caption2)
-                        .foregroundStyle(muted)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                if !session.translation.isEmpty {
-                    copyScroll(session.translation)
-                }
+                capsule("Live Q&A")
             }
-            Spacer(minLength: 0)
-            listeningWave
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    if session.original.isEmpty, session.translation.isEmpty {
+                        Image(systemName: "waveform")
+                            .font(.title2)
+                            .foregroundStyle(cyan)
+                        Text(session.mode == "translate" ? WatchCopy.speakNaturally : WatchCopy.waitingForQuestion)
+                            .font(.caption)
+                            .foregroundStyle(muted)
+                    } else {
+                        if !session.original.isEmpty {
+                            Text(session.original)
+                                .font(.caption)
+                                .foregroundStyle(muted)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        if session.translation.isEmpty {
+                            if session.engine == "generating" {
+                                HStack(spacing: 6) {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                    Text(session.mode == "translate" ? WatchCopy.translating : WatchCopy.drafting)
+                                        .font(.caption)
+                                        .foregroundStyle(muted)
+                                }
+                            }
+                        } else {
+                            Text(session.translation)
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(ink)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .focusable()
+            captureRow
         }
     }
 
-    private var qaPage: some View {
-        VStack(spacing: 6) {
-            capsule("Live Q&A")
-            if !session.previous.isEmpty {
-                Text(session.previous)
+    private var captureRow: some View {
+        HStack(spacing: 6) {
+            if session.paused {
+                Image(systemName: "pause.fill")
+                    .foregroundStyle(timer)
+                Text(WatchCopy.paused)
                     .font(.caption2)
-                    .foregroundStyle(muted)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if session.original.isEmpty, session.translation.isEmpty {
-                Text(WatchCopy.hearQuestion)
-                    .font(.headline)
-                    .foregroundStyle(ink)
+                    .foregroundStyle(timer)
             } else {
-                if !session.original.isEmpty {
-                    Text(session.original)
-                        .font(.caption2)
-                        .foregroundStyle(muted)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                if session.translation.isEmpty {
-                    Text(WatchCopy.drafting)
-                        .font(.headline)
-                        .foregroundStyle(ink)
-                } else {
-                    copyScroll(session.translation)
-                }
+                Circle().fill(Color.red).frame(width: 6, height: 6)
+                Text(WatchCopy.listeningStatus)
+                    .font(.caption2)
+                    .foregroundStyle(ink)
             }
-            Spacer(minLength: 0)
-            listeningWave
         }
     }
 
@@ -415,26 +435,6 @@ struct WatchRootView: View {
         }
     }
 
-    private var listeningWave: some View {
-        Image(systemName: "waveform")
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(cyan)
-            .modifier(ListeningPulse())
-            .accessibilityLabel(WatchCopy.listening)
-    }
-
-    private func copyScroll(_ text: String) -> some View {
-        ScrollView {
-            Text(text)
-                .font(.body.weight(.semibold))
-                .foregroundStyle(ink)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .id(text)
-        .focusable()
-    }
-
     private func capsule(_ title: String) -> some View {
         Text(title)
             .font(.caption2.weight(.semibold))
@@ -466,16 +466,6 @@ struct WatchRootView: View {
             return String(format: "%02d:%02d", m, s)
         }
         return "\(String(format: "%02d", h)):\(String(format: "%02d", m)):\(String(format: "%02d", s))"
-    }
-}
-
-private struct ListeningPulse: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(watchOS 10.0, *) {
-            content.symbolEffect(.variableColor.iterative, isActive: true)
-        } else {
-            content
-        }
     }
 }
 

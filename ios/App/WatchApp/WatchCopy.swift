@@ -161,29 +161,68 @@ enum WatchCopy {
         ])
     }
 
-    static var hearQuestion: String {
+    static var speakNaturally: String {
         pick([
-            "zh": "听问题",
+            "zh": "自然说话即可",
+            "en": "Speak naturally",
+            "it": "Parla naturalmente",
+            "es": "Habla con naturalidad",
+            "fr": "Parlez naturellement",
+            "de": "Sprich natürlich",
+            "pt": "Fale naturalmente",
+            "ja": "自然に話してください",
+        ])
+    }
+
+    static var waitingForQuestion: String {
+        pick([
+            "zh": "等待问题",
+            "en": "Waiting for a question",
+            "it": "In attesa di una domanda",
+            "es": "Esperando una pregunta",
+            "fr": "En attente d'une question",
+            "de": "Warte auf eine Frage",
+            "pt": "Aguardando uma pergunta",
+            "ja": "質問を待っています",
+        ])
+    }
+
+    static var listeningStatus: String {
+        pick([
+            "zh": "聆听中",
             "en": "Listening",
             "it": "Ascolto",
             "es": "Escuchando",
             "fr": "J'écoute",
             "de": "Ich höre zu",
             "pt": "Ouvindo",
-            "ja": "質問を聞く",
+            "ja": "聞いています",
+        ])
+    }
+
+    static var translating: String {
+        pick([
+            "zh": "正在翻译…",
+            "en": "Translating…",
+            "it": "Traduco…",
+            "es": "Traduciendo…",
+            "fr": "Traduction…",
+            "de": "Übersetze…",
+            "pt": "Traduzindo…",
+            "ja": "翻訳中…",
         ])
     }
 
     static var drafting: String {
         pick([
-            "zh": "起草中",
-            "en": "Drafting",
-            "it": "Sto scrivendo",
-            "es": "Redactando",
-            "fr": "Rédaction",
+            "zh": "正在生成…",
+            "en": "Drafting…",
+            "it": "Sto scrivendo…",
+            "es": "Redactando…",
+            "fr": "Rédaction…",
             "de": "Schreibe…",
-            "pt": "Escrevendo",
-            "ja": "作成中",
+            "pt": "Escrevendo…",
+            "ja": "作成中…",
         ])
     }
 

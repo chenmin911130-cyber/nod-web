@@ -1451,12 +1451,14 @@ export default function App() {
         elapsedMs: state.meetingElapsedMs,
         save: watchSaveWireStatus(saveBook.status),
         sessionId: saveBook.liveId || '',
+        engine: state.engine,
       })
     }, 180)
     return () => window.clearTimeout(timer)
   }, [
     consentOpen,
     state.capture,
+    state.engine,
     state.meetingLines,
     state.notesAskId,
     state.notesRaw,

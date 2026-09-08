@@ -17,6 +17,7 @@ export interface NodWatchPlugin {
     elapsedMs?: number
     save?: string
     sessionId?: string
+    engine?: string
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {
