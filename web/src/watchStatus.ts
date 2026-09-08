@@ -189,3 +189,44 @@ export function buildWatchFace(input: {
     failed,
   }
 }
+
+/** Int16 PCM RMS → 0…1. Full-scale is 32768 (2^15). */
+export function watchRmsToLevel(rms: number): number {
+  if (rms <= 0) return 0
+  return Math.min(1, rms / 32768)
+}
+
+export type WatchHaptic = 'start' | 'click' | 'stop' | 'success' | 'failure' | null
+
+export type WatchHapticSnap = {
+  starting: boolean
+  listening: boolean
+  paused: boolean
+  pending: string | null
+  ending: boolean
+  ended: boolean
+  capture: string
+  saveMatched: boolean
+  failure: string | null
+  blocked: string
+  statusUnknown: boolean
+  saveState: string
+  failed: boolean
+  translation?: string
+  reachable?: boolean
+}
+
+/** One-shot Watch haptic from prev→next values, not from “a status arrived”. */
+export function watchHaptic(prev: WatchHapticSnap, next: WatchHapticSnap): WatchHaptic {
+  if (prev.starting && next.listening) return 'start'
+  if (prev.pending === 'pause' && next.paused) return 'click'
+  if (prev.pending === 'resume' && next.listening) return 'click'
+  if (prev.ending && (next.ended || next.capture === 'off')) return 'stop'
+  if (!prev.saveMatched && next.saveMatched) return 'success'
+  if (prev.failure == null && next.failure != null) return 'failure'
+  if (!prev.blocked && !!next.blocked) return 'failure'
+  if (!prev.statusUnknown && next.statusUnknown) return 'failure'
+  if (prev.saveState !== 'failed' && next.saveState === 'failed') return 'failure'
+  if (!prev.failed && next.failed) return 'failure'
+  return null
+}

@@ -69,6 +69,64 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         var failed: Bool
     }
 
+    struct Snapshot: Equatable {
+        var starting: Bool
+        var listening: Bool
+        var paused: Bool
+        var pending: String?
+        var ending: Bool
+        var ended: Bool
+        var capture: String
+        var saveMatched: Bool
+        var failure: String?
+        var blocked: String
+        var statusUnknown: Bool
+        var saveState: String
+        var failed: Bool
+        var translation: String = ""
+        var reachable: Bool = false
+    }
+
+    static func hapticFor(prev: Snapshot, next: Snapshot) -> WKHapticType? {
+        if prev.starting && next.listening { return .start }
+        if prev.pending == "pause" && next.paused { return .click }
+        if prev.pending == "resume" && next.listening { return .click }
+        if prev.ending && (next.ended || next.capture == "off") { return .stop }
+        if !prev.saveMatched && next.saveMatched { return .success }
+        if prev.failure == nil, next.failure != nil { return .failure }
+        if prev.blocked.isEmpty, !next.blocked.isEmpty { return .failure }
+        if !prev.statusUnknown && next.statusUnknown { return .failure }
+        if prev.saveState != "failed" && next.saveState == "failed" { return .failure }
+        if !prev.failed && next.failed { return .failure }
+        return nil
+    }
+
+    private func snapshot() -> Snapshot {
+        Snapshot(
+            starting: starting,
+            listening: listening,
+            paused: paused,
+            pending: pending,
+            ending: ending,
+            ended: ended,
+            capture: lastCapture,
+            saveMatched: saveMatched,
+            failure: failure,
+            blocked: blocked,
+            statusUnknown: statusUnknown,
+            saveState: saveState,
+            failed: failed,
+            translation: translation,
+            reachable: reachable
+        )
+    }
+
+    private func playHaptic(from prev: Snapshot) {
+        if let type = Self.hapticFor(prev: prev, next: snapshot()) {
+            WKInterfaceDevice.current().play(type)
+        }
+    }
+
     private var pendingPcm = Data()
     private var liveStreamed = false
     private let pcmLock = NSLock()
@@ -440,7 +498,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             if self.saveState == "saved" || self.saveState == "failed" { return }
+            let prev = self.snapshot()
             self.saveState = "failed"
+            self.playHaptic(from: prev)
         }
         saveWaitWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: work)
@@ -512,11 +572,13 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             let waited = Int((Date().timeIntervalSince(self.startBeganAt ?? Date())) * 1000)
             let outcome = Self.startOutcome(capture: self.lastCapture, blocked: self.blocked, waitedMs: max(waited, 8000))
             if outcome == "started" { return }
+            let prev = self.snapshot()
             if outcome.hasPrefix("blocked:") {
                 self.failStart(reason: outcome)
             } else {
                 self.failStart(reason: "timeout")
             }
+            self.playHaptic(from: prev)
         }
         startWaitWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
@@ -544,7 +606,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                     self.startedAt = nil
                     WatchGlanceStore.clear()
                     if self.starting {
+                        let prev = self.snapshot()
                         self.failStart(reason: error.localizedDescription)
+                        self.playHaptic(from: prev)
                     } else {
                         self.hint = error.localizedDescription
                     }
@@ -603,7 +667,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 startBeganAt = nil
                 ended = false
                 failure = nil
-                WKInterfaceDevice.current().play(.start)
                 if Self.usesWatchMic(localStart: self.localMic), !WatchRecorder.shared.isRunning {
                     beginMic(
                         hint: reachable ? "Watch mic" : "Recording on Watch",
@@ -615,7 +678,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             if pending == "resume" {
                 pending = nil
                 pendingWaitWork?.cancel()
-                WKInterfaceDevice.current().play(.click)
             }
             // Live session: the Watch shows listening. It does NOT seize the mic
             // from local Watch Start; a phone-initiated session just mirrors.
@@ -638,7 +700,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             if pending == "pause" {
                 pending = nil
                 pendingWaitWork?.cancel()
-                WKInterfaceDevice.current().play(.click)
             }
             if !paused {
                 micWasRunningBeforePause = WatchRecorder.shared.isRunning
@@ -890,14 +951,18 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         reconnectFailed = false
         let payload: [String: Any] = ["action": "sync", "at": Date().timeIntervalSince1970]
         guard WCSession.isSupported() else {
+            let prev = snapshot()
             reconnecting = false
             reconnectFailed = true
+            playHaptic(from: prev)
             return
         }
         let session = WCSession.default
         guard session.isReachable else {
+            let prev = snapshot()
             reconnecting = false
             reconnectFailed = true
+            playHaptic(from: prev)
             return
         }
         session.sendMessage(payload, replyHandler: { [weak self] reply in
@@ -910,8 +975,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             }
         }, errorHandler: { [weak self] _ in
             DispatchQueue.main.async {
-                self?.reconnecting = false
-                self?.reconnectFailed = true
+                guard let self else { return }
+                let prev = self.snapshot()
+                self.reconnecting = false
+                self.reconnectFailed = true
+                self.playHaptic(from: prev)
             }
         })
     }
@@ -970,6 +1038,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
 
     private func apply(_ payload: [String: Any], live: Bool) {
         if payload["ok"] != nil { return }
+        let prev = snapshot()
         if let next = payload["mode"] as? String, ["meeting", "lecture", "interview", "translate"].contains(next) {
             phoneModeSeen = true
             if next == mode {
@@ -1098,6 +1167,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 }
             }
         }
+        playHaptic(from: prev)
     }
 
     private static func payloadBool(_ raw: Any?) -> Bool? {
@@ -1128,6 +1198,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
 
     func sessionReachabilityDidChange(_ session: WCSession) {
         DispatchQueue.main.async {
+            let prev = self.snapshot()
             let wasReachable = self.reachable
             self.reachable = session.isReachable
             if Self.liveStreamShouldReset(listening: self.listening, reachable: session.isReachable) {
@@ -1146,6 +1217,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             } else if self.paused {
                 self.hint = WatchCopy.paused
             }
+            self.playHaptic(from: prev)
         }
     }
 

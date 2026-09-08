@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import Foundation
 
 /// 16 kHz mono PCM16 from the Watch microphone. Prefers a live engine tap;
@@ -6,11 +7,12 @@ import Foundation
 /// new bytes. Both paths append a raw PCM spool so unsent audio can be
 /// retransmitted after a drop. The spool file is kept until the session
 /// confirms delivery — teardown must not delete it.
-final class WatchRecorder {
+final class WatchRecorder: ObservableObject {
     static let shared = WatchRecorder()
 
     var onPcm: ((Data, Int) -> Void)?
     var onWriteFailed: (() -> Void)?
+    @Published var level: Float = 0
 
     private var engine: AVAudioEngine?
     private var converter: AVAudioConverter?
@@ -27,8 +29,31 @@ final class WatchRecorder {
     private let queue = DispatchQueue(label: "nod.watch.recorder")
     private let spoolQueue = DispatchQueue(label: "nod.watch.spool")
     private let wavHeaderBytes = 44
+    private var envelope: Float = 0
+    private var lastLevelAt = Date.distantPast
+    private let levelLock = NSLock()
 
     var isRunning: Bool { running }
+
+    /// Raw Int16 RMS → 0…1. Full-scale is 32768 (2^15).
+    static func rmsToLevel(_ rms: Float) -> Float {
+        guard rms > 0 else { return 0 }
+        return min(1, rms / 32768)
+    }
+
+    static func pcmRms(_ data: Data) -> Float {
+        let count = data.count / 2
+        guard count > 0 else { return 0 }
+        var sum: Double = 0
+        data.withUnsafeBytes { raw in
+            let samples = raw.bindMemory(to: Int16.self)
+            for i in 0..<min(count, samples.count) {
+                let s = Double(samples[i])
+                sum += s * s
+            }
+        }
+        return Float(sqrt(sum / Double(count)))
+    }
 
     func start(completion: @escaping (Error?) -> Void) {
         if running {
@@ -82,6 +107,7 @@ final class WatchRecorder {
 
     func stop() {
         teardown()
+        resetLevel()
     }
 
     func bytes(from offset: Int, length: Int) -> Data? {
@@ -285,8 +311,41 @@ final class WatchRecorder {
 
     private func emitPcm(_ data: Data) {
         guard !data.isEmpty else { return }
+        publishLevel(from: data)
         guard let offset = writeSpool(data) else { return }
         onPcm?(data, offset)
+    }
+
+    private func publishLevel(from data: Data) {
+        let raw = Self.rmsToLevel(Self.pcmRms(data))
+        let now = Date()
+        levelLock.lock()
+        let elapsed = now.timeIntervalSince(lastLevelAt)
+        if lastLevelAt != .distantPast, elapsed < 1.0 / 20.0 {
+            levelLock.unlock()
+            return
+        }
+        let dt = Float(lastLevelAt == .distantPast ? 1.0 / 20.0 : min(max(elapsed, 1.0 / 20.0), 0.25))
+        lastLevelAt = now
+        let tau: Float = raw >= envelope ? 0.080 : 0.220
+        envelope += (raw - envelope) * (1 - exp(-dt / tau))
+        let next = envelope
+        levelLock.unlock()
+        DispatchQueue.main.async { [weak self] in
+            self?.level = next
+        }
+    }
+
+    private func resetLevel() {
+        levelLock.lock()
+        envelope = 0
+        lastLevelAt = .distantPast
+        levelLock.unlock()
+        if Thread.isMainThread {
+            level = 0
+        } else {
+            DispatchQueue.main.async { [weak self] in self?.level = 0 }
+        }
     }
 
     private func teardownEngine() {
