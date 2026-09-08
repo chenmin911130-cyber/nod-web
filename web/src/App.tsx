@@ -42,7 +42,7 @@ import {
 import { isTranslateChunk, looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, sttTag, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough, wrongScriptForTarget } from './translateGate'
 import { applyNotesTranslateTo, nextMeetingLineToTranslate } from './meetingTranslate'
 import { applyLineUpdate, applyLineTranslationRev, staleTranslateDone } from './meetingLines'
-import { doneAffectsInterview } from './interviewDone'
+import { doneAffectsInterview, markTurnFailed, retryTurn } from './interviewDone'
 import AnswerPane from './components/AnswerPane'
 import ListenPane from './components/ListenPane'
 import TranslatePane from './components/TranslatePane'
@@ -273,6 +273,7 @@ type Action =
   | { type: 'fill_translate'; id: string; translation: string; passthrough?: boolean }
   | { type: 'clear_translation'; id: string }
   | { type: 'retry_translate'; id: string }
+  | { type: 'retry_turn'; id: string }
   | { type: 'fail_translate'; id: string }
   | { type: 'ask_start' }
   | { type: 'seed_ask'; text: string }
@@ -535,7 +536,7 @@ function reducer(state: AppState, action: Action): AppState {
           }
           const pending = state.turns.findIndex((t) => t.id === '__pending_ask__')
           const turns = state.turns.slice()
-          if (pending >= 0) turns[pending] = { ...turns[pending], id: qid, q: text }
+          if (pending >= 0) turns[pending] = { ...turns[pending], id: qid, q: text, failed: false }
           else turns.push({ id: qid, q: text, a: '' })
           return { ...state, turns, currentQ: text, currentQId: qid, partial: '', busy: true, heardLang: heard ?? state.heardLang }
         }
@@ -593,7 +594,7 @@ function reducer(state: AppState, action: Action): AppState {
           }
           if (state.workspaceMode === 'interview' && state.turns.length) {
             const byId = ev.id ? state.turns.findIndex((t) => t.id === ev.id) : -1
-            const fallback = byId < 0 && !ev.id ? state.turns.length - 1 : state.turns.findIndex((t) => !t.a)
+            const fallback = byId < 0 && !ev.id ? state.turns.length - 1 : state.turns.findIndex((t) => !t.a && !t.failed)
             const idx = byId >= 0 ? byId : fallback
             if (idx >= 0) {
               const turns = state.turns.slice()
@@ -610,12 +611,8 @@ function reducer(state: AppState, action: Action): AppState {
           }
           const waitingAsk = state.catchNotes.some((note) => isPendingCatchId(note.id))
           let turns = state.turns
-          if (state.workspaceMode === 'interview' && ev.ok === false && ev.id && turns.length) {
-            const i = turns.findIndex((t) => t.id === ev.id)
-            if (i >= 0 && !turns[i].a) {
-              turns = turns.slice()
-              turns[i] = { ...turns[i], a: state.status.startsWith('Generation failed') ? state.status : 'Generation stopped. Please try again.' }
-            }
+          if (state.workspaceMode === 'interview' && ev.ok === false) {
+            turns = markTurnFailed(turns, ev.id || undefined)
           }
           return {
             ...state,
@@ -630,10 +627,8 @@ function reducer(state: AppState, action: Action): AppState {
         case 'error': {
           const msg = ev.text || 'Generation failed'
           if (state.workspaceMode === 'interview' && state.turns.length) {
-            const i = state.turns.findIndex((t) => !t.a)
-            if (i >= 0) {
-              const turns = state.turns.slice()
-              turns[i] = { ...turns[i], a: msg }
+            const turns = markTurnFailed(state.turns)
+            if (turns !== state.turns) {
               return { ...state, turns, status: msg, busy: false }
             }
           }
@@ -911,6 +906,11 @@ function reducer(state: AppState, action: Action): AppState {
       )
       return { ...state, translatePairs, translateBindId: action.id }
     }
+    case 'retry_turn': {
+      const turns = retryTurn(state.turns, action.id)
+      if (turns === state.turns) return state
+      return { ...state, turns, busy: true, status: 'Asking…' }
+    }
     case 'ask_start':
       return { ...state, busy: true, status: 'Asking…' }
     case 'seed_ask': {
@@ -918,9 +918,7 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, turns, currentQ: action.text, busy: true, status: 'Asking…' }
     }
     case 'fail_ask': {
-      const turns = state.turns.map((t) =>
-        t.id === '__pending_ask__' && !t.a ? { ...t, a: action.text } : t,
-      )
+      const turns = markTurnFailed(state.turns, '__pending_ask__')
       return { ...state, turns, busy: false, status: action.text }
     }
     case 'fail_translate': {
@@ -2971,6 +2969,13 @@ export default function App() {
     queueMicrotask(() => pumpTranslateRef.current())
   }, [])
 
+  const handleRetryTurn = useCallback((id: string) => {
+    const turn = stateRef.current.turns.find((t) => t.id === id)
+    if (!turn?.q.trim()) return
+    dispatch({ type: 'retry_turn', id })
+    window.api.send({ type: 'ask', text: turn.q })
+  }, [])
+
   const writePdf = useCallback(async () => {
     const s = stateRef.current
     const when = new Date().toLocaleString()
@@ -3590,6 +3595,7 @@ export default function App() {
                 busy={state.busy}
                 listening={listening}
                 onAsk={handleAsk}
+                onRetryTurn={handleRetryTurn}
                 onCompose={setComposeOpen}
               />
             }
