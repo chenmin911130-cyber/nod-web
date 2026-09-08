@@ -62,7 +62,6 @@ export const IPHONE_COPY = {
   autoDetect: 'Auto Detect',
   emptyLive: 'Start listening. What was said stays here.',
   emptyTranscript: 'Waiting for speech…',
-  emptyTranscriptAfterStop: 'Transcript appears after you stop.',
   emptyNotes: 'Start listening',
   fullTranscript: 'Full transcript',
   allCapturedSpeech: 'All captured speech',
@@ -321,9 +320,7 @@ export function isListenReadyView(input: {
   ended: boolean
   lines: number
   partial: boolean
-  engine?: string
 }): boolean {
-  if (input.engine === 'transcribing' || input.engine === 'generating') return false
   return (
     input.phone &&
     !input.listening &&
@@ -331,10 +328,6 @@ export function isListenReadyView(input: {
     input.lines === 0 &&
     !input.partial
   )
-}
-
-export function listenAskEnabled(input: { lineCount: number; busy: boolean }): boolean {
-  return input.lineCount > 0 && !input.busy
 }
 
 export function speakerSuggestText(label: string, name: string): string {
