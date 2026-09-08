@@ -115,6 +115,11 @@ export function watchStartShouldPreferWatchMic(input: { fromWatch: boolean }): b
   return input.fromWatch
 }
 
+/** Pause / Resume inherit Start / Record mic ownership. Never flip preferWatchMic. */
+export function watchResumeShouldChangeMic(): boolean {
+  return false
+}
+
 export type WatchHardwareKey = 'crown' | 'side'
 
 /** Crown is Start/Stop. Side is Pause/Resume. Never bind the crown to toggle(). */

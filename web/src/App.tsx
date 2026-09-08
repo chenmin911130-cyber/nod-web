@@ -53,7 +53,7 @@ import { api as authApi, deleteAccount, fetchMe, logout, type Me } from './auth'
 import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
-import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchBlockedReason, watchListenControlShouldApplyMode, watchListenMode, watchShouldApplyMode, watchStartShouldPreferWatchMic } from './watch'
+import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchBlockedReason, watchListenControlShouldApplyMode, watchListenMode, watchResumeShouldChangeMic, watchShouldApplyMode } from './watch'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
 import { keepShouldWaitForNotes, shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
@@ -1312,8 +1312,7 @@ export default function App() {
       }
     }
     const applyWatchMic = () => {
-      if (watchStartShouldPreferWatchMic({ fromWatch: true })) setPreferWatchMic(true)
-      else takePhoneMic()
+      setPreferWatchMic(true)
     }
     return installWatchRemote({
       onStart: (mode) => {
@@ -1371,7 +1370,7 @@ export default function App() {
         }
       },
       onResume: () => {
-        applyWatchMic()
+        if (watchResumeShouldChangeMic()) applyWatchMic()
         const s = stateRef.current
         if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
           dispatch({ type: 'meeting_clock', startedAt: Date.now() - s.meetingElapsedMs, elapsedMs: s.meetingElapsedMs })
