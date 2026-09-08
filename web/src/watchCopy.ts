@@ -37,6 +37,7 @@ export type WatchUiCopy = {
   limitReached: string
   couldntStart: string
   couldntChange: string
+  storageFull: string
   iphoneDisconnected: string
   statusUnavailable: string
   reconnect: string
@@ -89,6 +90,7 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: '已达上限 · 查看 iPhone',
     couldntStart: '无法开始 · 请重试',
     couldntChange: '未能更新 · 请重试',
+    storageFull: '存储已满 · 录音已停止',
     iphoneDisconnected: '与 iPhone 连接中断',
     statusUnavailable: '暂时无法确认录音状态',
     reconnect: '重新连接',
@@ -139,6 +141,7 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: 'Limit reached · see iPhone',
     couldntStart: "Couldn't start · try again",
     couldntChange: "Couldn't update · try again",
+    storageFull: 'Storage full · recording stopped',
     iphoneDisconnected: 'iPhone disconnected',
     statusUnavailable: 'Recording status unavailable',
     reconnect: 'Reconnect',
@@ -189,6 +192,7 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: 'Limite raggiunto · vedi iPhone',
     couldntStart: 'Avvio non riuscito · riprova',
     couldntChange: 'Aggiornamento non riuscito · riprova',
+    storageFull: 'Memoria piena · registrazione fermata',
     iphoneDisconnected: 'iPhone disconnesso',
     statusUnavailable: 'Stato registrazione non disponibile',
     reconnect: 'Riconnetti',
@@ -239,6 +243,7 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: 'Límite alcanzado · mira iPhone',
     couldntStart: 'No se pudo iniciar · reintenta',
     couldntChange: 'No se pudo actualizar · reintenta',
+    storageFull: 'Almacenamiento lleno · grabación detenida',
     iphoneDisconnected: 'iPhone desconectado',
     statusUnavailable: 'Estado de grabación no disponible',
     reconnect: 'Reconectar',
@@ -289,6 +294,7 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: 'Limite atteinte · voir iPhone',
     couldntStart: 'Impossible de démarrer · réessayer',
     couldntChange: 'Mise à jour impossible · réessayer',
+    storageFull: 'Stockage plein · enregistrement arrêté',
     iphoneDisconnected: 'iPhone déconnecté',
     statusUnavailable: 'État d’enregistrement indisponible',
     reconnect: 'Reconnecter',
@@ -339,6 +345,7 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: 'Limit erreicht · iPhone prüfen',
     couldntStart: 'Start fehlgeschlagen · erneut',
     couldntChange: 'Aktualisieren fehlgeschlagen · erneut',
+    storageFull: 'Speicher voll · Aufnahme gestoppt',
     iphoneDisconnected: 'iPhone getrennt',
     statusUnavailable: 'Aufnahmestatus unbekannt',
     reconnect: 'Erneut verbinden',
@@ -389,6 +396,7 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: 'Limite atingido · veja o iPhone',
     couldntStart: 'Não foi possível iniciar · tente de novo',
     couldntChange: 'Não foi possível atualizar · tente de novo',
+    storageFull: 'Armazenamento cheio · gravação parada',
     iphoneDisconnected: 'iPhone desconectado',
     statusUnavailable: 'Estado da gravação indisponível',
     reconnect: 'Reconectar',
@@ -439,6 +447,7 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: '上限です · iPhoneを見てください',
     couldntStart: '開始できません · 再試行',
     couldntChange: '更新できません · 再試行',
+    storageFull: '容量不足 · 録音を停止しました',
     iphoneDisconnected: 'iPhone切断',
     statusUnavailable: '録音状態を確認できません',
     reconnect: '再接続',

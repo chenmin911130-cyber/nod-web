@@ -4,7 +4,12 @@ import unittest
 from unittest import mock
 
 from server.app import Session, _adopt_live_stt, _reset_live_stt, _tick_live_idle_watches
-from server.settings import LISTEN_IDLE_SECONDS, LISTEN_MAX_SECONDS, LISTEN_ZERO_PCM_SECONDS
+from server.settings import (
+    LISTEN_IDLE_SECONDS,
+    LISTEN_MAX_SECONDS,
+    LISTEN_ZERO_PCM_SECONDS,
+    LISTEN_ZERO_PCM_WATCH_SECONDS,
+)
 
 
 class ForgottenListenTests(unittest.TestCase):
@@ -25,6 +30,8 @@ class ForgottenListenTests(unittest.TestCase):
         sess._last_pcm_at = time.time()
         sess.pipeline = mock.Mock()
         sess.pipeline._cancel = threading.Event()
+        sess._listen_mic = "phone"
+        sess._offer_save_history = mock.Mock()
         sess.emit = mock.Mock()
         sess._stop_listening = mock.Mock()
         return sess
@@ -149,3 +156,49 @@ class ForgottenListenTests(unittest.TestCase):
         # And the guard must NOT fire while muted + streaming:
         sess._maybe_stop_forgotten_listen()
         sess._stop_listening.assert_not_called()
+
+    def test_watch_mic_zero_pcm_waits_past_phone_window(self) -> None:
+        """Watch mic sessions keep listening while backlog is still in flight."""
+        sess = self._session()
+        sess._listen_mic = "watch"
+        sess._last_pcm_at = time.time() - 60
+        sess._last_voice_at = time.time()
+        sess._maybe_stop_forgotten_listen()
+        sess._stop_listening.assert_not_called()
+        self.assertTrue(sess._listen_wanted)
+
+    def test_watch_mic_zero_pcm_stops_after_watch_window(self) -> None:
+        sess = self._session()
+        sess._listen_mic = "watch"
+        sess._last_pcm_at = time.time() - LISTEN_ZERO_PCM_WATCH_SECONDS - 20
+        sess._last_voice_at = time.time()
+        sess._maybe_stop_forgotten_listen()
+        sess._stop_listening.assert_called_once()
+        self.assertFalse(sess._listen_wanted)
+
+    def test_phone_mic_zero_pcm_still_stops_at_30s(self) -> None:
+        sess = self._session()
+        sess._listen_mic = "phone"
+        sess._last_pcm_at = time.time() - 30
+        sess._last_voice_at = time.time()
+        sess._maybe_stop_forgotten_listen()
+        sess._stop_listening.assert_called_once()
+        self.assertFalse(sess._listen_wanted)
+
+    def test_start_listen_without_mic_is_phone(self) -> None:
+        sess = Session.__new__(Session)
+        sess._manual = False
+        sess._paused = True
+        sess._listener = object()
+        sess._listen_wanted = False
+        sess.start_listen()
+        self.assertEqual(sess._listen_mic, "phone")
+
+    def test_start_listen_watch_mic(self) -> None:
+        sess = Session.__new__(Session)
+        sess._manual = False
+        sess._paused = True
+        sess._listener = object()
+        sess._listen_wanted = False
+        sess.start_listen(mic="watch")
+        self.assertEqual(sess._listen_mic, "watch")

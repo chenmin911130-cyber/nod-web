@@ -36,6 +36,10 @@ def watch_flush_should_send(pending_bytes: int) -> bool:
     return pending_bytes > 0
 
 
+def backlog_should_flush(*, unsent_bytes: int, reachable: bool, since_last_flush_sec: float) -> bool:
+    return unsent_bytes > 0 and (reachable or since_last_flush_sec >= 20)
+
+
 def watch_listen_control_should_apply_mode(*, action: str, session_paused: bool, run: str) -> bool:
     """Mirror of web/src/watch.ts watchListenControlShouldApplyMode."""
     if action not in {"start", "record"}:
@@ -97,6 +101,10 @@ class WatchCommandTests(unittest.TestCase):
         self.assertFalse(watch_live_stream_should_reset(listening=True, reachable=True))
         self.assertTrue(watch_flush_should_send(3200))
         self.assertFalse(watch_flush_should_send(0))
+        self.assertFalse(backlog_should_flush(unsent_bytes=3200, reachable=False, since_last_flush_sec=5))
+        self.assertTrue(backlog_should_flush(unsent_bytes=3200, reachable=False, since_last_flush_sec=20))
+        self.assertTrue(backlog_should_flush(unsent_bytes=3200, reachable=True, since_last_flush_sec=1))
+        self.assertFalse(backlog_should_flush(unsent_bytes=0, reachable=True, since_last_flush_sec=30))
 
 
 if __name__ == "__main__":

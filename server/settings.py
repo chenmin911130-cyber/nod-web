@@ -149,6 +149,12 @@ LISTEN_MAX_SECONDS = max(LISTEN_IDLE_SECONDS, int(float(os.environ.get("LISTEN_M
 # a quiet room still streams silence frames, so it keeps _last_pcm_at fresh and
 # never trips this. 15-min idle stays the fallback for the quiet-room case.
 LISTEN_ZERO_PCM_SECONDS = max(10, int(float(os.environ.get("LISTEN_ZERO_PCM_SECONDS") or "25")))
+# Watch-mic sessions can go tens of seconds with no PCM while the wrist
+# buffers and transferFile's the backlog. Do not tear the socket down at 25s.
+LISTEN_ZERO_PCM_WATCH_SECONDS = max(
+    LISTEN_ZERO_PCM_SECONDS,
+    int(float(os.environ.get("LISTEN_ZERO_PCM_WATCH_SECONDS") or "180")),
+)
 
 PLANS: dict[str, dict] = {
     "free": {

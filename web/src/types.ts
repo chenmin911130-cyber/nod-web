@@ -160,7 +160,7 @@ export type EngineEvent =
 export type EngineMsg =
   | { type: 'manual' }
   | { type: 'toggle_listen' }
-  | { type: 'start_listen' }
+  | { type: 'start_listen'; mic?: 'watch' | 'phone' }
   | { type: 'stop_listen' }
   | { type: 'pause_listen' }
   | { type: 'resume_listen' }

@@ -486,6 +486,19 @@ enum WatchCopy {
         ])
     }
 
+    static var storageFull: String {
+        pick([
+            "zh": "存储已满 · 录音已停止",
+            "en": "Storage full · recording stopped",
+            "it": "Memoria piena · registrazione fermata",
+            "es": "Almacenamiento lleno · grabación detenida",
+            "fr": "Stockage plein · enregistrement arrêté",
+            "de": "Speicher voll · Aufnahme gestoppt",
+            "pt": "Armazenamento cheio · gravação parada",
+            "ja": "容量不足 · 録音を停止しました",
+        ])
+    }
+
     static var iphoneDisconnected: String {
         pick([
             "zh": "与 iPhone 连接中断",

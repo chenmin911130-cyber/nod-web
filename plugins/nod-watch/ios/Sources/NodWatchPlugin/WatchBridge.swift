@@ -28,6 +28,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastFailed = false
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
+    private var nextPcmSeq = 1
+    private var heldPcm: [Int: Data] = [:]
 
     override private init() {
         super.init()
@@ -196,6 +198,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let at = message["at"] as? Double
         let now = Date().timeIntervalSince1970
         guard Self.shouldRunWatchCommand(action, at: at, live: live, now: now) else { return }
+        if action == "start" || action == "record" {
+            nextPcmSeq = 1
+            heldPcm.removeAll()
+        }
         if jsReady {
             emit(action, mode: mode, id: id)
         } else {
@@ -342,6 +348,18 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
     }
 
+    private func ingestPcmFile(_ data: Data, seq: Int?) {
+        guard let seq else {
+            emitPcmData(data)
+            return
+        }
+        heldPcm[seq] = data
+        while let chunk = heldPcm.removeValue(forKey: nextPcmSeq) {
+            emitPcmData(chunk)
+            nextPcmSeq += 1
+        }
+    }
+
     public func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
         if activationState == .activated {
             pushStatus(
@@ -381,8 +399,25 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     }
 
     public func session(_ session: WCSession, didReceive file: WCSessionFile) {
+        let kind = file.metadata?["kind"] as? String
+        if kind == "speech" { return }
+        if kind != nil && kind != "pcm16" { return }
         guard let data = try? Data(contentsOf: file.fileURL), !data.isEmpty else { return }
         // Leftover PCM files must not start_listen. Watch already sent start/record live.
-        emitPcmData(data)
+        let seq: Int?
+        if let raw = file.metadata?["seq"] {
+            if let value = raw as? Int {
+                seq = value
+            } else if let value = raw as? NSNumber {
+                seq = value.intValue
+            } else if let value = raw as? String {
+                seq = Int(value)
+            } else {
+                seq = nil
+            }
+        } else {
+            seq = nil
+        }
+        ingestPcmFile(data, seq: seq)
     }
 }
