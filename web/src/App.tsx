@@ -1124,6 +1124,7 @@ export default function App() {
   const translateFiles = useRef<Map<string, AttachPayload[]>>(new Map())
   const translateTimer = useRef(0)
   const pumpTranslateRef = useRef<() => void>(() => {})
+  const handleRetryTurnRef = useRef<(id: string) => void>(() => {})
   const generateNotesRef = useRef<() => void>(() => {})
   const exportAfterNotes = useRef(false)
   const keepAfterNotes = useRef<KeepAfterNotesJob | null>(null)
@@ -1425,12 +1426,19 @@ export default function App() {
       },
       onRetry: (id) => {
         if (!id) return
-        if (inflightTranslate.current === id) return
-        askedTranslate.current.delete(id)
-        translateRetries.current.delete(id)
-        spokenTranslate.current.delete(id)
-        dispatch({ type: 'retry_translate', id })
-        queueMicrotask(() => pumpTranslateRef.current())
+        const mode = stateRef.current.workspaceMode
+        if (mode === 'translate') {
+          if (inflightTranslate.current === id) return
+          askedTranslate.current.delete(id)
+          translateRetries.current.delete(id)
+          spokenTranslate.current.delete(id)
+          dispatch({ type: 'retry_translate', id })
+          queueMicrotask(() => pumpTranslateRef.current())
+          return
+        }
+        if (mode === 'interview') {
+          handleRetryTurnRef.current(id)
+        }
       },
     })
   }, [])
@@ -2975,6 +2983,7 @@ export default function App() {
     dispatch({ type: 'retry_turn', id })
     window.api.send({ type: 'ask', text: turn.q })
   }, [])
+  handleRetryTurnRef.current = handleRetryTurn
 
   const writePdf = useCallback(async () => {
     const s = stateRef.current

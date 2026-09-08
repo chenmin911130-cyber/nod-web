@@ -163,6 +163,7 @@ export function buildWatchScreen(input: {
         question: input.question,
         status: '回答失败',
         statusEn: "Couldn't answer",
+        primary: 'Retry',
         swipeStop: true,
         ...(input.newContent ? { newContent: input.newContent } : {}),
       }

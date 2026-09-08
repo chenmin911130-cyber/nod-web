@@ -617,6 +617,20 @@ const qaFailed = buildWatchScreen({
 })
 eq(qaFailed.phase, 'qaFailed', 'empty failed answer is Couldn\'t answer')
 eq(qaFailed.statusEn, "Couldn't answer", 'qa failed copy')
-eq(qaFailed.primary, undefined, 'Q&A has no Retry')
+eq(qaFailed.primary, 'Retry', 'Q&A failed shows Retry')
+
+const qaFailedHasAnswer = buildWatchScreen({
+  workspaceMode: 'interview',
+  listenScene: 'interview',
+  listening: true,
+  paused: false,
+  original: '',
+  translation: '',
+  question: 'Why?',
+  answer: 'Because the launch slipped.',
+  drafting: false,
+  failed: true,
+})
+eq(qaFailedHasAnswer.phase, 'qaAnswer', 'failed but answer nonempty → normal result phase')
 
 
