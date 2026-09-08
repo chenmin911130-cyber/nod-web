@@ -70,6 +70,7 @@ from server.settings import (
     LISTEN_IDLE_SECONDS,
     LISTEN_MAX_SECONDS,
     LISTEN_ZERO_PCM_SECONDS,
+    LISTEN_ZERO_PCM_WATCH_SECONDS,
     PUBLIC_URL,
     QUOTA_DISABLED,
 )
@@ -2076,6 +2077,7 @@ class Session:
         self._last_pcm_at = 0.0
         self._last_voice_at = 0.0
         self._idle_check_at = 0.0
+        self._listen_mic = "phone"
         self._archive_fp = None
         self._archive_path: str | None = None
         self._archive_bytes = 0
@@ -2334,7 +2336,7 @@ class Session:
         elif mtype == "toggle_listen":
             self.toggle_listen()
         elif mtype == "start_listen":
-            self.start_listen()
+            self.start_listen(mic=msg.get("mic"))
         elif mtype == "stop_listen":
             self.stop_listen()
         elif mtype == "pause_listen":
@@ -3092,7 +3094,9 @@ class Session:
         else:
             self.emit({"type": "status", "text": "Microphone unmuted"})
 
-    def start_listen(self) -> None:
+    def start_listen(self, mic: Any = None) -> None:
+        raw = str(mic or "").strip().lower()
+        self._listen_mic = "watch" if raw == "watch" else "phone"
         if self._manual:
             self.emit({"type": "status", "text": "Stop recording before enabling Auto"})
             return
@@ -3331,11 +3335,16 @@ class Session:
             self._offer_save_history()
             return
         last_pcm = getattr(self, "_last_pcm_at", 0.0) or now
-        if now - last_pcm >= LISTEN_ZERO_PCM_SECONDS:
+        zero_limit = (
+            LISTEN_ZERO_PCM_WATCH_SECONDS
+            if getattr(self, "_listen_mic", "phone") == "watch"
+            else LISTEN_ZERO_PCM_SECONDS
+        )
+        if now - last_pcm >= zero_limit:
             self._paused = False
             self._listen_wanted = False
             self._stop_listening()
-            self.emit({"type": "status", "text": f"No microphone audio received for {int(LISTEN_ZERO_PCM_SECONDS)} seconds — stopped listening. Tap Start to retry."})
+            self.emit({"type": "status", "text": f"No microphone audio received for {int(zero_limit)} seconds — stopped listening. Tap Start to retry."})
             self._offer_save_history()
             return
         if now - last >= LISTEN_IDLE_SECONDS:

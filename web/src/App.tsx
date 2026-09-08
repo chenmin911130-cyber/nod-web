@@ -53,7 +53,7 @@ import { api as authApi, deleteAccount, fetchMe, logout, type Me } from './auth'
 import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
-import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchBlockedReason, watchListenControlShouldApplyMode, watchListenMode, watchShouldApplyMode, watchStartShouldPreferWatchMic } from './watch'
+import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchBlockedReason, watchListenControlShouldApplyMode, watchListenMode, watchShouldApplyMode, watchStartListenPayload, watchStartShouldPreferWatchMic } from './watch'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
 import { keepShouldWaitForNotes, shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
@@ -999,6 +999,7 @@ export default function App() {
   const stateRef = useRef(state)
   stateRef.current = state
   const listenWanted = useRef(false)
+  const listenFromWatch = useRef(false)
   const [savePrompt, setSavePrompt] = useState(false)
   const [savePromptMode, setSavePromptMode] = useState<'discard' | 'cancel'>('discard')
   const [leaveSheetOpen, setLeaveSheetOpen] = useState(false)
@@ -1094,6 +1095,7 @@ export default function App() {
   const startListen = (opts?: { fromWatch?: boolean }) => {
     if (!opts?.fromWatch) takePhoneMic()
     listenWanted.current = true
+    listenFromWatch.current = !!opts?.fromWatch
     // Starting a fresh listen abandons any pending recovery of a previously
     // disconnected meeting session — its prompt is dropped and the server
     // purges the pending row after 24h rather than letting it shadow this one.
@@ -1111,10 +1113,11 @@ export default function App() {
     if (s.workspaceMode === 'translate' || s.translateOn) {
       unlockSpeech()
     }
-    window.api.send({ type: 'start_listen' })
+    window.api.send(watchStartListenPayload(!!opts?.fromWatch))
   }
   const stopListen = () => {
     listenWanted.current = false
+    listenFromWatch.current = false
     window.api.send({ type: 'stop_listen' })
   }
   const askedTranslate = useRef<Set<string>>(new Set())
@@ -1574,7 +1577,7 @@ export default function App() {
         syncWorkspace()
         checkPendingRestore()
         if (listenWanted.current) {
-          queueMicrotask(() => api.send({ type: 'start_listen' }))
+          queueMicrotask(() => api.send(watchStartListenPayload(listenFromWatch.current)))
         }
       }
       // Every chunk of the current translate ask re-arms the 25s timeout, so a
@@ -1584,6 +1587,7 @@ export default function App() {
       }
       if (shouldReleaseListen(e)) {
         listenWanted.current = false
+        listenFromWatch.current = false
       }
       if (
         e.type === 'save_prompt'

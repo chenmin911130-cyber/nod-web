@@ -3,21 +3,29 @@ import Foundation
 
 /// 16 kHz mono PCM16 from the Watch microphone. Prefers a live engine tap;
 /// if watchOS refuses the engine, falls back to a WAV recorder and streams
-/// new bytes. Leftover bytes are handed back on stop for a file transfer.
+/// new bytes. Both paths append a raw PCM spool so unsent audio can be
+/// retransmitted after a drop. The spool file is kept until the session
+/// confirms delivery — teardown must not delete it.
 final class WatchRecorder {
     static let shared = WatchRecorder()
 
-    var onPcm: ((Data) -> Void)?
+    var onPcm: ((Data, Int) -> Void)?
+    var onWriteFailed: (() -> Void)?
 
     private var engine: AVAudioEngine?
     private var converter: AVAudioConverter?
     private var fileRecorder: AVAudioRecorder?
-    private var fileURL: URL?
-    private var fileOffset = 0
+    private var wavURL: URL?
+    private var wavReadOffset = 0
+    private var spoolHandle: FileHandle?
+    private(set) var fileURL: URL?
+    private(set) var fileOffset = 0
     private var pump: DispatchSourceTimer?
     private var running = false
+    private var writeFailed = false
     private let targetSampleRate: Double = 16_000
     private let queue = DispatchQueue(label: "nod.watch.recorder")
+    private let spoolQueue = DispatchQueue(label: "nod.watch.spool")
     private let wavHeaderBytes = 44
 
     var isRunning: Bool { running }
@@ -39,6 +47,7 @@ final class WatchRecorder {
             DispatchQueue.main.async {
                 do {
                     try self.prepareSession()
+                    try self.openSpool()
                     do {
                         try self.beginEngine()
                         Self.persist("engine-ok")
@@ -75,6 +84,35 @@ final class WatchRecorder {
         teardown()
     }
 
+    func bytes(from offset: Int, length: Int) -> Data? {
+        spoolQueue.sync {
+            try? spoolHandle?.synchronize()
+            guard let fileURL, offset >= 0, length > 0 else { return nil }
+            guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
+            defer { try? handle.close() }
+            do {
+                try handle.seek(toOffset: UInt64(offset))
+                let data = handle.readData(ofLength: length)
+                return data.isEmpty ? nil : data
+            } catch {
+                return nil
+            }
+        }
+    }
+
+    func discardSpool() {
+        spoolQueue.sync {
+            try? spoolHandle?.close()
+            spoolHandle = nil
+            if let fileURL {
+                try? FileManager.default.removeItem(at: fileURL)
+            }
+            fileURL = nil
+            fileOffset = 0
+            writeFailed = false
+        }
+    }
+
     private func requestMic(_ done: @escaping (Bool) -> Void) {
         if #available(watchOS 10.0, *) {
             AVAudioApplication.requestRecordPermission { done($0) }
@@ -87,6 +125,45 @@ final class WatchRecorder {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .default, options: [])
         try session.setActive(true)
+    }
+
+    private func openSpool() throws {
+        try spoolQueue.sync {
+            if spoolHandle != nil { return }
+            if let fileURL {
+                let handle = try FileHandle(forWritingTo: fileURL)
+                handle.seekToEndOfFile()
+                spoolHandle = handle
+                return
+            }
+            let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("nod-watch-spool.pcm")
+            try? FileManager.default.removeItem(at: url)
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+            spoolHandle = try FileHandle(forWritingTo: url)
+            fileURL = url
+            fileOffset = 0
+            writeFailed = false
+        }
+    }
+
+    private func writeSpool(_ data: Data) -> Int? {
+        spoolQueue.sync {
+            guard !writeFailed else { return nil }
+            do {
+                if spoolHandle == nil {
+                    return nil
+                }
+                let start = fileOffset
+                try spoolHandle?.write(contentsOf: data)
+                fileOffset += data.count
+                return start
+            } catch {
+                writeFailed = true
+                DispatchQueue.main.async { self.onWriteFailed?() }
+                return nil
+            }
+        }
     }
 
     private func beginEngine() throws {
@@ -149,8 +226,8 @@ final class WatchRecorder {
             throw Self.fail(4, "Watch microphone would not start")
         }
         fileRecorder = rec
-        fileURL = url
-        fileOffset = wavHeaderBytes
+        wavURL = url
+        wavReadOffset = wavHeaderBytes
         running = true
         startPump()
     }
@@ -166,17 +243,17 @@ final class WatchRecorder {
     }
 
     private func pumpFile() {
-        guard running, let fileURL else { return }
-        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return }
+        guard running, let wavURL else { return }
+        guard let handle = try? FileHandle(forReadingFrom: wavURL) else { return }
         defer { try? handle.close() }
         let size = Int((try? handle.seekToEnd()) ?? 0)
-        guard size > fileOffset else { return }
+        guard size > wavReadOffset else { return }
         do {
-            try handle.seek(toOffset: UInt64(fileOffset))
-            let data = handle.readData(ofLength: size - fileOffset)
-            fileOffset += data.count
+            try handle.seek(toOffset: UInt64(wavReadOffset))
+            let data = handle.readData(ofLength: size - wavReadOffset)
+            wavReadOffset += data.count
             if !data.isEmpty {
-                onPcm?(data)
+                emitPcm(data)
             }
         } catch {
             return
@@ -203,9 +280,13 @@ final class WatchRecorder {
         if error != nil { return }
         guard let channel = out.int16ChannelData?[0], out.frameLength > 0 else { return }
         let data = Data(bytes: channel, count: Int(out.frameLength) * MemoryLayout<Int16>.size)
-        if !data.isEmpty {
-            onPcm?(data)
-        }
+        emitPcm(data)
+    }
+
+    private func emitPcm(_ data: Data) {
+        guard !data.isEmpty else { return }
+        guard let offset = writeSpool(data) else { return }
+        onPcm?(data, offset)
     }
 
     private func teardownEngine() {
@@ -230,9 +311,14 @@ final class WatchRecorder {
         pump?.cancel()
         pump = nil
         fileRecorder = nil
-        fileURL = nil
-        fileOffset = 0
+        wavURL = nil
+        wavReadOffset = 0
         teardownEngine()
+        spoolQueue.sync {
+            try? spoolHandle?.synchronize()
+            try? spoolHandle?.close()
+            spoolHandle = nil
+        }
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 

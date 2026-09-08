@@ -72,7 +72,15 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     private var pendingPcm = Data()
     private var liveStreamed = false
     private let pcmLock = NSLock()
-    private let maxPending = 8 * 1024 * 1024
+    /// Last ~30s of 16 kHz PCM16 for a fast live retry; the spool file is the rest.
+    private let maxPending = 16_000 * 2 * 30
+    private var sentOffset = 0
+    private var flushThrough = 0
+    private var pcmSeq = 1
+    private var lastFlushAt = Date.distantPast
+    private var ackedRanges: [Int: Int] = [:]
+    private var flushTimer: DispatchSourceTimer?
+    private var storageFull = false
     private var runtime: WKExtendedRuntimeSession?
     /// True when the Watch's own recorder was running right before a pause, so
     /// a phone-initiated resume reopens the mic only for a session that was
@@ -85,8 +93,16 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
 
     override private init() {
         super.init()
-        WatchRecorder.shared.onPcm = { [weak self] data in
-            self?.forwardPcm(data)
+        WatchRecorder.shared.onPcm = { [weak self] data, offset in
+            self?.forwardPcm(data, offset: offset)
+        }
+        WatchRecorder.shared.onWriteFailed = { [weak self] in
+            DispatchQueue.main.async {
+                guard let self, !self.storageFull else { return }
+                self.storageFull = true
+                self.hint = WatchCopy.storageFull
+                self.finish()
+            }
         }
         guard WCSession.isSupported() else { return }
         WCSession.default.delegate = self
@@ -403,8 +419,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         localModeHeld = false
         localMic = false
         send(action: "stop")
-        flushUnsent()
-        resetPcmBuffer()
+        flushBacklog()
         endWaitWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.ending else { return }
@@ -548,6 +563,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                     self.hint = hint
                 }
                 self.startRuntime()
+                self.startFlushTimer()
             }
         }
     }
@@ -558,6 +574,10 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
 
     static func liveStreamShouldReset(listening: Bool, reachable: Bool) -> Bool {
         listening && !reachable
+    }
+
+    static func backlogShouldFlush(unsentBytes: Int, reachable: Bool, sinceLastFlushSec: TimeInterval) -> Bool {
+        unsentBytes > 0 && (reachable || sinceLastFlushSec >= 20)
     }
 
     /// Start / Record carry the Watch chip. Pause / Stop / leftovers must not.
@@ -648,8 +668,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 WatchGlanceStore.clear()
                 localModeHeld = false
                 localMic = false
-                flushUnsent()
-                resetPcmBuffer()
+                flushBacklog()
                 if !ended {
                     startedAt = nil
                     hint = WatchCopy.ready
@@ -670,59 +689,124 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         pendingPcm.removeAll(keepingCapacity: true)
         liveStreamed = false
         pcmLock.unlock()
+        sentOffset = 0
+        flushThrough = 0
+        pcmSeq = 1
+        lastFlushAt = Date.distantPast
+        ackedRanges.removeAll()
+        storageFull = false
+        WatchRecorder.shared.discardSpool()
     }
 
     private func bufferUnsent(_ data: Data) {
         pcmLock.lock()
         liveStreamed = false
-        if pendingPcm.count < maxPending {
-            pendingPcm.append(data)
+        pendingPcm.append(data)
+        if pendingPcm.count > maxPending {
+            pendingPcm.removeFirst(pendingPcm.count - maxPending)
         }
         pcmLock.unlock()
     }
 
-    private func takeUnsentPcm() -> Data {
-        pcmLock.lock()
-        defer { pcmLock.unlock() }
-        guard Self.flushShouldSend(pendingBytes: pendingPcm.count) else { return Data() }
-        let data = pendingPcm
-        pendingPcm.removeAll()
-        liveStreamed = false
-        return data
-    }
-
-    private func forwardPcm(_ data: Data) {
+    private func forwardPcm(_ data: Data, offset: Int) {
         guard !data.isEmpty else { return }
         DispatchQueue.main.async { [weak self] in
-            self?.sendPcm(data)
+            self?.sendPcm(data, offset: offset)
         }
     }
 
-    private func sendPcm(_ data: Data) {
+    private func sendPcm(_ data: Data, offset: Int) {
         let session = WCSession.default
         let reachable = session.activationState == .activated && session.isReachable
-        if Self.pcmShouldBuffer(reachable: reachable) {
+        if Self.pcmShouldBuffer(reachable: reachable) || sentOffset < offset {
             bufferUnsent(data)
             return
         }
         pcmLock.lock()
         liveStreamed = true
         pcmLock.unlock()
-        session.sendMessage(["pcm": data.base64EncodedString()], replyHandler: nil, errorHandler: { [weak self] _ in
+        session.sendMessage(["pcm": data.base64EncodedString()], replyHandler: { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.noteAck(offset: offset, bytes: data.count)
+            }
+        }, errorHandler: { [weak self] _ in
             self?.bufferUnsent(data)
         })
     }
 
-    private func flushUnsent() {
-        let data = takeUnsentPcm()
-        guard !data.isEmpty else { return }
-        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nod-watch.pcm")
-        do {
-            try data.write(to: url, options: .atomic)
-            WCSession.default.transferFile(url, metadata: ["kind": "pcm16", "sr": "16000"])
-        } catch {
-            WCSession.default.transferUserInfo(["pcm": data.base64EncodedString()])
+    private func noteAck(offset: Int, bytes: Int) {
+        guard bytes > 0 else { return }
+        ackedRanges[offset] = max(ackedRanges[offset] ?? 0, bytes)
+        while let n = ackedRanges.removeValue(forKey: sentOffset) {
+            sentOffset += n
         }
+        if sentOffset > flushThrough {
+            flushThrough = sentOffset
+        }
+        if !WatchRecorder.shared.isRunning, sentOffset >= WatchRecorder.shared.fileOffset {
+            WatchRecorder.shared.discardSpool()
+        } else {
+            maybeFlushBacklog()
+        }
+    }
+
+    private func maybeFlushBacklog() {
+        let unsent = WatchRecorder.shared.fileOffset - sentOffset
+        let reachable = WCSession.default.activationState == .activated && WCSession.default.isReachable
+        let since = Date().timeIntervalSince(lastFlushAt)
+        guard Self.backlogShouldFlush(unsentBytes: unsent, reachable: reachable, sinceLastFlushSec: since) else { return }
+        flushBacklog()
+    }
+
+    private func flushBacklog() {
+        let rec = WatchRecorder.shared
+        let end = rec.fileOffset
+        var offset = max(sentOffset, flushThrough)
+        guard end > offset else { return }
+        lastFlushAt = Date()
+        let chunkMax = 1_000_000
+        while offset < end {
+            let length = min(chunkMax, end - offset)
+            guard let data = rec.bytes(from: offset, length: length), !data.isEmpty else { break }
+            let seq = pcmSeq
+            pcmSeq += 1
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("nod-watch-backlog-\(seq).pcm")
+            do {
+                try data.write(to: url, options: .atomic)
+                WCSession.default.transferFile(url, metadata: [
+                    "kind": "pcm16",
+                    "sr": "16000",
+                    "seq": "\(seq)",
+                    "offset": "\(offset)",
+                    "bytes": "\(data.count)",
+                ])
+            } catch {
+                if !storageFull {
+                    storageFull = true
+                    hint = WatchCopy.storageFull
+                    finish()
+                }
+                return
+            }
+            offset += data.count
+        }
+        flushThrough = max(flushThrough, offset)
+    }
+
+    private func startFlushTimer() {
+        stopFlushTimer()
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
+        timer.schedule(deadline: .now() + 20, repeating: 20)
+        timer.setEventHandler { [weak self] in
+            self?.maybeFlushBacklog()
+        }
+        timer.resume()
+        flushTimer = timer
+    }
+
+    private func stopFlushTimer() {
+        flushTimer?.cancel()
+        flushTimer = nil
     }
 
     private func startRuntime() {
@@ -734,6 +818,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     private func stopRuntime() {
+        stopFlushTimer()
         runtime?.invalidate()
         runtime = nil
     }
@@ -821,6 +906,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 var r = reply
                 r.removeValue(forKey: "ok")
                 self?.apply(r, live: false)
+                self?.flushBacklog()
             }
         }, errorHandler: { [weak self] _ in
             DispatchQueue.main.async {
@@ -1024,6 +1110,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let value = raw as? Int { return value }
         if let value = raw as? NSNumber { return value.intValue }
         if let value = raw as? Double { return Int(value) }
+        if let value = raw as? String { return Int(value) }
         return nil
     }
 
@@ -1049,6 +1136,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 self.pcmLock.unlock()
             }
             if !wasReachable, session.isReachable {
+                self.maybeFlushBacklog()
                 self.reconnect()
             }
             if self.listening {
@@ -1087,6 +1175,20 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         guard Self.speechFileShouldPlay(at: at, now: Date().timeIntervalSince1970) else { return }
         guard let data = try? Data(contentsOf: file.fileURL), !data.isEmpty else { return }
         DispatchQueue.main.async { self.playSpeech(data) }
+    }
+
+    func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
+        DispatchQueue.main.async {
+            let meta = fileTransfer.file.metadata ?? [:]
+            guard (meta["kind"] as? String) == "pcm16" else { return }
+            let offset = Self.payloadInt(meta["offset"]) ?? 0
+            let bytes = Self.payloadInt(meta["bytes"]) ?? 0
+            if error != nil {
+                self.flushThrough = min(self.flushThrough, offset)
+                return
+            }
+            self.noteAck(offset: offset, bytes: bytes)
+        }
     }
 
     #if os(iOS)

@@ -242,6 +242,21 @@ export function watchFlushShouldSend(pendingBytes: number): boolean {
   return pendingBytes > 0
 }
 
+/** Unsent Watch PCM flushes when the phone is reachable, or every 20s in the background. */
+export function backlogShouldFlush(input: {
+  unsentBytes: number
+  reachable: boolean
+  sinceLastFlushSec: number
+}): boolean {
+  return input.unsentBytes > 0 && (input.reachable || input.sinceLastFlushSec >= 20)
+}
+
+/** Watch Start tells the server this session's mic is the wrist, so zero-PCM waits. */
+export function watchStartListenPayload(fromWatch: boolean): { type: 'start_listen'; mic?: 'watch' } {
+  if (fromWatch) return { type: 'start_listen', mic: 'watch' }
+  return { type: 'start_listen' }
+}
+
 /**
  * File-recorder fallback may only read leftover WAV bytes while still running.
  * Stop must pump those bytes before clearing `running`, or the last ~200ms is lost.

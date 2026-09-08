@@ -13,6 +13,8 @@ import {
   watchShouldApplyMode,
   watchStartShouldAttachMode,
   watchStartShouldPreferWatchMic,
+  watchStartListenPayload,
+  backlogShouldFlush,
   watchFallbackStopSequence,
   watchFlushShouldSend,
   watchLiveStreamShouldReset,
@@ -161,6 +163,26 @@ if (watchLiveStreamShouldReset(false, false) || watchLiveStreamShouldReset(true,
 
 if (!watchFlushShouldSend(3200) || watchFlushShouldSend(0)) {
   throw new Error('Done must flush leftover PCM and skip an empty buffer')
+}
+
+if (backlogShouldFlush({ unsentBytes: 3200, reachable: false, sinceLastFlushSec: 5 })) {
+  throw new Error('unreachable Watch PCM must wait 20s before a background flush')
+}
+if (!backlogShouldFlush({ unsentBytes: 3200, reachable: false, sinceLastFlushSec: 20 })) {
+  throw new Error('unreachable Watch PCM must flush after 20s')
+}
+if (!backlogShouldFlush({ unsentBytes: 3200, reachable: true, sinceLastFlushSec: 1 })) {
+  throw new Error('reachable Watch PCM with a backlog must flush immediately')
+}
+if (backlogShouldFlush({ unsentBytes: 0, reachable: true, sinceLastFlushSec: 30 })) {
+  throw new Error('an empty Watch backlog must not flush')
+}
+
+if (watchStartListenPayload(false).mic) {
+  throw new Error('phone Start must not mark the listen session as watch mic')
+}
+if (watchStartListenPayload(true).mic !== 'watch') {
+  throw new Error('Watch Start must send start_listen with mic=watch')
 }
 
 const fallbackStop = watchFallbackStopSequence()
