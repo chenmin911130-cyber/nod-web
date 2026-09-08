@@ -185,10 +185,6 @@ struct WatchRootView: View {
             .tint(Color.red.opacity(0.18))
             .foregroundStyle(Color.red)
             .disabled(session.ending)
-            Text(WatchCopy.keepsSession)
-                .font(.caption2)
-                .foregroundStyle(muted)
-                .multilineTextAlignment(.center)
         }
     }
 
@@ -297,52 +293,114 @@ struct WatchRootView: View {
     }
 
     private var readingPage: some View {
-        VStack(spacing: 6) {
+        let units = session.readingUnits
+        let latestId = units.last?.id
+        return VStack(spacing: 6) {
             if session.mode == "translate" {
                 capsule(session.langPair)
             } else {
                 capsule("Live Q&A")
             }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
-                    if session.original.isEmpty, session.translation.isEmpty {
-                        Image(systemName: "waveform")
-                            .font(.title2)
-                            .foregroundStyle(cyan)
-                        Text(session.mode == "translate" ? WatchCopy.speakNaturally : WatchCopy.waitingForQuestion)
-                            .font(.caption)
-                            .foregroundStyle(muted)
-                    } else {
-                        if !session.original.isEmpty {
-                            Text(session.original)
+            if session.pillShown {
+                Button {
+                    session.openLatest()
+                } label: {
+                    Text(session.mode == "translate" ? WatchCopy.newTranslation : WatchCopy.newAnswer)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Color.black)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(cyan, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        if units.isEmpty {
+                            Image(systemName: "waveform")
+                                .font(.title2)
+                                .foregroundStyle(cyan)
+                            Text(session.mode == "translate" ? WatchCopy.speakNaturally : WatchCopy.waitingForQuestion)
                                 .font(.caption)
                                 .foregroundStyle(muted)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        if session.translation.isEmpty {
-                            if session.engine == "generating" {
-                                HStack(spacing: 6) {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                    Text(session.mode == "translate" ? WatchCopy.translating : WatchCopy.drafting)
-                                        .font(.caption)
-                                        .foregroundStyle(muted)
-                                }
-                            }
                         } else {
-                            Text(session.translation)
-                                .font(.title3.weight(.semibold))
-                                .foregroundStyle(ink)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .fixedSize(horizontal: false, vertical: true)
+                            ForEach(units) { unit in
+                                readingUnit(unit, isLatest: unit.id == latestId)
+                                    .id(unit.id)
+                                    .onAppear {
+                                        if unit.id == latestId { session.markLatestVisible(true) }
+                                    }
+                                    .onDisappear {
+                                        if unit.id == latestId { session.markLatestVisible(false) }
+                                    }
+                            }
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .focusable()
+                .onChange(of: session.scrollToId) { id in
+                    if let id {
+                        proxy.scrollTo(id, anchor: .top)
+                        session.clearScroll()
+                    }
+                }
             }
-            .focusable()
             captureRow
         }
+    }
+
+    private func readingUnit(_ unit: WatchPhoneSession.ReadingUnit, isLatest: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if !unit.original.isEmpty {
+                Text(unit.original)
+                    .font(.caption)
+                    .foregroundStyle(muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if unit.failed, unit.result.isEmpty {
+                Text(session.mode == "translate" ? WatchCopy.couldntTranslate : WatchCopy.couldntAnswer)
+                    .font(.caption)
+                    .foregroundStyle(timer)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if session.mode == "translate", isLatest {
+                    retryButton(id: unit.id)
+                }
+            } else if unit.result.isEmpty, isLatest, session.engine == "generating" {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                    Text(session.mode == "translate" ? WatchCopy.translating : WatchCopy.drafting)
+                        .font(.caption)
+                        .foregroundStyle(muted)
+                }
+            } else if !unit.result.isEmpty {
+                Text(unit.result)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func retryButton(id: String) -> some View {
+        let label: String = {
+            if !session.reachable { return WatchCopy.openOnIphone }
+            if session.retrying { return WatchCopy.retrying }
+            return WatchCopy.retry
+        }()
+        return Button {
+            session.retry(id: id)
+        } label: {
+            Text(label)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(panel)
+        .foregroundStyle(ink)
+        .disabled(session.retrying && session.reachable)
     }
 
     private var captureRow: some View {

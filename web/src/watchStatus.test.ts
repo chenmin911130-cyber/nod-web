@@ -1,4 +1,4 @@
-import { buildWatchFace, watchPreviousCaption } from './watchStatus'
+import { buildWatchFace, watchPreviousCaption, watchReadingAnchor } from './watchStatus'
 
 const face = buildWatchFace({
   capture: 'listening',
@@ -224,3 +224,68 @@ for (const ws of ['meeting', 'interview', 'translate']) {
   eqListen('recording', ws, true)
   eqListen('paused', ws, false)
 }
+
+function eqAnchor(got: { scroll: boolean; pill: boolean }, want: { scroll: boolean; pill: boolean }, label: string) {
+  if (got.scroll !== want.scroll || got.pill !== want.pill) {
+    throw new Error(`${label}: expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`)
+  }
+}
+eqAnchor(watchReadingAnchor({ atLatest: true, newUnit: true, pillShown: false }), { scroll: true, pill: false }, 'at latest + new unit scrolls')
+eqAnchor(watchReadingAnchor({ atLatest: false, newUnit: true, pillShown: false }), { scroll: false, pill: true }, 'scrolled away + new unit shows pill')
+eqAnchor(watchReadingAnchor({ atLatest: false, newUnit: false, pillShown: true }), { scroll: false, pill: true }, 'still away keeps pill')
+eqAnchor(watchReadingAnchor({ atLatest: true, newUnit: false, pillShown: true }), { scroll: false, pill: false }, 'back at latest clears pill')
+
+const qaHist = buildWatchFace({
+  capture: 'listening',
+  consentOpen: false,
+  notesAskId: '',
+  notesRaw: '',
+  partial: '',
+  workspaceMode: 'interview',
+  translateOn: false,
+  translatePairs: [],
+  meetingLines: [{ id: 'm', text: 'ignore me' }],
+  turns: [
+    { id: 'q1', q: 'Why ship Friday?', a: 'QA 还没完，建议下周一。' },
+    { id: 'q2', q: 'Who owns launch?', a: '产品经理，周一同步。' },
+  ],
+})
+if (qaHist.history[0]?.id !== 'q2' || qaHist.history[1]?.id !== 'q1') {
+  throw new Error(`interview history must be newest first from turns, got ${JSON.stringify(qaHist.history)}`)
+}
+if (qaHist.failed) throw new Error('interview failed is always false this round')
+
+const nineTurns = Array.from({ length: 9 }, (_, i) => ({ id: `t${i}`, q: `Q${i}`, a: `A${i}` }))
+const qaCap = buildWatchFace({
+  capture: 'listening',
+  consentOpen: false,
+  notesAskId: '',
+  notesRaw: '',
+  partial: '',
+  workspaceMode: 'interview',
+  translateOn: false,
+  translatePairs: [],
+  meetingLines: [],
+  turns: nineTurns,
+})
+if (qaCap.history.length !== 8 || qaCap.history[0]?.id !== 't8') {
+  throw new Error(`interview history caps at 8 newest, got ${JSON.stringify(qaCap.history.map((h) => h.id))}`)
+}
+
+const failedFace = buildWatchFace({
+  capture: 'listening',
+  consentOpen: false,
+  notesAskId: '',
+  notesRaw: '',
+  partial: '',
+  workspaceMode: 'translate',
+  translateOn: true,
+  translatePairs: [
+    { id: 'ok', original: 'hi', translation: '你好' },
+    { id: 'bad', original: 'later', translation: '', failed: true },
+  ],
+  meetingLines: [],
+})
+if (!failedFace.failed) throw new Error('failed follows the latest nonempty pair')
+if (failedFace.history[0]?.failed !== true) throw new Error('latest history item carries failed')
+

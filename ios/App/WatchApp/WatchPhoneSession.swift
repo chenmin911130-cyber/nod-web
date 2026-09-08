@@ -33,6 +33,10 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var lastStatusAt: Date?
     @Published var reconnecting = false
     @Published var reconnectFailed = false
+    @Published var failed = false
+    @Published var retrying = false
+    @Published var pillShown = false
+    @Published var scrollToId: String?
 
     private var localModeHeld = false
     private var phoneModeSeen = false
@@ -47,11 +51,22 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     private var lastCapture = ""
     private var lastReconnectAt: Date?
     private var staleWatch: DispatchWorkItem?
+    private var retryWaitWork: DispatchWorkItem?
+    private var lastLatestId = ""
+    var latestVisible = true
 
     struct WatchHistItem: Identifiable, Equatable {
         let id: String
         let title: String
         let text: String
+        let failed: Bool
+    }
+
+    struct ReadingUnit: Identifiable, Equatable {
+        let id: String
+        var original: String
+        var result: String
+        var failed: Bool
     }
 
     private var pendingPcm = Data()
@@ -186,6 +201,39 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         recorderRunning: Bool
     ) -> Bool {
         !starting && (listening || paused || recorderRunning)
+    }
+
+    static func readingAnchor(atLatest: Bool, newUnit: Bool, pillShown: Bool) -> (scroll: Bool, pill: Bool) {
+        if atLatest {
+            return (newUnit, false)
+        }
+        if newUnit {
+            return (false, true)
+        }
+        return (false, pillShown)
+    }
+
+    static func readingUnits(
+        history: [WatchHistItem],
+        original: String,
+        translation: String,
+        failed: Bool
+    ) -> [ReadingUnit] {
+        var units = history.reversed().map {
+            ReadingUnit(id: $0.id, original: $0.title, result: $0.text, failed: $0.failed)
+        }
+        if let newest = history.first, let idx = units.indices.last, units[idx].id == newest.id {
+            if !original.isEmpty { units[idx].original = original }
+            units[idx].result = translation
+            units[idx].failed = failed
+        } else if !original.isEmpty || !translation.isEmpty {
+            units.append(ReadingUnit(id: history.first?.id ?? "live", original: original, result: translation, failed: failed))
+        }
+        return units
+    }
+
+    var readingUnits: [ReadingUnit] {
+        Self.readingUnits(history: history, original: original, translation: translation, failed: failed)
     }
 
     private func failureCopy(forBlocked blocked: String) -> String {
@@ -380,7 +428,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             self.saveState = "failed"
         }
         saveWaitWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: work)
     }
 
     func discardSession() {
@@ -713,6 +761,40 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         }
     }
 
+    func retry(id: String) {
+        guard !id.isEmpty else { return }
+        if !reachable {
+            send(action: "retry", extra: ["id": id])
+            return
+        }
+        if retrying { return }
+        retrying = true
+        send(action: "retry", extra: ["id": id])
+        retryWaitWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.retrying = false
+        }
+        retryWaitWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)
+    }
+
+    func markLatestVisible(_ visible: Bool) {
+        latestVisible = visible
+        if visible {
+            pillShown = false
+        }
+    }
+
+    func openLatest() {
+        pillShown = false
+        latestVisible = true
+        scrollToId = history.first?.id ?? readingUnits.last?.id
+    }
+
+    func clearScroll() {
+        scrollToId = nil
+    }
+
     func reconnect(silent: Bool = false) {
         if reconnecting { return }
         if let lastReconnectAt, Date().timeIntervalSince(lastReconnectAt) < 2 { return }
@@ -762,8 +844,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         DispatchQueue.main.asyncAfter(deadline: .now() + 21, execute: work)
     }
 
-    func send(action: String) {
+    func send(action: String, extra: [String: Any] = [:]) {
         var payload: [String: Any] = ["action": action, "at": Date().timeIntervalSince1970]
+        extra.forEach { payload[$0] = $1 }
         if Self.commandShouldSendMode(action), phoneModeSeen {
             payload["mode"] = mode
         }
@@ -850,6 +933,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let blockedVal = payload["blocked"] as? String {
             blocked = blockedVal
         }
+        if let failedVal = Self.payloadBool(payload["failed"]) {
+            failed = failedVal
+        }
         if let capture = payload["capture"] as? String {
             lastCapture = capture
             lastStatusAt = Date()
@@ -881,6 +967,10 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let translation = payload["translation"] as? String {
             self.translation = translation
         }
+        if retrying, !failed || !translation.isEmpty {
+            retrying = false
+            retryWaitWork?.cancel()
+        }
         if let previous = payload["previous"] as? String {
             self.previous = previous
         }
@@ -894,13 +984,32 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             }
         }
         if let rows = payload["history"] as? [Any] {
-            self.history = rows.compactMap { row in
+            let next = rows.compactMap { row -> WatchHistItem? in
                 guard let row = row as? [String: Any] else { return nil }
                 let id = (row["id"] as? String) ?? ""
                 let title = (row["title"] as? String) ?? ""
                 let text = (row["text"] as? String) ?? ""
+                let itemFailed = Self.payloadBool(row["failed"]) ?? false
                 guard !id.isEmpty, !text.isEmpty || !title.isEmpty else { return nil }
-                return WatchHistItem(id: id, title: title, text: text)
+                return WatchHistItem(id: id, title: title, text: text, failed: itemFailed)
+            }
+            self.history = next
+            if next.isEmpty {
+                pillShown = false
+                lastLatestId = ""
+                latestVisible = true
+            } else {
+                let latestId = next.first?.id ?? ""
+                if lastLatestId.isEmpty {
+                    lastLatestId = latestId
+                } else if !latestId.isEmpty, latestId != lastLatestId {
+                    let decision = Self.readingAnchor(atLatest: latestVisible, newUnit: true, pillShown: pillShown)
+                    pillShown = decision.pill
+                    if decision.scroll {
+                        scrollToId = latestId
+                    }
+                    lastLatestId = latestId
+                }
             }
         }
     }

@@ -573,3 +573,50 @@ const lostOn = buildWatchAlwaysOn({
 })
 eq(lostOn.show, false, 'unknown capture blacks out Always On')
 
+const translateFailed = buildWatchScreen({
+  workspaceMode: 'translate',
+  listenScene: 'meeting',
+  listening: true,
+  paused: false,
+  original: 'hello',
+  translation: '',
+  question: '',
+  answer: '',
+  drafting: false,
+  failed: true,
+})
+eq(translateFailed.phase, 'translateFailed', 'empty failed translation is Retry')
+eq(translateFailed.statusEn, "Couldn't translate", 'failed copy')
+eq(translateFailed.primary, 'Retry', 'Retry is the only action')
+
+const translateFailedHasText = buildWatchScreen({
+  workspaceMode: 'translate',
+  listenScene: 'meeting',
+  listening: true,
+  paused: false,
+  original: 'hello',
+  translation: '你好',
+  question: '',
+  answer: '',
+  drafting: false,
+  failed: true,
+})
+eq(translateFailedHasText.phase, 'translateResult', 'failed with translation stays a result')
+
+const qaFailed = buildWatchScreen({
+  workspaceMode: 'interview',
+  listenScene: 'interview',
+  listening: true,
+  paused: false,
+  original: '',
+  translation: '',
+  question: 'Why?',
+  answer: '',
+  drafting: false,
+  failed: true,
+})
+eq(qaFailed.phase, 'qaFailed', 'empty failed answer is Couldn\'t answer')
+eq(qaFailed.statusEn, "Couldn't answer", 'qa failed copy')
+eq(qaFailed.primary, undefined, 'Q&A has no Retry')
+
+

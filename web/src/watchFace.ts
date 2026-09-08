@@ -15,6 +15,8 @@ export type WatchPhase =
   | 'saved'
   | 'saveFailed'
   | 'connectionLost'
+  | 'translateFailed'
+  | 'qaFailed'
 
 export type WatchScreen = {
   phase: WatchPhase
@@ -42,6 +44,7 @@ export type WatchScreen = {
   waveform?: boolean
   saveStacked?: boolean
   secondaryTone?: 'bright'
+  newContent?: 'translation' | 'answer'
 }
 
 export type WatchAlwaysOn = {
@@ -85,6 +88,8 @@ export function buildWatchScreen(input: {
   starting?: boolean
   failure?: string
   statusUnknown?: boolean
+  failed?: boolean
+  newContent?: 'translation' | 'answer'
 }): WatchScreen {
   const engine = input.engine || ''
   const reading = input.listening || input.paused
@@ -150,6 +155,18 @@ export function buildWatchScreen(input: {
   }
 
   if (input.workspaceMode === 'interview' || input.listenScene === 'interview') {
+    if (input.failed && !input.answer.trim()) {
+      return {
+        ...base,
+        ...readingFlags,
+        phase: 'qaFailed',
+        question: input.question,
+        status: '回答失败',
+        statusEn: "Couldn't answer",
+        swipeStop: true,
+        ...(input.newContent ? { newContent: input.newContent } : {}),
+      }
+    }
     if (input.answer.trim()) {
       return {
         ...base,
@@ -183,6 +200,21 @@ export function buildWatchScreen(input: {
         statusEn: 'Waiting for a question',
         swipeStop: true,
       }
+    }
+  }
+
+  if (input.workspaceMode === 'translate' && reading && input.failed && !input.translation.trim()) {
+    return {
+      ...base,
+      ...readingFlags,
+      phase: 'translateFailed',
+      langPair: watchLangPair(input.translateTo || 'zh'),
+      original: watchVisibleOriginal(input.original, input.translation),
+      status: '翻译失败',
+      statusEn: "Couldn't translate",
+      primary: 'Retry',
+      swipeStop: true,
+      ...(input.newContent ? { newContent: input.newContent } : {}),
     }
   }
 

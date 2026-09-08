@@ -9,14 +9,14 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
 
     weak var plugin: NodWatchPlugin?
     private(set) var jsReady = false
-    private var pending: [(action: String, at: Double?, live: Bool, mode: String)] = []
+    private var pending: [(action: String, at: Double?, live: Bool, mode: String, id: String)] = []
     private var pendingPcm: [String] = []
     private var lastCapture = ""
     private var lastHint = "Ready"
     private var lastOriginal = ""
     private var lastTranslation = ""
     private var lastPrevious = ""
-    private var lastHistory: [[String: String]] = []
+    private var lastHistory: [[String: Any]] = []
     private var lastMode = ""
     private var lastLangPair = ""
     private var lastEnded = false
@@ -25,6 +25,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastSessionId = ""
     private var lastEngine = ""
     private var lastBlocked = ""
+    private var lastFailed = false
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
 
@@ -58,7 +59,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let now = Date().timeIntervalSince1970
         for item in queued {
             if Self.shouldRunWatchCommand(item.action, at: item.at, live: item.live, now: now) {
-                emit(item.action, mode: item.mode)
+                emit(item.action, mode: item.mode, id: item.id)
             }
         }
         let pcm = pendingPcm
@@ -82,7 +83,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         original: String = "",
         translation: String = "",
         previous: String = "",
-        history: [[String: String]] = [],
+        history: [[String: Any]] = [],
         mode: String = "",
         langPair: String = "",
         ended: Bool? = nil,
@@ -90,7 +91,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         save: String? = nil,
         sessionId: String? = nil,
         engine: String? = nil,
-        blocked: String? = nil
+        blocked: String? = nil,
+        failed: Bool? = nil
     ) {
         if !capture.isEmpty {
             lastCapture = capture
@@ -123,6 +125,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         if let blocked {
             lastBlocked = blocked
+        }
+        if let failed {
+            lastFailed = failed
         }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
@@ -166,6 +171,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             "save": lastSave,
             "sessionId": lastSessionId,
             "blocked": lastBlocked,
+            "failed": lastFailed,
         ]
         if !lastMode.isEmpty {
             payload["mode"] = lastMode
@@ -181,18 +187,19 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             emitPcm(pcm)
         }
         let raw = (message["action"] as? String ?? "").lowercased()
-        let allowed = ["stop", "start", "record", "pause", "resume", "speak", "save", "discard", "tts_live", "tts_tap", "tts_female", "tts_male", "sync"]
+        let allowed = ["stop", "start", "record", "pause", "resume", "speak", "save", "discard", "tts_live", "tts_tap", "tts_female", "tts_male", "sync", "retry"]
         let action = allowed.contains(raw) ? raw : ""
         guard !action.isEmpty else { return }
         if action == "sync" { return }
         let mode = Self.watchListenMode(message["mode"] as? String ?? "")
+        let id = message["id"] as? String ?? ""
         let at = message["at"] as? Double
         let now = Date().timeIntervalSince1970
         guard Self.shouldRunWatchCommand(action, at: at, live: live, now: now) else { return }
         if jsReady {
-            emit(action, mode: mode)
+            emit(action, mode: mode, id: id)
         } else {
-            pending.append((action, at, live, mode))
+            pending.append((action, at, live, mode, id))
         }
     }
 
@@ -303,10 +310,13 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
     }
 
-    private func emit(_ action: String, mode: String = "") {
+    private func emit(_ action: String, mode: String = "", id: String = "") {
         var data: [String: Any] = ["action": action]
         if !mode.isEmpty {
             data["mode"] = mode
+        }
+        if !id.isEmpty {
+            data["id"] = id
         }
         plugin?.notifyListeners("command", data: data)
     }

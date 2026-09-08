@@ -179,6 +179,9 @@ if (watchFileShouldStartListen()) {
 if (watchAction('save') !== 'save' || watchAction('discard') !== 'discard') {
   throw new Error('Watch Save / Don\'t save must be session actions, not start_listen')
 }
+if (watchAction('retry') !== 'retry') {
+  throw new Error('Watch Translate Retry must be a session action')
+}
 if (
   watchListenControlShouldApplyMode({ action: 'save', paused: false, capture: 'off' })
   || watchListenControlShouldApplyMode({ action: 'discard', paused: false, capture: 'off' })

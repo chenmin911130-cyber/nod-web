@@ -1,3 +1,5 @@
+import type { SaveBook } from './sessionSave'
+
 /** After a Record session stops, wait until capture is off and the engine is idle. */
 export function shouldGenerateAutoReport(input: {
   flagged: boolean
@@ -17,10 +19,15 @@ export function shouldGenerateAutoReport(input: {
   return 'generate'
 }
 
-/** A Save / finish tapped while Notes are still streaming must wait for them,
- * or the session is persisted without the Notes section. */
-export function keepShouldWaitForNotes(notesAskId: string): boolean {
-  return Boolean(notesAskId)
+/** Wait for Notes only when this Save is about to leave the session.
+ * Watch Save and a stay-put phone Save keep immediately; late Notes still
+ * land on the same usage_session_id. */
+export function keepShouldWaitForNotes(input: {
+  notesAskId: string
+  pendingAfterSave: SaveBook['pendingAfterSave'] | null
+  fromWatch: boolean
+}): boolean {
+  return Boolean(input.notesAskId) && !input.fromWatch && input.pendingAfterSave != null && input.pendingAfterSave !== 'none'
 }
 
 /** When a Meeting is stopped with the mic NOT live (capture='paused'), the

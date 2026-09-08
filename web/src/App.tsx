@@ -1387,8 +1387,9 @@ export default function App() {
         }
       },
       onSave: () => {
-        if (saveBookRef.current.status === 'saving') return
-        saveLiveSession()
+        const book = saveBookRef.current
+        if (book.status === 'saving' && book.liveId) return
+        saveLiveSession({ fromWatch: true })
       },
       onDiscard: () => {
         if (saveBookRef.current.status === 'saving') return
@@ -1420,6 +1421,15 @@ export default function App() {
       onTtsVoice: (voice) => {
         setTtsVoice(voice)
         writeTtsVoice(voice)
+      },
+      onRetry: (id) => {
+        if (!id) return
+        if (inflightTranslate.current === id) return
+        askedTranslate.current.delete(id)
+        translateRetries.current.delete(id)
+        spokenTranslate.current.delete(id)
+        dispatch({ type: 'retry_translate', id })
+        queueMicrotask(() => pumpTranslateRef.current())
       },
     })
   }, [])
@@ -1458,6 +1468,7 @@ export default function App() {
           consentOpen,
           quotaOk: state.quota?.ok !== false,
         }),
+        failed: face.failed,
       })
     }, 180)
     return () => window.clearTimeout(timer)
@@ -1788,7 +1799,12 @@ export default function App() {
   }
 
   const sendKeepNow = (opts: { content: boolean; audio: boolean }) => {
-    window.api.send({ type: 'keep_history', content: opts.content, audio: opts.audio })
+    const liveId = saveBookRef.current.liveId
+    window.api.send(
+      liveId
+        ? { type: 'keep_history', content: opts.content, audio: opts.audio, id: liveId }
+        : { type: 'keep_history', content: opts.content, audio: opts.audio },
+    )
     clearKeepTimer()
     keepTimerRef.current = window.setTimeout(() => failKeep('timeout'), KEEP_ACK_TIMEOUT_MS)
   }
@@ -1798,7 +1814,11 @@ export default function App() {
     const book = saveBookRef.current
     if (!pending || !book.liveId || book.status !== 'saving') return
     pendingKeepRef.current = null
-    if (pending.waitNotes && keepShouldWaitForNotes(stateRef.current.notesAskId)) {
+    if (pending.waitNotes && keepShouldWaitForNotes({
+      notesAskId: stateRef.current.notesAskId,
+      pendingAfterSave: book.pendingAfterSave === 'none' ? null : book.pendingAfterSave,
+      fromWatch: false,
+    })) {
       keepAfterNotes.current = {
         content: pending.content,
         audio: pending.audio,
@@ -1846,9 +1866,12 @@ export default function App() {
     setSavePrompt(true)
   }
 
-  const saveLiveSession = (opts?: { content?: boolean; audio?: boolean; fromPrompt?: boolean }) => {
+  const saveLiveSession = (opts?: { content?: boolean; audio?: boolean; fromPrompt?: boolean; fromWatch?: boolean }) => {
     if (historyKeptRef.current) {
       setHistoryOpen(true)
+      if (opts?.fromWatch && saveBookRef.current.status !== 'saved') {
+        commitBook({ ...saveBookRef.current, status: 'saved' })
+      }
       return
     }
     if (!isNativeApp() && !opts?.fromPrompt) {
@@ -1862,7 +1885,11 @@ export default function App() {
     commitBook(book)
     keepEpochRef.current = { liveId: book.liveId, generation: book.generation }
     if (phoneRef.current) setSaveBannerOpen(true)
-    const waitNotes = keepShouldWaitForNotes(stateRef.current.notesAskId)
+    const waitNotes = keepShouldWaitForNotes({
+      notesAskId: stateRef.current.notesAskId,
+      pendingAfterSave: book.pendingAfterSave === 'none' ? null : book.pendingAfterSave,
+      fromWatch: Boolean(opts?.fromWatch),
+    })
     if (!book.liveId) {
       pendingKeepRef.current = { content, audio, waitNotes }
       clearKeepTimer()
