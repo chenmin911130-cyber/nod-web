@@ -113,8 +113,7 @@ const ready = buildWatchScreen({
 })
 eq(ready.phase, 'ready', 'idle is Ready')
 eq(ready.primary, 'Start', 'one Start button')
-eq(ready.status, 'Ready', 'Ready label')
-eq(ready.readyDot, true, 'green Ready dot')
+eq(ready.status, undefined, 'Ready has no status line')
 eq(ready.modeLabel, 'Meeting', 'Watch capsule matches the phone Meeting scene')
 eq(ready.showModePicker, false, 'Ready has no mode list')
 
@@ -132,9 +131,11 @@ const listening = buildWatchScreen({
   drafting: false,
 })
 eq(listening.phase, 'listening', 'Listen session chrome')
-eq(listening.statusEn, "I'm listening.", 'web listening line')
-eq(listening.primary, 'Stop', 'Stop is the main listening button')
-eq(listening.secondary, 'Pause', 'Pause is the secondary listening button')
+eq(listening.statusEn, 'Recording', 'web listening line')
+eq(listening.status, '录音中', 'Chinese recording status')
+eq(listening.primary, 'Pause', 'Pause is the main recording button')
+eq(listening.secondary, 'End recording', 'End recording lives on the swipe page')
+eq(listening.swipeStop, true, 'recording swipes to End recording')
 eq(listening.rec, true, 'REC while Listen is running')
 
 const paused = buildWatchScreen({
@@ -153,7 +154,8 @@ const paused = buildWatchScreen({
 eq(paused.phase, 'paused', 'Pause freezes the session')
 eq(paused.status, '已暂停', 'paused status')
 eq(paused.primary, 'Resume', 'Resume is the main paused button')
-eq(paused.secondary, 'Stop', 'Stop stays available')
+eq(paused.secondary, 'End recording', 'End recording stays on the swipe page')
+eq(paused.swipeStop, true, 'paused swipes to End recording')
 eq(paused.modeLabel, 'Lecture', 'Lecture is a read-only capsule')
 
 const qaWait = buildWatchScreen({

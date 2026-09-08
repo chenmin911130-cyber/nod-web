@@ -30,7 +30,6 @@ export type WatchScreen = {
   secondary?: string
   playLabel?: string
   rec?: boolean
-  readyDot?: boolean
   clipLines?: number
   crownScroll?: boolean
   swipeStop?: boolean
@@ -178,7 +177,8 @@ export function buildWatchScreen(input: {
       status: '已暂停',
       statusEn: 'Paused',
       primary: 'Resume',
-      secondary: 'Stop',
+      secondary: 'End recording',
+      swipeStop: true,
     }
   }
 
@@ -186,11 +186,12 @@ export function buildWatchScreen(input: {
     return {
       ...base,
       phase: 'listening',
-      status: '听着',
-      statusEn: "I'm listening.",
-      primary: 'Stop',
-      secondary: 'Pause',
+      status: '录音中',
+      statusEn: 'Recording',
+      primary: 'Pause',
+      secondary: 'End recording',
       rec: true,
+      swipeStop: true,
     }
   }
 
@@ -198,8 +199,6 @@ export function buildWatchScreen(input: {
     ...base,
     phase: 'ready',
     primary: 'Start',
-    readyDot: true,
-    status: 'Ready',
   }
 }
 
