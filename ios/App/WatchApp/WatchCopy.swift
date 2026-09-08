@@ -420,4 +420,82 @@ enum WatchCopy {
             "ja": "破棄できません · 再試行",
         ])
     }
+
+    static var starting: String {
+        pick([
+            "zh": "正在开始…",
+            "en": "Starting…",
+            "it": "Avvio…",
+            "es": "Iniciando…",
+            "fr": "Démarrage…",
+            "de": "Start…",
+            "pt": "Iniciando…",
+            "ja": "開始中…",
+        ])
+    }
+
+    static var signInOnIphone: String {
+        pick([
+            "zh": "请在 iPhone 打开 Nodpilot 登录",
+            "en": "Open Nodpilot on iPhone to sign in",
+            "it": "Apri Nodpilot su iPhone per accedere",
+            "es": "Abre Nodpilot en iPhone para entrar",
+            "fr": "Ouvre Nodpilot sur iPhone pour te connecter",
+            "de": "Nodpilot auf iPhone öffnen zum Anmelden",
+            "pt": "Abra o Nodpilot no iPhone para entrar",
+            "ja": "iPhoneでNodpilotを開いてサインイン",
+        ])
+    }
+
+    static var confirmOnIphone: String {
+        pick([
+            "zh": "请在 iPhone 确认",
+            "en": "Confirm on iPhone",
+            "it": "Conferma su iPhone",
+            "es": "Confirma en iPhone",
+            "fr": "Confirme sur iPhone",
+            "de": "Auf iPhone bestätigen",
+            "pt": "Confirme no iPhone",
+            "ja": "iPhoneで確認",
+        ])
+    }
+
+    static var limitReached: String {
+        pick([
+            "zh": "已达上限 · 查看 iPhone",
+            "en": "Limit reached · see iPhone",
+            "it": "Limite raggiunto · vedi iPhone",
+            "es": "Límite alcanzado · mira iPhone",
+            "fr": "Limite atteinte · voir iPhone",
+            "de": "Limit erreicht · iPhone prüfen",
+            "pt": "Limite atingido · veja o iPhone",
+            "ja": "上限です · iPhoneを見てください",
+        ])
+    }
+
+    static var couldntStart: String {
+        pick([
+            "zh": "无法开始 · 请重试",
+            "en": "Couldn't start · try again",
+            "it": "Avvio non riuscito · riprova",
+            "es": "No se pudo iniciar · reintenta",
+            "fr": "Impossible de démarrer · réessayer",
+            "de": "Start fehlgeschlagen · erneut",
+            "pt": "Não foi possível iniciar · tente de novo",
+            "ja": "開始できません · 再試行",
+        ])
+    }
+
+    static var couldntChange: String {
+        pick([
+            "zh": "未能更新 · 请重试",
+            "en": "Couldn't update · try again",
+            "it": "Aggiornamento non riuscito · riprova",
+            "es": "No se pudo actualizar · reintenta",
+            "fr": "Mise à jour impossible · réessayer",
+            "de": "Aktualisieren fehlgeschlagen · erneut",
+            "pt": "Não foi possível atualizar · tente de novo",
+            "ja": "更新できません · 再試行",
+        ])
+    }
 }

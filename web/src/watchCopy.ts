@@ -32,6 +32,12 @@ export type WatchUiCopy = {
   ending: string
   couldntEnd: string
   couldntDiscard: string
+  starting: string
+  signInOnIphone: string
+  confirmOnIphone: string
+  limitReached: string
+  couldntStart: string
+  couldntChange: string
 }
 
 const COPY: Record<WatchUiLang, WatchUiCopy> = {
@@ -67,6 +73,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     ending: '正在结束…',
     couldntEnd: '未能结束 · 请重试',
     couldntDiscard: '未能丢弃 · 请重试',
+    starting: '正在开始…',
+    signInOnIphone: '请在 iPhone 打开 Nodpilot 登录',
+    confirmOnIphone: '请在 iPhone 确认',
+    limitReached: '已达上限 · 查看 iPhone',
+    couldntStart: '无法开始 · 请重试',
+    couldntChange: '未能更新 · 请重试',
   },
   en: {
     listening: "I'm listening.",
@@ -100,6 +112,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     ending: 'Ending…',
     couldntEnd: "Couldn't end · try again",
     couldntDiscard: "Couldn't discard · try again",
+    starting: 'Starting…',
+    signInOnIphone: 'Open Nodpilot on iPhone to sign in',
+    confirmOnIphone: 'Confirm on iPhone',
+    limitReached: 'Limit reached · see iPhone',
+    couldntStart: "Couldn't start · try again",
+    couldntChange: "Couldn't update · try again",
   },
   it: {
     listening: 'Ascolto',
@@ -133,6 +151,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     ending: 'Chiusura…',
     couldntEnd: 'Chiusura non riuscita · riprova',
     couldntDiscard: 'Eliminazione non riuscita · riprova',
+    starting: 'Avvio…',
+    signInOnIphone: 'Apri Nodpilot su iPhone per accedere',
+    confirmOnIphone: 'Conferma su iPhone',
+    limitReached: 'Limite raggiunto · vedi iPhone',
+    couldntStart: 'Avvio non riuscito · riprova',
+    couldntChange: 'Aggiornamento non riuscito · riprova',
   },
   es: {
     listening: 'Escuchando',
@@ -166,6 +190,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     ending: 'Finalizando…',
     couldntEnd: 'No se pudo terminar · reintenta',
     couldntDiscard: 'No se pudo descartar · reintenta',
+    starting: 'Iniciando…',
+    signInOnIphone: 'Abre Nodpilot en iPhone para entrar',
+    confirmOnIphone: 'Confirma en iPhone',
+    limitReached: 'Límite alcanzado · mira iPhone',
+    couldntStart: 'No se pudo iniciar · reintenta',
+    couldntChange: 'No se pudo actualizar · reintenta',
   },
   fr: {
     listening: "J'écoute",
@@ -199,6 +229,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     ending: 'Fin…',
     couldntEnd: "Impossible d'arrêter · réessayer",
     couldntDiscard: "Impossible d'ignorer · réessayer",
+    starting: 'Démarrage…',
+    signInOnIphone: 'Ouvre Nodpilot sur iPhone pour te connecter',
+    confirmOnIphone: 'Confirme sur iPhone',
+    limitReached: 'Limite atteinte · voir iPhone',
+    couldntStart: 'Impossible de démarrer · réessayer',
+    couldntChange: 'Mise à jour impossible · réessayer',
   },
   de: {
     listening: 'Ich höre zu',
@@ -232,6 +268,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     ending: 'Beenden…',
     couldntEnd: 'Beenden fehlgeschlagen · erneut',
     couldntDiscard: 'Verwerfen fehlgeschlagen · erneut',
+    starting: 'Start…',
+    signInOnIphone: 'Nodpilot auf iPhone öffnen zum Anmelden',
+    confirmOnIphone: 'Auf iPhone bestätigen',
+    limitReached: 'Limit erreicht · iPhone prüfen',
+    couldntStart: 'Start fehlgeschlagen · erneut',
+    couldntChange: 'Aktualisieren fehlgeschlagen · erneut',
   },
   pt: {
     listening: 'Ouvindo',
@@ -265,6 +307,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     ending: 'Encerrando…',
     couldntEnd: 'Não foi possível encerrar · tente de novo',
     couldntDiscard: 'Não foi possível descartar · tente de novo',
+    starting: 'Iniciando…',
+    signInOnIphone: 'Abra o Nodpilot no iPhone para entrar',
+    confirmOnIphone: 'Confirme no iPhone',
+    limitReached: 'Limite atingido · veja o iPhone',
+    couldntStart: 'Não foi possível iniciar · tente de novo',
+    couldntChange: 'Não foi possível atualizar · tente de novo',
   },
   ja: {
     listening: '聞いています',
@@ -298,6 +346,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     ending: '終了中…',
     couldntEnd: '終了できません · 再試行',
     couldntDiscard: '破棄できません · 再試行',
+    starting: '開始中…',
+    signInOnIphone: 'iPhoneでNodpilotを開いてサインイン',
+    confirmOnIphone: 'iPhoneで確認',
+    limitReached: '上限です · iPhoneを見てください',
+    couldntStart: '開始できません · 再試行',
+    couldntChange: '更新できません · 再試行',
   },
 }
 

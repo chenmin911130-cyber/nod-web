@@ -215,6 +215,9 @@ if (watchHardwareAction('crown', saving) || watchHardwareAction('side', saving))
 if (watchHardwareAction('crown', { listening: false, paused: false, ended: true }) || watchHardwareAction('side', { listening: false, paused: false, saved: true })) {
   throw new Error('hardware keys must not fire on Ended or Saved')
 }
+if (watchHardwareAction('crown', { listening: false, paused: false, starting: true }) || watchHardwareAction('side', { listening: true, paused: false, pending: 'pause' })) {
+  throw new Error('hardware keys must not fire while Starting or Pause/Resume is pending')
+}
 
 if (!watchCommandShouldSendMode('start') || !watchCommandShouldSendMode('record')) {
   throw new Error('Watch Start / Record must send the selected mode so Translate can open')

@@ -53,7 +53,7 @@ import { api as authApi, deleteAccount, fetchMe, logout, type Me } from './auth'
 import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
-import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchListenMode, watchShouldApplyMode, watchStartShouldPreferWatchMic } from './watch'
+import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchBlockedReason, watchListenControlShouldApplyMode, watchListenMode, watchShouldApplyMode, watchStartShouldPreferWatchMic } from './watch'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
 import { keepShouldWaitForNotes, shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
@@ -1137,6 +1137,7 @@ export default function App() {
   ttsVoiceRef.current = ttsVoice
   const consentRef = useRef<boolean | null>(demoScene ? true : null)
   const [consentOpen, setConsentOpen] = useState(false)
+  const [watchSignInBlocked, setWatchSignInBlocked] = useState(false)
   const pendingMic = useRef<(() => void) | null>(null)
   const [composeOpen, setComposeOpen] = useState(false)
   const [railHover, setRailHover] = useState(false)
@@ -1260,7 +1261,10 @@ export default function App() {
 
   useEffect(() => {
     void fetchMe().then((user) => {
-      if (user) setMe(user)
+      if (user) {
+        setMe(user)
+        setWatchSignInBlocked(false)
+      }
       const ok = user ? Boolean(user.consent) : true
       consentRef.current = ok
       setConsent(ok)
@@ -1452,6 +1456,11 @@ export default function App() {
         save: watchSaveWireStatus(saveBook.status),
         sessionId: saveBook.liveId || '',
         engine: state.engine,
+        blocked: watchBlockedReason({
+          signIn: watchSignInBlocked,
+          consentOpen,
+          quotaOk: state.quota?.ok !== false,
+        }),
       })
     }, 180)
     return () => window.clearTimeout(timer)
@@ -1474,6 +1483,8 @@ export default function App() {
     state.meetingEnded,
     state.meetingElapsedMs,
     saveBook,
+    watchSignInBlocked,
+    state.quota,
   ])
 
   const acceptConsent = () => {
@@ -1574,6 +1585,7 @@ export default function App() {
         handleEngineKeepRef.current(e)
       }
       const translateAskBefore = stateRef.current.translateAskId
+      if (e.type === 'auth_required') setWatchSignInBlocked(true)
       dispatch({ type: 'engine', ev: e })
       if (e.type === 'question' && stateRef.current.workspaceMode === 'meeting' && notesBilingualOn(stateRef.current.notesLang, stateRef.current.translateOn)) {
         const text = e.text ?? ''
@@ -2087,7 +2099,10 @@ export default function App() {
   }, [performSignOut])
 
   const handleAccountMe = useCallback((user: Me | null) => {
-    if (user) setMe(user)
+    if (user) {
+      setMe(user)
+      setWatchSignInBlocked(false)
+    }
   }, [])
 
   const armLeaveCaptureWait = () => {
