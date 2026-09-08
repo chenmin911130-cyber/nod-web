@@ -13,6 +13,7 @@ import {
   watchShouldApplyMode,
   watchStartShouldAttachMode,
   watchStartShouldPreferWatchMic,
+  watchResumeShouldChangeMic,
   watchFallbackStopSequence,
   watchFlushShouldSend,
   watchLiveStreamShouldReset,
@@ -185,11 +186,17 @@ if (
   throw new Error('Watch Save / Don\'t save must not switch Meeting / Interview / Translate')
 }
 
-if (watchStartShouldPreferWatchMic('meeting') || watchStartShouldPreferWatchMic('lecture')) {
-  throw new Error('Meeting / Lecture Watch Start must keep the phone mic')
+if (!watchStartShouldPreferWatchMic(true)) {
+  throw new Error('Watch Start must prefer the watch mic')
 }
-if (!watchStartShouldPreferWatchMic('interview') || !watchStartShouldPreferWatchMic('translate')) {
-  throw new Error('Live Q&A / Translate Watch Start may use the watch mic')
+if (watchStartShouldPreferWatchMic(false)) {
+  throw new Error('phone Start must keep the phone mic')
+}
+if (watchResumeShouldChangeMic()) {
+  throw new Error('Resume must not reassign the mic')
+}
+if (watchPcmShouldClaimMic()) {
+  throw new Error('incoming Watch PCM must not count as Start')
 }
 
 const idle = { listening: false, paused: false, offeringSave: false, saved: false }

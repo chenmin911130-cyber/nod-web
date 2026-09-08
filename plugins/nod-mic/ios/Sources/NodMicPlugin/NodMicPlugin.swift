@@ -11,6 +11,9 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "start", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stop", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "isActive", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "startKeepAlive", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stopKeepAlive", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "resume", returnType: CAPPluginReturnPromise),
     ]
 
     private var engine = AVAudioEngine()
@@ -26,6 +29,8 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
     // (all-zero PCM) keeps the session genuinely in the playing state, so the app
     // and the JS stays alive and the tap keeps firing. Inaudible by construction.
     private var silentPlayer: AVAudioPlayer?
+    private var keepAlive = false
+    private var interruptionObserver: NSObjectProtocol?
 
     @objc func start(_ call: CAPPluginCall) {
         if running {
@@ -56,6 +61,85 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func isActive(_ call: CAPPluginCall) {
         call.resolve(["active": running])
+    }
+
+    @objc func startKeepAlive(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            do {
+                if self.running {
+                    self.startSilentLoop()
+                    self.keepAlive = true
+                    call.resolve()
+                    return
+                }
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                try session.setActive(true)
+                self.startSilentLoop()
+                self.keepAlive = true
+                call.resolve()
+            } catch {
+                call.reject(error.localizedDescription)
+            }
+        }
+    }
+
+    @objc func stopKeepAlive(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            self.keepAlive = false
+            if self.running {
+                call.resolve()
+                return
+            }
+            self.stopSilentLoop()
+            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+            call.resolve()
+        }
+    }
+
+    @objc func resume(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            self.resumeAfterInterruption()
+            call.resolve()
+        }
+    }
+
+    override public func load() {
+        super.load()
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            self?.handleInterruption(note)
+        }
+    }
+
+    private func handleInterruption(_ note: Notification) {
+        guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw)
+        else { return }
+        if type == .began { return }
+        resumeAfterInterruption()
+    }
+
+    private func resumeAfterInterruption() {
+        guard running || keepAlive else { return }
+        do {
+            if running {
+                try beginCapture()
+                return
+            }
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try session.setActive(true)
+            if silentPlayer?.isPlaying != true {
+                stopSilentLoop()
+                startSilentLoop()
+            }
+        } catch {
+            /* next resume() / start() retries */
+        }
     }
 
     private func startCapture(_ call: CAPPluginCall, attempt: Int, gen: Int) {
@@ -90,7 +174,7 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
         try session.setCategory(
             .playAndRecord,
             mode: .default,
-            options: [.defaultToSpeaker]
+            options: [.defaultToSpeaker, .mixWithOthers]
         )
         try session.setActive(true, options: [])
         if let builtin = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
@@ -143,6 +227,9 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
 
         try engine.start()
         running = true
+        if self.silentPlayer?.isPlaying != true {
+            self.stopSilentLoop()
+        }
         startSilentLoop()
     }
 
@@ -175,6 +262,7 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func teardown() {
         running = false
+        keepAlive = false
         stopSilentLoop()
         engine.inputNode.removeTap(onBus: 0)
         if engine.isRunning {
@@ -255,6 +343,9 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     deinit {
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+        }
         teardown()
         clearListeningNotification()
     }

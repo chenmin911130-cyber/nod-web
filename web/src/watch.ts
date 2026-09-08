@@ -104,9 +104,14 @@ export function watchPcmShouldClaimMic(): boolean {
   return false
 }
 
-/** Meeting / Lecture stay on the phone mic. Live Q&A / Translate may use the watch. */
-export function watchStartShouldPreferWatchMic(mode: string): boolean {
-  return mode === 'interview' || mode === 'translate'
+/** Watch Start / Record uses the watch mic. Phone Start does not. */
+export function watchStartShouldPreferWatchMic(fromWatch: boolean): boolean {
+  return fromWatch
+}
+
+/** Pause / Resume inherit the mic chosen at Start. Do not reassign. */
+export function watchResumeShouldChangeMic(): boolean {
+  return false
 }
 
 export type WatchHardwareKey = 'crown' | 'side'
