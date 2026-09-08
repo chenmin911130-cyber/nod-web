@@ -357,7 +357,10 @@ const translateEnded = buildWatchScreen({
   answer: '',
   drafting: false,
 })
-eq(translateEnded.phase, 'ready', 'Translate End does not open Ended')
+if (translateEnded.phase === 'ready') {
+  throw new Error('translate ended with content must stay on a reading phase')
+}
+eq(translateEnded.captureLine, 'Ended', 'translate ended captureLine')
 
 const qaEnded = buildWatchScreen({
   workspaceMode: 'interview',
@@ -372,7 +375,40 @@ const qaEnded = buildWatchScreen({
   answer: '',
   drafting: false,
 })
-eq(qaEnded.phase, 'ready', 'Live Q&A End does not open Ended')
+eq(qaEnded.phase, 'ready', 'Live Q&A End with no content returns Ready')
+
+const qaEndedContent = buildWatchScreen({
+  workspaceMode: 'interview',
+  listenScene: 'interview',
+  listening: false,
+  paused: false,
+  ended: true,
+  save: 'none',
+  original: '',
+  translation: '',
+  question: 'Why ship Friday?',
+  answer: 'QA 还没完，建议下周一。',
+  drafting: false,
+})
+if (qaEndedContent.phase === 'ready') {
+  throw new Error('interview ended with content must stay on a reading phase')
+}
+eq(qaEndedContent.captureLine, 'Ended', 'interview ended captureLine')
+
+const translateEndedEmpty = buildWatchScreen({
+  workspaceMode: 'translate',
+  listenScene: 'meeting',
+  listening: false,
+  paused: false,
+  ended: true,
+  save: 'none',
+  original: '',
+  translation: '',
+  question: '',
+  answer: '',
+  drafting: false,
+})
+eq(translateEndedEmpty.phase, 'ready', 'translate ended with no content returns Ready')
 
 eq(watchStatusMode('translate', 'meeting'), 'translate', 'Translate stays Translate')
 eq(watchStatusMode('interview', 'interview'), 'interview', 'Live Q&A stays interview')

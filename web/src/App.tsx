@@ -54,7 +54,7 @@ import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
 import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchBlockedReason, watchListenControlShouldApplyMode, watchListenMode, watchResumeShouldChangeMic, watchShouldApplyMode, watchStartListenPayload } from './watch'
-import { buildWatchFace } from './watchStatus'
+import { buildWatchFace, watchEndedFor } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
 import { keepShouldWaitForNotes, shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
 import {
@@ -1459,7 +1459,14 @@ export default function App() {
         history: face.history,
         mode: watchStatusMode(state.workspaceMode, state.listenScene),
         langPair: watchLangPair(state.workspaceMode === 'translate' ? state.translateTo : state.notesTranslateTo),
-        ended: state.workspaceMode === 'meeting' && state.meetingEnded && meetingHasSaveableContent(state),
+        ended: watchEndedFor({
+          workspaceMode: state.workspaceMode,
+          capture: state.capture,
+          meetingEnded: state.meetingEnded,
+          hasSaveableContent: meetingHasSaveableContent(state),
+          translatePairs: state.translatePairs,
+          turns: state.turns,
+        }),
         elapsedMs: state.meetingElapsedMs,
         save: watchSaveWireStatus(saveBook.status),
         sessionId: saveBook.liveId || '',

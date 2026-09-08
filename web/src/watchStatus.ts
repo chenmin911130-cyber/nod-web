@@ -54,6 +54,30 @@ export function watchPreviousCaption(pairs: Pair[]): string {
   return line
 }
 
+export function watchEndedFor(input: {
+  workspaceMode: string
+  capture: string
+  meetingEnded?: boolean
+  hasSaveableContent?: boolean
+  translatePairs?: Array<{ original: string; translation: string }>
+  turns?: Array<{ q: string; a: string }>
+}): boolean {
+  if (input.workspaceMode === 'meeting') {
+    return Boolean(input.meetingEnded && input.hasSaveableContent)
+  }
+  if (input.workspaceMode === 'translate') {
+    return input.capture === 'off' && (input.translatePairs || []).some(
+      (p) => p.original.trim() || p.translation.trim(),
+    )
+  }
+  if (input.workspaceMode === 'interview') {
+    return input.capture === 'off' && (input.turns || []).some(
+      (t) => t.q.trim() || t.a.trim(),
+    )
+  }
+  return false
+}
+
 export function clipWatch(text: string, max: number): string {
   const t = text.replace(/\s+/g, ' ').trim()
   if (t.length <= max) return t
