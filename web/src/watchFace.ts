@@ -81,6 +81,8 @@ export function buildWatchScreen(input: {
   drafting: boolean
   translateTo?: string
   engine?: string
+  starting?: boolean
+  failure?: string
 }): WatchScreen {
   const engine = input.engine || ''
   const reading = input.listening || input.paused
@@ -219,6 +221,14 @@ export function buildWatchScreen(input: {
     }
   }
 
+  if (input.starting) {
+    return {
+      ...base,
+      phase: 'ready',
+      primary: 'Starting…',
+    }
+  }
+
   if (input.paused) {
     return {
       ...base,
@@ -248,6 +258,7 @@ export function buildWatchScreen(input: {
     ...base,
     phase: 'ready',
     primary: 'Start',
+    ...(input.failure ? { status: input.failure, statusEn: input.failure } : {}),
   }
 }
 

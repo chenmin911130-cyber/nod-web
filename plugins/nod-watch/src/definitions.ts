@@ -18,6 +18,7 @@ export interface NodWatchPlugin {
     save?: string
     sessionId?: string
     engine?: string
+    blocked?: string
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {

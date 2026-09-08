@@ -39,6 +39,7 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
         let save = call.getString("save") ?? "none"
         let sessionId = call.getString("sessionId") ?? ""
         let engine = call.getString("engine") ?? ""
+        let blocked = call.getString("blocked") ?? ""
         var history: [[String: String]] = []
         if let rows = call.getArray("history") {
             for row in rows {
@@ -63,7 +64,8 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
             elapsedMs: elapsedMs,
             save: save,
             sessionId: sessionId,
-            engine: engine
+            engine: engine,
+            blocked: blocked
         )
         call.resolve()
     }

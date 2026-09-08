@@ -153,22 +153,24 @@ struct WatchRootView: View {
                     Button {
                         session.pause()
                     } label: {
-                        Label(WatchCopy.pause, systemImage: "pause.fill")
+                        Label(session.pending == "pause" ? "…" : WatchCopy.pause, systemImage: "pause.fill")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(panel)
                     .foregroundStyle(ink)
+                    .disabled(session.pending != nil)
                 } else if session.paused {
                     Button {
                         session.resume()
                     } label: {
-                        Label(WatchCopy.resume, systemImage: "play.fill")
+                        Label(session.pending == "resume" ? "…" : WatchCopy.resume, systemImage: "play.fill")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(cyan)
                     .foregroundStyle(Color.black)
+                    .disabled(session.pending != nil)
                 }
             }
             Button {
@@ -195,16 +197,27 @@ struct WatchRootView: View {
                 session.startSession()
             } label: {
                 VStack(spacing: 6) {
-                    Image(systemName: "waveform")
-                        .font(.title2.weight(.semibold))
-                    Text(WatchCopy.start)
+                    if session.starting {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "waveform")
+                            .font(.title2.weight(.semibold))
+                    }
+                    Text(session.starting ? WatchCopy.starting : WatchCopy.start)
                         .font(.headline)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
             }
             .tint(cyan)
+            .disabled(session.starting)
             .modifier(CrownStartStop())
+            if let failure = session.failure {
+                Text(failure)
+                    .font(.caption2)
+                    .foregroundStyle(timer)
+                    .multilineTextAlignment(.center)
+            }
         }
     }
 
@@ -220,12 +233,19 @@ struct WatchRootView: View {
             Button {
                 session.pause()
             } label: {
-                Label(WatchCopy.pause, systemImage: "pause.fill")
+                Label(session.pending == "pause" ? "…" : WatchCopy.pause, systemImage: "pause.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .tint(panel)
             .foregroundStyle(ink)
+            .disabled(session.pending != nil)
+            if session.hint == WatchCopy.couldntChange {
+                Text(session.hint)
+                    .font(.caption2)
+                    .foregroundStyle(timer)
+                    .multilineTextAlignment(.center)
+            }
         }
     }
 
@@ -239,12 +259,19 @@ struct WatchRootView: View {
             Button {
                 session.resume()
             } label: {
-                Label(WatchCopy.resume, systemImage: "play.fill")
+                Label(session.pending == "resume" ? "…" : WatchCopy.resume, systemImage: "play.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .tint(cyan)
             .foregroundStyle(Color.black)
+            .disabled(session.pending != nil)
+            if session.hint == WatchCopy.couldntChange {
+                Text(session.hint)
+                    .font(.caption2)
+                    .foregroundStyle(timer)
+                    .multilineTextAlignment(.center)
+            }
         }
     }
 
@@ -351,13 +378,14 @@ struct WatchRootView: View {
                 Button {
                     session.continueSession()
                 } label: {
-                    Text(WatchCopy.continueRecording)
+                    Text(session.starting ? WatchCopy.starting : WatchCopy.continueRecording)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(panel)
                 .foregroundStyle(ink)
+                .disabled(session.starting)
                 Text(WatchCopy.sameSession)
                     .font(.caption2)
                     .foregroundStyle(muted)
@@ -401,13 +429,14 @@ struct WatchRootView: View {
             Button {
                 session.continueSession()
             } label: {
-                Text(WatchCopy.continueRecording)
+                Text(session.starting ? WatchCopy.starting : WatchCopy.continueRecording)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .tint(cyan)
             .foregroundStyle(Color.black)
+            .disabled(session.starting)
         }
     }
 

@@ -22,6 +22,7 @@ type WatchPlugin = {
     save?: string
     sessionId?: string
     engine?: string
+    blocked?: string
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {
@@ -119,9 +120,18 @@ export type WatchHardwareKey = 'crown' | 'side'
 /** Crown is Start/Stop. Side is Pause/Resume. Never bind the crown to toggle(). */
 export function watchHardwareAction(
   key: WatchHardwareKey,
-  state: { listening: boolean; paused: boolean; ended?: boolean; saving?: boolean; saved?: boolean },
+  state: {
+    listening: boolean
+    paused: boolean
+    ended?: boolean
+    saving?: boolean
+    saved?: boolean
+    starting?: boolean
+    pending?: string | null
+  },
 ): 'start' | 'stop' | 'pause' | 'resume' | '' {
   if (state.ended || state.saving || state.saved) return ''
+  if (state.starting || state.pending) return ''
   if (key === 'crown') {
     if (state.listening || state.paused) return 'stop'
     return 'start'
@@ -129,6 +139,30 @@ export function watchHardwareAction(
   if (state.paused) return 'resume'
   if (state.listening) return 'pause'
   return ''
+}
+
+/** Phone → Watch `blocked`. signin > consent > quota. */
+export function watchBlockedReason(input: {
+  signIn: boolean
+  consentOpen: boolean
+  quotaOk: boolean
+}): string {
+  if (input.signIn) return 'signin'
+  if (input.consentOpen) return 'consent'
+  if (!input.quotaOk) return 'quota'
+  return ''
+}
+
+/** Watch Start wait: capture confirm wins, then blocked, then 8s timeout. */
+export function watchStartOutcome(input: {
+  capture: string
+  blocked: string
+  waitedMs: number
+}): string {
+  if (input.capture === 'listening' || input.capture === 'recording') return 'started'
+  if (input.blocked) return `blocked:${input.blocked}`
+  if (input.waitedMs >= 8000) return 'timeout'
+  return 'waiting'
 }
 
 /** A leftover Watch file transfer is PCM only. It must not start_listen. */
@@ -305,6 +339,7 @@ export function pushWatchStatus(face: {
   save?: string
   sessionId?: string
   engine?: string
+  blocked?: string
 }): void {
   if (!isNativeApp()) return
   void NodWatch.setStatus({
@@ -321,6 +356,7 @@ export function pushWatchStatus(face: {
     save: face.save || 'none',
     sessionId: face.sessionId || '',
     engine: face.engine,
+    blocked: face.blocked || '',
   }).catch(() => undefined)
 }
 

@@ -24,6 +24,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastSave = "none"
     private var lastSessionId = ""
     private var lastEngine = ""
+    private var lastBlocked = ""
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
 
@@ -88,7 +89,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         elapsedMs: Int? = nil,
         save: String? = nil,
         sessionId: String? = nil,
-        engine: String? = nil
+        engine: String? = nil,
+        blocked: String? = nil
     ) {
         if !capture.isEmpty {
             lastCapture = capture
@@ -119,6 +121,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         if let engine, !engine.isEmpty {
             lastEngine = engine
         }
+        if let blocked {
+            lastBlocked = blocked
+        }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         var payload: [String: Any] = [
@@ -140,6 +145,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         payload["elapsedMs"] = lastElapsedMs
         payload["save"] = lastSave
         payload["sessionId"] = lastSessionId
+        payload["blocked"] = lastBlocked
         guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
         do {
             try session.updateApplicationContext(payload)
@@ -357,6 +363,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         reply["save"] = lastSave
         reply["sessionId"] = lastSessionId
         reply["engine"] = lastEngine
+        reply["blocked"] = lastBlocked
         replyHandler(reply)
     }
 

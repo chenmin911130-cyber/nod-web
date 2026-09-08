@@ -119,6 +119,37 @@ eq(ready.status, undefined, 'Ready has no status line')
 eq(ready.modeLabel, 'Meeting', 'Watch capsule matches the phone Meeting scene')
 eq(ready.showModePicker, false, 'Ready has no mode list')
 
+const startingReady = buildWatchScreen({
+  workspaceMode: 'meeting',
+  listenScene: 'meeting',
+  listening: false,
+  paused: false,
+  original: '',
+  translation: '',
+  question: '',
+  answer: '',
+  drafting: false,
+  starting: true,
+})
+eq(startingReady.phase, 'ready', 'Starting stays on Ready')
+eq(startingReady.primary, 'Starting…', 'Start button becomes Starting…')
+
+const failedReady = buildWatchScreen({
+  workspaceMode: 'meeting',
+  listenScene: 'meeting',
+  listening: false,
+  paused: false,
+  original: '',
+  translation: '',
+  question: '',
+  answer: '',
+  drafting: false,
+  failure: 'Open Nodpilot on iPhone to sign in',
+})
+eq(failedReady.phase, 'ready', 'a start failure stays on Ready')
+eq(failedReady.status, 'Open Nodpilot on iPhone to sign in', 'Ready shows the failure line')
+eq(failedReady.primary, 'Start', 'Start stays tappable after a failure')
+
 const listening = buildWatchScreen({
   workspaceMode: 'meeting',
   listenScene: 'meeting',
