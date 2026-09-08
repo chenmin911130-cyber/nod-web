@@ -165,6 +165,16 @@ export function watchStartOutcome(input: {
   return 'waiting'
 }
 
+/** Stale phone `capture:off` during local Start must not kill the Watch recorder. */
+export function watchOffShouldStopRecorder(input: {
+  starting: boolean
+  listening: boolean
+  paused: boolean
+  recorderRunning: boolean
+}): boolean {
+  return !input.starting && (input.listening || input.paused || input.recorderRunning)
+}
+
 /** Connection lost only when we cannot confirm phone capture. Watch mic recording is known. */
 export function watchStatusUnknown(input: {
   reachable: boolean
