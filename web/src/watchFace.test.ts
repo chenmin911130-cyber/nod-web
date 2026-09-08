@@ -1,4 +1,4 @@
-import { buildWatchAlwaysOn, buildWatchScreen, watchLangPair, watchListenPane, watchStatusMode } from './watchFace'
+import { buildWatchAlwaysOn, buildWatchScreen, watchAlwaysOnKeepsTree, watchLangPair, watchListenPane, watchStatusMode } from './watchFace'
 
 function eq<T>(got: T, want: T, label: string) {
   if (JSON.stringify(got) !== JSON.stringify(want)) {
@@ -541,9 +541,13 @@ const trOn = buildWatchAlwaysOn({
   save: 'none',
   translation: '请把合同放到桌上',
   answer: '',
+  langPair: 'Auto → ZH',
 })
-eq(trOn.line, '请把合同放到桌上', 'Translate Always On keeps the sentence')
-eq(trOn.showTimer, false, 'Translate Always On is the sentence, not a clock')
+eq(trOn.line, undefined, 'Translate Always On must not show the sentence')
+eq(trOn.modeLabel, 'Auto → ZH', 'Translate Always On keeps the language pair')
+eq(trOn.showTimer, false, 'Translate Always On is the capsule, not a clock')
+eq(trOn.recDot, true, 'Translate Always On keeps the red dot')
+eq(trOn.show, true, 'Translate Always On stays up')
 
 const pausedOn = buildWatchAlwaysOn({
   workspaceMode: 'meeting',
@@ -608,6 +612,13 @@ const lostOn = buildWatchAlwaysOn({
   statusUnknown: true,
 })
 eq(lostOn.show, false, 'unknown capture blacks out Always On')
+
+eq(watchAlwaysOnKeepsTree('translate', true, false, false, false), true, 'translate listening keeps the reading tree')
+eq(watchAlwaysOnKeepsTree('interview', false, true, false, false), true, 'interview paused keeps the reading tree')
+eq(watchAlwaysOnKeepsTree('meeting', true, false, false, false), false, 'meeting still swaps to Always On')
+eq(watchAlwaysOnKeepsTree('translate', true, false, true, false), false, 'ended still swaps to Always On')
+eq(watchAlwaysOnKeepsTree('translate', true, false, false, true), false, 'unknown status still swaps to Always On')
+eq(watchAlwaysOnKeepsTree('translate', false, false, false, false), false, 'ready does not keep the reading tree')
 
 const translateFailed = buildWatchScreen({
   workspaceMode: 'translate',

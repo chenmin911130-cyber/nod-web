@@ -328,6 +328,17 @@ export function watchStatusMode(workspaceMode: string, listenScene: string): Wat
 
 type WatchListenMode = 'meeting' | 'lecture' | 'interview' | 'translate'
 
+export function watchAlwaysOnKeepsTree(
+  mode: string,
+  listening: boolean,
+  paused: boolean,
+  ended: boolean,
+  statusUnknown: boolean,
+): boolean {
+  const reading = mode === 'translate' || mode === 'interview'
+  return reading && (listening || paused) && !ended && !statusUnknown
+}
+
 export function buildWatchAlwaysOn(input: {
   workspaceMode: string
   listenScene: string
@@ -338,6 +349,7 @@ export function buildWatchAlwaysOn(input: {
   translation: string
   answer: string
   statusUnknown?: boolean
+  langPair?: string
 }): WatchAlwaysOn {
   if (input.statusUnknown || input.ended || (!input.listening && !input.paused)) {
     return { show: false, showTimer: false, recDot: false }
@@ -349,8 +361,7 @@ export function buildWatchAlwaysOn(input: {
     return { show: true, modeLabel: 'Live Q&A', showTimer: true, recDot: false }
   }
   if (input.workspaceMode === 'translate') {
-    const line = input.translation.trim()
-    return { show: true, line: line || undefined, showTimer: false, recDot: false }
+    return { show: true, modeLabel: input.langPair, showTimer: false, recDot: true }
   }
   return { show: true, showTimer: true, recDot: true }
 }
