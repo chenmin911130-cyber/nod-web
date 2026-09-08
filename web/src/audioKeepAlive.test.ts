@@ -15,6 +15,11 @@ eq(
   'lock screen must not switch native mic to web',
 )
 eq(
+  nativeFallbackShouldSwitch({ hidden: false, appActive: false, running: true, hasStream: false }),
+  false,
+  'iOS lock often leaves document.hidden false; Capacitor isActive=false must still block the switch',
+)
+eq(
   nativeFallbackShouldSwitch({ hidden: false, running: true, hasStream: false }),
   true,
   'foreground native silence may fall back to web',
