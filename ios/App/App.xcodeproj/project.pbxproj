@@ -15,6 +15,7 @@
 		D0D100000000000000000014 /* NodWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000002 /* NodWatchApp.swift */; };
 		D0D100000000000000000015 /* WatchRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000003 /* WatchRootView.swift */; };
 		D0D100000000000000000040 /* WatchCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000041 /* WatchCopy.swift */; };
+		D0D100000000000000000043 /* WaveBars.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000042 /* WaveBars.swift */; };
 		D0D100000000000000000016 /* WatchPhoneSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000004 /* WatchPhoneSession.swift */; };
 		D0D100000000000000000017 /* WatchRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000005 /* WatchRecorder.swift */; };
 		D0D100000000000000000031 /* WatchGlanceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000029 /* WatchGlanceStore.swift */; };
@@ -39,6 +40,7 @@
 		D0D100000000000000000002 /* NodWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodWatchApp.swift; sourceTree = "<group>"; };
 		D0D100000000000000000003 /* WatchRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRootView.swift; sourceTree = "<group>"; };
 		D0D100000000000000000041 /* WatchCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchCopy.swift; sourceTree = "<group>"; };
+		D0D100000000000000000042 /* WaveBars.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaveBars.swift; sourceTree = "<group>"; };
 		D0D100000000000000000004 /* WatchPhoneSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchPhoneSession.swift; sourceTree = "<group>"; };
 		D0D100000000000000000005 /* WatchRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRecorder.swift; sourceTree = "<group>"; };
 		D0D100000000000000000029 /* WatchGlanceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchGlanceStore.swift; sourceTree = "<group>"; };
@@ -136,6 +138,7 @@
 				D0D100000000000000000002 /* NodWatchApp.swift */,
 				D0D100000000000000000003 /* WatchRootView.swift */,
 				D0D100000000000000000041 /* WatchCopy.swift */,
+				D0D100000000000000000042 /* WaveBars.swift */,
 				D0D100000000000000000004 /* WatchPhoneSession.swift */,
 				D0D100000000000000000005 /* WatchRecorder.swift */,
 				D0D100000000000000000029 /* WatchGlanceStore.swift */,
@@ -338,6 +341,7 @@
 				D0D100000000000000000014 /* NodWatchApp.swift in Sources */,
 				D0D100000000000000000015 /* WatchRootView.swift in Sources */,
 				D0D100000000000000000040 /* WatchCopy.swift in Sources */,
+				D0D100000000000000000043 /* WaveBars.swift in Sources */,
 				D0D100000000000000000016 /* WatchPhoneSession.swift in Sources */,
 				D0D100000000000000000017 /* WatchRecorder.swift in Sources */,
 				D0D100000000000000000031 /* WatchGlanceStore.swift in Sources */,

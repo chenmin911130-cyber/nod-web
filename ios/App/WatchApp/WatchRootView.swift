@@ -2,7 +2,10 @@ import SwiftUI
 
 struct WatchRootView: View {
     @EnvironmentObject private var session: WatchPhoneSession
+    @ObservedObject private var recorder = WatchRecorder.shared
     @Environment(\.isLuminanceReduced) private var dimmed
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @State private var listenPage = 0
 
     private let canvas = Color(red: 5 / 255, green: 6 / 255, blue: 7 / 255)
@@ -125,6 +128,14 @@ struct WatchRootView: View {
         session.mode == "translate" || session.mode == "interview"
     }
 
+    private var waveAnimating: Bool {
+        listenPage == 0 && !dimmed && scenePhase == .active
+    }
+
+    private var listenWaveMode: WaveBars.Mode {
+        recorder.isRunning ? .level(recorder.level) : .still
+    }
+
     private var sessionPage: some View {
         Group {
             if readingSession, session.listening || session.paused || session.ended {
@@ -226,8 +237,8 @@ struct WatchRootView: View {
                     if session.starting {
                         ProgressView()
                     } else {
-                        Image(systemName: "waveform")
-                            .font(.title2.weight(.semibold))
+                        WaveBars(mode: .breathe, animating: waveAnimating)
+                            .frame(width: 56, height: 56)
                     }
                     Text(session.starting ? WatchCopy.starting : WatchCopy.start)
                         .font(.headline)
@@ -250,7 +261,13 @@ struct WatchRootView: View {
     private var listeningControls: some View {
         VStack(spacing: 8) {
             capsule(WatchPhoneSession.modeLabel(session.mode))
-            recordingStatus
+            HStack(spacing: 6) {
+                recordingStatus
+                Spacer(minLength: 4)
+                WaveBars(mode: listenWaveMode, animating: waveAnimating)
+                    .frame(width: 24, height: 24)
+                    .foregroundStyle(cyan)
+            }
             if let startedAt = session.startedAt {
                 Text(startedAt, style: .timer)
                     .font(.title.monospacedDigit().weight(.semibold))
@@ -356,6 +373,7 @@ struct WatchRootView: View {
                             ForEach(units) { unit in
                                 readingUnit(unit, isLatest: unit.id == latestId)
                                     .id(unit.id)
+                                    .transition(reduceMotion ? .identity : .opacity)
                                     .onAppear {
                                         if unit.id == latestId { session.markLatestVisible(true) }
                                     }
@@ -363,6 +381,7 @@ struct WatchRootView: View {
                                         if unit.id == latestId { session.markLatestVisible(false) }
                                     }
                             }
+                            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: units.count)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
