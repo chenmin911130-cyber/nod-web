@@ -21,6 +21,7 @@ type WatchPlugin = {
     elapsedMs?: number
     save?: string
     sessionId?: string
+    engine?: string
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {
@@ -303,6 +304,7 @@ export function pushWatchStatus(face: {
   elapsedMs?: number
   save?: string
   sessionId?: string
+  engine?: string
 }): void {
   if (!isNativeApp()) return
   void NodWatch.setStatus({
@@ -318,6 +320,7 @@ export function pushWatchStatus(face: {
     elapsedMs: face.elapsedMs || 0,
     save: face.save || 'none',
     sessionId: face.sessionId || '',
+    engine: face.engine,
   }).catch(() => undefined)
 }
 

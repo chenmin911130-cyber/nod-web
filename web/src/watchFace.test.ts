@@ -25,8 +25,9 @@ eq(translateListening.mascot, false, 'Watch must not show the pet')
 eq(translateListening.showModePicker, false, 'Watch must not pick Meeting / Lecture')
 eq(translateListening.showHistoryList, false, 'Watch must not list History')
 eq(translateListening.modeLabel, 'Translate', 'mode capsule')
-eq(translateListening.langPair, 'Auto → CH', 'default pair follows Chinese captions')
-eq(translateListening.status, '听着', 'listening status')
+eq(translateListening.langPair, 'Auto → ZH', 'default pair follows Chinese captions')
+eq(translateListening.status, '自然说话即可', 'waiting copy')
+eq(translateListening.statusEn, 'Speak naturally', 'web waiting line')
 eq(translateListening.rec, true, 'REC while listening')
 eq(translateListening.swipeStop, true, 'Translate listening Stop lives on the swipe page')
 eq(translateListening.waveform, true, 'Translate listening keeps a waveform')
@@ -46,6 +47,7 @@ const translateResult = buildWatchScreen({
   drafting: false,
 })
 eq(translateResult.phase, 'translateResult', 'current sentence covers the listening chrome')
+eq(translateResult.langPair, 'Auto → ZH', 'result pair uses ZH')
 eq(translateResult.original, 'Hello, how are you?', 'Watch Translate keeps bilingual source')
 eq(translateResult.translation, '你好，你好吗？', 'translation is the large line')
 eq(translateResult.playLabel, undefined, 'Watch Translate has no Play')
@@ -68,7 +70,7 @@ const stackedResult = buildWatchScreen({
   answer: '',
   drafting: false,
 })
-eq(stackedResult.previous, '你好', 'Watch Translate keeps one muted previous line')
+eq(stackedResult.previous, undefined, 'W3 reading page drops the previous line')
 eq(stackedResult.translation, '明天见', 'the current sentence stays the large line')
 eq(translateResult.clipLines, 3, 'long Translate copy starts at three lines')
 eq(translateResult.mascot, false, 'result must not show the pet')
@@ -172,7 +174,8 @@ const qaWait = buildWatchScreen({
   drafting: false,
 })
 eq(qaWait.phase, 'qaWaiting', 'Live Q&A waits for a question')
-eq(qaWait.status, '听问题', 'waiting copy')
+eq(qaWait.status, '等待问题', 'waiting copy')
+eq(qaWait.statusEn, 'Waiting for a question', 'web waiting line')
 eq(qaWait.modeLabel, 'Live Q&A', 'Q&A capsule')
 eq(qaWait.swipeStop, true, 'Live Q&A waiting Stop lives on the swipe page')
 eq(qaWait.playLabel, undefined, 'Live Q&A has no Play')
@@ -189,10 +192,12 @@ const qaDraft = buildWatchScreen({
   question: 'Why ship Friday?',
   answer: '',
   drafting: true,
+  engine: 'generating',
 })
 eq(qaDraft.phase, 'qaDrafting', 'drafting after a question')
 eq(qaDraft.question, 'Why ship Friday?', 'question stays one gray line')
-eq(qaDraft.status, '起草中', 'drafting copy')
+eq(qaDraft.status, '正在生成…', 'drafting copy')
+eq(qaDraft.statusEn, 'Drafting…', 'web drafting line')
 eq(qaDraft.swipeStop, true, 'Q&A draft Stop lives on the swipe page')
 eq(qaDraft.playLabel, undefined, 'Q&A draft has no Play')
 
@@ -233,7 +238,7 @@ const qaStacked = buildWatchScreen({
   answer: '产品经理，周一同步。',
   drafting: false,
 })
-eq(qaStacked.previous, 'QA 还没完，建议下周一。', 'Q&A keeps one muted previous answer')
+eq(qaStacked.previous, undefined, 'W3 reading page drops the previous answer')
 eq(qaStacked.answer, '产品经理，周一同步。', 'the current answer stays the large line')
 eq(watchListenPane('interview', true), 'qa', 'a new answer must not open the Stop page')
 
@@ -344,7 +349,7 @@ eq(watchStatusMode('meeting', 'lecture'), 'lecture', 'Lecture is a capsule, not 
 eq(watchStatusMode('meeting', 'meeting'), 'meeting', 'Meeting stays on the phone workspace')
 eq(ready.modeLabel, 'Meeting', 'leftover Lecture must not win when the phone scene is Meeting')
 
-eq(watchLangPair('zh'), 'Auto → CH', 'Chinese captions')
+eq(watchLangPair('zh'), 'Auto → ZH', 'Chinese captions')
 eq(watchLangPair('it'), 'Auto → IT', 'Italian captions follow the phone target')
 eq(watchLangPair('en'), 'Auto → EN', 'English captions')
 
@@ -367,6 +372,75 @@ eq(italian.playLabel, undefined, 'Watch Translate has no Play')
 eq(italian.original, '', 'same-language copy stays one line')
 eq(watchListenPane('translate', false), 'translate', 'empty Translate stays on the live pane')
 eq(watchListenPane('translate', true), 'translate', 'a new sentence must not open the Stop page')
+
+const translateGenerating = buildWatchScreen({
+  workspaceMode: 'translate',
+  listenScene: 'meeting',
+  listening: true,
+  paused: false,
+  offeringSave: false,
+  saved: false,
+  original: 'Hello, how are you?',
+  translation: '',
+  question: '',
+  answer: '',
+  drafting: false,
+  engine: 'generating',
+})
+eq(translateGenerating.phase, 'translateGenerating', 'engine generating with source only')
+eq(translateGenerating.original, 'Hello, how are you?', 'source stays while translating')
+eq(translateGenerating.statusEn, 'Translating…', 'web translating line')
+eq(translateGenerating.langPair, 'Auto → ZH', 'generating pair uses ZH')
+
+const qaTranscribing = buildWatchScreen({
+  workspaceMode: 'interview',
+  listenScene: 'interview',
+  listening: true,
+  paused: false,
+  offeringSave: false,
+  saved: false,
+  original: '',
+  translation: '',
+  question: 'Why ship Friday?',
+  answer: '',
+  drafting: true,
+  engine: 'transcribing',
+})
+if (qaTranscribing.phase === 'qaDrafting') {
+  throw new Error('a transcribing question must not show Drafting')
+}
+
+const pausedTranslate = buildWatchScreen({
+  workspaceMode: 'translate',
+  listenScene: 'meeting',
+  listening: false,
+  paused: true,
+  offeringSave: false,
+  saved: false,
+  original: 'Hello, how are you?',
+  translation: '你好，你好吗？',
+  question: '',
+  answer: '',
+  drafting: false,
+})
+eq(pausedTranslate.phase, 'translateResult', 'paused Translate stays on the reading page')
+eq(pausedTranslate.paused, true, 'paused Translate marks paused on the reading screen')
+
+const pausedQa = buildWatchScreen({
+  workspaceMode: 'interview',
+  listenScene: 'interview',
+  listening: false,
+  paused: true,
+  offeringSave: false,
+  saved: false,
+  original: '',
+  translation: '',
+  question: '',
+  answer: '',
+  drafting: false,
+})
+eq(pausedQa.phase, 'qaWaiting', 'paused Live Q&A stays on the reading page')
+eq(pausedQa.paused, true, 'paused Live Q&A marks paused on the reading screen')
 
 const meetingOn = buildWatchAlwaysOn({
   workspaceMode: 'meeting',
