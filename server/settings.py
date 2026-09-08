@@ -155,6 +155,8 @@ LISTEN_ZERO_PCM_WATCH_SECONDS = max(
     LISTEN_ZERO_PCM_SECONDS,
     int(float(os.environ.get("LISTEN_ZERO_PCM_WATCH_SECONDS") or "180")),
 )
+# Parked control-WS sessions with a live native uplink. Default 10 min.
+UPLINK_ORPHAN_SECONDS = max(60, int(float(os.environ.get("UPLINK_ORPHAN_SECONDS") or "600")))
 
 PLANS: dict[str, dict] = {
     "free": {
