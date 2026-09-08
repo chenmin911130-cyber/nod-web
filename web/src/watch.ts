@@ -17,6 +17,10 @@ type WatchPlugin = {
     history?: WatchHistItem[]
     mode?: string
     langPair?: string
+    ended?: boolean
+    elapsedMs?: number
+    save?: string
+    sessionId?: string
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {
@@ -114,9 +118,9 @@ export type WatchHardwareKey = 'crown' | 'side'
 /** Crown is Start/Stop. Side is Pause/Resume. Never bind the crown to toggle(). */
 export function watchHardwareAction(
   key: WatchHardwareKey,
-  state: { listening: boolean; paused: boolean; offeringSave: boolean; saved: boolean },
+  state: { listening: boolean; paused: boolean; ended?: boolean; saving?: boolean; saved?: boolean },
 ): 'start' | 'stop' | 'pause' | 'resume' | '' {
-  if (state.offeringSave || state.saved) return ''
+  if (state.ended || state.saving || state.saved) return ''
   if (key === 'crown') {
     if (state.listening || state.paused) return 'stop'
     return 'start'
@@ -295,6 +299,10 @@ export function pushWatchStatus(face: {
   history?: WatchHistItem[]
   mode?: string
   langPair?: string
+  ended?: boolean
+  elapsedMs?: number
+  save?: string
+  sessionId?: string
 }): void {
   if (!isNativeApp()) return
   void NodWatch.setStatus({
@@ -306,6 +314,10 @@ export function pushWatchStatus(face: {
     history: (face.history || []).slice(0, 8),
     mode: face.mode,
     langPair: face.langPair,
+    ended: face.ended === true,
+    elapsedMs: face.elapsedMs || 0,
+    save: face.save || 'none',
+    sessionId: face.sessionId || '',
   }).catch(() => undefined)
 }
 

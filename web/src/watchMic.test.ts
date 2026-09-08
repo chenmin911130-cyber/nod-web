@@ -192,10 +192,10 @@ if (!watchStartShouldPreferWatchMic('interview') || !watchStartShouldPreferWatch
   throw new Error('Live Q&A / Translate Watch Start may use the watch mic')
 }
 
-const idle = { listening: false, paused: false, offeringSave: false, saved: false }
-const live = { listening: true, paused: false, offeringSave: false, saved: false }
-const held = { listening: false, paused: true, offeringSave: false, saved: false }
-const saving = { listening: false, paused: false, offeringSave: true, saved: false }
+const idle = { listening: false, paused: false }
+const live = { listening: true, paused: false }
+const held = { listening: false, paused: true }
+const saving = { listening: false, paused: false, ended: true, saving: true }
 
 if (watchHardwareAction('crown', live) !== 'stop') {
   throw new Error('Digital Crown while listening must Stop, not Pause')
@@ -210,7 +210,10 @@ if (watchHardwareAction('side', live) !== 'pause' || watchHardwareAction('side',
   throw new Error('Side button is Pause / Resume only')
 }
 if (watchHardwareAction('crown', saving) || watchHardwareAction('side', saving)) {
-  throw new Error('hardware keys must not fire on the Save prompt')
+  throw new Error('hardware keys must not fire on Ended / Saving / Saved')
+}
+if (watchHardwareAction('crown', { listening: false, paused: false, ended: true }) || watchHardwareAction('side', { listening: false, paused: false, saved: true })) {
+  throw new Error('hardware keys must not fire on Ended or Saved')
 }
 
 if (!watchCommandShouldSendMode('start') || !watchCommandShouldSendMode('record')) {

@@ -7,7 +7,7 @@ import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
 import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
-import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
+import { watchDiscardCommand, watchSaveWireStatus, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
 import { meetingRailIsPaused } from './meetingPause'
@@ -1386,12 +1386,14 @@ export default function App() {
         }
       },
       onSave: () => {
-        window.api.send(watchSaveCommand())
-        markHistoryKept(true)
+        if (saveBookRef.current.status === 'saving') return
+        saveLiveSession()
       },
       onDiscard: () => {
-        window.api.send(watchDiscardCommand())
+        if (saveBookRef.current.status === 'saving') return
         markHistoryKept(false)
+        window.api.send(watchDiscardCommand())
+        doClearRef.current()
       },
       onSpeak: () => {
         const s = stateRef.current
@@ -1445,6 +1447,10 @@ export default function App() {
         history: face.history,
         mode: watchStatusMode(state.workspaceMode, state.listenScene),
         langPair: watchLangPair(state.workspaceMode === 'translate' ? state.translateTo : state.notesTranslateTo),
+        ended: state.workspaceMode === 'meeting' && state.meetingEnded && meetingHasSaveableContent(state),
+        elapsedMs: state.meetingElapsedMs,
+        save: watchSaveWireStatus(saveBook.status),
+        sessionId: saveBook.liveId || '',
       })
     }, 180)
     return () => window.clearTimeout(timer)
@@ -1463,6 +1469,9 @@ export default function App() {
     state.listenScene,
     state.translateTo,
     state.notesTranslateTo,
+    state.meetingEnded,
+    state.meetingElapsedMs,
+    saveBook,
   ])
 
   const acceptConsent = () => {
@@ -1868,13 +1877,6 @@ export default function App() {
         return
       }
       bindLiveFromEngine(e.id)
-      if (watchAutoNotes.current) {
-        if (watchStopShouldAutoKeepHistory(watchAutoNotes.current)) {
-          window.api.send(watchSaveCommand())
-          markHistoryKept(true)
-        }
-        return
-      }
       if (leaving || skipOfferSavePromptRef.current) {
         skipOfferSavePromptRef.current = false
         return

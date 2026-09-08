@@ -10,7 +10,6 @@ struct WatchRootView: View {
     private let muted = Color(red: 164 / 255, green: 171 / 255, blue: 177 / 255)
     private let cyan = Color(red: 0, green: 196 / 255, blue: 232 / 255)
     private let panel = Color(red: 17 / 255, green: 21 / 255, blue: 24 / 255)
-    private let slate = Color(red: 168 / 255, green: 182 / 255, blue: 196 / 255)
     private let timer = Color(red: 245 / 255, green: 197 / 255, blue: 66 / 255)
 
     var body: some View {
@@ -32,7 +31,7 @@ struct WatchRootView: View {
         let qa = session.mode == "interview"
         let translate = session.mode == "translate"
         return Group {
-            if session.offeringSave || session.savedAck || (!session.listening && !session.paused) {
+            if session.ended || (!session.listening && !session.paused) {
                 Color.black
             } else if session.paused {
                 VStack(spacing: 6) {
@@ -94,10 +93,14 @@ struct WatchRootView: View {
 
     private var livePage: some View {
         Group {
-            if session.offeringSave {
-                savePrompt
-            } else if session.savedAck {
-                savedAck
+            if session.ended, session.saveState == "saving" {
+                savingPage
+            } else if session.ended, session.saveMatched {
+                savedPage
+            } else if session.ended, session.saveState == "failed" {
+                saveFailedPage
+            } else if session.ended {
+                endedPage
             } else if session.listening || session.paused {
                 TabView(selection: $listenPage) {
                     sessionPage.tag(0)
@@ -149,12 +152,13 @@ struct WatchRootView: View {
             Button {
                 session.finish()
             } label: {
-                Label(WatchCopy.endRecording, systemImage: "stop.fill")
+                Label(session.ending ? WatchCopy.ending : WatchCopy.endRecording, systemImage: "stop.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .tint(Color.red.opacity(0.18))
             .foregroundStyle(Color.red)
+            .disabled(session.ending)
             Text(WatchCopy.keepsSession)
                 .font(.caption2)
                 .foregroundStyle(muted)
@@ -309,25 +313,105 @@ struct WatchRootView: View {
         }
     }
 
-    private var savePrompt: some View {
-        VStack(spacing: 8) {
-            Button(WatchCopy.dontSave) { session.declineSave() }
-                .buttonStyle(.borderedProminent)
-                .tint(slate)
-                .foregroundStyle(Color.black)
-            Button(WatchCopy.save) { session.confirmSave() }
+    private var endedPage: some View {
+        ScrollView {
+            VStack(spacing: 8) {
+                Text("\(WatchCopy.ended) · \(clock(session.elapsedMs, compact: true))")
+                    .font(.headline)
+                    .foregroundStyle(ink)
+                Button {
+                    session.requestSave()
+                } label: {
+                    Text(WatchCopy.save)
+                        .frame(maxWidth: .infinity)
+                }
                 .buttonStyle(.borderedProminent)
                 .tint(cyan)
+                .foregroundStyle(Color.black)
+                Button {
+                    session.continueSession()
+                } label: {
+                    Text(WatchCopy.continueRecording)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(panel)
+                .foregroundStyle(ink)
+                Text(WatchCopy.sameSession)
+                    .font(.caption2)
+                    .foregroundStyle(muted)
+                Button(WatchCopy.dontSave) {
+                    session.discardSession()
+                }
+                .font(.caption)
+                .foregroundStyle(muted)
+                .frame(minHeight: 36)
+            }
         }
     }
 
-    private var savedAck: some View {
+    private var savingPage: some View {
         VStack(spacing: 8) {
-            Image(systemName: "checkmark.circle.fill")
+            Image(systemName: "cloud.arrow.up")
                 .font(.title)
                 .foregroundStyle(cyan)
-            Text(WatchCopy.saved)
+            Text(WatchCopy.saving)
                 .font(.headline)
+                .foregroundStyle(ink)
+            Text(WatchCopy.waitingConfirmation)
+                .font(.caption)
+                .foregroundStyle(muted)
+                .multilineTextAlignment(.center)
+            ProgressView()
+        }
+    }
+
+    private var savedPage: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "checkmark.circle")
+                .font(.title)
+                .foregroundStyle(cyan)
+            Text(WatchCopy.savedToHistory)
+                .font(.headline)
+                .foregroundStyle(ink)
+            Text(WatchCopy.viewOnIphone)
+                .font(.caption)
+                .foregroundStyle(muted)
+            Button {
+                session.continueSession()
+            } label: {
+                Text(WatchCopy.continueRecording)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(cyan)
+            .foregroundStyle(Color.black)
+        }
+    }
+
+    private var saveFailedPage: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.title)
+                .foregroundStyle(timer)
+            Text(WatchCopy.couldntSave)
+                .font(.headline)
+                .foregroundStyle(ink)
+            Text(WatchCopy.saveFailedHelp)
+                .font(.caption)
+                .foregroundStyle(muted)
+                .multilineTextAlignment(.center)
+            Button {
+                session.requestSave()
+            } label: {
+                Text(WatchCopy.retrySave)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(cyan)
+            .foregroundStyle(Color.black)
         }
     }
 
@@ -373,11 +457,14 @@ struct WatchRootView: View {
             )
     }
 
-    private func clock(_ seconds: TimeInterval) -> String {
+    private func clock(_ seconds: TimeInterval, compact: Bool = false) -> String {
         let sec = max(0, Int(seconds))
         let h = sec / 3600
         let m = (sec % 3600) / 60
         let s = sec % 60
+        if compact, h == 0 {
+            return String(format: "%02d:%02d", m, s)
+        }
         return "\(String(format: "%02d", h)):\(String(format: "%02d", m)):\(String(format: "%02d", s))"
     }
 }

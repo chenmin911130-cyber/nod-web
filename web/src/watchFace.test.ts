@@ -11,8 +11,8 @@ const translateListening = buildWatchScreen({
   listenScene: 'meeting',
   listening: true,
   paused: false,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   original: '',
   translation: '',
   question: '',
@@ -37,8 +37,8 @@ const translateResult = buildWatchScreen({
   listenScene: 'meeting',
   listening: true,
   paused: false,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   original: 'Hello, how are you?',
   translation: '你好，你好吗？',
   question: '',
@@ -59,8 +59,8 @@ const stackedResult = buildWatchScreen({
   listenScene: 'meeting',
   listening: true,
   paused: false,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   original: 'see you tomorrow',
   translation: '明天见',
   previous: '你好',
@@ -84,8 +84,8 @@ const longResult = buildWatchScreen({
   listenScene: 'meeting',
   listening: true,
   paused: false,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   original: 'Move the launch to Monday at 10 and bring the customer email plus the test checklist.',
   translation: longZh,
   question: '',
@@ -103,8 +103,8 @@ const ready = buildWatchScreen({
   listenScene: 'meeting',
   listening: false,
   paused: false,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   original: '',
   translation: '',
   question: '',
@@ -122,8 +122,8 @@ const listening = buildWatchScreen({
   listenScene: 'meeting',
   listening: true,
   paused: false,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   original: '',
   translation: '',
   question: '',
@@ -143,8 +143,8 @@ const paused = buildWatchScreen({
   listenScene: 'lecture',
   listening: false,
   paused: true,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   original: '',
   translation: '',
   question: '',
@@ -163,8 +163,8 @@ const qaWait = buildWatchScreen({
   listenScene: 'interview',
   listening: true,
   paused: false,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   original: '',
   translation: '',
   question: '',
@@ -182,8 +182,8 @@ const qaDraft = buildWatchScreen({
   listenScene: 'interview',
   listening: true,
   paused: false,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   original: '',
   translation: '',
   question: 'Why ship Friday?',
@@ -201,8 +201,8 @@ const qaAnswer = buildWatchScreen({
   listenScene: 'interview',
   listening: true,
   paused: false,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   original: '',
   translation: '',
   question: 'Why ship Friday?',
@@ -224,8 +224,8 @@ const qaStacked = buildWatchScreen({
   listenScene: 'interview',
   listening: true,
   paused: false,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   original: '',
   translation: '',
   previous: 'QA 还没完，建议下周一。',
@@ -237,44 +237,106 @@ eq(qaStacked.previous, 'QA 还没完，建议下周一。', 'Q&A keeps one muted
 eq(qaStacked.answer, '产品经理，周一同步。', 'the current answer stays the large line')
 eq(watchListenPane('interview', true), 'qa', 'a new answer must not open the Stop page')
 
-const savePrompt = buildWatchScreen({
-  workspaceMode: 'translate',
+const ended = buildWatchScreen({
+  workspaceMode: 'meeting',
   listenScene: 'meeting',
   listening: false,
   paused: false,
-  offeringSave: true,
-  saved: false,
-  original: 'Hello, how are you?',
-  translation: '你好，你好吗？',
+  ended: true,
+  save: 'none',
+  elapsedMs: 90_000,
+  original: 'Hello',
+  translation: '',
   question: '',
   answer: '',
   drafting: false,
 })
-eq(savePrompt.phase, 'savePrompt', 'Stop asks to save')
-eq(savePrompt.primary, '保存', 'Save is the main button')
-eq(savePrompt.secondary, '不保存', 'Don\'t save stays on screen')
-eq(savePrompt.saveStacked, true, 'Don\'t save and Save stack so both fit')
-eq(savePrompt.secondaryTone, 'bright', 'Don\'t save must stay readable')
-eq(savePrompt.status, '保存？', 'save title stays short')
-if (!savePrompt.secondary) throw new Error('Watch Stop must offer Don\'t save, not Save only')
+eq(ended.phase, 'ended', 'Meeting End opens Ended')
+eq(ended.primary, 'Save', 'Save is the main Ended button')
+eq(ended.secondary, 'Continue recording', 'Continue recording stays on Ended')
+eq(ended.tertiary, "Don't save", 'Don\'t save is the weak third action')
+
+const savingFace = buildWatchScreen({
+  workspaceMode: 'meeting',
+  listenScene: 'lecture',
+  listening: false,
+  paused: false,
+  ended: true,
+  save: 'saving',
+  original: 'Hello',
+  translation: '',
+  question: '',
+  answer: '',
+  drafting: false,
+})
+eq(savingFace.phase, 'saving', 'keep in flight is Saving')
+eq(savingFace.tertiary, undefined, 'Saving has no Don\'t save')
 
 const saved = buildWatchScreen({
   workspaceMode: 'meeting',
   listenScene: 'meeting',
   listening: false,
   paused: false,
-  offeringSave: false,
-  saved: true,
+  ended: true,
+  save: 'saved',
   original: '',
   translation: '',
   question: '',
   answer: '',
   drafting: false,
 })
-eq(saved.phase, 'saved', 'saved ack')
-eq(saved.status, '已同步到手机', 'saved copy points at iPhone History')
+eq(saved.phase, 'saved', 'matching keep ack is Saved')
+eq(saved.statusEn, 'Saved to History', 'saved copy points at History')
 eq(saved.mascot, false, 'saved must not show the pet')
-eq(saved.primary, undefined, 'saved ack must not offer Start')
+eq(saved.tertiary, undefined, 'Saved has no Don\'t save')
+eq(saved.primary, 'Continue recording', 'Saved can continue the same session')
+
+const saveFailed = buildWatchScreen({
+  workspaceMode: 'meeting',
+  listenScene: 'meeting',
+  listening: false,
+  paused: false,
+  ended: true,
+  save: 'failed',
+  original: 'Hello',
+  translation: '',
+  question: '',
+  answer: '',
+  drafting: false,
+})
+eq(saveFailed.phase, 'saveFailed', 'timeout or keep fail is Couldn\'t save')
+eq(saveFailed.primary, 'Retry save', 'failed offers Retry save')
+eq(saveFailed.tertiary, undefined, 'failed has no Don\'t save')
+
+const translateEnded = buildWatchScreen({
+  workspaceMode: 'translate',
+  listenScene: 'meeting',
+  listening: false,
+  paused: false,
+  ended: true,
+  save: 'none',
+  original: 'Hello',
+  translation: '你好',
+  question: '',
+  answer: '',
+  drafting: false,
+})
+eq(translateEnded.phase, 'ready', 'Translate End does not open Ended')
+
+const qaEnded = buildWatchScreen({
+  workspaceMode: 'interview',
+  listenScene: 'interview',
+  listening: false,
+  paused: false,
+  ended: true,
+  save: 'none',
+  original: '',
+  translation: '',
+  question: '',
+  answer: '',
+  drafting: false,
+})
+eq(qaEnded.phase, 'ready', 'Live Q&A End does not open Ended')
 
 eq(watchStatusMode('translate', 'meeting'), 'translate', 'Translate stays Translate')
 eq(watchStatusMode('interview', 'interview'), 'interview', 'Live Q&A stays interview')
@@ -291,8 +353,8 @@ const italian = buildWatchScreen({
   listenScene: 'meeting',
   listening: true,
   paused: false,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   original: 'Buongiorno',
   translation: 'Buongiorno',
   question: '',
@@ -311,8 +373,8 @@ const meetingOn = buildWatchAlwaysOn({
   listenScene: 'meeting',
   listening: true,
   paused: false,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   translation: '',
   answer: 'secret',
 })
@@ -327,8 +389,8 @@ const qaOn = buildWatchAlwaysOn({
   listenScene: 'interview',
   listening: true,
   paused: false,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   translation: '对面不该看见这句',
   answer: '对面不该看见这句',
 })
@@ -342,8 +404,8 @@ const trOn = buildWatchAlwaysOn({
   listenScene: 'meeting',
   listening: true,
   paused: false,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   translation: '请把合同放到桌上',
   answer: '',
 })
@@ -355,8 +417,8 @@ const pausedOn = buildWatchAlwaysOn({
   listenScene: 'meeting',
   listening: false,
   paused: true,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   translation: '',
   answer: '',
 })
@@ -368,8 +430,8 @@ const readyOn = buildWatchAlwaysOn({
   listenScene: 'meeting',
   listening: false,
   paused: false,
-  offeringSave: false,
-  saved: false,
+  ended: false,
+  save: 'none',
   translation: '',
   answer: '',
 })
@@ -380,8 +442,8 @@ const savedOn = buildWatchAlwaysOn({
   listenScene: 'meeting',
   listening: false,
   paused: false,
-  offeringSave: false,
-  saved: true,
+  ended: true,
+  save: 'saved',
   translation: '',
   answer: '',
 })
