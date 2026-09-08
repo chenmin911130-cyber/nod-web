@@ -422,7 +422,7 @@ struct WatchRootView: View {
                     .font(.caption)
                     .foregroundStyle(timer)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                if session.mode == "translate", isLatest {
+                if isLatest {
                     retryButton(id: unit.id)
                 }
             } else if unit.result.isEmpty, isLatest, session.engine == "generating" {
