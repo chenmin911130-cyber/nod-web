@@ -38,6 +38,12 @@ export type WatchUiCopy = {
   limitReached: string
   couldntStart: string
   couldntChange: string
+  iphoneDisconnected: string
+  statusUnavailable: string
+  reconnect: string
+  reconnecting: string
+  openOnIphone: string
+  recordingOnWatchOffline: string
 }
 
 const COPY: Record<WatchUiLang, WatchUiCopy> = {
@@ -79,6 +85,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: '已达上限 · 查看 iPhone',
     couldntStart: '无法开始 · 请重试',
     couldntChange: '未能更新 · 请重试',
+    iphoneDisconnected: '与 iPhone 连接中断',
+    statusUnavailable: '暂时无法确认录音状态',
+    reconnect: '重新连接',
+    reconnecting: '正在重新连接…',
+    openOnIphone: '请在 iPhone 打开 Nodpilot',
+    recordingOnWatchOffline: '手表录音中 · iPhone 离线',
   },
   en: {
     listening: "I'm listening.",
@@ -118,6 +130,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: 'Limit reached · see iPhone',
     couldntStart: "Couldn't start · try again",
     couldntChange: "Couldn't update · try again",
+    iphoneDisconnected: 'iPhone disconnected',
+    statusUnavailable: 'Recording status unavailable',
+    reconnect: 'Reconnect',
+    reconnecting: 'Reconnecting…',
+    openOnIphone: 'Open Nodpilot on iPhone',
+    recordingOnWatchOffline: 'Recording on Watch · iPhone offline',
   },
   it: {
     listening: 'Ascolto',
@@ -157,6 +175,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: 'Limite raggiunto · vedi iPhone',
     couldntStart: 'Avvio non riuscito · riprova',
     couldntChange: 'Aggiornamento non riuscito · riprova',
+    iphoneDisconnected: 'iPhone disconnesso',
+    statusUnavailable: 'Stato registrazione non disponibile',
+    reconnect: 'Riconnetti',
+    reconnecting: 'Riconnessione…',
+    openOnIphone: 'Apri Nodpilot su iPhone',
+    recordingOnWatchOffline: 'Registrazione su Watch · iPhone offline',
   },
   es: {
     listening: 'Escuchando',
@@ -196,6 +220,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: 'Límite alcanzado · mira iPhone',
     couldntStart: 'No se pudo iniciar · reintenta',
     couldntChange: 'No se pudo actualizar · reintenta',
+    iphoneDisconnected: 'iPhone desconectado',
+    statusUnavailable: 'Estado de grabación no disponible',
+    reconnect: 'Reconectar',
+    reconnecting: 'Reconectando…',
+    openOnIphone: 'Abre Nodpilot en iPhone',
+    recordingOnWatchOffline: 'Grabando en Watch · iPhone offline',
   },
   fr: {
     listening: "J'écoute",
@@ -235,6 +265,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: 'Limite atteinte · voir iPhone',
     couldntStart: 'Impossible de démarrer · réessayer',
     couldntChange: 'Mise à jour impossible · réessayer',
+    iphoneDisconnected: 'iPhone déconnecté',
+    statusUnavailable: 'État d’enregistrement indisponible',
+    reconnect: 'Reconnecter',
+    reconnecting: 'Reconnexion…',
+    openOnIphone: 'Ouvre Nodpilot sur iPhone',
+    recordingOnWatchOffline: 'Enregistrement Watch · iPhone hors ligne',
   },
   de: {
     listening: 'Ich höre zu',
@@ -274,6 +310,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: 'Limit erreicht · iPhone prüfen',
     couldntStart: 'Start fehlgeschlagen · erneut',
     couldntChange: 'Aktualisieren fehlgeschlagen · erneut',
+    iphoneDisconnected: 'iPhone getrennt',
+    statusUnavailable: 'Aufnahmestatus unbekannt',
+    reconnect: 'Erneut verbinden',
+    reconnecting: 'Verbinde…',
+    openOnIphone: 'Nodpilot auf iPhone öffnen',
+    recordingOnWatchOffline: 'Aufnahme auf Watch · iPhone offline',
   },
   pt: {
     listening: 'Ouvindo',
@@ -313,6 +355,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: 'Limite atingido · veja o iPhone',
     couldntStart: 'Não foi possível iniciar · tente de novo',
     couldntChange: 'Não foi possível atualizar · tente de novo',
+    iphoneDisconnected: 'iPhone desconectado',
+    statusUnavailable: 'Estado da gravação indisponível',
+    reconnect: 'Reconectar',
+    reconnecting: 'Reconectando…',
+    openOnIphone: 'Abra o Nodpilot no iPhone',
+    recordingOnWatchOffline: 'Gravando no Watch · iPhone offline',
   },
   ja: {
     listening: '聞いています',
@@ -352,6 +400,12 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     limitReached: '上限です · iPhoneを見てください',
     couldntStart: '開始できません · 再試行',
     couldntChange: '更新できません · 再試行',
+    iphoneDisconnected: 'iPhone切断',
+    statusUnavailable: '録音状態を確認できません',
+    reconnect: '再接続',
+    reconnecting: '再接続中…',
+    openOnIphone: 'iPhoneでNodpilotを開く',
+    recordingOnWatchOffline: 'Watchで録音中 · iPhoneオフライン',
   },
 }
 

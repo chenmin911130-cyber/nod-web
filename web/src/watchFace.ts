@@ -14,6 +14,7 @@ export type WatchPhase =
   | 'saving'
   | 'saved'
   | 'saveFailed'
+  | 'connectionLost'
 
 export type WatchScreen = {
   phase: WatchPhase
@@ -83,6 +84,7 @@ export function buildWatchScreen(input: {
   engine?: string
   starting?: boolean
   failure?: string
+  statusUnknown?: boolean
 }): WatchScreen {
   const engine = input.engine || ''
   const reading = input.listening || input.paused
@@ -92,6 +94,17 @@ export function buildWatchScreen(input: {
     showHistoryList: false as const,
     modeLabel: modeCapsule(input.workspaceMode, input.listenScene),
   }
+
+  if (input.statusUnknown) {
+    return {
+      ...base,
+      phase: 'connectionLost',
+      status: '与 iPhone 连接中断',
+      statusEn: 'iPhone disconnected',
+      primary: 'Reconnect',
+    }
+  }
+
   const readingFlags = {
     ...(input.listening ? { rec: true } : {}),
     ...(input.paused ? { paused: true } : {}),
@@ -281,8 +294,9 @@ export function buildWatchAlwaysOn(input: {
   save?: string
   translation: string
   answer: string
+  statusUnknown?: boolean
 }): WatchAlwaysOn {
-  if (input.ended || (!input.listening && !input.paused)) {
+  if (input.statusUnknown || input.ended || (!input.listening && !input.paused)) {
     return { show: false, showTimer: false, recDot: false }
   }
   if (input.paused) {

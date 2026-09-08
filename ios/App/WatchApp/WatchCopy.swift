@@ -498,4 +498,82 @@ enum WatchCopy {
             "ja": "更新できません · 再試行",
         ])
     }
+
+    static var iphoneDisconnected: String {
+        pick([
+            "zh": "与 iPhone 连接中断",
+            "en": "iPhone disconnected",
+            "it": "iPhone disconnesso",
+            "es": "iPhone desconectado",
+            "fr": "iPhone déconnecté",
+            "de": "iPhone getrennt",
+            "pt": "iPhone desconectado",
+            "ja": "iPhone切断",
+        ])
+    }
+
+    static var statusUnavailable: String {
+        pick([
+            "zh": "暂时无法确认录音状态",
+            "en": "Recording status unavailable",
+            "it": "Stato registrazione non disponibile",
+            "es": "Estado de grabación no disponible",
+            "fr": "État d’enregistrement indisponible",
+            "de": "Aufnahmestatus unbekannt",
+            "pt": "Estado da gravação indisponível",
+            "ja": "録音状態を確認できません",
+        ])
+    }
+
+    static var reconnect: String {
+        pick([
+            "zh": "重新连接",
+            "en": "Reconnect",
+            "it": "Riconnetti",
+            "es": "Reconectar",
+            "fr": "Reconnecter",
+            "de": "Erneut verbinden",
+            "pt": "Reconectar",
+            "ja": "再接続",
+        ])
+    }
+
+    static var reconnecting: String {
+        pick([
+            "zh": "正在重新连接…",
+            "en": "Reconnecting…",
+            "it": "Riconnessione…",
+            "es": "Reconectando…",
+            "fr": "Reconnexion…",
+            "de": "Verbinde…",
+            "pt": "Reconectando…",
+            "ja": "再接続中…",
+        ])
+    }
+
+    static var openOnIphone: String {
+        pick([
+            "zh": "请在 iPhone 打开 Nodpilot",
+            "en": "Open Nodpilot on iPhone",
+            "it": "Apri Nodpilot su iPhone",
+            "es": "Abre Nodpilot en iPhone",
+            "fr": "Ouvre Nodpilot sur iPhone",
+            "de": "Nodpilot auf iPhone öffnen",
+            "pt": "Abra o Nodpilot no iPhone",
+            "ja": "iPhoneでNodpilotを開く",
+        ])
+    }
+
+    static var recordingOnWatchOffline: String {
+        pick([
+            "zh": "手表录音中 · iPhone 离线",
+            "en": "Recording on Watch · iPhone offline",
+            "it": "Registrazione su Watch · iPhone offline",
+            "es": "Grabando en Watch · iPhone offline",
+            "fr": "Enregistrement Watch · iPhone hors ligne",
+            "de": "Aufnahme auf Watch · iPhone offline",
+            "pt": "Gravando no Watch · iPhone offline",
+            "ja": "Watchで録音中 · iPhoneオフライン",
+        ])
+    }
 }

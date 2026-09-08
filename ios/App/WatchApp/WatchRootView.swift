@@ -31,7 +31,7 @@ struct WatchRootView: View {
         let qa = session.mode == "interview"
         let translate = session.mode == "translate"
         return Group {
-            if session.ended || (!session.listening && !session.paused) {
+            if session.statusUnknown || session.ended || (!session.listening && !session.paused) {
                 Color.black
             } else if session.paused {
                 VStack(spacing: 6) {
@@ -93,7 +93,9 @@ struct WatchRootView: View {
 
     private var livePage: some View {
         Group {
-            if session.ended, session.saveState == "saving" {
+            if session.statusUnknown {
+                connectionLostPage
+            } else if session.ended, session.saveState == "saving" {
                 savingPage
             } else if session.ended, session.saveMatched {
                 savedPage
@@ -351,11 +353,48 @@ struct WatchRootView: View {
                 Text(WatchCopy.paused)
                     .font(.caption2)
                     .foregroundStyle(timer)
+            } else if WatchRecorder.shared.isRunning, !session.reachable {
+                Circle().fill(Color.red).frame(width: 6, height: 6)
+                Text(WatchCopy.recordingOnWatchOffline)
+                    .font(.caption2)
+                    .foregroundStyle(muted)
             } else {
                 Circle().fill(Color.red).frame(width: 6, height: 6)
                 Text(WatchCopy.listeningStatus)
                     .font(.caption2)
                     .foregroundStyle(ink)
+            }
+        }
+    }
+
+    private var connectionLostPage: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "iphone.slash")
+                .font(.title2)
+                .foregroundStyle(timer)
+            Text(WatchCopy.iphoneDisconnected)
+                .font(.headline)
+                .foregroundStyle(ink)
+                .multilineTextAlignment(.center)
+            Text(WatchCopy.statusUnavailable)
+                .font(.caption2)
+                .foregroundStyle(muted)
+                .multilineTextAlignment(.center)
+            Button {
+                session.reconnect()
+            } label: {
+                Text(session.reconnecting ? WatchCopy.reconnecting : WatchCopy.reconnect)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(panel)
+            .foregroundStyle(cyan)
+            .disabled(session.reconnecting)
+            if session.reconnectFailed {
+                Text(WatchCopy.openOnIphone)
+                    .font(.caption2)
+                    .foregroundStyle(timer)
+                    .multilineTextAlignment(.center)
             }
         }
     }

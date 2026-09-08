@@ -545,3 +545,31 @@ const savedOn = buildWatchAlwaysOn({
   answer: '',
 })
 eq(savedOn.show, false, 'saved ack must not occupy Always On')
+
+const lost = buildWatchScreen({
+  workspaceMode: 'meeting',
+  listenScene: 'meeting',
+  listening: true,
+  paused: false,
+  original: '',
+  translation: '',
+  question: '',
+  answer: '',
+  drafting: false,
+  statusUnknown: true,
+})
+eq(lost.phase, 'connectionLost', 'unknown capture shows Connection lost')
+eq(lost.primary, 'Reconnect', 'Reconnect is the only action')
+eq(lost.rec, undefined, 'Connection lost has no rec dot')
+
+const lostOn = buildWatchAlwaysOn({
+  workspaceMode: 'meeting',
+  listenScene: 'meeting',
+  listening: true,
+  paused: false,
+  translation: '',
+  answer: '',
+  statusUnknown: true,
+})
+eq(lostOn.show, false, 'unknown capture blacks out Always On')
+
