@@ -4,6 +4,8 @@ struct WatchRootView: View {
     @EnvironmentObject private var session: WatchPhoneSession
     @Environment(\.isLuminanceReduced) private var dimmed
     @State private var listenPage = 0
+    @State private var showStorage = false
+    @State private var confirmDeleteId = ""
 
     private let ink = Color(red: 244 / 255, green: 248 / 255, blue: 252 / 255)
     private let muted = Color(red: 142 / 255, green: 163 / 255, blue: 184 / 255)
@@ -32,7 +34,17 @@ struct WatchRootView: View {
         let qa = session.mode == "interview"
         let translate = session.mode == "translate"
         return Group {
-            if session.offeringSave || session.savedAck || (!session.listening && !session.paused) {
+            if session.draining || session.drainFailed {
+                VStack(spacing: 4) {
+                    Text(session.drainFailed ? WatchCopy.drainFailed : WatchCopy.replaying)
+                        .font(.caption)
+                        .foregroundStyle(muted)
+                        .multilineTextAlignment(.center)
+                    if session.pcmStalled {
+                        stallWarning
+                    }
+                }
+            } else if session.offeringSave || session.savedAck || (!session.listening && !session.paused) {
                 Color.black
             } else if session.paused {
                 VStack(spacing: 6) {
@@ -93,24 +105,85 @@ struct WatchRootView: View {
     }
 
     private var livePage: some View {
-        Group {
-            if session.offeringSave {
-                savePrompt
-            } else if session.savedAck {
-                savedAck
-            } else if session.listening || session.paused {
-                TabView(selection: $listenPage) {
-                    sessionPage.tag(0)
-                    stopPage.tag(1)
-                }
-            } else {
-                readyStart
+        VStack(spacing: 4) {
+            if session.storageFailed {
+                Text(WatchCopy.diskFull).font(.caption).foregroundStyle(Color.orange)
             }
+            if session.pcmStalled && !session.draining && !session.drainFailed {
+                stallWarning
+                    .padding(.horizontal, 6)
+            }
+            if session.pcmRejected && !session.draining {
+                rejectedWarning
+                    .padding(.horizontal, 6)
+            }
+            Group {
+                if session.offeringSave {
+                    savePrompt
+                } else if session.savedAck {
+                    savedAck
+                } else if session.draining || session.drainFailed {
+                    drainPage
+                } else if session.listening || session.paused {
+                    TabView(selection: $listenPage) {
+                        sessionPage.tag(0)
+                        stopPage.tag(1)
+                    }
+                } else {
+                    readyStart
+                }
+            }
+            .padding(.horizontal, 6)
         }
-        .padding(.horizontal, 6)
         .onChange(of: session.listening) { listening in
             if listening { listenPage = 0 }
         }
+    }
+
+    private var drainPage: some View {
+        VStack(spacing: 10) {
+            Text(session.drainFailed ? WatchCopy.drainFailed : WatchCopy.replaying)
+                .font(.headline)
+                .foregroundStyle(ink)
+                .multilineTextAlignment(.center)
+            if session.pcmStalled {
+                stallWarning
+            }
+            if session.pcmRejected {
+                rejectedWarning
+            }
+            if session.drainFailed {
+                Button(WatchCopy.done) { session.leaveIncomplete() }.tint(panel)
+            }
+            if session.drainFailed && !session.pcmRejected {
+                Button(WatchCopy.retry) { session.retryDrain() }
+                    .tint(cyan)
+            }
+        }
+    }
+
+    /// The overflow-stall (audio incomplete) warning, surfaceable on the recording
+    /// page and the End/drain page. Survives End/Retry so the user is not told the
+    /// session is complete once audio was dropped.
+    private var stallWarning: some View {
+        Text(session.pcmStallText.isEmpty ? WatchCopy.pcmIncomplete : session.pcmStallText)
+            .font(.caption2)
+            .foregroundStyle(Color.orange)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    /// A terminal session rejection (session ended server-side). Not retryable —
+    /// the capture's session is already over, so Retry must not feed old audio
+    /// into a new session (issue #165 P2-8).
+    private var rejectedWarning: some View {
+        Text(session.pcmRejectText.isEmpty ? WatchCopy.pcmRejected : session.pcmRejectText)
+            .font(.caption2)
+            .foregroundStyle(Color.red)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .center)
     }
 
     private var sessionPage: some View {
@@ -168,6 +241,80 @@ struct WatchRootView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(ink)
                 }
+            }
+            if !session.unfinishedCaptureList.isEmpty {
+                Button { showStorage = true } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "externaldrive")
+                            .font(.caption)
+                        Text(WatchCopy.manageStorage)
+                            .font(.caption)
+                        Text("(\(session.unfinishedCaptureList.count))")
+                            .font(.caption.monospacedDigit())
+                    }
+                    .foregroundStyle(muted)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .sheet(isPresented: $showStorage, content: { storagePage })
+    }
+
+    private var storagePage: some View {
+        let items = session.unfinishedCaptureList
+        return VStack(spacing: 8) {
+            Text(WatchCopy.unfinishedRecordings)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(ink)
+                .multilineTextAlignment(.center)
+            if !session.storageErrorText.isEmpty {
+                Text(session.storageErrorText).font(.caption2).foregroundStyle(Color.orange)
+            }
+            if items.isEmpty {
+                Text(WatchCopy.noUnfinished)
+                    .font(.caption)
+                    .foregroundStyle(muted)
+                    .multilineTextAlignment(.center)
+            } else {
+                ScrollView {
+                    ForEach(items, id: \.captureId) { item in
+                        storageRow(item)
+                    }
+                }
+            }
+            Button(WatchCopy.done) { showStorage = false }
+                .tint(panel)
+        }
+    }
+
+    private func storageRow(_ item: WatchPcmStore.CaptureInfo) -> some View {
+        let date = item.modifiedAt
+        let when = date.formatted(date: .abbreviated, time: .shortened)
+        return HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(ByteCountFormatter.string(fromByteCount: Int64(item.bytes), countStyle: .file))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(ink)
+                Text("\(when) · \(item.shardCount)")
+                    .font(.caption2)
+                    .foregroundStyle(muted)
+            }
+            Spacer()
+            if confirmDeleteId == item.captureId {
+                Button(WatchCopy.confirmDelete) {
+                    _ = session.deleteUnfinishedCapture(item.captureId)
+                    confirmDeleteId = ""
+                }
+                .tint(Color.red)
+            } else {
+                Button {
+                    confirmDeleteId = item.captureId
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                        .foregroundStyle(Color.red)
+                }
+                .buttonStyle(.plain)
             }
         }
     }

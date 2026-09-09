@@ -23,6 +23,7 @@ import {
   watchWorkspaceForMode,
   watchAction,
 } from './watch'
+import { watchStartListenCommand, watchReadyResendListen, watchAttachedShouldStartListen } from './watchReplay'
 
 if (watchPcmShouldClaimMic()) {
   throw new Error('watch PCM must not steal the phone microphone')
@@ -191,6 +192,18 @@ if (!watchStartShouldPreferWatchMic(true)) {
 }
 if (watchStartShouldPreferWatchMic(false)) {
   throw new Error('phone Start must keep the phone mic')
+}
+if (watchStartListenCommand(true).mic !== 'watch') {
+  throw new Error('Watch start_listen must send mic=watch')
+}
+if (watchStartListenCommand(false).mic) {
+  throw new Error('phone start_listen must not send watch mic')
+}
+if (watchReadyResendListen({ listenWanted: true, watchMic: true })?.mic !== 'watch') {
+  throw new Error('ready resend must keep mic=watch')
+}
+if (watchAttachedShouldStartListen()) {
+  throw new Error('attached must not replay start_listen')
 }
 if (watchResumeShouldChangeMic()) {
   throw new Error('Resume must not reassign the mic')

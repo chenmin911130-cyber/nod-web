@@ -156,12 +156,13 @@ export type EngineEvent =
   | { type: 'history_keep_failed'; id?: string; reason?: string }
   | { type: 'disconnected' }
   | { type: 'attached'; usage_session_id?: string }
+  | { type: 'pcm_drained'; id: string; capture_id: string; byte_offset: number }
 
 // 前端 → 引擎
 export type EngineMsg =
   | { type: 'manual' }
   | { type: 'toggle_listen' }
-  | { type: 'start_listen' }
+  | { type: 'start_listen'; mic?: 'watch' | 'phone' }
   | { type: 'stop_listen' }
   | { type: 'pause_listen' }
   | { type: 'resume_listen' }

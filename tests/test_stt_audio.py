@@ -17,6 +17,7 @@ from server.stt_audio import (
     duration_ms,
     error_summary,
     pace_wait_s,
+    take_final_frames,
     take_frames,
 )
 
@@ -40,6 +41,12 @@ class FrameSplitTests(unittest.TestCase):
         buf = bytearray(b"\x00" * 800)
         self.assertEqual(take_frames(buf), [])
         self.assertEqual(len(buf), 800)
+
+    def test_final_pads_sub_50ms_tail(self):
+        buf = bytearray(b"\x00" * 800)
+        frames = take_final_frames(buf)
+        self.assertEqual([len(f) for f in frames], [1600])
+        self.assertEqual(len(buf), 0)
 
     def test_50ms_is_emitted(self):
         buf = bytearray(b"\x00" * 1600)

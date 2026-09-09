@@ -2,6 +2,36 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-09 · #165 复查：移交倒序、Retry 从零重发、join 超时仍取走缓冲
+- 我以为：队列先出、缓冲后拼；Retry 清零 `nextByte` 才能避开 duplicate；`join(2.0)` 后取走缓冲即可。
+- 实际：`_pcm_buf` 是已出队的较早音频，`_q` 是后续；先队列会倒序。手机从 0 重灌，服务端裸 PCM 无偏移，已送 STT 的前段会重复转写和计量。`ws.send()` 仍阻塞时未发帧在 sender 局部变量里，超时取走会漏。
+- 规则：移交先缓冲再队列；Retry 只按 STT 已消费偏移恢复或重取确认，禁止从零重发；sender 未退出不得移交，超时应失败。
+- 涉及：`CloudListener.take_unsent` · `WatchPcmIngest.beginDrain` · `watchIngestRewindForRetry`
+
+## 2026-09-09 · #165 复查：STT 重连丢未发送缓冲后空 drain 假成功
+- 我以为：回填 `_pcm_buf` 后同一 listener 再 drain 即可；测试替换 socket 覆盖了失败路径。
+- 实际：生产 `_restart_listener` 丢开旧对象、不移交未发送音频；`_pcm_rx_bytes` 仍满，新空队列 `drain()` 成功并发 `pcm_drained`。手机 `nextByte` 不回退，Retry 文件被判 duplicate。
+- 规则：重建 listener 必须移交未发送 PCM；确认要求 STT 已发出字节达到 End 偏移；Retry 回退手机 ingest 游标。
+- 涉及：`_restart_listener` · `CloudListener.take_unsent` · `_finish_pcm_end_if_ready` · `WatchPcmIngest.beginDrain`
+
+## 2026-09-09 · #165 复查：socket 确认删片、失败排空清空缓冲后 Retry 假成功
+- 我以为：`pcmAckByte` 删已封片、`take_final_frames` 清空 `_pcm_buf` 后标失败即可，Retry 会再走一遍 drain。
+- 实际：socket 成功不等于 STT 排空；删片后排空失败就没有可补原片。失败路径已把尾块从 `_pcm_buf` 拿走，下次 `drain()` 见空缓冲会直接成功。
+- 规则：Watch 原片只在匹配的 `pcm_drained` 之后删除；STT 发送失败必须把未发出的帧放回缓冲，Retry 不能把空队列当成功。
+- 涉及：`WatchPcmStore.ack` · `WatchPhoneSession.apply pcmAck` · `CloudListener._send_drain_tail`
+
+## 2026-09-09 · #165 复审：假成功排空、park 丢确认、Resume 游标归零、删未封片、旧 drained 贴新 capture
+- 我以为：`drain()` 之后一律 `pcm_drained`、控制 WS emit、`_pcm_rx_bytes` 跟 STT 子流走、ack 追上当前片长度即可删、sessionId 足够区分排空。
+- 实际：`drain()==False` / listener 空 / STT socket 未连仍发成功；park 把 emit 换成空 sink 且 reattach 不重放；Pause/Resume 清累计字节，End 永远等不到；`deleteAckedShards` 不排除打开的 FileHandle；`markPcmDrained` 只核 session 再盖上当前 capture，旧确认能放行新录音。
+- 规则：只在 STT 真正排空成功时确认并落可重放结果；累计偏移跟 capture 走、不跟子流重开走；只删已封片；drain 事件必须自带 capture+session+offset，禁止用当前场补标签。
+- 涉及：`Session._finish_pcm_end_if_ready` · `CloudListener._send_stt_frame` · `reattach` · `_open_listener` · `WatchPcmStore.deleteAckedShards` · `WatchBridge.markPcmDrained`
+
+## 2026-09-09 · #165 审查：双向同步、忙循环、无身份 ack、只等 socket、短尾不发、5 秒内存窗
+- 我以为：ingest `queue.sync` + uplink `tryEnqueue`/`markSent` 同步、`pcmAckByte` 纯数字、socket send completion、160 kB 再落盘，就能完成有序补传和 End 排空。
+- 实际：ingest 与 uplink 互相 `sync` 会死锁；队列满时 `pumpLocked` 立刻重读同一文件；ack 无 capture/session，旧确认能删新片；socket 成功后 `stop` 会截断服务端 `_q`；stash <50ms 永不 flush；当前片在内存最多约 5 秒。
+- 规则：消费回调只异步回状态队列；容量不足必须退出 pump；ack 绑定 capture+session 且换场清零；End 等服务端 `pcm_drained` 再 stop；冻结时 flush 短尾；采集开始即追加写盘。
+- 涉及：`WatchPcmIngest` · `AudioUplink.tryEnqueue` · `WatchPhoneSession.apply pcmAck` · `CloudListener.drain` · `WatchPcmStore.append`
+
 ## 2026-09-09 · Bundle 71 把 node_modules 链到脏主仓，编进旧原生插件
 - 我以为：隔离 worktree 里 `node_modules` 链到主仓能共用依赖；committed `Podfile` 的 `../../plugins` 会编当前树。
 - 实际：`nod-mic` 相对链接解析到 `/Users/minchen/Projects/nod-web/plugins`。`cap sync` 按 realpath 写进 Pods。71 归档的 `NodMic.framework` 没有 `startUplink` / `AudioUplink`，`NodWatch` 也缺新会话字段。网页是新的，框架是旧的。

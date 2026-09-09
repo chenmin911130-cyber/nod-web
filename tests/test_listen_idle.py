@@ -202,3 +202,14 @@ class ForgottenListenTests(unittest.TestCase):
         sess._listen_wanted = False
         sess.start_listen(mic="watch")
         self.assertEqual(sess._listen_mic, "watch")
+
+    def test_start_listen_without_mic_overwrites_watch(self) -> None:
+        """Ready resend must keep mic=watch. Bare start_listen would reset to phone 25s."""
+        sess = Session.__new__(Session)
+        sess._manual = False
+        sess._paused = True
+        sess._listener = object()
+        sess._listen_wanted = False
+        sess.start_listen(mic="watch")
+        sess.start_listen()
+        self.assertEqual(sess._listen_mic, "phone")

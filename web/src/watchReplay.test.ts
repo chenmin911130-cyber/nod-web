@@ -1,0 +1,364 @@
+import {
+  UPLINK_MAX_PENDING_BYTES,
+  WATCH_DISK_LIMIT_BYTES,
+  WATCH_PCM_FRAME_BYTES,
+  WATCH_PCM_MIN_CHUNK_BYTES,
+  WatchReplayIngest,
+  watchAttachedShouldStartListen,
+  watchDiskWouldExceed,
+  watchDrainTimedOut,
+  watchEndShouldSendStop,
+  watchFailedPersistMayDelete,
+  watchFileShouldStartListenReplay,
+  watchMinFramePad,
+  watchPcmDecision,
+  watchReadyResendListen,
+  watchSaveTimerMayStart,
+  watchStartListenCommand,
+  watchUplinkCanTake,
+  watchPcmAckApplies,
+  watchPcmDrainApplies,
+  watchFilePumpStep,
+  watchPersistDelayBytes,
+  watchEnqueueWaitsForConsume,
+  watchPcmEndMessage,
+  watchDrainMessage,
+  watchMayDeleteShard,
+  watchMayDeleteWatchCopy,
+  watchIngestRewindForRetry,
+  watchConsumedApplies,
+} from './watchReplay'
+
+function eq<T>(got: T, want: T, label: string) {
+  const a = JSON.stringify(got)
+  const b = JSON.stringify(want)
+  if (a !== b) throw new Error(`${label}: got ${a}, want ${b}`)
+}
+
+function bytes(n: number, start = 0): Uint8Array {
+  const out = new Uint8Array(n)
+  for (let i = 0; i < n; i++) out[i] = (start + i) & 0xff
+  return out
+}
+
+eq(watchStartListenCommand(true), { type: 'start_listen', mic: 'watch' }, 'Watch Start sends mic=watch')
+eq(watchStartListenCommand(false), { type: 'start_listen' }, 'phone Start does not send watch mic')
+eq(
+  watchReadyResendListen({ listenWanted: true, watchMic: true }),
+  { type: 'start_listen', mic: 'watch' },
+  'ready resend keeps watch mic',
+)
+eq(
+  watchReadyResendListen({ listenWanted: true, watchMic: false }),
+  { type: 'start_listen' },
+  'ready resend keeps phone mic',
+)
+eq(watchReadyResendListen({ listenWanted: false, watchMic: true }), null, 'idle ready does not start_listen')
+eq(watchAttachedShouldStartListen(), false, 'attached must not replay start_listen')
+eq(watchFileShouldStartListenReplay(), false, 'a leftover Watch file must not start_listen')
+
+const live = { liveCaptureId: 'cap-a', liveSessionId: 'sess-1', nextByte: 3200 }
+eq(
+  watchPcmDecision({ ...live, incomingCaptureId: 'cap-a', incomingSessionId: 'sess-1', incomingOffset: 3200, incomingBytes: 3200 }),
+  'accept',
+  'in-order shard is accepted',
+)
+eq(
+  watchPcmDecision({ ...live, incomingCaptureId: 'cap-a', incomingSessionId: 'sess-1', incomingOffset: 0, incomingBytes: 3200 }),
+  'duplicate',
+  'live/file overlap of an already-taken seq is duplicate',
+)
+eq(
+  watchPcmDecision({ ...live, incomingCaptureId: 'cap-a', incomingSessionId: 'sess-1', incomingOffset: 1600, incomingBytes: 3200 }),
+  'overlap',
+  'partial overlap keeps the unseen tail',
+)
+eq(
+  watchPcmDecision({ ...live, incomingCaptureId: 'cap-a', incomingSessionId: 'sess-1', incomingOffset: 9600, incomingBytes: 3200 }),
+  'future',
+  'reorder parks a future seq',
+)
+eq(
+  watchPcmDecision({ ...live, incomingCaptureId: 'cap-b', incomingSessionId: 'sess-1', incomingOffset: 3200, incomingBytes: 3200 }),
+  'stale-capture',
+  'old capture must not join the live session',
+)
+eq(
+  watchPcmDecision({ ...live, incomingCaptureId: 'cap-a', incomingSessionId: 'sess-2', incomingOffset: 3200, incomingBytes: 3200 }),
+  'stale-session',
+  'old session id must not join the live session',
+)
+eq(
+  watchPcmDecision({
+    liveCaptureId: '',
+    liveSessionId: '',
+    incomingCaptureId: 'cap-old',
+    incomingSessionId: 'sess-old',
+    nextByte: 0,
+    incomingOffset: 0,
+    incomingBytes: 3200,
+  }),
+  'accept',
+  'first packet of a live capture may bind identity',
+)
+eq(
+  watchPcmDecision({
+    liveCaptureId: 'cap-a',
+    liveSessionId: 'sess-1',
+    incomingCaptureId: '',
+    incomingSessionId: '',
+    nextByte: 0,
+    incomingOffset: 0,
+    incomingBytes: 3200,
+  }),
+  'stale-capture',
+  'anonymous leftover PCM is rejected',
+)
+
+{
+  const pipe = new WatchReplayIngest()
+  pipe.bind('cap-a', 'sess-1')
+  eq(pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 3200, bytes: bytes(3200, 1), key: 'a:3200' }), 'future', 'gap parks later seq')
+  eq(pipe.nextByte, 0, 'future seq does not advance')
+  eq(pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: bytes(3200, 0), key: 'a:0' }), 'accept', 'missing earlier seq then plays')
+  eq(pipe.nextByte, 6400, 'parked later seq drains in order')
+  eq(pipe.delivered[0], 0, 'byte 0 is from the earlier shard')
+  eq(pipe.delivered[3200], 1, 'byte 3200 is from the parked shard')
+  eq(pipe.startListenCalls, 0, 'reorder must not start_listen')
+}
+
+{
+  const pipe = new WatchReplayIngest()
+  pipe.bind('cap-a', 'sess-1')
+  const chunk = bytes(3200, 9)
+  eq(pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: chunk, key: 'live:0' }), 'accept', 'live chunk accepted')
+  eq(
+    pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: chunk, key: 'file:0', fromFile: true }),
+    'duplicate',
+    'file retry of the live chunk is dropped',
+  )
+  eq(pipe.nextByte, 3200, 'overlap does not double-count')
+  eq(pipe.delivered.length, 3200, 'duplicate file does not append PCM')
+}
+
+{
+  const idle = new WatchReplayIngest()
+  eq(
+    idle.ingest({ captureId: 'cap-old', sessionId: 'sess-old', offset: 0, bytes: bytes(3200), key: 'orphan:0', fromFile: true }),
+    'stale-capture',
+    'a leftover file with no live capture must not bind or Start',
+  )
+  eq(idle.nextByte, 0, 'idle leftover does not ingest')
+  eq(idle.startListenCalls, 0, 'idle leftover must not start_listen')
+}
+
+{
+  const pipe = new WatchReplayIngest()
+  pipe.bind('cap-new', 'sess-new')
+  eq(
+    pipe.ingest({ captureId: 'cap-old', sessionId: 'sess-old', offset: 0, bytes: bytes(3200), key: 'old:0', fromFile: true }),
+    'stale-capture',
+    'old file is not the current capture',
+  )
+  eq(pipe.nextByte, 0, 'old file does not move the cursor')
+  eq(pipe.startListenCalls, 0, 'old file must not start_listen')
+  eq(watchFileShouldStartListenReplay(), false, 'file arrival is never Start')
+}
+
+{
+  const pipe = new WatchReplayIngest()
+  pipe.bind('cap-a', 'sess-1')
+  const file = bytes(UPLINK_MAX_PENDING_BYTES + WATCH_PCM_FRAME_BYTES * 4, 3)
+  const first = pipe.ingest({
+    captureId: 'cap-a',
+    sessionId: 'sess-1',
+    offset: 0,
+    bytes: file,
+    key: 'big:0',
+    fromFile: true,
+  })
+  eq(first, 'accept', 'large file starts ingest')
+  eq(watchUplinkCanTake(pipe.uplinkQueued, WATCH_PCM_FRAME_BYTES), false, '2 MiB uplink is full')
+  eq(pipe.uplinkQueued <= UPLINK_MAX_PENDING_BYTES, true, 'queue never grows past 2 MiB')
+  eq(pipe.droppedOldest, 0, 'backpressure does not drop-oldest')
+  while (pipe.nextByte < file.length) {
+    pipe.consume(WATCH_PCM_FRAME_BYTES)
+  }
+  eq(pipe.nextByte, file.length, 'file larger than 2 MiB is sent in full')
+  eq(pipe.delivered.length, file.length, 'every byte is delivered once')
+  eq(pipe.droppedOldest, 0, 'complete send still never drops old frames')
+  eq(pipe.watchDeleted.has('big:0'), false, 'socket/phone consume must not delete the Watch original')
+  pipe.markServerDrained()
+  eq(pipe.watchDeleted.has('big:0'), true, 'Watch copy deletes only after matching pcm_drained')
+}
+
+{
+  const pipe = new WatchReplayIngest()
+  pipe.bind('cap-a', 'sess-1')
+  pipe.setPersistOk(false)
+  pipe.ingest({
+    captureId: 'cap-a',
+    sessionId: 'sess-1',
+    offset: 0,
+    bytes: bytes(3200),
+    key: 'fail:0',
+    fromFile: true,
+  })
+  eq(pipe.phoneFiles.has('fail:0'), false, 'failed persist does not claim a phone copy')
+  eq(pipe.watchDeleted.has('fail:0'), false, 'failed file must not delete the Watch original')
+  eq(watchFailedPersistMayDelete(), false, 'delete is forbidden until persist succeeds')
+}
+
+{
+  const lastByte = 64_000
+  const ids = { ackCaptureId: 'cap-a', liveCaptureId: 'cap-a', ackSessionId: 'sess-1', liveSessionId: 'sess-1' }
+  eq(
+    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: 32_000, uplinkQueued: 0, serverDrained: true, ...ids }),
+    false,
+    'End must not stop while backlog remains',
+  )
+  eq(
+    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 3200, serverDrained: true, ...ids }),
+    false,
+    'End must not stop while uplink still holds frames',
+  )
+  eq(
+    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 0, serverDrained: false, ...ids }),
+    false,
+    'socket send is not enough; wait for pcm_drained',
+  )
+  eq(
+    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 0, serverDrained: true, ...ids, ackCaptureId: 'cap-old' }),
+    false,
+    'old ack must not complete a new capture',
+  )
+  eq(
+    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 0, serverDrained: true, ...ids, drainByte: 32_000 }),
+    false,
+    'old drain offset must not complete a new capture length',
+  )
+  eq(
+    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 0, serverDrained: true, ...ids, drainByte: lastByte }),
+    true,
+    'stop_listen only after server drain of this capture and offset',
+  )
+  eq(watchSaveTimerMayStart({ draining: true, stopSent: false }), false, '#164 15s timer does not cover replay')
+  eq(watchSaveTimerMayStart({ draining: false, stopSent: true }), true, 'Save timer starts once keep_history can send')
+  eq(watchMinFramePad(800), WATCH_PCM_MIN_CHUNK_BYTES, 'drain tail is padded to the 50 ms floor')
+  eq(watchMinFramePad(1600), 1600, 'already-legal tail is unchanged')
+}
+
+{
+  const pipe = new WatchReplayIngest()
+  pipe.bind('cap-a', 'sess-1')
+  const body = bytes(6400, 5)
+  pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: body, key: 'end:0', fromFile: true })
+  let stopSent = false
+  let saveArmed = false
+  const frozen = true
+  const lastByte = 6400
+  const ids = { ackCaptureId: 'cap-a', liveCaptureId: 'cap-a', ackSessionId: 'sess-1', liveSessionId: 'sess-1' }
+  let serverDrained = false
+  while (!watchEndShouldSendStop({ frozen, lastByte, nextByte: pipe.nextByte, uplinkQueued: pipe.uplinkQueued, serverDrained, ...ids })) {
+    eq(stopSent, false, 'stop is held while draining')
+    if (pipe.uplinkQueued > 0) pipe.consume(WATCH_PCM_FRAME_BYTES)
+    else serverDrained = true
+  }
+  stopSent = true
+  if (watchSaveTimerMayStart({ draining: false, stopSent })) saveArmed = true
+  eq(stopSent, true, 'stop fires after the last byte')
+  eq(saveArmed, true, 'Save may arm only after stop')
+  eq(pipe.nextByte, lastByte, 'same seq continues across the drain')
+}
+
+eq(
+  watchDrainTimedOut({ freezeAt: 0, now: 10, lastByte: 32_000 * 60 }),
+  false,
+  'a 1-minute backlog plus slack has not expired at 10s',
+)
+eq(
+  watchDrainTimedOut({ freezeAt: 0, now: 32_000 * 60 / 32_000 + 90, lastByte: 32_000 * 60 }),
+  true,
+  'past audio-duration + slack is an explicit drain failure',
+)
+
+eq(watchDiskWouldExceed(WATCH_DISK_LIMIT_BYTES, 1), true, 'disk cap refuses new capture bytes')
+eq(watchDiskWouldExceed(0, 3200), false, 'under the cap still records')
+
+eq(watchPcmAckApplies({ liveCaptureId: 'cap-a', liveSessionId: 'sess-1', ackCaptureId: 'cap-a', ackSessionId: 'sess-1' }), true, 'matching ack applies')
+eq(watchPcmAckApplies({ liveCaptureId: 'cap-a', liveSessionId: 'sess-1', ackCaptureId: 'cap-old', ackSessionId: 'sess-1' }), false, 'old capture ack is rejected')
+eq(watchPcmAckApplies({ liveCaptureId: 'cap-a', liveSessionId: 'sess-1', ackCaptureId: 'cap-a', ackSessionId: 'sess-old' }), false, 'old session ack is rejected')
+eq(watchPcmAckApplies({ liveCaptureId: 'cap-a', liveSessionId: 'sess-1', ackCaptureId: '', ackSessionId: 'sess-1' }), false, 'ack without capture is rejected')
+eq(
+  watchPcmDrainApplies({ liveCaptureId: 'cap-b', liveSessionId: 'sess-1', liveLastByte: 6400, drainCaptureId: 'cap-a', drainSessionId: 'sess-1', drainByte: 6400 }),
+  false,
+  'old drain capture is not stamped onto the current capture',
+)
+eq(
+  watchConsumedApplies({ liveCaptureId: 'cap-b', liveSessionId: 'sess-1', consumeCaptureId: 'cap-a', consumeSessionId: 'sess-1' }),
+  false,
+  'delayed consume after capture change does not advance the new cursor',
+)
+eq(watchMayDeleteWatchCopy(false), false, 'phone persist or socket send is not enough to delete Watch copies')
+eq(watchMayDeleteWatchCopy(true), true, 'matching pcm_drained may delete Watch copies')
+eq(watchMayDeleteShard({ openSeq: 2, seq: 2, offset: 160000, bytes: 3200, ack: 163200, serverDrained: true }), false, 'open shard is not deleted when ack catches its current length')
+eq(watchMayDeleteShard({ openSeq: 2, seq: 1, offset: 0, bytes: 160000, ack: 160000, serverDrained: false }), false, 'socket ack without pcm_drained must not delete a sealed shard')
+eq(watchMayDeleteShard({ openSeq: 2, seq: 1, offset: 0, bytes: 160000, ack: 160000, serverDrained: true }), true, 'sealed fully-acked shard may be deleted after pcm_drained')
+
+eq(watchFilePumpStep({ queued: UPLINK_MAX_PENDING_BYTES, parked: 1 }), 'paused', 'full uplink pauses the file pump')
+eq(watchFilePumpStep({ queued: 0, parked: 1 }), 'continue', 'room to send continues the file pump')
+eq(watchFilePumpStep({ queued: 0, parked: 0 }), 'done', 'empty parked list is done')
+
+{
+  let steps = 0
+  let queued = UPLINK_MAX_PENDING_BYTES
+  let parked = 1
+  while (watchFilePumpStep({ queued, parked }) === 'continue') steps++
+  eq(watchFilePumpStep({ queued, parked }), 'paused', 'backpressure does not reread in a loop')
+  eq(steps, 0, 'paused pump does not spin')
+}
+
+eq(watchPersistDelayBytes(), 0, 'every capture frame is durable; no 5s memory window')
+eq(watchEnqueueWaitsForConsume(), false, 'enqueue must not wait on the consume callback')
+eq(watchPcmEndMessage({ sessionId: 'sess-1', captureId: 'cap-a', lastByte: 6400 }), { type: 'pcm_end', id: 'sess-1', capture_id: 'cap-a', byte_offset: 6400 }, 'pcm_end binds session and capture')
+eq(watchPcmEndMessage({ sessionId: '', captureId: 'cap-a', lastByte: 6400 }), null, 'pcm_end without session id is not sent')
+eq(watchPcmEndMessage({ sessionId: 'sess-1', captureId: '', lastByte: 6400 }), null, 'pcm_end without capture id is not sent')
+eq(
+  watchDrainMessage({ lastByte: 6400, captureId: 'cap-a', sessionId: 'sess-1' }),
+  { action: 'drain', lastByte: 6400, captureId: 'cap-a', sessionId: 'sess-1' },
+  'End freeze sends drain, not stop_listen',
+)
+eq(watchDrainMessage({ lastByte: 6400, captureId: '', sessionId: 'sess-1' }), null, 'drain without capture is not sent')
+eq(watchMinFramePad(800), WATCH_PCM_MIN_CHUNK_BYTES, 'short End tail is padded before send')
+eq(watchIngestRewindForRetry({ pcmEndSent: false, nextByte: 6400 }), 6400, 'first drain keeps the phone cursor')
+eq(watchIngestRewindForRetry({ pcmEndSent: true, nextByte: 6400 }), 6400, 'lost confirmation only re-requests drain; does not rewind to 0')
+
+{
+  const pipe = new WatchReplayIngest()
+  pipe.bind('cap-a', 'sess-1')
+  const shard = bytes(6400, 9)
+  eq(pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: shard, key: 'r:0' }), 'accept', 'first ingest')
+  pipe.consume(6400)
+  eq(
+    pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: shard, key: 'r:0' }),
+    'duplicate',
+    'caught-up ingest rejects the same shard',
+  )
+  pipe.pcmEndSent = true
+  pipe.rewindForRetry()
+  eq(pipe.nextByte, 6400, 'confirmation retry keeps the ingest cursor')
+  eq(
+    pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: shard, key: 'r:0' }),
+    'duplicate',
+    'Retry does not replay audio the phone already delivered',
+  )
+}
+
+{
+  const pipe = new WatchReplayIngest()
+  pipe.bind('cap-a', 'sess-1')
+  pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: bytes(3200), key: 'a:0' })
+  pipe.bind('cap-b', 'sess-2')
+  eq(pipe.nextByte, 0, 'new capture resets the cursor')
+  eq(pipe.uplinkSent, 0, 'new capture resets sent bytes')
+}

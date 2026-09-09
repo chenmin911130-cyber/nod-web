@@ -55,7 +55,8 @@ import { api as authApi, deleteAccount, fetchMe, logout, type Me } from './auth'
 import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
-import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode } from './watch'
+import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
+import { watchStartListenCommand } from './watchReplay'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
 import { shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
@@ -669,6 +670,8 @@ function reducer(state: AppState, action: Action): AppState {
           return { ...state, busy: false, status: quotaLimitText(ev.reason, state.quota as unknown as QuotaFields) }
         case 'attached':
           return state
+        case 'pcm_drained':
+          return state
         default:
           return state
       }
@@ -1139,7 +1142,7 @@ export default function App() {
     if (s.workspaceMode === 'translate' || s.translateOn) {
       unlockSpeech()
     }
-    window.api.send({ type: 'start_listen' })
+    window.api.send(watchStartListenCommand(!!opts?.fromWatch))
   }
   const stopListen = () => {
     listenWanted.current = false
@@ -1574,7 +1577,7 @@ export default function App() {
         syncWorkspace()
         checkPendingRestore()
         if (listenWanted.current) {
-          queueMicrotask(() => api.send({ type: 'start_listen' }))
+          queueMicrotask(() => api.send(watchStartListenCommand(isWatchMicPreferred())))
         }
       }
       if (e.type === 'attached') {
@@ -1592,6 +1595,16 @@ export default function App() {
             })
             .catch(() => undefined)
         }
+      }
+      if (e.type === 'pcm_drained') {
+        pushWatchStatus({
+          capture: '',
+          sessionId: e.id,
+          pcmDrained: true,
+          pcmDrainedCaptureId: e.capture_id,
+          pcmDrainedSessionId: e.id,
+          pcmDrainedByte: e.byte_offset,
+        })
       }
       // Every chunk of the current translate ask re-arms the 25s timeout, so a
       // slow-but-alive stream doesn't time out mid-answer and double-fire.

@@ -16,6 +16,9 @@ export type WatchUiCopy = {
   drafting: string
   starting: string
   couldntStart: string
+  replaying: string
+  diskFull: string
+  drainFailed: string
 }
 
 const COPY: Record<WatchUiLang, WatchUiCopy> = {
@@ -35,6 +38,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: '起草中',
     starting: '正在开始…',
     couldntStart: '无法开始 · 请在 iPhone 打开 Nodpilot',
+    replaying: '正在补传',
+    diskFull: '手表存储已满',
+    drainFailed: '补传未完成',
   },
   en: {
     listening: "I'm listening.",
@@ -52,6 +58,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: 'Drafting',
     starting: 'Starting…',
     couldntStart: "Couldn't start · open Nodpilot on iPhone",
+    replaying: 'Catching up',
+    diskFull: 'Watch storage full',
+    drainFailed: "Couldn't finish sending",
   },
   it: {
     listening: 'Ascolto',
@@ -69,6 +78,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: 'Sto scrivendo',
     starting: 'Avvio…',
     couldntStart: 'Impossibile avviare · apri Nodpilot su iPhone',
+    replaying: 'Invio in corso',
+    diskFull: 'Memoria piena',
+    drainFailed: 'Invio non riuscito',
   },
   es: {
     listening: 'Escuchando',
@@ -86,6 +98,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: 'Redactando',
     starting: 'Iniciando…',
     couldntStart: 'No se pudo iniciar · abre Nodpilot en iPhone',
+    replaying: 'Enviando audio',
+    diskFull: 'Almacenamiento lleno',
+    drainFailed: 'No se pudo enviar',
   },
   fr: {
     listening: "J'écoute",
@@ -103,6 +118,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: 'Rédaction',
     starting: 'Démarrage…',
     couldntStart: 'Impossible de démarrer · ouvre Nodpilot sur iPhone',
+    replaying: 'Envoi en cours',
+    diskFull: 'Stockage plein',
+    drainFailed: 'Envoi impossible',
   },
   de: {
     listening: 'Ich höre zu',
@@ -120,6 +138,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: 'Schreibe…',
     starting: 'Startet…',
     couldntStart: 'Start fehlgeschlagen · Nodpilot auf dem iPhone öffnen',
+    replaying: 'Wird nachgereicht',
+    diskFull: 'Speicher voll',
+    drainFailed: 'Senden fehlgeschlagen',
   },
   pt: {
     listening: 'Ouvindo',
@@ -137,6 +158,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: 'Escrevendo',
     starting: 'Iniciando…',
     couldntStart: 'Não foi possível iniciar · abra o Nodpilot no iPhone',
+    replaying: 'Enviando áudio',
+    diskFull: 'Armazenamento cheio',
+    drainFailed: 'Falha no envio',
   },
   ja: {
     listening: '聞いています',
@@ -154,6 +178,9 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     drafting: '作成中',
     starting: '開始中…',
     couldntStart: '開始できません · iPhoneでNodpilotを開く',
+    replaying: '送信中',
+    diskFull: '容量不足',
+    drainFailed: '送信できませんでした',
   },
 }
 
