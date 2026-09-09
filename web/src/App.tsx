@@ -7,7 +7,7 @@ import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
 import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
-import { keepHistoryMessage, watchDiscardCommand, watchSaveCommand, watchSaveRepeatAction, watchSaveShouldWaitForNotes, watchSaveStatusPayload, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
+import { flushPendingKeepMessage, keepHistoryMessage, watchDiscardCommand, watchKeepNotesWait, watchSaveCommand, watchSaveRepeatAction, watchSaveStatusPayload, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
 import { meetingRailIsPaused } from './meetingPause'
@@ -57,7 +57,7 @@ import { usePhoneChrome } from './phoneChrome'
 import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode } from './watch'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
-import { keepShouldWaitForNotes, shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
+import { shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
 import {
   clearWatchReport,
   markWatchReport,
@@ -1458,7 +1458,7 @@ export default function App() {
         mode: watchStatusMode(state.workspaceMode, state.listenScene),
         langPair: watchLangPair(state.workspaceMode === 'translate' ? state.translateTo : state.notesTranslateTo),
         ...watchSaveStatusPayload({
-          status: historyKept ? 'saved' : saveBook.status,
+          status: saveBook.status,
           liveId: saveBook.liveId,
         }),
       })
@@ -1481,7 +1481,6 @@ export default function App() {
     state.notesTranslateTo,
     saveBook.status,
     saveBook.liveId,
-    historyKept,
   ])
 
   const acceptConsent = () => {
@@ -1812,13 +1811,19 @@ export default function App() {
   const flushPendingKeep = () => {
     const pending = pendingKeepRef.current
     const book = saveBookRef.current
-    if (!pending || !book.liveId || book.status !== 'saving') return
+    const result = flushPendingKeepMessage({
+      pending,
+      liveId: book.liveId,
+      status: book.status,
+      notesAskId: stateRef.current.notesAskId,
+    })
+    if (!pending || (!result.send && !result.parkNotes)) return
     pendingKeepRef.current = null
-    if (pending.waitNotes && keepShouldWaitForNotes(stateRef.current.notesAskId)) {
+    if (result.parkNotes) {
       keepAfterNotes.current = {
         content: pending.content,
         audio: pending.audio,
-        liveId: book.liveId,
+        liveId: book.liveId || '',
         generation: book.generation,
       }
       return
@@ -1886,7 +1891,7 @@ export default function App() {
     commitBook(book)
     keepEpochRef.current = { liveId: book.liveId, generation: book.generation }
     if (phoneRef.current) setSaveBannerOpen(true)
-    const waitNotes = opts?.fromWatch ? watchSaveShouldWaitForNotes() : keepShouldWaitForNotes(stateRef.current.notesAskId)
+    const waitNotes = watchKeepNotesWait(!!opts?.fromWatch, stateRef.current.notesAskId)
     if (!book.liveId) {
       pendingKeepRef.current = { content, audio, waitNotes }
       clearKeepTimer()

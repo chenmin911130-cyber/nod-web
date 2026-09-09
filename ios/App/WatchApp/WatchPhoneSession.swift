@@ -679,13 +679,16 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     private func apply(_ payload: [String: Any], live: Bool) {
-        if payload["ok"] != nil { return }
         if let sessionId = payload["sessionId"] as? String, !sessionId.isEmpty {
             phoneSessionId = sessionId
+            if saving && saveRequestId.isEmpty {
+                saveRequestId = sessionId
+            }
         }
         if let save = payload["save"] as? String {
             applySaveStatus(save, sessionId: (payload["sessionId"] as? String) ?? "")
         }
+        if payload["ok"] != nil { return }
         if let next = payload["mode"] as? String, ["meeting", "lecture", "interview", "translate"].contains(next) {
             phoneModeSeen = true
             if next == mode {
