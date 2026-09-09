@@ -2,6 +2,12 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-09 · #165 复查：移交倒序、Retry 从零重发、join 超时仍取走缓冲
+- 我以为：队列先出、缓冲后拼；Retry 清零 `nextByte` 才能避开 duplicate；`join(2.0)` 后取走缓冲即可。
+- 实际：`_pcm_buf` 是已出队的较早音频，`_q` 是后续；先队列会倒序。手机从 0 重灌，服务端裸 PCM 无偏移，已送 STT 的前段会重复转写和计量。`ws.send()` 仍阻塞时未发帧在 sender 局部变量里，超时取走会漏。
+- 规则：移交先缓冲再队列；Retry 只按 STT 已消费偏移恢复或重取确认，禁止从零重发；sender 未退出不得移交，超时应失败。
+- 涉及：`CloudListener.take_unsent` · `WatchPcmIngest.beginDrain` · `watchIngestRewindForRetry`
+
 ## 2026-09-09 · #165 复查：STT 重连丢未发送缓冲后空 drain 假成功
 - 我以为：回填 `_pcm_buf` 后同一 listener 再 drain 即可；测试替换 socket 覆盖了失败路径。
 - 实际：生产 `_restart_listener` 丢开旧对象、不移交未发送音频；`_pcm_rx_bytes` 仍满，新空队列 `drain()` 成功并发 `pcm_drained`。手机 `nextByte` 不回退，Retry 文件被判 duplicate。

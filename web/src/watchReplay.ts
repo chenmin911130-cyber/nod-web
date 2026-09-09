@@ -7,8 +7,9 @@ Ack layers (delete only after the next layer owns a copy):
 4. Server `pcm_drained` for this capture+session+offset — then Watch may delete,
    then `stop_listen`. Socket send / phone persist is not enough to delete Watch
    copies; drain failure must still have shards to retry. STT reconnect hands
-   off unsent PCM; confirm requires STT-sent bytes to reach the End offset.
-   Drain retry rewinds phone `nextByte` so Watch files are not duplicate.
+   off unsent PCM (buffer then queue) after the sender has exited. Confirm
+   requires STT-sent bytes to reach the End offset. Drain retry re-requests
+   confirmation or resumes from the STT consume offset — never from byte 0.
    Old clients omit `pcm_end`; `stop_listen` stays immediate.
 
 Caps: Watch disk 32 MiB (stop capture, keep files, visible error). Uplink RAM
@@ -239,9 +240,15 @@ export function watchMayDeleteWatchCopy(serverDrained: boolean): boolean {
   return serverDrained
 }
 
-/** Drain retry must re-offer Watch files; socket cursor is not STT consumption. */
-export function watchIngestRewindForRetry(opts: { pcmEndSent: boolean; nextByte: number }): number {
-  return opts.pcmEndSent ? 0 : opts.nextByte
+/** Retry re-requests confirmation, or resumes after STT-consumed bytes. Never rewinds to 0 unless STT sent nothing. */
+export function watchIngestRewindForRetry(opts: {
+  pcmEndSent: boolean
+  nextByte: number
+  sttTxByte?: number
+}): number {
+  if (!opts.pcmEndSent) return opts.nextByte
+  if (opts.sttTxByte == null) return opts.nextByte
+  return Math.min(opts.nextByte, Math.max(0, opts.sttTxByte))
 }
 
 export function watchMayDeletePhoneCopy(uplinkSent: boolean): boolean {
@@ -361,10 +368,12 @@ export class WatchReplayIngest {
     }
   }
 
-  rewindForRetry(): void {
-    this.nextByte = watchIngestRewindForRetry({ pcmEndSent: true, nextByte: this.nextByte })
-    this.uplinkQueued = 0
-    this.uplinkSent = 0
+  rewindForRetry(sttTxByte?: number): void {
+    this.nextByte = watchIngestRewindForRetry({
+      pcmEndSent: true,
+      nextByte: this.nextByte,
+      sttTxByte,
+    })
     this.pcmEndSent = false
   }
 

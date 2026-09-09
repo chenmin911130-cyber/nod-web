@@ -1821,20 +1821,35 @@ class CloudListener:
         self._drain.set()
         return self._drained.wait(timeout)
 
-    def take_unsent(self) -> bytes:
-        """PCM that never reached STT. Stops the sender first so in-flight frames return to the buffer."""
+    def take_unsent(self, timeout: float = 2.0) -> bytes | None:
+        """Earlier dequeued audio (`_pcm_buf`) then later `_q`. None if the sender is still in flight."""
         self._stop.set()
+        ws = self._ws
+        self._ws = None
+        if ws is not None:
+            sock = getattr(ws, "sock", None)
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            try:
+                ws.close()
+            except Exception:
+                pass
         t = getattr(self, "_sender_thread", None)
         if t is not None and t is not threading.current_thread():
-            t.join(2.0)
+            t.join(timeout)
+            if t.is_alive():
+                return None
         out = bytearray()
+        out.extend(self._pcm_buf)
+        self._pcm_buf.clear()
         while True:
             try:
                 out.extend(self._q.get_nowait())
             except queue.Empty:
                 break
-        out.extend(self._pcm_buf)
-        self._pcm_buf.clear()
         return bytes(out)
 
     def seed_unsent(self, pcm: bytes) -> None:
@@ -2763,6 +2778,8 @@ class Session:
         if not callable(take):
             return
         extra = take()
+        if extra is None:
+            return
         if not isinstance(extra, (bytes, bytearray)) or not extra:
             return
         prev = getattr(self, "_stt_pending_pcm", b"") or b""

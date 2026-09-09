@@ -302,13 +302,39 @@ class SttSocketDrainTests(unittest.TestCase):
         t.join(0.5)
         self.assertTrue(ok)
 
-    def test_take_unsent_returns_queue_then_buf(self) -> None:
+    def test_take_unsent_returns_buf_then_queue(self) -> None:
         lst = _listener()
         lst._q.put_nowait(b"\x02" * 50)
         lst._pcm_buf.extend(b"\x01" * 100)
         got = lst.take_unsent()
-        self.assertEqual(got, b"\x02" * 50 + b"\x01" * 100)
+        self.assertEqual(got, b"\x01" * 100 + b"\x02" * 50)
         self.assertEqual(bytes(lst._pcm_buf), b"")
+
+    def test_take_unsent_keeps_failure_when_sender_blocked(self) -> None:
+        lst = _listener()
+        started = threading.Event()
+
+        def blocking_send(*_a, **_k):
+            started.set()
+            time.sleep(3.5)
+            raise RuntimeError("still sending")
+
+        ws = _connected_ws()
+        ws.send.side_effect = blocking_send
+        lst._ws = ws
+        lst._stop.clear()
+        payload = b"\x03" * 1600
+        lst._pcm_buf.extend(payload)
+        t = threading.Thread(target=lst._sender, daemon=True)
+        lst._sender_thread = t
+        t.start()
+        lst._drain.set()
+        self.assertTrue(started.wait(1.0))
+        got = lst.take_unsent(timeout=2.0)
+        self.assertIsNone(got)
+        self.assertTrue(t.is_alive())
+        lst._stop.set()
+        t.join(5.0)
 
     def test_restart_without_unsent_does_not_emit_pcm_drained(self) -> None:
         sess = _session()
@@ -343,16 +369,18 @@ class SttSocketDrainTests(unittest.TestCase):
         sess.usage_session_id = "sess-live"
         sess._listen_wanted = True
         sess.pipeline._keys["ASSEMBLYAI_API_KEY"] = "k"
-        payload = b"\x07" * 1600
+        payload_early = b"\x07" * 1600
+        payload_late = b"\x08" * 1600
         old = _listener()
-        old._pcm_buf.extend(payload)
+        old._pcm_buf.extend(payload_early)
+        old._q.put_nowait(payload_late)
         old._stop.clear()
         sess._listener = old
-        sess._pcm_rx_bytes = 1600
+        sess._pcm_rx_bytes = 3200
         sess._stt_tx_bytes = 0
         sess._pcm_end_id = "sess-live"
         sess._pcm_end_capture = "cap-a"
-        sess._pcm_end_offset = 1600
+        sess._pcm_end_offset = 3200
         events: list[dict] = []
         sess.emit = events.append
 
@@ -386,12 +414,14 @@ class SttSocketDrainTests(unittest.TestCase):
         drained = [e for e in events if e.get("type") == "pcm_drained"]
         self.assertEqual(
             drained,
-            [{"type": "pcm_drained", "id": "sess-live", "capture_id": "cap-a", "byte_offset": 1600}],
+            [{"type": "pcm_drained", "id": "sess-live", "capture_id": "cap-a", "byte_offset": 3200}],
         )
         sent = [
             c.args[0]
             for c in new._ws.send.call_args_list
             if c.args and isinstance(c.args[0], (bytes, bytearray))
         ]
-        self.assertTrue(any(frame[: len(payload)] == payload for frame in sent))
-        self.assertGreaterEqual(sess._stt_tx_bytes, 1600)
+        joined = b"".join(sent)
+        self.assertEqual(joined[:1600], payload_early)
+        self.assertEqual(joined[1600:3200], payload_late)
+        self.assertGreaterEqual(sess._stt_tx_bytes, 3200)
