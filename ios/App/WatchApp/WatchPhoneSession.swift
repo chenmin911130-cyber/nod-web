@@ -282,10 +282,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         savedAck = false
         saving = true
         saveFailed = false
-        saveRequestId = phoneSessionId
+        saveRequestId = Self.savePinnedId(pinnedId: saveRequestId, phoneSessionId: phoneSessionId)
         hint = WatchCopy.saving
-        send(action: "save")
         armSaveWait()
+        guard Self.saveShouldSend(saveRequestId) else { return }
+        send(action: "save")
     }
 
     func declineSave() {
@@ -445,6 +446,27 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
 
     static func liveStreamShouldReset(listening: Bool, reachable: Bool) -> Bool {
         listening && !reachable
+    }
+
+    /// First Save pins phoneSessionId. Retry keeps that pin even if the phone moved on.
+    static func savePinnedId(pinnedId: String, phoneSessionId: String) -> String {
+        pinnedId.isEmpty ? phoneSessionId : pinnedId
+    }
+
+    static func saveShouldSend(_ pinnedId: String) -> Bool {
+        !pinnedId.isEmpty
+    }
+
+    static func saveWireMessage(sessionId: String) -> String? {
+        sessionId.isEmpty ? nil : sessionId
+    }
+
+    /// Saving with no pin yet: latch the incoming id and send Save.
+    static func savePinIncoming(saving: Bool, pinnedId: String, incomingSessionId: String) -> (pinnedId: String, send: Bool) {
+        if saving, pinnedId.isEmpty, !incomingSessionId.isEmpty {
+            return (incomingSessionId, true)
+        }
+        return (pinnedId, false)
     }
 
     /// Start / Record carry the Watch chip. Pause / Stop / leftovers must not.
@@ -644,6 +666,10 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if Self.commandShouldSendMode(action), phoneModeSeen {
             payload["mode"] = mode
         }
+        if action == "save" {
+            guard let wire = Self.saveWireMessage(sessionId: saveRequestId) else { return }
+            payload["sessionId"] = wire
+        }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         if session.isReachable {
@@ -681,8 +707,10 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     private func apply(_ payload: [String: Any], live: Bool) {
         if let sessionId = payload["sessionId"] as? String, !sessionId.isEmpty {
             phoneSessionId = sessionId
-            if saving && saveRequestId.isEmpty {
-                saveRequestId = sessionId
+            let pin = Self.savePinIncoming(saving: saving, pinnedId: saveRequestId, incomingSessionId: sessionId)
+            if pin.send {
+                saveRequestId = pin.pinnedId
+                send(action: "save")
             }
         }
         if let save = payload["save"] as? String {

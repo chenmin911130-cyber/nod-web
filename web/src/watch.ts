@@ -1,7 +1,7 @@
 import { registerPlugin } from '@capacitor/core'
 import { isNativeApp } from './native'
 
-type WatchCommand = { action?: string; mode?: string }
+type WatchCommand = { action?: string; mode?: string; sessionId?: string }
 type WatchPcm = { data?: string }
 
 type WatchHistItem = { id: string; title: string; text: string }
@@ -159,6 +159,17 @@ export function watchLiveStreamShouldReset(listening: boolean, reachable: boolea
   return listening && !reachable
 }
 
+/** WatchConnectivity command as JS receives it. Missing sessionId stays empty. */
+export function watchCommandFromBridge(ev: {
+  action?: string
+  sessionId?: string
+}): { action: ReturnType<typeof watchAction>; sessionId: string } {
+  return {
+    action: watchAction(ev.action),
+    sessionId: typeof ev.sessionId === 'string' ? ev.sessionId : '',
+  }
+}
+
 /** Start / Record carry the Watch chip. Pause / Stop / leftovers must not. */
 export function watchCommandShouldSendMode(action: string): boolean {
   return action === 'start' || action === 'record'
@@ -239,7 +250,7 @@ export function installWatchRemote(handlers: {
   onPause: () => void
   onResume: () => void
   onSpeak: () => void
-  onSave: () => void
+  onSave: (sessionId: string) => void
   onDiscard: () => void
   onTtsLive: () => void
   onTtsTap: () => void
@@ -252,7 +263,7 @@ export function installWatchRemote(handlers: {
     await NodWatch.ready()
     const command = await NodWatch.addListener('command', (ev) => {
       if (gone) return
-      const action = watchAction(ev.action)
+      const { action, sessionId } = watchCommandFromBridge(ev)
       const mode = watchListenMode(ev.mode)
       if (action === 'start') {
         handlers.onStart(mode || undefined)
@@ -271,7 +282,7 @@ export function installWatchRemote(handlers: {
         setPreferWatchMic(false)
       }
       if (action === 'speak') handlers.onSpeak()
-      if (action === 'save') handlers.onSave()
+      if (action === 'save') handlers.onSave(sessionId)
       if (action === 'discard') handlers.onDiscard()
       if (action === 'tts_live') handlers.onTtsLive()
       if (action === 'tts_tap') handlers.onTtsTap()

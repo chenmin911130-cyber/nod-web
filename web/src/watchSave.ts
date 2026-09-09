@@ -51,19 +51,50 @@ export function flushPendingKeepMessage(opts: {
   }
 }
 
-/** Bind a late sessionId onto an in-flight Watch Save that started with no id. */
-export function watchSaveRequestIdAfterSession(opts: {
+/** First Save pins phoneSessionId. Retry keeps that pin even if the phone moved on. */
+export function watchSavePinnedId(opts: { pinnedId: string; phoneSessionId: string }): string {
+  return opts.pinnedId || opts.phoneSessionId
+}
+
+/** WatchConnectivity Save body. Missing id must not go on the wire. */
+export function watchSaveWireMessage(sessionId: string): { action: 'save'; sessionId: string } | null {
+  if (!sessionId) return null
+  return { action: 'save', sessionId }
+}
+
+/**
+ * Saving with no pin yet: latch the incoming id and send Save. Already pinned
+ * ids stay put. This is not an ack — Saved still needs history_kept.
+ */
+export function watchSavePinIncoming(opts: {
   saving: boolean
-  requestId: string
+  pinnedId: string
   incomingSessionId: string
-}): string {
-  if (opts.incomingSessionId && opts.saving && !opts.requestId) return opts.incomingSessionId
-  return opts.requestId
+}): { pinnedId: string; send: boolean } {
+  if (!opts.saving || opts.pinnedId || !opts.incomingSessionId) {
+    return { pinnedId: opts.pinnedId, send: false }
+  }
+  return { pinnedId: opts.incomingSessionId, send: true }
+}
+
+/**
+ * Phone keep target. Empty Watch id never falls back to the current session.
+ * A delayed Save after the phone switched still keeps the original id.
+ */
+export function watchSaveKeepTarget(opts: {
+  requestedId: string
+  liveId: string | null
+}): { keepId: string | null; adopt: boolean } {
+  if (!opts.requestedId) return { keepId: null, adopt: false }
+  if (!opts.liveId || opts.liveId === opts.requestedId) {
+    return { keepId: opts.requestedId, adopt: true }
+  }
+  return { keepId: opts.requestedId, adopt: false }
 }
 
 /**
  * Watch apply must run this even when the payload is a WatchBridge `ok` reply.
- * Empty ids never wildcard-match.
+ * Empty / unpinned ids never wildcard-match a late sessionId into Saved.
  */
 export function watchApplySavePayload(opts: {
   saving: boolean
@@ -71,15 +102,10 @@ export function watchApplySavePayload(opts: {
   payload: { ok?: unknown; save?: string; sessionId?: string }
 }): { requestId: string; ack: 'ignore' | 'saved' | 'failed' } {
   const incomingSessionId = opts.payload.sessionId || ''
-  const requestId = watchSaveRequestIdAfterSession({
-    saving: opts.saving,
-    requestId: opts.requestId,
-    incomingSessionId,
-  })
   return {
-    requestId,
+    requestId: opts.requestId,
     ack: watchSaveAckApplies({
-      requestedId: requestId,
+      requestedId: opts.requestId,
       incomingSave: opts.payload.save || '',
       incomingSessionId,
     }),

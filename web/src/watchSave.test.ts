@@ -1,5 +1,6 @@
 import { keepShouldWaitForNotes } from './recordReport'
 import { applyKeepAck, applyKeepFailed, beginSave, bindLiveId, emptySaveBook } from './sessionSave'
+import { watchCommandFromBridge } from './watch'
 import {
   flushPendingKeepMessage,
   keepHistoryMessage,
@@ -8,10 +9,13 @@ import {
   watchKeepNotesWait,
   watchSaveAckApplies,
   watchSaveCommand,
+  watchSaveKeepTarget,
+  watchSavePinIncoming,
+  watchSavePinnedId,
   watchSaveRepeatAction,
-  watchSaveRequestIdAfterSession,
   watchSaveShouldWaitForNotes,
   watchSaveStatusPayload,
+  watchSaveWireMessage,
   watchSavedAckMs,
   watchSaveTimeoutMs,
   watchStopShouldAutoKeepHistory,
@@ -142,12 +146,63 @@ eq(watchKeepNotesWait(false, 'ask-1'), true, 'phone Save with Notes in flight st
 }
 
 {
-  eq(watchSaveRequestIdAfterSession({ saving: true, requestId: '', incomingSessionId: 'live-a' }), 'live-a', 'in-flight Watch Save latches a late sessionId')
-  eq(watchApplySavePayload({
-    saving: true,
-    requestId: '',
-    payload: { ok: true, save: 'saved', sessionId: 'live-a' },
-  }).ack, 'saved', 'late sessionId on an ok-reply can complete Saved')
+  eq(watchSaveWireMessage(''), null, 'Save without sessionId must not go on the wire')
+  eq(watchSaveWireMessage('live-a'), { action: 'save', sessionId: 'live-a' }, 'Save message carries the pinned sessionId')
+  eq(watchCommandFromBridge({ action: 'save' }), { action: 'save', sessionId: '' }, 'Bridge command with no sessionId stays empty')
+  eq(
+    watchCommandFromBridge(watchSaveWireMessage('live-a')!),
+    { action: 'save', sessionId: 'live-a' },
+    'Watch send → Bridge command keeps the same sessionId',
+  )
+  eq(
+    watchSaveKeepTarget({
+      requestedId: watchCommandFromBridge({ action: 'save' }).sessionId,
+      liveId: 'live-b',
+    }).keepId,
+    null,
+    'missing sessionId must not save the current phone session',
+  )
+}
+
+{
+  const pinned = watchSavePinnedId({ pinnedId: '', phoneSessionId: 'live-a' })
+  eq(pinned, 'live-a', 'first Save pins the phone session id')
+  eq(watchSavePinnedId({ pinnedId: pinned, phoneSessionId: 'live-b' }), 'live-a', 'Retry keeps the first pin, not the current phone session')
+  const late = watchSavePinIncoming({ saving: true, pinnedId: '', incomingSessionId: 'live-a' })
+  eq(late, { pinnedId: 'live-a', send: true }, 'empty first Save waits, then sends once the id arrives')
+  eq(
+    watchSavePinIncoming({ saving: true, pinnedId: 'live-a', incomingSessionId: 'live-b' }),
+    { pinnedId: 'live-a', send: false },
+    'a later phone sessionId must not replace the pin or send a second Save',
+  )
+  eq(
+    watchApplySavePayload({
+      saving: true,
+      requestId: '',
+      payload: { ok: true, save: 'saved', sessionId: 'live-a' },
+    }).ack,
+    'ignore',
+    'unpinned Save must not complete Saved from a late status id',
+  )
+}
+
+{
+  const pinned = watchSavePinnedId({ pinnedId: '', phoneSessionId: 'live-a' })
+  const delayed = watchCommandFromBridge(watchSaveWireMessage(pinned)!)
+  const phoneNow = 'live-b'
+  const target = watchSaveKeepTarget({ requestedId: delayed.sessionId, liveId: phoneNow })
+  eq(target, { keepId: 'live-a', adopt: false }, 'delayed Save after the phone switched still targets the original id')
+  const keep = keepHistoryMessage({ content: true, audio: true, id: target.keepId || undefined })
+  eq(keep.id, 'live-a', 'phone keep_history uses the Watch id, not the current session')
+  eq(keep.id === phoneNow, false, 'switched session is not kept')
+  const retryPin = watchSavePinnedId({ pinnedId: pinned, phoneSessionId: phoneNow })
+  const retry = watchCommandFromBridge(watchSaveWireMessage(retryPin)!)
+  eq(retry.sessionId, 'live-a', 'Retry wire still names the original id')
+  eq(
+    watchSaveKeepTarget({ requestedId: retry.sessionId, liveId: phoneNow }),
+    { keepId: 'live-a', adopt: false },
+    'Retry after a switch still keeps the original id',
+  )
 }
 
 {
@@ -162,9 +217,10 @@ eq(watchKeepNotesWait(false, 'ask-1'), true, 'phone Save with Notes in flight st
     payload: failFace,
   }).ack, 'failed', 'Watch maps matching failed to Couldn\'t save')
   eq(watchSaveRepeatAction({ kept: false, status: book.status }), 'start', 'failed Watch Save may Retry')
-  book = beginSave(book, 'live-a')
-  const retried = keepHistoryMessage({ content: true, audio: true, id: book.liveId || undefined })
-  eq(retried.id, 'live-a', 'Retry keep_history stays on the same id')
+  const retryId = watchSavePinnedId({ pinnedId: 'live-a', phoneSessionId: book.liveId || '' })
+  book = beginSave(book, retryId)
+  const retried = keepHistoryMessage({ content: true, audio: true, id: retryId })
+  eq(retried.id, 'live-a', 'Retry keep_history stays on the pinned id')
 }
 
 {

@@ -2,6 +2,12 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-09 · #164 Save 消息不带 sessionId，手机保存当前会话
+- 我以为：手表本地 pin `saveRequestId`，手机 `keep_history` 当前 `liveId`，迟到 `sessionId` 闩进 requestId 就能 Saved。
+- 实际：`send(action: "save")` 和 Bridge `command` 都不带 sessionId；JS `onSave()` 无参；Retry 每次 `confirmSave` 重读 `phoneSessionId`。请求延迟期间手机换场，会 keep 错场。
+- 规则：首次 Save 钉死目标 ID 并写入 WCSession / Bridge / JS command；手机只 keep 该 ID，缺 ID 不得保存当前会话；Retry 沿用钉死的 ID，禁止重读当前会话。
+- 涉及：`WatchPhoneSession.send` · `WatchBridge.emit` · `watch.ts onSave` · `saveLiveSession`
+
 ## 2026-09-09 · #171 补传审查只看入口帧率，漏了下游实时音频约束
 - 我以为：把补传限制在 `WS_FRAMES_PER_SEC=40` 以内，就补齐了发送节奏约束；没有继续核对 AssemblyAI 的音频时长与墙钟约束。
 - 实际：Bundle 67 用户报麦已开但不转写、自动停止。生产 2026-09-09 00:57:55Z `/ws/audio` accepted，随后反复收到 AssemblyAI 3007。官方文档列出两类原因：单块不在 50–1000ms 内，或音频发送快于实时。代码 `frameBytes=3200` 为 100ms，积压时按 40fps 补发允许约 4 倍实时；`scheduleFlush` 也可发不足 50ms 的尾块。当前日志未落完整 Error，尚不能判定此次具体触发哪一种。服务端 `_on_stt_drop` 超过 6 次会停听。
