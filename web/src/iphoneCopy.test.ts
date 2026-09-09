@@ -267,5 +267,7 @@ eq(keptSaveRow.label, 'Saved', 'kept Save row says Saved')
 eq(keptSaveRow.hint, '', 'kept Save row does not keep the disabled hint')
 eq(keptSaveRow.trailing, 'View in History', 'kept Save row trails View in History')
 eq(keptSaveRow.disabled, false, 'kept Save row stays tappable')
+eq(IPHONE_COPY.uplinkUnavailable, 'Background recording is unavailable. Reopen the app and try again.', 'missing native uplink is a short reopen notice')
+eq(IPHONE_COPY.uplinkFailed, 'Background recording could not start. You can still record while the app is open.', 'uplink connect failure keeps foreground recording')
 
 console.log('iphoneCopy.test.ts ok')

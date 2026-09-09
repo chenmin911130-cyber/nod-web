@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { statusIsAmbient } from '../statusToast'
+import { statusIsStickyUplink, statusShouldOverlayToast } from '../statusToast'
 
 interface Props {
   text: string
@@ -10,7 +10,7 @@ export default function StatusToast({ text }: Props) {
   const [on, setOn] = useState(false)
 
   useEffect(() => {
-    if (statusIsAmbient(text)) return
+    if (!statusShouldOverlayToast(text)) return
     setMsg(text)
     setOn(true)
   }, [text])
@@ -28,6 +28,15 @@ export default function StatusToast({ text }: Props) {
   return (
     <div className="status-toast" role="status">
       {msg}
+    </div>
+  )
+}
+
+export function UplinkStatusBanner({ text }: Props) {
+  if (!statusIsStickyUplink(text)) return null
+  return (
+    <div className="uplink-status-banner" role="status">
+      {text}
     </div>
   )
 }

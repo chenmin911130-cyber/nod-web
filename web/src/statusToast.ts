@@ -1,3 +1,5 @@
+import { IPHONE_COPY } from './iphoneCopy'
+
 /** Status strings that must not float over the phone title bar. */
 export function statusIsAmbient(text: string): boolean {
   const t = text.trim()
@@ -8,4 +10,21 @@ export function statusIsAmbient(text: string): boolean {
   if (t.startsWith('Mode ·')) return true
   if (/^Opened .+ session$/.test(t)) return true
   return false
+}
+
+export function statusIsStickyUplink(text: string): boolean {
+  const t = text.trim()
+  return t === IPHONE_COPY.uplinkUnavailable || t === IPHONE_COPY.uplinkFailed
+}
+
+export function statusShouldOverlayToast(text: string): boolean {
+  return !statusIsAmbient(text) && !statusIsStickyUplink(text)
+}
+
+/** Keep a capability notice until uplink recovers or a later non-ambient status replaces it. */
+export function nextStatusText(prev: string, incoming: string): string {
+  const next = incoming.trim()
+  if (!next) return ''
+  if (statusIsStickyUplink(prev) && statusIsAmbient(next)) return prev
+  return incoming
 }

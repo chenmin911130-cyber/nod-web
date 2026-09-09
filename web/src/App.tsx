@@ -46,7 +46,8 @@ import { doneAffectsInterview } from './interviewDone'
 import AnswerPane from './components/AnswerPane'
 import ListenPane from './components/ListenPane'
 import TranslatePane from './components/TranslatePane'
-import StatusToast from './components/StatusToast'
+import StatusToast, { UplinkStatusBanner } from './components/StatusToast'
+import { nextStatusText } from './statusToast'
 import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
 import { api as authApi, deleteAccount, fetchMe, logout, type Me } from './auth'
@@ -418,7 +419,7 @@ function reducer(state: AppState, action: Action): AppState {
           }
         }
         case 'status':
-          return { ...state, status: ev.text }
+          return { ...state, status: nextStatusText(state.status, ev.text) }
         case 'partial': {
           const text = ev.text ?? ''
           if (state.workspaceMode === 'translate' && state.translateFrom !== 'auto') {
@@ -635,10 +636,10 @@ function reducer(state: AppState, action: Action): AppState {
             if (i >= 0) {
               const turns = state.turns.slice()
               turns[i] = { ...turns[i], a: msg }
-              return { ...state, turns, status: msg, busy: false }
+              return { ...state, turns, status: nextStatusText(state.status, msg), busy: false }
             }
           }
-          return { ...state, status: msg, busy: false }
+          return { ...state, status: nextStatusText(state.status, msg), busy: false }
         }
         case 'auth_required':
           if (location.hostname !== '127.0.0.1' && location.hostname !== 'localhost') {
@@ -3353,6 +3354,7 @@ export default function App() {
             : undefined
         }
       />
+      <UplinkStatusBanner text={state.status} />
       <HistoryPane open={historyOpen} onClose={() => setHistoryOpen(false)} onRestore={restoreHistory} />
       <AccountPane
         open={accountOpen}
