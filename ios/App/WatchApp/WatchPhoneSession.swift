@@ -28,6 +28,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var mode = "meeting"
     @Published var draining = false
     @Published var drainFailed = false
+    @Published var pcmStalled = false
 
     private var localModeHeld = false
     private var phoneModeSeen = false
@@ -287,6 +288,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         saveAfterDrain = false
         drainFailed = false
         pcmDrained = false
+        pcmStalled = false
         pcmStore.freeze()
         draining = true
         hint = WatchCopy.replaying
@@ -339,6 +341,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         draining = false
         drainFailed = false
         pcmDrained = false
+        pcmStalled = false
         pendingSaveOffer = false
         saveAfterDrain = false
         original = ""
@@ -758,6 +761,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     func retryDrain() {
         drainFailed = false
         pcmDrained = false
+        pcmStalled = false
         draining = true
         hint = WatchCopy.replaying
         lastTransferAt.removeAll()
@@ -905,6 +909,17 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 maybeCompleteDrain()
             }
         }
+        if Self.flag(payload, "pcmStalled") {
+            let stallSession = (payload["pcmStallSessionId"] as? String) ?? ""
+            if stallSession.isEmpty || phoneSessionId.isEmpty || stallSession == phoneSessionId {
+                let message = (payload["pcmStallText"] as? String)
+                    ?? "Recording incomplete — audio may be missing"
+                pcmStalled = true
+                if !message.isEmpty, !offeringSave, !savedAck, !saving, !saveFailed, !starting {
+                    hint = message
+                }
+            }
+        }
         if let save = payload["save"] as? String {
             applySaveStatus(save, sessionId: (payload["sessionId"] as? String) ?? "")
         }
@@ -923,7 +938,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let capture = payload["capture"] as? String {
             syncFromCapture(capture)
         }
-        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck, !saving, !saveFailed, !starting, !localWatchMic, !draining, !drainFailed {
+        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck, !saving, !saveFailed, !starting, !localWatchMic, !draining, !drainFailed, !pcmStalled {
             self.hint = hint
         }
         if let original = payload["original"] as? String {

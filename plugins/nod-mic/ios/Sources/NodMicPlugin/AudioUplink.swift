@@ -488,24 +488,37 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
 
     private func handleAudioText(_ text: String) {
         guard let data = text.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              (obj["type"] as? String) == "pcm_drained"
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
-        let id = obj["id"] as? String ?? ""
-        let capture = obj["capture_id"] as? String ?? obj["captureId"] as? String ?? ""
-        let offset: Int
-        if let n = obj["byte_offset"] as? Int {
-            offset = n
-        } else if let n = obj["byte_offset"] as? Double {
-            offset = Int(n)
-        } else {
-            offset = Int(obj["byte_offset"] as? String ?? "") ?? 0
+        switch obj["type"] as? String {
+        case "pcm_drained":
+            let id = obj["id"] as? String ?? ""
+            let capture = obj["capture_id"] as? String ?? obj["captureId"] as? String ?? ""
+            let offset: Int
+            if let n = obj["byte_offset"] as? Int {
+                offset = n
+            } else if let n = obj["byte_offset"] as? Double {
+                offset = Int(n)
+            } else {
+                offset = Int(obj["byte_offset"] as? String ?? "") ?? 0
+            }
+            NotificationCenter.default.post(
+                name: Notification.Name("nod.watch.pcm.serverDrained"),
+                object: nil,
+                userInfo: ["sessionId": id, "captureId": capture, "byteOffset": offset]
+            )
+        case "pcm_stall":
+            NotificationCenter.default.post(
+                name: Notification.Name("nod.watch.pcm.serverStalled"),
+                object: nil,
+                userInfo: [
+                    "sessionId": obj["id"] as? String ?? "",
+                    "text": obj["text"] as? String ?? "",
+                ]
+            )
+        default:
+            break
         }
-        NotificationCenter.default.post(
-            name: Notification.Name("nod.watch.pcm.serverDrained"),
-            object: nil,
-            userInfo: ["sessionId": id, "captureId": capture, "byteOffset": offset]
-        )
     }
 
     private func handleDrop() {

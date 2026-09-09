@@ -1097,9 +1097,13 @@ class HandoffConcurrencyTests(unittest.TestCase):
         sess.push_pcm(b"\xab" * 1600)
         # 1) The failure is RETAINED as session state (queryable after park) ...
         self.assertTrue(sess._pcm_stall_reported)
-        # ... and is pushed over the native-reachable channel, not silently dropped.
+        # ... and is pushed over the native-reachable channel as a session-identity
+        # pcm_stall frame (not a dropped generic error), so the device can route it.
         native.assert_called_once()
-        self.assertEqual(native.call_args[0][0]["type"], "error")
+        sent = native.call_args[0][0]
+        self.assertEqual(sent["type"], "pcm_stall")
+        self.assertEqual(sent["id"], "sess-live")
+        self.assertIn("incomplete", sent["text"])
         # 2) The already-buffered original audio is NOT clobbered by the overflow.
         self.assertEqual(len(sess._pcm_hold), STT_PCM_HOLD_MAX)
         # 3) Reconnect: re-emit the retained failure so the user (re)sees it.
@@ -1126,4 +1130,55 @@ class HandoffConcurrencyTests(unittest.TestCase):
             [e for e in events[before:] if e.get("type") == "pcm_drained"],
             [],
             "session claimed complete success after an overflow drop",
+        )
+
+
+    def test_overflow_stall_survives_recovery_frames_and_reattach(self) -> None:
+        """Fable follow-up #1: a later successful frame must NOT clear the incomplete
+        state. Overflow -> recovery -> a real frame arrives -> reattach/End: the
+        failure stays visible and no pcm_drained is fabricated."""
+        sess = self._live_session()
+        sess._listener = None
+        sess._handoff_listener = None
+        sess._pcm_hold = bytearray(STT_PCM_HOLD_MAX)
+        native = mock.Mock()
+        sess._send_audio_text = native
+        # Overflow marks the session incomplete.
+        sess.push_pcm(b"\xac" * 1600)
+        self.assertTrue(sess._pcm_stall_reported)
+        native.reset_mock()
+        # Recovery: a new listener is installed and the hold is flushed to it,
+        # then a real frame arrives through the normal path.
+        lst = mock.Mock()
+        lst.drain.return_value = True
+        lst.take_unsent.return_value = b""
+        sess._listener = lst
+        sess._pcm_hold = bytearray()
+        sess._pcm_rx_bytes = 1600
+        sess._stt_tx_bytes = 3200
+        sess.push_pcm(b"\xad" * 1600)
+        # The incomplete state must persist after the recovery frame.
+        self.assertTrue(
+            sess._pcm_stall_reported,
+            "a successful frame after recovery cleared the incomplete state",
+        )
+        # Reattach still re-announces the failure.
+        events: list[dict] = []
+        sess.emit = events.append
+        sess.reattach()
+        self.assertTrue(
+            any(e.get("type") == "error" for e in events),
+            f"stall not re-emitted on reattach after recovery; events={events!r}",
+        )
+        # End must not fabricate a drain over a dropped window (the stall guard,
+        # not just the rx undercount, blocks it).
+        sess._pcm_end_id = "sess-live"
+        sess._pcm_end_capture = "cap-a"
+        sess._pcm_end_offset = 3200
+        before = len(events)
+        sess._finish_pcm_end_if_ready()
+        self.assertEqual(
+            [e for e in events[before:] if e.get("type") == "pcm_drained"],
+            [],
+            "End fabricated pcm_drained after an overflow drop",
         )

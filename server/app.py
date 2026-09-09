@@ -2638,7 +2638,10 @@ class Session:
             return
         if not self._deliver_pcm(pcm):
             return
-        self._pcm_stall_reported = False
+        # NOTE: _pcm_stall_reported is deliberately NOT reset here. Once a session
+        # drops audio under hold overflow, it is "incomplete" for its whole lifetime;
+        # a later successful frame must not re-arm the End drain or hide the failure.
+        # It is cleared only when a fresh listen session opens (resume=False).
         self._finish_pcm_end_if_ready()
         self._maybe_stop_forgotten_listen()
 
@@ -2945,13 +2948,18 @@ class Session:
             return
         self._pcm_stall_reported = True
         logging.getLogger("nod").warning("stt pcm hold overflow: audio rail stalled")
-        notice = {"type": "error", "text": "Recording buffer full — audio may be incomplete."}
-        # Retain the failure as session state and reach the device on BOTH channels:
-        # the control emit (which may be a sink while parked) AND the native audio
-        # path (_send_audio_text), so a lock-screen/watch session is notified even
-        # when the control emit is parked. reattach() re-emits it for a reconnect.
-        self.emit(notice)
-        self._send_audio_text(notice)
+        text = "Recording buffer full — audio may be incomplete."
+        # Control channel: a generic error the web/phone control renderer already
+        # understands (may be a no-op sink while the control emit is parked).
+        self.emit({"type": "error", "text": text})
+        # Native-reachable path: carry session identity so the iOS AudioUplink can
+        # route it to the Watch. The iOS side only parses pcm_drained today, so this
+        # frame is a distinct pcm_stall type the native receiver adopts.
+        self._send_audio_text({
+            "type": "pcm_stall",
+            "id": getattr(self, "usage_session_id", "") or "",
+            "text": text,
+        })
 
     def _flush_pcm_hold_into(self, lst: CloudListener) -> None:
         with self._listen_lock():
@@ -3946,6 +3954,7 @@ class Session:
             self._pcm_end_capture = ""
             self._pcm_end_offset = 0
             self._pcm_drain_result = None
+            self._pcm_stall_reported = False
         self._stt_stream_gen = getattr(self, "_stt_stream_gen", 0) + 1
         listen_gen = getattr(self, "_listen_gen", 0)
         stream_gen = self._stt_stream_gen
