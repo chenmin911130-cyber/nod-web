@@ -111,8 +111,10 @@ final class WatchPcmIngest {
             queue: nil
         ) { [weak self] note in
             let n = (note.userInfo?["bytes"] as? Int) ?? 0
+            let capture = note.userInfo?["captureId"] as? String ?? ""
+            let session = note.userInfo?["sessionId"] as? String ?? ""
             self?.queue.async {
-                self?.markSentLocked(n)
+                self?.markSentLocked(n, captureId: capture, sessionId: session)
                 self?.pumpLocked()
             }
         })
@@ -292,8 +294,10 @@ final class WatchPcmIngest {
         }
     }
 
-    private func markSentLocked(_ n: Int) {
+    private func markSentLocked(_ n: Int, captureId: String, sessionId: String) {
         guard n > 0 else { return }
+        if !captureId.isEmpty, !self.captureId.isEmpty, captureId != self.captureId { return }
+        if !sessionId.isEmpty, !self.sessionId.isEmpty, sessionId != self.sessionId { return }
         ackByte = min(nextByte, ackByte + n)
     }
 
@@ -310,11 +314,11 @@ final class WatchPcmIngest {
     }
 
     private func maybeRequestPcmEndLocked() {
-        guard !pcmEndSent, drainLastByte >= 0, !drainSession.isEmpty else { return }
+        guard !pcmEndSent, drainLastByte >= 0, !drainSession.isEmpty, !drainCapture.isEmpty else { return }
         if !drainCapture.isEmpty, drainCapture != captureId { return }
         guard nextByte >= drainLastByte else { return }
         pcmEndSent = true
-        AudioUplink.shared.requestPcmEnd(sessionId: drainSession, byteOffset: drainLastByte)
+        AudioUplink.shared.requestPcmEnd(sessionId: drainSession, byteOffset: drainLastByte, captureId: drainCapture)
     }
 
     private func pumpLocked() {

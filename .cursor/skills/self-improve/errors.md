@@ -2,6 +2,12 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-09 · #165 复审：假成功排空、park 丢确认、Resume 游标归零、删未封片、旧 drained 贴新 capture
+- 我以为：`drain()` 之后一律 `pcm_drained`、控制 WS emit、`_pcm_rx_bytes` 跟 STT 子流走、ack 追上当前片长度即可删、sessionId 足够区分排空。
+- 实际：`drain()==False` / listener 空 / STT socket 未连仍发成功；park 把 emit 换成空 sink 且 reattach 不重放；Pause/Resume 清累计字节，End 永远等不到；`deleteAckedShards` 不排除打开的 FileHandle；`markPcmDrained` 只核 session 再盖上当前 capture，旧确认能放行新录音。
+- 规则：只在 STT 真正排空成功时确认并落可重放结果；累计偏移跟 capture 走、不跟子流重开走；只删已封片；drain 事件必须自带 capture+session+offset，禁止用当前场补标签。
+- 涉及：`Session._finish_pcm_end_if_ready` · `CloudListener._send_stt_frame` · `reattach` · `_open_listener` · `WatchPcmStore.deleteAckedShards` · `WatchBridge.markPcmDrained`
+
 ## 2026-09-09 · #165 审查：双向同步、忙循环、无身份 ack、只等 socket、短尾不发、5 秒内存窗
 - 我以为：ingest `queue.sync` + uplink `tryEnqueue`/`markSent` 同步、`pcmAckByte` 纯数字、socket send completion、160 kB 再落盘，就能完成有序补传和 End 排空。
 - 实际：ingest 与 uplink 互相 `sync` 会死锁；队列满时 `pumpLocked` 立刻重读同一文件；ack 无 capture/session，旧确认能删新片；socket 成功后 `stop` 会截断服务端 `_q`；stash <50ms 永不 flush；当前片在内存最多约 5 秒。

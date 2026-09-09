@@ -242,7 +242,11 @@ final class WatchPcmStore {
 
     private func deleteAckedShards(captureId: String, through ack: Int) {
         guard !captureId.isEmpty else { return }
+        lock.lock()
+        let openSeq = handle != nil ? currentSeq : -1
+        lock.unlock()
         for shard in shardsOnDisk(captureId: captureId, sessionId: "") {
+            if openSeq > 0, shard.seq == openSeq { continue }
             if shard.byteOffset + shard.bytes <= ack {
                 try? fm.removeItem(at: shard.url)
             }

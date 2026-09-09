@@ -54,6 +54,9 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     private var lastSentAudioSeconds: TimeInterval = 0
     private var pcmEndId = ""
     private var pcmEndOffset = 0
+    private var pcmEndCapture = ""
+    private var streamCaptureId = ""
+    private var streamSessionId = ""
 
     private override init() {
         super.init()
@@ -68,6 +71,36 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         ) { [weak self] note in
             guard let data = note.userInfo?["data"] as? Data, !data.isEmpty else { return }
             self?.enqueue(data)
+        }
+        NotificationCenter.default.addObserver(
+            forName: Notification.Name("nod.watch.pcm.bind"),
+            object: nil,
+            queue: nil
+        ) { [weak self] note in
+            let capture = note.userInfo?["captureId"] as? String ?? ""
+            let session = note.userInfo?["sessionId"] as? String ?? ""
+            self?.queue.async {
+                if !capture.isEmpty, capture != self?.streamCaptureId {
+                    self?.pcmEndId = ""
+                    self?.pcmEndCapture = ""
+                    self?.pcmEndOffset = 0
+                }
+                if !capture.isEmpty { self?.streamCaptureId = capture }
+                if !session.isEmpty { self?.streamSessionId = session }
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: Notification.Name("nod.watch.pcm.reset"),
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.queue.async {
+                self?.streamCaptureId = ""
+                self?.streamSessionId = ""
+                self?.pcmEndId = ""
+                self?.pcmEndCapture = ""
+                self?.pcmEndOffset = 0
+            }
         }
     }
 
@@ -145,6 +178,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             self.pendingBytes = 0
             self.bufLock.unlock()
             self.pcmEndId = ""
+            self.pcmEndCapture = ""
             self.pcmEndOffset = 0
         }
     }
@@ -190,11 +224,14 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         }
     }
 
-    func requestPcmEnd(sessionId: String, byteOffset: Int) {
+    func requestPcmEnd(sessionId: String, byteOffset: Int, captureId: String) {
         queue.async { [weak self] in
             guard let self else { return }
             self.pcmEndId = sessionId
+            self.pcmEndCapture = captureId
             self.pcmEndOffset = byteOffset
+            if !captureId.isEmpty { self.streamCaptureId = captureId }
+            if !sessionId.isEmpty { self.streamSessionId = sessionId }
             self.flushTailLocked()
             self.pump()
         }
@@ -244,6 +281,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         pendingBytes = 0
         bufLock.unlock()
         pcmEndId = ""
+        pcmEndCapture = ""
         pcmEndOffset = 0
     }
 
@@ -354,7 +392,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func sendPcmEndIfIdle() {
-        guard !pcmEndId.isEmpty, isConnected, let task, !stopped, !sending else { return }
+        guard !pcmEndId.isEmpty, !pcmEndCapture.isEmpty, isConnected, let task, !stopped, !sending else { return }
         bufLock.lock()
         let idle = pending.isEmpty && stash.isEmpty
         bufLock.unlock()
@@ -362,6 +400,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         let payload: [String: Any] = [
             "type": "pcm_end",
             "id": pcmEndId,
+            "capture_id": pcmEndCapture,
             "byte_offset": pcmEndOffset,
         ]
         guard JSONSerialization.isValidJSONObject(payload),
@@ -374,6 +413,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             self.queue.async {
                 if error == nil {
                     self.pcmEndId = ""
+                    self.pcmEndCapture = ""
                     self.pcmEndOffset = 0
                 }
                 self.sending = false
@@ -394,6 +434,8 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             return
         }
         bufLock.unlock()
+        let consumeCapture = streamCaptureId
+        let consumeSession = streamSessionId
         let frame = sendableFrame(queued)
         sending = true
         task.send(.data(frame)) { [weak self] error in
@@ -415,7 +457,11 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                 NotificationCenter.default.post(
                     name: Notification.Name("nod.uplink.consumed"),
                     object: nil,
-                    userInfo: ["bytes": queued.count]
+                    userInfo: [
+                        "bytes": queued.count,
+                        "captureId": consumeCapture,
+                        "sessionId": consumeSession,
+                    ]
                 )
                 self.pump()
             }
@@ -430,11 +476,36 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                 switch result {
                 case .failure:
                     self.handleDrop()
-                case .success:
+                case .success(let message):
+                    if case .string(let text) = message {
+                        self.handleAudioText(text)
+                    }
                     self.listen(task)
                 }
             }
         }
+    }
+
+    private func handleAudioText(_ text: String) {
+        guard let data = text.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (obj["type"] as? String) == "pcm_drained"
+        else { return }
+        let id = obj["id"] as? String ?? ""
+        let capture = obj["capture_id"] as? String ?? obj["captureId"] as? String ?? ""
+        let offset: Int
+        if let n = obj["byte_offset"] as? Int {
+            offset = n
+        } else if let n = obj["byte_offset"] as? Double {
+            offset = Int(n)
+        } else {
+            offset = Int(obj["byte_offset"] as? String ?? "") ?? 0
+        }
+        NotificationCenter.default.post(
+            name: Notification.Name("nod.watch.pcm.serverDrained"),
+            object: nil,
+            userInfo: ["sessionId": id, "captureId": capture, "byteOffset": offset]
+        )
     }
 
     private func handleDrop() {

@@ -708,6 +708,25 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         return true
     }
 
+    static func pcmDrainApplies(
+        liveCaptureId: String,
+        liveSessionId: String,
+        liveLastByte: Int,
+        drainCaptureId: String,
+        drainSessionId: String,
+        drainByte: Int
+    ) -> Bool {
+        if !pcmAckApplies(
+            liveCaptureId: liveCaptureId,
+            liveSessionId: liveSessionId,
+            ackCaptureId: drainCaptureId,
+            ackSessionId: drainSessionId
+        ) {
+            return false
+        }
+        return drainByte == liveLastByte
+    }
+
     private func maybeCompleteDrain() {
         guard draining, !drainFailed, pcmStore.frozen else { return }
         if pcmStore.lastByte == 0 {
@@ -869,20 +888,19 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             }
         }
         if Self.flag(payload, "pcmDrained") {
-            let ackCapture = (payload["pcmAckCaptureId"] as? String)
-                ?? (payload["captureId"] as? String)
-                ?? pcmStore.captureId
-            let ackSession = (payload["pcmAckSessionId"] as? String)
-                ?? (payload["sessionId"] as? String)
-                ?? ""
-            if Self.pcmAckApplies(
+            let drainCapture = (payload["pcmDrainedCaptureId"] as? String) ?? ""
+            let drainSession = (payload["pcmDrainedSessionId"] as? String) ?? ""
+            let drainByte = Self.intField(payload, "pcmDrainedByte") ?? -1
+            if Self.pcmDrainApplies(
                 liveCaptureId: pcmStore.captureId,
                 liveSessionId: pcmStore.sessionId,
-                ackCaptureId: ackCapture,
-                ackSessionId: ackSession
+                liveLastByte: pcmStore.lastByte,
+                drainCaptureId: drainCapture,
+                drainSessionId: drainSession,
+                drainByte: drainByte
             ) {
                 pcmDrained = true
-                pcmStore.ack(pcmStore.lastByte, captureId: ackCapture, sessionId: ackSession)
+                pcmStore.ack(pcmStore.lastByte, captureId: drainCapture, sessionId: drainSession)
                 maybeCompleteDrain()
             }
         }

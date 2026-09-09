@@ -17,11 +17,14 @@ import {
   watchStartListenCommand,
   watchUplinkCanTake,
   watchPcmAckApplies,
+  watchPcmDrainApplies,
   watchFilePumpStep,
   watchPersistDelayBytes,
   watchEnqueueWaitsForConsume,
   watchPcmEndMessage,
   watchDrainMessage,
+  watchMayDeleteShard,
+  watchConsumedApplies,
 } from './watchReplay'
 
 function eq<T>(got: T, want: T, label: string) {
@@ -226,9 +229,14 @@ eq(
     'old ack must not complete a new capture',
   )
   eq(
-    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 0, serverDrained: true, ...ids }),
+    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 0, serverDrained: true, ...ids, drainByte: 32_000 }),
+    false,
+    'old drain offset must not complete a new capture length',
+  )
+  eq(
+    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 0, serverDrained: true, ...ids, drainByte: lastByte }),
     true,
-    'stop_listen only after server drain of this session',
+    'stop_listen only after server drain of this capture and offset',
   )
   eq(watchSaveTimerMayStart({ draining: true, stopSent: false }), false, '#164 15s timer does not cover replay')
   eq(watchSaveTimerMayStart({ draining: false, stopSent: true }), true, 'Save timer starts once keep_history can send')
@@ -277,6 +285,18 @@ eq(watchPcmAckApplies({ liveCaptureId: 'cap-a', liveSessionId: 'sess-1', ackCapt
 eq(watchPcmAckApplies({ liveCaptureId: 'cap-a', liveSessionId: 'sess-1', ackCaptureId: 'cap-old', ackSessionId: 'sess-1' }), false, 'old capture ack is rejected')
 eq(watchPcmAckApplies({ liveCaptureId: 'cap-a', liveSessionId: 'sess-1', ackCaptureId: 'cap-a', ackSessionId: 'sess-old' }), false, 'old session ack is rejected')
 eq(watchPcmAckApplies({ liveCaptureId: 'cap-a', liveSessionId: 'sess-1', ackCaptureId: '', ackSessionId: 'sess-1' }), false, 'ack without capture is rejected')
+eq(
+  watchPcmDrainApplies({ liveCaptureId: 'cap-b', liveSessionId: 'sess-1', liveLastByte: 6400, drainCaptureId: 'cap-a', drainSessionId: 'sess-1', drainByte: 6400 }),
+  false,
+  'old drain capture is not stamped onto the current capture',
+)
+eq(
+  watchConsumedApplies({ liveCaptureId: 'cap-b', liveSessionId: 'sess-1', consumeCaptureId: 'cap-a', consumeSessionId: 'sess-1' }),
+  false,
+  'delayed consume after capture change does not advance the new cursor',
+)
+eq(watchMayDeleteShard({ openSeq: 2, seq: 2, offset: 160000, bytes: 3200, ack: 163200 }), false, 'open shard is not deleted when ack catches its current length')
+eq(watchMayDeleteShard({ openSeq: 2, seq: 1, offset: 0, bytes: 160000, ack: 160000 }), true, 'sealed fully-acked shard may be deleted')
 
 eq(watchFilePumpStep({ queued: UPLINK_MAX_PENDING_BYTES, parked: 1 }), 'paused', 'full uplink pauses the file pump')
 eq(watchFilePumpStep({ queued: 0, parked: 1 }), 'continue', 'room to send continues the file pump')
@@ -293,8 +313,9 @@ eq(watchFilePumpStep({ queued: 0, parked: 0 }), 'done', 'empty parked list is do
 
 eq(watchPersistDelayBytes(), 0, 'every capture frame is durable; no 5s memory window')
 eq(watchEnqueueWaitsForConsume(), false, 'enqueue must not wait on the consume callback')
-eq(watchPcmEndMessage({ sessionId: 'sess-1', lastByte: 6400 }), { type: 'pcm_end', id: 'sess-1', byte_offset: 6400 }, 'pcm_end binds the usage session')
-eq(watchPcmEndMessage({ sessionId: '', lastByte: 6400 }), null, 'pcm_end without session id is not sent')
+eq(watchPcmEndMessage({ sessionId: 'sess-1', captureId: 'cap-a', lastByte: 6400 }), { type: 'pcm_end', id: 'sess-1', capture_id: 'cap-a', byte_offset: 6400 }, 'pcm_end binds session and capture')
+eq(watchPcmEndMessage({ sessionId: '', captureId: 'cap-a', lastByte: 6400 }), null, 'pcm_end without session id is not sent')
+eq(watchPcmEndMessage({ sessionId: 'sess-1', captureId: '', lastByte: 6400 }), null, 'pcm_end without capture id is not sent')
 eq(
   watchDrainMessage({ lastByte: 6400, captureId: 'cap-a', sessionId: 'sess-1' }),
   { action: 'drain', lastByte: 6400, captureId: 'cap-a', sessionId: 'sess-1' },

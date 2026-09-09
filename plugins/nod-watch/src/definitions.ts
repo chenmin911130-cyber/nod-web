@@ -16,6 +16,9 @@ export interface NodWatchPlugin {
     save?: string
     sessionId?: string
     pcmDrained?: boolean
+    pcmDrainedCaptureId?: string
+    pcmDrainedSessionId?: string
+    pcmDrainedByte?: number
     pcmAckCaptureId?: string
     pcmAckSessionId?: string
   }): Promise<void>

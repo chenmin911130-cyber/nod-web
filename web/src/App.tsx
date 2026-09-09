@@ -1601,6 +1601,9 @@ export default function App() {
           capture: '',
           sessionId: e.id,
           pcmDrained: true,
+          pcmDrainedCaptureId: e.capture_id,
+          pcmDrainedSessionId: e.id,
+          pcmDrainedByte: e.byte_offset,
         })
       }
       // Every chunk of the current translate ask re-arms the 25s timeout, so a

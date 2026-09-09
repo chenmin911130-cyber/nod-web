@@ -25,6 +25,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastPcmCaptureId = ""
     private var lastPcmAckSessionId = ""
     private var lastPcmDrained = false
+    private var lastPcmDrainedCaptureId = ""
+    private var lastPcmDrainedSessionId = ""
+    private var lastPcmDrainedByte = 0
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
     private var uplinkActive = false
@@ -47,6 +50,16 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             queue: .main
         ) { [weak self] _ in
             self?.pushPcmAck()
+        }
+        NotificationCenter.default.addObserver(
+            forName: Notification.Name("nod.watch.pcm.serverDrained"),
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let session = note.userInfo?["sessionId"] as? String ?? ""
+            let capture = note.userInfo?["captureId"] as? String ?? ""
+            let offset = (note.userInfo?["byteOffset"] as? Int) ?? 0
+            self?.markPcmDrained(sessionId: session, captureId: capture, byteOffset: offset)
         }
     }
 
@@ -81,15 +94,12 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         wc.sendMessage(msg, replyHandler: nil, errorHandler: nil)
     }
 
-    func markPcmDrained(sessionId: String) {
-        if !sessionId.isEmpty, !lastSessionId.isEmpty, sessionId != lastSessionId {
-            return
-        }
+    func markPcmDrained(sessionId: String, captureId: String, byteOffset: Int) {
+        guard !captureId.isEmpty, !sessionId.isEmpty, byteOffset >= 0 else { return }
         lastPcmDrained = true
-        if !sessionId.isEmpty {
-            lastSessionId = sessionId
-            lastPcmAckSessionId = sessionId
-        }
+        lastPcmDrainedCaptureId = captureId
+        lastPcmDrainedSessionId = sessionId
+        lastPcmDrainedByte = byteOffset
         pushStatus(
             capture: lastCapture,
             hint: lastHint,
@@ -211,6 +221,11 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             payload["pcmAckSessionId"] = lastSessionId
         }
         payload["pcmDrained"] = lastPcmDrained ? "true" : "false"
+        if lastPcmDrained {
+            payload["pcmDrainedCaptureId"] = lastPcmDrainedCaptureId
+            payload["pcmDrainedSessionId"] = lastPcmDrainedSessionId
+            payload["pcmDrainedByte"] = String(lastPcmDrainedByte)
+        }
         guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
         do {
             try session.updateApplicationContext(payload)
@@ -255,6 +270,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
                 lastPcmAckByte = 0
                 lastPcmDrained = false
                 lastPcmAckSessionId = ""
+                lastPcmDrainedCaptureId = ""
+                lastPcmDrainedSessionId = ""
+                lastPcmDrainedByte = 0
             }
             lastPcmCaptureId = captureId
             NotificationCenter.default.post(
@@ -505,6 +523,11 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             reply["pcmAckSessionId"] = lastSessionId
         }
         reply["pcmDrained"] = lastPcmDrained ? "true" : "false"
+        if lastPcmDrained {
+            reply["pcmDrainedCaptureId"] = lastPcmDrainedCaptureId
+            reply["pcmDrainedSessionId"] = lastPcmDrainedSessionId
+            reply["pcmDrainedByte"] = String(lastPcmDrainedByte)
+        }
         replyHandler(reply)
     }
 

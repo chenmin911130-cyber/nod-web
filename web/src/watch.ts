@@ -20,6 +20,9 @@ type WatchPlugin = {
     save?: string
     sessionId?: string
     pcmDrained?: boolean
+    pcmDrainedCaptureId?: string
+    pcmDrainedSessionId?: string
+    pcmDrainedByte?: number
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {
@@ -317,6 +320,9 @@ export function pushWatchStatus(face: {
   save?: string
   sessionId?: string
   pcmDrained?: boolean
+  pcmDrainedCaptureId?: string
+  pcmDrainedSessionId?: string
+  pcmDrainedByte?: number
 }): void {
   if (!isNativeApp()) return
   void NodWatch.setStatus({
@@ -331,6 +337,9 @@ export function pushWatchStatus(face: {
     save: face.save,
     sessionId: face.sessionId,
     pcmDrained: face.pcmDrained,
+    pcmDrainedCaptureId: face.pcmDrainedCaptureId,
+    pcmDrainedSessionId: face.pcmDrainedSessionId,
+    pcmDrainedByte: face.pcmDrainedByte,
   }).catch(() => undefined)
 }
 

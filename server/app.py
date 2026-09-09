@@ -1789,6 +1789,7 @@ class CloudListener:
         self._send_count = 0
         self._drain = threading.Event()
         self._drained = threading.Event()
+        self._drain_send_failed = False
 
     def set_muted(self, muted: bool) -> None:
         self._muted = bool(muted)
@@ -1813,6 +1814,7 @@ class CloudListener:
         if self._stop.is_set():
             return False
         self._drained.clear()
+        self._drain_send_failed = False
         self._drain.set()
         return self._drained.wait(timeout)
 
@@ -1835,6 +1837,7 @@ class CloudListener:
         self._send_count = 0
         self._drain.clear()
         self._drained.clear()
+        self._drain_send_failed = False
         self._ws = websocket.WebSocketApp(
             url,
             header=[f"Authorization: {self.api_key}"],
@@ -1871,7 +1874,7 @@ class CloudListener:
             try:
                 chunk = self._q.get(timeout=0.08)
             except queue.Empty:
-                if self._drain.is_set() and self._q.empty():
+                if self._drain.is_set() and self._q.empty() and not getattr(self, "_drain_send_failed", False):
                     self._send_drain_tail()
                 continue
             if not chunk:
@@ -1894,6 +1897,7 @@ class CloudListener:
             if self._stop.is_set():
                 return
             if not self._send_stt_frame(frame):
+                self._drain_send_failed = True
                 return
         self._drained.set()
         self._drain.clear()
@@ -1901,10 +1905,11 @@ class CloudListener:
     def _send_stt_frame(self, frame: bytes) -> bool:
         import websocket
         ws = self._ws
+        if not (ws and ws.sock and ws.sock.connected):
+            return False
         try:
-            if ws and ws.sock and ws.sock.connected:
-                ws.send(frame, websocket.ABNF.OPCODE_BINARY)
-                self._record_send(frame)
+            ws.send(frame, websocket.ABNF.OPCODE_BINARY)
+            self._record_send(frame)
             return True
         except Exception as e:
             if not self._stop.is_set():
@@ -2347,6 +2352,9 @@ class Session:
         token = getattr(self, "audio_token", None)
         if token:
             self.emit({"type": "audio_uplink", "token": token})
+        drained = getattr(self, "_pcm_drain_result", None)
+        if isinstance(drained, dict) and drained.get("type") == "pcm_drained":
+            self.emit(drained)
 
     def _sink_emit(self, _obj: dict) -> None:
         return
@@ -2508,7 +2516,7 @@ class Session:
         elif mtype == "start_listen":
             self.start_listen(mic=msg.get("mic"))
         elif mtype == "pcm_end":
-            self.pcm_end(msg.get("id"), msg.get("byte_offset"))
+            self.pcm_end(msg.get("id"), msg.get("byte_offset"), msg.get("capture_id") or msg.get("captureId"))
         elif mtype == "stop_listen":
             self.stop_listen()
         elif mtype == "pause_listen":
@@ -3301,14 +3309,15 @@ class Session:
             self.emit({"type": "status", "text": STATUS_READY})
         self._offer_save_history()
 
-    def pcm_end(self, session_id: Any = None, byte_offset: Any = None) -> None:
-        """Watch End: wait until this session's audio is in STT, then emit pcm_drained.
+    def pcm_end(self, session_id: Any = None, byte_offset: Any = None, capture_id: Any = None) -> None:
+        """Watch End: wait until this capture's audio is in STT, then emit pcm_drained.
 
-        Old clients never send this. Wrong or empty id is ignored so a leftover
-        End cannot drain or stop another session.
+        Old clients never send this. Wrong/empty id or capture is ignored so a
+        leftover End cannot drain or stop another session.
         """
         sid = str(session_id or "").strip()
-        if not sid or sid != (self.usage_session_id or ""):
+        cap = str(capture_id or "").strip()
+        if not sid or not cap or sid != (self.usage_session_id or ""):
             return
         try:
             offset = int(byte_offset)
@@ -3316,23 +3325,65 @@ class Session:
             return
         if offset < 0:
             return
+        prev = getattr(self, "_pcm_drain_result", None)
+        if (
+            isinstance(prev, dict)
+            and prev.get("type") == "pcm_drained"
+            and prev.get("id") == sid
+            and prev.get("capture_id") == cap
+            and int(prev.get("byte_offset") or 0) == offset
+        ):
+            self._publish_pcm_drained(prev)
+            return
         self._pcm_end_id = sid
+        self._pcm_end_capture = cap
         self._pcm_end_offset = offset
         self._finish_pcm_end_if_ready()
 
     def _finish_pcm_end_if_ready(self) -> None:
         sid = getattr(self, "_pcm_end_id", None)
-        if not sid:
+        cap = str(getattr(self, "_pcm_end_capture", "") or "")
+        if not sid or not cap:
             return
         offset = int(getattr(self, "_pcm_end_offset", 0) or 0)
         if getattr(self, "_pcm_rx_bytes", 0) < offset:
             return
         lst = self._listener
-        if lst is not None:
-            lst.drain()
+        if lst is None:
+            return
+        if not lst.drain():
+            return
         self._pcm_end_id = None
+        self._pcm_end_capture = ""
         self._pcm_end_offset = 0
-        self.emit({"type": "pcm_drained", "id": sid, "byte_offset": offset})
+        self._publish_pcm_drained({"type": "pcm_drained", "id": sid, "capture_id": cap, "byte_offset": offset})
+
+    def _publish_pcm_drained(self, event: dict) -> None:
+        self._pcm_drain_result = event
+        self.emit(event)
+        self._send_audio_text(event)
+
+    def _send_audio_text(self, obj: dict) -> None:
+        ws = getattr(self, "_audio_ws", None)
+        loop = getattr(self, "_loop", None)
+        if ws is None or loop is None:
+            return
+        try:
+            text = json.dumps(obj, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return
+
+        async def _send() -> None:
+            try:
+                await ws.send_text(text)
+            except Exception:
+                pass
+
+        try:
+            if loop.is_running():
+                asyncio.run_coroutine_threadsafe(_send(), loop)
+        except Exception:
+            pass
 
     def pause_listen(self) -> None:
         """Pause live capture and stop AssemblyAI billing.
@@ -3476,9 +3527,12 @@ class Session:
             on_error=lambda e: self.emit({"type": "error", "text": f"Transcription failed:{e}"}),
             on_drop=self._on_stt_drop,
         )
-        self._pcm_rx_bytes = 0
-        self._pcm_end_id = None
-        self._pcm_end_offset = 0
+        if not resume:
+            self._pcm_rx_bytes = 0
+            self._pcm_end_id = None
+            self._pcm_end_capture = ""
+            self._pcm_end_offset = 0
+            self._pcm_drain_result = None
         slot = self._stt_slot()
         prev = _adopt_live_stt(slot, listener, self)
         if prev:
@@ -3527,6 +3581,7 @@ class Session:
         self._emit_phase()
         if not resume:
             self.emit({"type": "status", "text": STATUS_LISTEN})
+        self._finish_pcm_end_if_ready()
 
     def _mark_voice(self) -> None:
         self._last_voice_at = time.time()
@@ -4292,7 +4347,12 @@ async def ws_audio(ws: WebSocket):
                 if mtype == "ping":
                     continue
                 if mtype == "pcm_end":
-                    await run_in_threadpool(session.pcm_end, payload.get("id"), payload.get("byte_offset"))
+                    await run_in_threadpool(
+                        session.pcm_end,
+                        payload.get("id"),
+                        payload.get("byte_offset"),
+                        payload.get("capture_id") or payload.get("captureId"),
+                    )
     except WebSocketDisconnect:
         pass
     finally:

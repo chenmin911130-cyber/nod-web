@@ -101,13 +101,16 @@ export function watchEndShouldSendStop(opts: {
   liveCaptureId: string
   ackSessionId: string
   liveSessionId: string
+  drainByte?: number
 }): boolean {
   if (!opts.frozen || !opts.serverDrained) return false
-  if (!watchPcmAckApplies({
+  if (!watchPcmDrainApplies({
     liveCaptureId: opts.liveCaptureId,
     liveSessionId: opts.liveSessionId,
-    ackCaptureId: opts.ackCaptureId,
-    ackSessionId: opts.ackSessionId,
+    liveLastByte: opts.lastByte,
+    drainCaptureId: opts.ackCaptureId,
+    drainSessionId: opts.ackSessionId,
+    drainByte: opts.drainByte ?? opts.lastByte,
   })) {
     return false
   }
@@ -125,6 +128,51 @@ export function watchPcmAckApplies(opts: {
   return true
 }
 
+export function watchPcmDrainApplies(opts: {
+  liveCaptureId: string
+  liveSessionId: string
+  liveLastByte: number
+  drainCaptureId: string
+  drainSessionId: string
+  drainByte: number
+}): boolean {
+  if (!watchPcmAckApplies({
+    liveCaptureId: opts.liveCaptureId,
+    liveSessionId: opts.liveSessionId,
+    ackCaptureId: opts.drainCaptureId,
+    ackSessionId: opts.drainSessionId,
+  })) {
+    return false
+  }
+  return opts.drainByte === opts.liveLastByte
+}
+
+export function watchConsumedApplies(opts: {
+  liveCaptureId: string
+  liveSessionId: string
+  consumeCaptureId: string
+  consumeSessionId: string
+}): boolean {
+  return watchPcmAckApplies({
+    liveCaptureId: opts.liveCaptureId,
+    liveSessionId: opts.liveSessionId,
+    ackCaptureId: opts.consumeCaptureId,
+    ackSessionId: opts.consumeSessionId,
+  })
+}
+
+/** Sealed shards only. The open FileHandle shard must not be unlinked. */
+export function watchMayDeleteShard(opts: {
+  openSeq: number
+  seq: number
+  offset: number
+  bytes: number
+  ack: number
+}): boolean {
+  if (opts.openSeq > 0 && opts.seq === opts.openSeq) return false
+  return opts.offset + opts.bytes <= opts.ack
+}
+
 /** Capacity shortage must leave the pump, not reread the same file in a loop. */
 export function watchFilePumpStep(opts: { queued: number; parked: number }): 'paused' | 'continue' | 'done' {
   if (opts.parked <= 0) return 'done'
@@ -140,11 +188,11 @@ export function watchEnqueueWaitsForConsume(): boolean {
   return false
 }
 
-export type WatchPcmEndMsg = { type: 'pcm_end'; id: string; byte_offset: number }
+export type WatchPcmEndMsg = { type: 'pcm_end'; id: string; capture_id: string; byte_offset: number }
 
-export function watchPcmEndMessage(opts: { sessionId: string; lastByte: number }): WatchPcmEndMsg | null {
-  if (!opts.sessionId || opts.lastByte < 0) return null
-  return { type: 'pcm_end', id: opts.sessionId, byte_offset: opts.lastByte }
+export function watchPcmEndMessage(opts: { sessionId: string; captureId: string; lastByte: number }): WatchPcmEndMsg | null {
+  if (!opts.sessionId || !opts.captureId || opts.lastByte < 0) return null
+  return { type: 'pcm_end', id: opts.sessionId, capture_id: opts.captureId, byte_offset: opts.lastByte }
 }
 
 export type WatchDrainMsg = {
