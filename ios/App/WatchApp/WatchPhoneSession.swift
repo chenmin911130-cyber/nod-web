@@ -29,6 +29,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var draining = false
     @Published var drainFailed = false
     @Published var pcmStalled = false
+    @Published var pcmStallText = ""
 
     private var localModeHeld = false
     private var phoneModeSeen = false
@@ -288,7 +289,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         saveAfterDrain = false
         drainFailed = false
         pcmDrained = false
-        pcmStalled = false
         pcmStore.freeze()
         draining = true
         hint = WatchCopy.replaying
@@ -342,6 +342,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         drainFailed = false
         pcmDrained = false
         pcmStalled = false
+        pcmStallText = ""
         pendingSaveOffer = false
         saveAfterDrain = false
         original = ""
@@ -761,7 +762,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     func retryDrain() {
         drainFailed = false
         pcmDrained = false
-        pcmStalled = false
         draining = true
         hint = WatchCopy.replaying
         lastTransferAt.removeAll()
@@ -915,6 +915,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 let message = (payload["pcmStallText"] as? String)
                     ?? "Recording incomplete — audio may be missing"
                 pcmStalled = true
+                pcmStallText = message
                 if !message.isEmpty, !offeringSave, !savedAck, !saving, !saveFailed, !starting {
                     hint = message
                 }

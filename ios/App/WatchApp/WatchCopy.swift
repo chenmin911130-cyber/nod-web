@@ -265,6 +265,19 @@ enum WatchCopy {
         ])
     }
 
+    static var pcmIncomplete: String {
+        pick([
+            "zh": "音频不完整 — 可能有缺失",
+            "en": "Audio incomplete — may be missing",
+            "it": "Audio incompleto",
+            "es": "Audio incompleto",
+            "fr": "Audio incomplet",
+            "de": "Audio unvollständig",
+            "pt": "Áudio incompleto",
+            "ja": "音声が不完全です",
+        ])
+    }
+
     static var diskFull: String {
         pick([
             "zh": "手表存储已满",

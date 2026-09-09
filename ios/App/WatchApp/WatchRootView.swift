@@ -33,10 +33,15 @@ struct WatchRootView: View {
         let translate = session.mode == "translate"
         return Group {
             if session.draining || session.drainFailed {
-                Text(session.drainFailed ? WatchCopy.drainFailed : WatchCopy.replaying)
-                    .font(.caption)
-                    .foregroundStyle(muted)
-                    .multilineTextAlignment(.center)
+                VStack(spacing: 4) {
+                    Text(session.drainFailed ? WatchCopy.drainFailed : WatchCopy.replaying)
+                        .font(.caption)
+                        .foregroundStyle(muted)
+                        .multilineTextAlignment(.center)
+                    if session.pcmStalled {
+                        stallWarning
+                    }
+                }
             } else if session.offeringSave || session.savedAck || (!session.listening && !session.paused) {
                 Color.black
             } else if session.paused {
@@ -98,23 +103,29 @@ struct WatchRootView: View {
     }
 
     private var livePage: some View {
-        Group {
-            if session.offeringSave {
-                savePrompt
-            } else if session.savedAck {
-                savedAck
-            } else if session.draining || session.drainFailed {
-                drainPage
-            } else if session.listening || session.paused {
-                TabView(selection: $listenPage) {
-                    sessionPage.tag(0)
-                    stopPage.tag(1)
-                }
-            } else {
-                readyStart
+        VStack(spacing: 4) {
+            if session.pcmStalled && !session.draining && !session.drainFailed {
+                stallWarning
+                    .padding(.horizontal, 6)
             }
+            Group {
+                if session.offeringSave {
+                    savePrompt
+                } else if session.savedAck {
+                    savedAck
+                } else if session.draining || session.drainFailed {
+                    drainPage
+                } else if session.listening || session.paused {
+                    TabView(selection: $listenPage) {
+                        sessionPage.tag(0)
+                        stopPage.tag(1)
+                    }
+                } else {
+                    readyStart
+                }
+            }
+            .padding(.horizontal, 6)
         }
-        .padding(.horizontal, 6)
         .onChange(of: session.listening) { listening in
             if listening { listenPage = 0 }
         }
@@ -126,11 +137,26 @@ struct WatchRootView: View {
                 .font(.headline)
                 .foregroundStyle(ink)
                 .multilineTextAlignment(.center)
+            if session.pcmStalled {
+                stallWarning
+            }
             if session.drainFailed {
                 Button(WatchCopy.retry) { session.retryDrain() }
                     .tint(cyan)
             }
         }
+    }
+
+    /// The overflow-stall (audio incomplete) warning, surfaceable on the recording
+    /// page and the End/drain page. Survives End/Retry so the user is not told the
+    /// session is complete once audio was dropped.
+    private var stallWarning: some View {
+        Text(session.pcmStallText.isEmpty ? WatchCopy.pcmIncomplete : session.pcmStallText)
+            .font(.caption2)
+            .foregroundStyle(Color.orange)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .center)
     }
 
     private var sessionPage: some View {
