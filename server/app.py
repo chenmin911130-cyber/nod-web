@@ -70,7 +70,6 @@ from server.stt_audio import (
     duration_s,
     error_summary,
     pace_wait_s,
-    take_frames,
     take_one_frame,
 )
 from server.logging_setup import backup_now, setup_logging
@@ -1826,6 +1825,7 @@ class CloudListener:
         self._force_pending = False
         self._pcm_buf = bytearray()
         self._q_bytes = 0  # bytes sitting in _q, under _pcm_mu
+        self._pcm_inflight_bytes = 0
         self._last_send_at = 0.0
         self._last_send_bytes = 0
         self._last_send_ms = 0.0
@@ -1858,7 +1858,7 @@ class CloudListener:
         if self._stop.is_set():
             return PCM_TERMINATED
         with self._pcm_mu:
-            if len(self._pcm_buf) + self._q_bytes + len(pcm) > STT_PCM_BUF_MAX:
+            if len(self._pcm_buf) + self._q_bytes + self._pcm_inflight_bytes + len(pcm) > STT_PCM_BUF_MAX:
                 return PCM_BACKPRESSURE
             try:
                 self._q.put_nowait(pcm)
@@ -2033,40 +2033,23 @@ class CloudListener:
                 self._pcm_buf.extend(chunk)
 
     def _sender(self) -> None:
-        import websocket
         try:
             while not self._stop.is_set():
                 self._flush_force_endpoint()
                 self._absorb_queue()
-                if self._drain.is_set() and not self._pcm_buf and self._q.empty():
-                    if not getattr(self, "_drain_send_failed", False):
+                if self._drain.is_set():
+                    if not self._drain_send_failed:
                         self._send_drain_tail()
+                    else:
+                        self._stop.wait(0.05)
                     continue
                 ws = self._ws
                 if not (ws and getattr(ws, "sock", None) and ws.sock.connected):
+                    self._stop.wait(0.05)
                     continue
-                with self._pcm_mu:
-                    frame = take_one_frame(self._pcm_buf)
-                if not frame:
-                    # Nothing sendable yet; sleep the poll interval so a partial
-                    # (< 50 ms) tail accumulates and we do not busy-spin. We must NOT
-                    # consume from _q here: a frame arriving during this sleep must
-                    # stay queued and be absorbed at the top of the next cycle
-                    # (before the old tail), preserving order — Queue.get() would
-                    # silently drop it (issue #165 P1).
-                    time.sleep(0.08)
-                    continue
-                self._pace_before_send()
-                if self._stop.is_set():
-                    self._restore_unsent([frame])
-                    return
-                if not self._send_stt_frame(frame):
-                    self._restore_unsent([frame])
+                if not self._send_buffered_frame(final=False):
                     return
         finally:
-            # Any sender exit other than a completed drain must wake a drain()
-            # waiter promptly (issue #165 P2-5). A healthy send does not reach here
-            # until `_stop` is set or the socket errors out.
             if self._drain.is_set() and not self._drained.is_set():
                 self._drain_failed.set()
             self._sender_exited.set()
@@ -2076,53 +2059,50 @@ class CloudListener:
             with self._pcm_mu:
                 self._pcm_buf[0:0] = b"".join(frames)
 
-    def _send_drain_tail(self) -> None:
-        """Flush everything remaining (full frames then a padded tail), re-reading
-        the queue each pass so late-arriving frames are not dropped mid-drain.
-
-        Padding is sent to AssemblyAI (it must receive a >= 50 ms final chunk) but
-        is NOT counted as delivered audio: only the real bytes advance
-        ``_stt_tx_bytes`` / the ``on_sent`` total, so padding can never falsely
-        satisfy the completion offset (issue #165 P1 #5).
-        """
-        while True:
-            self._absorb_queue()
-            with self._pcm_mu:
-                frames = take_frames(self._pcm_buf)
-                leftover = bytes(self._pcm_buf)
+    def _send_buffered_frame(self, *, final: bool) -> bool:
+        # Keep only ONE raw frame in flight. On failure only that frame is
+        # returned, ahead of the unsent suffix and any new arrivals. Padding is
+        # never placed in the retained recording or its byte budget.
+        with self._pcm_mu:
+            raw = take_one_frame(self._pcm_buf)
+            if not raw and final and self._pcm_buf:
+                raw = bytes(self._pcm_buf)
                 self._pcm_buf.clear()
-            if not frames and not leftover:
+            self._pcm_inflight_bytes = len(raw)
+        if not raw:
+            if not final:
+                self._stop.wait(0.08)
+            return True
+        sent = False
+        try:
+            self._pace_before_send()
+            if self._stop.is_set():
+                return False
+            frame = raw + b"\x00" * max(0, MIN_CHUNK_BYTES - len(raw))
+            sent = self._send_stt_frame(frame, real_bytes=len(raw))
+            return sent
+        finally:
+            with self._pcm_mu:
+                if not sent:
+                    self._pcm_buf[0:0] = raw
+                self._pcm_inflight_bytes = 0
+
+    def _send_drain_tail(self) -> None:
+        while not self._stop.is_set():
+            self._absorb_queue()
+            ws = self._ws
+            if not (ws and getattr(ws, "sock", None) and ws.sock.connected):
                 break
-            for frame in frames:
-                if self._stop.is_set():
-                    self._restore_unsent(frames)
+            with self._pcm_mu:
+                if not self._pcm_buf and self._q.empty():
+                    self._drained.set()
+                    self._drain.clear()
+                    self._drain_send_failed = False
                     return
-                self._pace_before_send()
-                if self._stop.is_set():
-                    self._restore_unsent(frames)
-                    return
-                if not self._send_stt_frame(frame):
-                    self._restore_unsent(frames)
-                    self._drain_send_failed = True
-                    return
-            if leftover:
-                real = len(leftover)
-                pad = MIN_CHUNK_BYTES - real
-                padded = leftover + b"\x00" * pad
-                if self._stop.is_set():
-                    self._restore_unsent([leftover])
-                    return
-                self._pace_before_send()
-                if self._stop.is_set():
-                    self._restore_unsent([leftover])
-                    return
-                if not self._send_stt_frame(padded, real_bytes=real):
-                    self._restore_unsent([leftover])
-                    self._drain_send_failed = True
-                    return
-        self._drained.set()
-        self._drain.clear()
-        self._drain_send_failed = False
+            if not self._send_buffered_frame(final=True):
+                break
+        self._drain_send_failed = True
+        self._drain_failed.set()
 
     def _send_stt_frame(self, frame: bytes, real_bytes: int | None = None) -> bool:
         import websocket
@@ -2600,6 +2580,15 @@ class Session:
         if getattr(self, "_pcm_stall_reported", False):
             self.emit({"type": "error", "text": "Recording buffer full — audio may be incomplete."})
 
+        self._replay_pcm_rejection()
+
+    def _replay_pcm_rejection(self) -> None:
+        event = getattr(self, "_pcm_reject_result", None)
+        if isinstance(event, dict):
+            self.emit({"type": "error", "text": event.get("text", "Upload incomplete")})
+            self.emit(event)
+            self._send_audio_text(event)
+
     def _sink_emit(self, _obj: dict) -> None:
         return
 
@@ -2783,7 +2772,16 @@ class Session:
             with self._listen_lock():
                 lst = getattr(self, "_listener", None)
                 if lst is not None:
-                    self._flush_pcm_hold_into(lst)
+                    if not self._flush_pcm_hold_into(lst):
+                        # Retain behind the older hold where budget permits;
+                        # never let this smaller new frame overtake it.
+                        hold = getattr(self, "_pcm_hold", bytearray())
+                        if len(hold) + len(pcm) <= STT_PCM_HOLD_MAX:
+                            hold.extend(pcm)
+                            self._pcm_hold = hold
+                            self._pcm_rx_bytes = getattr(self, "_pcm_rx_bytes", 0) + len(pcm)
+                        self._archive_append(pcm)
+                        return False
                     res = lst.push_pcm(pcm)
                     if res != PCM_ACCEPTED:
                         # The listener cannot reliably keep this byte. Keep the
@@ -2803,7 +2801,16 @@ class Session:
                 # not drop), or there genuinely is no live listener to receive it.
                 lst = getattr(self, "_listener", None)
                 if lst is not None:
-                    self._flush_pcm_hold_into(lst)
+                    if not self._flush_pcm_hold_into(lst):
+                        # Retain behind the older hold where budget permits;
+                        # never let this smaller new frame overtake it.
+                        hold = getattr(self, "_pcm_hold", bytearray())
+                        if len(hold) + len(pcm) <= STT_PCM_HOLD_MAX:
+                            hold.extend(pcm)
+                            self._pcm_hold = hold
+                            self._pcm_rx_bytes = getattr(self, "_pcm_rx_bytes", 0) + len(pcm)
+                        self._archive_append(pcm)
+                        return False
                     res = lst.push_pcm(pcm)
                     if res != PCM_ACCEPTED:
                         self._archive_append(pcm)
@@ -3080,7 +3087,7 @@ class Session:
             "text": text,
         })
 
-    def _flush_pcm_hold_into(self, lst: CloudListener) -> None:
+    def _flush_pcm_hold_into(self, lst: CloudListener) -> bool:
         with self._listen_lock():
             hold = bytes(getattr(self, "_pcm_hold", b"") or b"")
             self._pcm_hold = bytearray()
@@ -3092,6 +3099,8 @@ class Session:
                 with self._listen_lock():
                     self._pcm_hold = bytearray(hold) + bytearray(getattr(self, "_pcm_hold", b"") or b"")
                 self._report_pcm_stalled()
+                return False
+        return True
 
     def _normalize_handoff(self, extra: Any) -> UnsentHandoff:
         if isinstance(extra, UnsentHandoff):
@@ -3857,13 +3866,15 @@ class Session:
             "stt pcm_rejected session=%s capture=%s reason=%s", sid, cap, reason
         )
         self.emit({"type": "error", "text": text})
-        self._send_audio_text({
+        event = {
             "type": "pcm_rejected",
             "id": sid,
             "capture_id": cap,
             "reason": reason,
             "text": text,
-        })
+        }
+        self._pcm_reject_result = event
+        self._send_audio_text(event)
 
     def pcm_end(self, session_id: Any = None, byte_offset: Any = None, capture_id: Any = None) -> None:
         """Watch End: wait until this capture's audio is in STT, then emit pcm_drained.
@@ -3943,7 +3954,15 @@ class Session:
             return
         if self._listener is not lst:
             return
-        if str(getattr(self, "_pcm_end_capture", "") or "") != cap:
+        if (
+            getattr(self, "_pcm_end_id", None) != sid
+            or str(getattr(self, "_pcm_end_capture", "") or "") != cap
+            or getattr(self, "_pcm_end_offset", None) != offset
+            or getattr(self, "_pcm_stall_reported", False)
+            or self._session_terminated()
+            or getattr(self, "_pcm_hold", b"")
+            or getattr(self, "_stt_pending_pcm", b"")
+        ):
             return
         if getattr(self, "_stt_tx_bytes", 0) < offset:
             return
@@ -4132,6 +4151,7 @@ class Session:
             self._pcm_drain_result = None
             self._pcm_stall_reported = False
             self._listen_ended = False
+            self._pcm_reject_result = None
         self._pcm_reject_sent = False
         self._stt_stream_gen = getattr(self, "_stt_stream_gen", 0) + 1
         listen_gen = getattr(self, "_listen_gen", 0)
@@ -4947,6 +4967,7 @@ async def ws_audio(ws: WebSocket):
         except Exception:
             pass
     session._audio_ws = ws
+    session._replay_pcm_rejection()
     session._uplink_connected = True
     session._uplink_lost_at = 0.0
     try:
