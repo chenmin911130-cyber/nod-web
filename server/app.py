@@ -1835,6 +1835,8 @@ class CloudListener:
         self._send_count = 0
         self._drain = threading.Event()
         self._drained = threading.Event()
+        self._drain_failed = threading.Event()
+        self._sender_exited = threading.Event()
         self._drain_send_failed = False
         self._stt_tx_bytes = 0
         self._sender_thread: threading.Thread | None = None
@@ -1868,13 +1870,36 @@ class CloudListener:
         return PCM_ACCEPTED
 
     def drain(self, timeout: float = 120.0) -> bool:
-        """Flush queued PCM into AssemblyAI, including a padded short tail. Does not stop."""
+        """Flush queued PCM into AssemblyAI, including a padded short tail. Does not stop.
+
+        Returns True only when the tail is genuinely sent. Returns False quickly
+        (well before ``timeout``) when the listener has stopped, the sender has
+        exited, or the tail send failed — a failed/stopped drain must not hold the
+        calling thread until the full 120 s timeout (issue #165 review P2-5). The
+        120 s ceiling remains as the last-resort cap for a healthy slow drain.
+        """
         if self._stop.is_set():
             return False
         self._drained.clear()
+        self._drain_failed.clear()
         self._drain_send_failed = False
         self._drain.set()
-        return self._drained.wait(timeout)
+        deadline = time.monotonic() + timeout
+        while True:
+            if self._drained.is_set():
+                return True
+            if self._drain_failed.is_set() or self._drain_send_failed:
+                return False
+            if self._stop.is_set():
+                return False
+            if self._sender_exited.is_set() and not self._drained.is_set():
+                # The sender thread has returned without draining (send error,
+                # handoff stop, or a swap that exited it). Do not wait out the cap.
+                return False
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return False
+            time.sleep(min(0.05, left))
 
     def take_unsent(self, timeout: float = STT_HANDOFF_JOIN_SEC) -> UnsentHandoff:
         """Stop taking new frames, then harvest `_pcm_buf` (A) then `_q` (B).
@@ -1959,6 +1984,8 @@ class CloudListener:
         self._send_count = 0
         self._drain.clear()
         self._drained.clear()
+        self._drain_failed.clear()
+        self._sender_exited.clear()
         self._drain_send_failed = False
         self._ws = websocket.WebSocketApp(
             url,
@@ -2009,34 +2036,42 @@ class CloudListener:
 
     def _sender(self) -> None:
         import websocket
-        while not self._stop.is_set():
-            self._flush_force_endpoint()
-            self._absorb_queue()
-            if self._drain.is_set() and not self._pcm_buf and self._q.empty():
-                if not getattr(self, "_drain_send_failed", False):
-                    self._send_drain_tail()
-                continue
-            ws = self._ws
-            if not (ws and getattr(ws, "sock", None) and ws.sock.connected):
-                continue
-            with self._pcm_mu:
-                frame = take_one_frame(self._pcm_buf)
-            if not frame:
-                # Nothing sendable yet; sleep the poll interval so a partial
-                # (< 50 ms) tail accumulates and we do not busy-spin. We must NOT
-                # consume from _q here: a frame arriving during this sleep must
-                # stay queued and be absorbed at the top of the next cycle
-                # (before the old tail), preserving order — Queue.get() would
-                # silently drop it (issue #165 P1).
-                time.sleep(0.08)
-                continue
-            self._pace_before_send()
-            if self._stop.is_set():
-                self._restore_unsent([frame])
-                return
-            if not self._send_stt_frame(frame):
-                self._restore_unsent([frame])
-                return
+        try:
+            while not self._stop.is_set():
+                self._flush_force_endpoint()
+                self._absorb_queue()
+                if self._drain.is_set() and not self._pcm_buf and self._q.empty():
+                    if not getattr(self, "_drain_send_failed", False):
+                        self._send_drain_tail()
+                    continue
+                ws = self._ws
+                if not (ws and getattr(ws, "sock", None) and ws.sock.connected):
+                    continue
+                with self._pcm_mu:
+                    frame = take_one_frame(self._pcm_buf)
+                if not frame:
+                    # Nothing sendable yet; sleep the poll interval so a partial
+                    # (< 50 ms) tail accumulates and we do not busy-spin. We must NOT
+                    # consume from _q here: a frame arriving during this sleep must
+                    # stay queued and be absorbed at the top of the next cycle
+                    # (before the old tail), preserving order — Queue.get() would
+                    # silently drop it (issue #165 P1).
+                    time.sleep(0.08)
+                    continue
+                self._pace_before_send()
+                if self._stop.is_set():
+                    self._restore_unsent([frame])
+                    return
+                if not self._send_stt_frame(frame):
+                    self._restore_unsent([frame])
+                    return
+        finally:
+            # Any sender exit other than a completed drain must wake a drain()
+            # waiter promptly (issue #165 P2-5). A healthy send does not reach here
+            # until `_stop` is set or the socket errors out.
+            if self._drain.is_set() and not self._drained.is_set():
+                self._drain_failed.set()
+            self._sender_exited.set()
 
     def _restore_unsent(self, frames: list[bytes]) -> None:
         if frames:
@@ -3860,6 +3895,16 @@ class Session:
         if lst is None:
             return
         if not lst.drain():
+            return
+        # Re-check the post-drain state: a drain that took time may have raced a
+        # handoff, a stop, or a fresh End. Only publish if THIS listener still
+        # owns the stream, the request is unchanged, and nothing stale completed.
+        # (issue #165 P2-5 — concurrent recovery must not publish an old result.)
+        if getattr(self, "_handoff_blocked", False) or getattr(self, "_handoff_listener", None):
+            return
+        if self._listener is not lst:
+            return
+        if str(getattr(self, "_pcm_end_capture", "") or "") != cap:
             return
         if getattr(self, "_stt_tx_bytes", 0) < offset:
             return
