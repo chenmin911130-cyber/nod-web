@@ -2632,19 +2632,60 @@ class Session:
             else:
                 self._maybe_flush_manual_chunk()
             return
-        lst = self._pcm_destination()
-        if lst is None:
-            if self._hold_incoming_pcm(pcm):
-                return
+        if not self._deliver_pcm(pcm):
             return
-        self._last_pcm_at = time.time()
-        self._archive_append(pcm)
-        with self._pcm_input_lock():
-            self._flush_pcm_hold_into(lst)
-            lst.push_pcm(pcm)
-        self._pcm_rx_bytes = getattr(self, "_pcm_rx_bytes", 0) + len(pcm)
+        self._pcm_stall_reported = False
         self._finish_pcm_end_if_ready()
         self._maybe_stop_forgotten_listen()
+
+    def _deliver_pcm(self, pcm: bytes) -> bool:
+        """Deliver one PCM frame to the live listener or hold it, atomically with
+        the listener-handoff switch.
+
+        Routing and enqueue are coordinated (issue #165 fable #1): the destination
+        is read and written under _pcm_input_lock (which _open_listener also uses
+        for the hold flush) AND _listen_lock (under which _restart_listener and
+        _open_listener swap _listener). A listener installed mid-hold is picked up
+        and the frame is pushed to it instead of being dropped; a listener that was
+        swapped out is never written to. Returns True when the frame is accounted
+        for (delivered or held) and False only when it cannot be kept — which is
+        surfaced, not silently dropped (fable #3).
+        """
+        with self._pcm_input_lock():
+            with self._listen_lock():
+                lst = getattr(self, "_listener", None)
+                if lst is not None:
+                    self._flush_pcm_hold_into(lst)
+                    lst.push_pcm(pcm)
+                    self._last_pcm_at = time.time()
+                    self._archive_append(pcm)
+                    self._pcm_rx_bytes = getattr(self, "_pcm_rx_bytes", 0) + len(pcm)
+                    return True
+                if self._hold_incoming_pcm(pcm):
+                    return True
+                # The hold refused. Either a listener appeared in the instant
+                # between the destination read and the hold attempt (re-route, do
+                # not drop), or there genuinely is no live listener to receive it.
+                lst = getattr(self, "_listener", None)
+                if lst is not None:
+                    self._flush_pcm_hold_into(lst)
+                    lst.push_pcm(pcm)
+                    self._last_pcm_at = time.time()
+                    self._archive_append(pcm)
+                    self._pcm_rx_bytes = getattr(self, "_pcm_rx_bytes", 0) + len(pcm)
+                    return True
+            # No listener and the hold is full. A paused/closed session, or one no
+            # longer wanting to listen, legitimately discards stray frames; only a
+            # session that IS still listening but has run out of hold capacity gets
+            # the explicit stall (fable #3).
+            if (
+                getattr(self, "_paused", False)
+                or getattr(self, "_closed", False)
+                or not getattr(self, "_listen_wanted", False)
+            ):
+                return True
+            self._report_pcm_stalled()
+            return False
 
     def dispatch(self, msg: dict) -> None:
         mtype = msg.get("type")
@@ -2845,20 +2886,6 @@ class Session:
         except Exception:
             pass
 
-    def _pcm_destination(self) -> CloudListener | None:
-        lst = self._listener
-        if lst is not None:
-            return lst
-        if (
-            getattr(self, "_listen_starting", False)
-            and self._listen_wanted
-            and not self._paused
-            and not getattr(self, "_closed", False)
-        ):
-            self._pcm_ready_event().wait(timeout=STT_PCM_OWNER_WAIT_SEC)
-            return self._listener
-        return None
-
     def _pcm_ready_event(self) -> threading.Event:
         ev = getattr(self, "_pcm_owner_ready", None)
         if ev is None:
@@ -2897,6 +2924,21 @@ class Session:
             self._pcm_rx_bytes = getattr(self, "_pcm_rx_bytes", 0) + len(pcm)
         self._archive_append(pcm)
         return True
+
+    def _report_pcm_stalled(self) -> None:
+        """Surface a hold overflow instead of silently dropping audio.
+
+        When the 2 MiB hold is full and there is no live listener, the incoming
+        frame cannot be kept (the phone cursor has advanced, so Retry will not
+        resend it). Report it once so the user sees the gap rather than a silent
+        transcript hole; the recorded archive still holds the bytes already
+        consumed (fable #3).
+        """
+        if getattr(self, "_pcm_stall_reported", False):
+            return
+        self._pcm_stall_reported = True
+        logging.getLogger("nod").warning("stt pcm hold overflow: audio rail stalled")
+        self.emit({"type": "error", "text": "Recording buffer full — audio may be incomplete."})
 
     def _flush_pcm_hold_into(self, lst: CloudListener) -> None:
         with self._listen_lock():
@@ -2975,43 +3017,60 @@ class Session:
         self._handoff_waiter = th
         th.start()
 
-    def _complete_blocked_handoff(self, lst: CloudListener) -> None:
+    def _claim_handoff_collect(self, lst: CloudListener) -> bool:
+        """Atomically claim the right to finish one handoff.
+
+        A handoff may be completed by more than one path (the auto-recovery waiter
+        after a blocked sender, and a Retry/pcm_end). Exactly ONE may collect the
+        unsent PCM and start the replacement listener; any other path must only read
+        the result (fable #2). The claim is a short critical section on _listen_lock.
+        """
+        with self._listen_lock():
+            if getattr(self, "_handoff_listener", None) is not lst:
+                return False
+            if getattr(self, "_handoff_collected", False):
+                return False
+            self._handoff_collected = True
+            return True
+
+    def _release_handoff_collect(self, lst: CloudListener) -> None:
+        """Undo a claim that turned out to be a blocked probe (nothing collected)."""
         with self._listen_lock():
             if getattr(self, "_handoff_listener", None) is not lst:
                 return
-            if getattr(self, "_handoff_collected", False):
-                return
+            self._handoff_collected = False
+
+    def _collect_handoff(self, lst: CloudListener) -> None:
+        """Sole-executor completion of one handoff.
+
+        Only the thread that wins the claim does the work: stash the unsent tail,
+        stop the old listener, clear the handoff, and reopen STT. A second path that
+        races this one sees the claim already held and returns without doing
+        anything — so auto-recovery and Retry cannot double-complete.
+        """
+        if not self._claim_handoff_collect(lst):
+            return
         result = self._stash_unsent(lst)
         if result.kind == "blocked":
+            self._release_handoff_collect(lst)
+            self._mark_handoff_blocked(lst)
             return
-        with self._listen_lock():
-            if getattr(self, "_handoff_collected", False):
-                return
-            self._handoff_collected = True
         self._stop_listener(lst)
         self._clear_handoff()
         self._flush_translate_carry("restart")
-        if self._listen_wanted and not self._paused:
+        if getattr(self, "_listen_wanted", False) and not getattr(self, "_paused", False):
             self._start_listening(resume=True)
         else:
             self._release_pcm_waiters()
+
+    def _complete_blocked_handoff(self, lst: CloudListener) -> None:
+        self._collect_handoff(lst)
 
     def _try_complete_handoff(self) -> None:
         lst = getattr(self, "_handoff_listener", None)
         if lst is None:
             return
-        if getattr(self, "_handoff_collected", False):
-            return
-        result = self._stash_unsent(lst)
-        if result.kind == "blocked":
-            self._mark_handoff_blocked(lst)
-            return
-        self._handoff_collected = True
-        self._stop_listener(lst)
-        self._clear_handoff()
-        self._flush_translate_carry("restart")
-        if self._listen_wanted and not self._paused:
-            self._start_listening(resume=True)
+        self._collect_handoff(lst)
 
     def _restart_listener(self) -> None:
         with self._listen_lock():
@@ -3027,17 +3086,7 @@ class Session:
             if self._listen_wanted and not self._paused:
                 self._start_listening(resume=True)
             return
-        result = self._stash_unsent(lst)
-        if result.kind == "blocked":
-            self._mark_handoff_blocked(lst)
-            return
-        self._stop_listener(lst)
-        self._clear_handoff()
-        self._flush_translate_carry("restart")
-        if self._listen_wanted and not self._paused:
-            self._start_listening(resume=True)
-        else:
-            self._release_pcm_waiters()
+        self._collect_handoff(lst)
 
     def _on_stt_sent(self, n: int, stream_gen: int | None = None) -> None:
         if stream_gen is not None and stream_gen != getattr(self, "_stt_stream_gen", 0):
@@ -3735,7 +3784,11 @@ class Session:
         ``capture`` stays ``paused`` so the Watch does not treat this as Stop.
         The cloud socket is Terminated; Resume opens a new stream.
         """
-        if self._listener is None and not self._manual:
+        if (
+            self._listener is None
+            and not getattr(self, "_handoff_listener", None)
+            and not self._manual
+        ):
             self.emit({"type": "status", "text": "Not listening"})
             return
         if self._manual:
@@ -3753,12 +3806,8 @@ class Session:
                 self._listener = None
                 if lst is not None:
                     self._handoff_listener = lst
-            result = self._stash_unsent(lst)
-            if result.kind == "blocked":
-                self._mark_handoff_blocked(lst)
-            else:
-                self._stop_listener(lst)
-                self._clear_handoff()
+            if lst is not None:
+                self._collect_handoff(lst)
         self._flush_translate_carry("pause")
         # Flush any held half-sentence, drain the worker (its queued finals may
         # re-open _open_line via _hold_or_emit_meeting), THEN close the open line

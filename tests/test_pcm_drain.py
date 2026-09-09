@@ -11,7 +11,7 @@ from unittest import mock
 from starlette.testclient import TestClient
 
 from server import uplink
-from server.app import CFG, CloudListener, Session, UnsentHandoff, _reset_live_stt
+from server.app import CFG, CloudListener, Session, UnsentHandoff, _reset_live_stt, STT_PCM_HOLD_MAX
 from tests.test_stt_terminate import _connected_ws
 
 
@@ -911,5 +911,166 @@ class HandoffLifecycleTests(unittest.TestCase):
             factory.assert_not_called()
         self.assertEqual([e for e in events if e.get("type") == "pcm_drained"], [])
         self.assertEqual(sess._pcm_end_id, "sess-live")
+        self.addCleanup(lambda: (block.set(), t.join(5.0)))
+
+
+
+class HandoffConcurrencyTests(unittest.TestCase):
+    """Fable #165 review: the four handoff/retry races and failure branches.
+
+    These drive the REAL Session entry points (push_pcm, pause_listen,
+    _try_complete_handoff, _complete_blocked_handoff) rather than calling the
+    stash helper directly, so the routing and completion coordination are
+    exercised end-to-end.
+    """
+
+    def setUp(self) -> None:
+        uplink.reset()
+        _reset_live_stt()
+
+    def tearDown(self) -> None:
+        uplink.reset()
+        _reset_live_stt()
+
+    def _live_session(self) -> Session:
+        sess = _session()
+        sess.usage_session_id = "sess-live"
+        sess._listen_wanted = True
+        sess._listen_started_at = time.time()
+        sess._consent_ok = True
+        sess.pipeline._keys["ASSEMBLYAI_API_KEY"] = "k"
+        sess._paused = False
+        return sess
+
+    def test_push_pcm_reroutes_frame_when_listener_appears_mid_hold(self) -> None:
+        """Issue 1: routing and enqueue must be coordinated with the handoff switch.
+
+        Reproduce the real TOCTOU through the REAL push_pcm entry: the frame
+        arrives while there is no live listener, then a handoff installs one
+        exactly when the hold is attempted. The frame must be re-routed to the new
+        listener, never silently dropped.
+        """
+        sess = self._live_session()
+        sess._listener = None
+        sess._handoff_listener = None
+        new = mock.Mock()
+
+        def appear_then_refuse(pcm):
+            # The new listener is installed at this exact instant; the hold now
+            # refuses because a listener is present (the old code path).
+            sess._listener = new
+            return False
+
+        with mock.patch.object(sess, "_hold_incoming_pcm", side_effect=appear_then_refuse):
+            sess.push_pcm(b"\x5e" * 1600)
+        # The frame must NOT have been dropped into the void — it reaches `new`.
+        calls = [c.args[0] for c in new.push_pcm.call_args_list
+                 if c.args and isinstance(c.args[0], (bytes, bytearray))]
+        self.assertTrue(
+            any(b"\x5e" * 1600 in (frame or b"") for frame in calls),
+            f"frame dropped on handoff switch; saw {len(calls)} push calls",
+        )
+
+    def test_concurrent_completion_paths_start_one_listener(self) -> None:
+        """Issue 2: auto-recovery and Retry must not both complete one handoff."""
+        sess = self._live_session()
+        lst = mock.Mock()
+        lst.take_unsent.return_value = b"\x99" * 1600
+        sess._listener = None
+        sess._handoff_listener = lst
+        sess._handoff_collected = False
+        sess._start_listening = mock.Mock()
+        real_stash = sess._stash_unsent
+
+        def slow_stash(l):
+            time.sleep(0.05)  # widen the race window so both paths see collected=False
+            return real_stash(l)
+
+        sess._stash_unsent = slow_stash
+        workers = [
+            threading.Thread(target=sess._try_complete_handoff),
+            threading.Thread(target=lambda: sess._complete_blocked_handoff(lst)),
+        ]
+        for t in workers:
+            t.start()
+        for t in workers:
+            t.join(4)
+
+        sess._start_listening.assert_called_once()
+        # Exactly one collection: the unsent tail is not replayed twice.
+        self.assertEqual(bytes(sess._stt_pending_pcm), b"\x99" * 1600)
+        self.assertIsNone(sess._handoff_listener)
+
+    def test_hold_overflow_is_reported_not_silently_dropped(self) -> None:
+        """Issue 3: a full 2 MiB hold must surface a failure, not log+drop."""
+        sess = self._live_session()
+        sess._listener = None
+        sess._handoff_listener = None
+        sess._pcm_hold = bytearray(STT_PCM_HOLD_MAX)  # capacity exhausted
+        events: list[dict] = []
+        sess.emit = events.append
+        sess.push_pcm(b"\xaa" * 1600)
+        # No live listener + full hold: the frame cannot be kept. The client must
+        # be told, not left with a silent gap in the transcript.
+        self.assertTrue(
+            any(e.get("type") in ("error", "status") for e in events),
+            f"no explicit failure surfaced; events={events!r}",
+        )
+
+    def test_pause_after_blocked_does_not_reopen_stt(self) -> None:
+        """Issue 4: Pause pressed while the handoff is already blocked must be honored.
+
+        First reconnect/Retry drives the listener into a blocked handoff, then the
+        user presses Pause. After the block clears, STT must NOT auto-reopen.
+        """
+        sess = self._live_session()
+        started = threading.Event()
+        block = threading.Event()
+        payload = b"\x4e" * 1600
+        lst = _listener()
+
+        def blocking_send(payload_sent, *a, **k):
+            if isinstance(payload_sent, (bytes, bytearray)):
+                started.set()
+                block.wait(10)
+                raise RuntimeError("send failed")
+
+        ws = _connected_ws()
+        ws.send.side_effect = blocking_send
+        lst._ws = ws
+        lst._pcm_buf.extend(payload)
+        t = threading.Thread(target=lst._sender, daemon=True)
+        lst._sender_thread = t
+        lst._stop.clear()
+        t.start()
+        lst._drain.set()
+        self.assertTrue(started.wait(1.0))
+        sess._listener = lst
+        events: list[dict] = []
+        sess.emit = events.append
+        factory, _created = _fake_listener_factory(sess)
+        with (
+            mock.patch("server.app.CloudListener", side_effect=factory),
+            mock.patch("server.app._adopt_live_stt", return_value=None),
+            mock.patch("server.app._ensure_idle_watch_thread"),
+            mock.patch("server.app._drop_live_stt"),
+        ):
+            # Establish the blocked handoff FIRST (a reconnect/Retry is in flight),
+            # THEN the user presses Pause while listener is None.
+            sess._restart_listener()
+            self.assertTrue(sess._handoff_blocked)
+            self.assertIsNone(sess._listener)
+            sess.pause_listen()
+            self.assertTrue(sess._paused)
+            # Unblock the sender; the waiter must NOT auto-reopen STT (Pause honored).
+            block.set()
+            deadline = time.time() + 3.0
+            while time.time() < deadline and sess._handoff_blocked:
+                time.sleep(0.05)
+        self.assertTrue(sess._paused)
+        self.assertTrue(sess._listen_wanted)
+        self.assertIsNone(sess._listener)
+        self.assertFalse(sess._handoff_blocked)
+        self.assertEqual(bytes(sess._stt_pending_pcm), payload)
         self.addCleanup(lambda: (block.set(), t.join(5.0)))
 
