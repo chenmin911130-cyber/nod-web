@@ -49,6 +49,10 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     private var pcmDrained = false
     private let pcmStore = WatchPcmStore()
     private var lastTransferAt: [Int: Date] = [:]
+    /// One in-flight transferFile per shard, keyed by "captureId|seq". Prevents a
+    /// timer, reconnect, End, or Retry from scheduling a second copy while the
+    /// first is still transferring (issue #165 review P2-3).
+    private var outstandingTransfers: [String: WCSessionFileTransfer] = [:]
 
     struct WatchHistItem: Identifiable, Equatable {
         let id: String
@@ -629,6 +633,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         pendingPcm.removeAll(keepingCapacity: true)
         liveStreamed = false
         pcmLock.unlock()
+        // A fresh capture must not inherit an old capture's in-flight records
+        // (its shard seqs may collide) — issue #165 review P2-3.
+        outstandingTransfers.removeAll(keepingCapacity: false)
     }
 
     private func forwardPcm(_ data: Data) {
@@ -680,12 +687,30 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             pcmStore.closeShard()
         }
         let now = Date()
+        let capture = pcmStore.captureId
         for shard in pcmStore.unackedShards() {
+            let key = Self.transferKey(capture: capture, seq: shard.seq)
+            if outstandingTransfers[key] != nil { continue }  // already in flight
             if let at = lastTransferAt[shard.seq], now.timeIntervalSince(at) < 8 { continue }
             lastTransferAt[shard.seq] = now
-            WCSession.default.transferFile(shard.url, metadata: pcmStore.metadata(for: shard))
+            let ft = WCSession.default.transferFile(shard.url, metadata: pcmStore.metadata(for: shard))
+            outstandingTransfers[key] = ft
         }
         maybeCompleteDrain()
+    }
+
+    /// "captureId|seq" — unique per shard and per capture, so an old capture's
+    /// completion callback can never release a new capture's in-flight record
+    /// even when the shard seqs collide (issue #165 review P2-3).
+    static func transferKey(capture: String, seq: Int) -> String {
+        "\(capture)|\(seq)"
+    }
+
+    /// True when a shard with the same capture+seq is still transferring. Used to
+    /// keep flushTransfers from ever scheduling a duplicate copy while the first
+    /// has not finished (issue #165 review P2-3).
+    static func hasOutstandingTransfer(_ transfers: [String: Any], capture: String, seq: Int) -> Bool {
+        transfers[transferKey(capture: capture, seq: seq)] != nil
     }
 
     private func flushUnsent() {
@@ -1062,6 +1087,20 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         guard Self.speechFileShouldPlay(at: at, now: Date().timeIntervalSince1970) else { return }
         guard let data = try? Data(contentsOf: file.fileURL), !data.isEmpty else { return }
         DispatchQueue.main.async { self.playSpeech(data) }
+    }
+
+    /// Outgoing transferFile completion. Releases the matching in-flight record so
+    /// the shard may be re-sent later if needed; it NEVER deletes the original —
+    /// a successful transfer means the bytes reached the phone, not that STT
+    /// drained. On error the shard stays in unackedShards for a bounded Retry,
+    /// not an immediate infinite reschedule (issue #165 review P2-3).
+    func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
+        DispatchQueue.main.async {
+            let id = fileTransfer.transferIdentifier
+            for (key, ft) in self.outstandingTransfers where ft.transferIdentifier == id {
+                self.outstandingTransfers.removeValue(forKey: key)
+            }
+        }
     }
 
     #if os(iOS)
