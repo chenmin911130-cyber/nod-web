@@ -304,9 +304,14 @@ final class WatchPcmIngest {
     private func beginDrainLocked(lastByte: Int, captureId: String, sessionId: String) {
         if !self.captureId.isEmpty, !captureId.isEmpty, captureId != self.captureId { return }
         if !sessionId.isEmpty, !self.sessionId.isEmpty, sessionId != self.sessionId { return }
+        let retry = pcmEndSent
         drainLastByte = lastByte
         drainCapture = captureId.isEmpty ? self.captureId : captureId
         drainSession = sessionId.isEmpty ? self.sessionId : sessionId
+        if retry {
+            nextByte = 0
+            ackByte = 0
+        }
         pcmEndSent = false
         AudioUplink.shared.flushTail()
         pumpLocked()

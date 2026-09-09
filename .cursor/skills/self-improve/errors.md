@@ -2,6 +2,12 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-09 · #165 复查：STT 重连丢未发送缓冲后空 drain 假成功
+- 我以为：回填 `_pcm_buf` 后同一 listener 再 drain 即可；测试替换 socket 覆盖了失败路径。
+- 实际：生产 `_restart_listener` 丢开旧对象、不移交未发送音频；`_pcm_rx_bytes` 仍满，新空队列 `drain()` 成功并发 `pcm_drained`。手机 `nextByte` 不回退，Retry 文件被判 duplicate。
+- 规则：重建 listener 必须移交未发送 PCM；确认要求 STT 已发出字节达到 End 偏移；Retry 回退手机 ingest 游标。
+- 涉及：`_restart_listener` · `CloudListener.take_unsent` · `_finish_pcm_end_if_ready` · `WatchPcmIngest.beginDrain`
+
 ## 2026-09-09 · #165 复查：socket 确认删片、失败排空清空缓冲后 Retry 假成功
 - 我以为：`pcmAckByte` 删已封片、`take_final_frames` 清空 `_pcm_buf` 后标失败即可，Retry 会再走一遍 drain。
 - 实际：socket 成功不等于 STT 排空；删片后排空失败就没有可补原片。失败路径已把尾块从 `_pcm_buf` 拿走，下次 `drain()` 见空缓冲会直接成功。

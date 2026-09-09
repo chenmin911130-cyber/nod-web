@@ -1759,13 +1759,14 @@ class Pipeline:
 
 
 class CloudListener:
-    def __init__(self, api_key: str, cfg: dict[str, Any], on_final, on_partial, on_error, on_drop=None):
+    def __init__(self, api_key: str, cfg: dict[str, Any], on_final, on_partial, on_error, on_drop=None, on_sent=None):
         self.api_key = api_key
         self.cfg = cfg
         self.on_final = on_final
         self.on_partial = on_partial
         self.on_error = on_error
         self.on_drop = on_drop
+        self.on_sent = on_sent
         self._q: queue.Queue[bytes] = queue.Queue(maxsize=240)
         self._stop = threading.Event()
         self._ready = threading.Event()
@@ -1790,6 +1791,8 @@ class CloudListener:
         self._drain = threading.Event()
         self._drained = threading.Event()
         self._drain_send_failed = False
+        self._stt_tx_bytes = 0
+        self._sender_thread: threading.Thread | None = None
 
     def set_muted(self, muted: bool) -> None:
         self._muted = bool(muted)
@@ -1817,6 +1820,26 @@ class CloudListener:
         self._drain_send_failed = False
         self._drain.set()
         return self._drained.wait(timeout)
+
+    def take_unsent(self) -> bytes:
+        """PCM that never reached STT. Stops the sender first so in-flight frames return to the buffer."""
+        self._stop.set()
+        t = getattr(self, "_sender_thread", None)
+        if t is not None and t is not threading.current_thread():
+            t.join(2.0)
+        out = bytearray()
+        while True:
+            try:
+                out.extend(self._q.get_nowait())
+            except queue.Empty:
+                break
+        out.extend(self._pcm_buf)
+        self._pcm_buf.clear()
+        return bytes(out)
+
+    def seed_unsent(self, pcm: bytes) -> None:
+        if pcm:
+            self._pcm_buf.extend(pcm)
 
     def start(self) -> None:
         import websocket
@@ -1853,7 +1876,8 @@ class CloudListener:
         if self._fail:
             self.stop()
             raise RuntimeError(self._fail[0])
-        threading.Thread(target=self._sender, daemon=True).start()
+        self._sender_thread = threading.Thread(target=self._sender, daemon=True)
+        self._sender_thread.start()
 
     def _on_open(self, _ws) -> None:
         self._was_ready = True
@@ -1925,6 +1949,10 @@ class CloudListener:
         try:
             ws.send(frame, websocket.ABNF.OPCODE_BINARY)
             self._record_send(frame)
+            self._stt_tx_bytes = getattr(self, "_stt_tx_bytes", 0) + len(frame)
+            cb = self.on_sent
+            if cb:
+                cb(len(frame))
             return True
         except Exception as e:
             if not self._stop.is_set():
@@ -2723,9 +2751,28 @@ class Session:
                 return
             lst = self._listener
             self._listener = None
-            self._stop_listener(lst)
-            self._flush_translate_carry("restart")
-            self._start_listening(resume=True)
+        self._stash_unsent(lst)
+        self._stop_listener(lst)
+        self._flush_translate_carry("restart")
+        self._start_listening(resume=True)
+
+    def _stash_unsent(self, lst: CloudListener | None) -> None:
+        if not lst:
+            return
+        take = getattr(lst, "take_unsent", None)
+        if not callable(take):
+            return
+        extra = take()
+        if not isinstance(extra, (bytes, bytearray)) or not extra:
+            return
+        prev = getattr(self, "_stt_pending_pcm", b"") or b""
+        if not isinstance(prev, (bytes, bytearray)):
+            prev = b""
+        self._stt_pending_pcm = bytes(prev) + bytes(extra)
+
+    def _on_stt_sent(self, n: int) -> None:
+        if n > 0:
+            self._stt_tx_bytes = getattr(self, "_stt_tx_bytes", 0) + int(n)
 
     def _on_listen_taken(self) -> None:
         """Another Session stole this user+workspace stream. Leave Listening.
@@ -3368,6 +3415,8 @@ class Session:
             return
         if not lst.drain():
             return
+        if getattr(self, "_stt_tx_bytes", 0) < offset:
+            return
         self._pcm_end_id = None
         self._pcm_end_capture = ""
         self._pcm_end_offset = 0
@@ -3422,6 +3471,7 @@ class Session:
             with self._listen_lock():
                 lst = self._listener
                 self._listener = None
+            self._stash_unsent(lst)
             self._stop_listener(lst)
         self._flush_translate_carry("pause")
         # Flush any held half-sentence, drain the worker (its queued finals may
@@ -3541,9 +3591,12 @@ class Session:
             on_partial=self._on_partial,
             on_error=lambda e: self.emit({"type": "error", "text": f"Transcription failed:{e}"}),
             on_drop=self._on_stt_drop,
+            on_sent=self._on_stt_sent,
         )
         if not resume:
             self._pcm_rx_bytes = 0
+            self._stt_tx_bytes = 0
+            self._stt_pending_pcm = b""
             self._pcm_end_id = None
             self._pcm_end_capture = ""
             self._pcm_end_offset = 0
@@ -3596,6 +3649,14 @@ class Session:
         self._emit_phase()
         if not resume:
             self.emit({"type": "status", "text": STATUS_LISTEN})
+        pending = getattr(self, "_stt_pending_pcm", b"") or b""
+        if isinstance(pending, (bytes, bytearray)) and pending:
+            self._stt_pending_pcm = b""
+            seed = getattr(listener, "seed_unsent", None)
+            if callable(seed):
+                seed(bytes(pending))
+            else:
+                self._stt_pending_pcm = bytes(pending)
         self._finish_pcm_end_if_ready()
 
     def _mark_voice(self) -> None:

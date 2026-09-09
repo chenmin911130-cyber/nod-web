@@ -25,6 +25,7 @@ import {
   watchDrainMessage,
   watchMayDeleteShard,
   watchMayDeleteWatchCopy,
+  watchIngestRewindForRetry,
   watchConsumedApplies,
 } from './watchReplay'
 
@@ -329,6 +330,29 @@ eq(
 )
 eq(watchDrainMessage({ lastByte: 6400, captureId: '', sessionId: 'sess-1' }), null, 'drain without capture is not sent')
 eq(watchMinFramePad(800), WATCH_PCM_MIN_CHUNK_BYTES, 'short End tail is padded before send')
+eq(watchIngestRewindForRetry({ pcmEndSent: false, nextByte: 6400 }), 6400, 'first drain keeps the phone cursor')
+eq(watchIngestRewindForRetry({ pcmEndSent: true, nextByte: 6400 }), 0, 'Retry rewinds so Watch files are not duplicate')
+
+{
+  const pipe = new WatchReplayIngest()
+  pipe.bind('cap-a', 'sess-1')
+  const shard = bytes(3200, 9)
+  eq(pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: shard, key: 'r:0' }), 'accept', 'first ingest')
+  pipe.consume(3200)
+  eq(
+    pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: shard, key: 'r:0' }),
+    'duplicate',
+    'caught-up ingest rejects the same shard',
+  )
+  pipe.pcmEndSent = true
+  pipe.rewindForRetry()
+  eq(pipe.nextByte, 0, 'Retry rewinds nextByte')
+  eq(
+    pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: shard, key: 'r:0' }),
+    'accept',
+    'after rewind the Watch original can be offered again',
+  )
+}
 
 {
   const pipe = new WatchReplayIngest()

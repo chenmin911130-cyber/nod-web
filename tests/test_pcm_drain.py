@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -23,8 +24,10 @@ def _session(user_id: str = "user-a") -> Session:
 def _live(sess: Session, *, rx: int = 6400) -> mock.Mock:
     sess.usage_session_id = "sess-live"
     sess._pcm_rx_bytes = rx
+    sess._stt_tx_bytes = rx
     lst = mock.Mock()
     lst.drain.return_value = True
+    lst.take_unsent.return_value = b""
     sess._listener = lst
     return lst
 
@@ -88,6 +91,18 @@ class PcmEndTests(unittest.TestCase):
         self.assertEqual(sess._pcm_end_id, "sess-live")
         self.assertIsNone(getattr(sess, "_pcm_drain_result", None))
 
+    def test_drain_does_not_emit_when_stt_tx_behind_offset(self) -> None:
+        sess = _session()
+        lst = _live(sess, rx=6400)
+        sess._stt_tx_bytes = 1600
+        events: list[dict] = []
+        sess.emit = events.append
+        sess.pcm_end("sess-live", 6400, "cap-a")
+        lst.drain.assert_called_once()
+        self.assertEqual(events, [])
+        self.assertEqual(sess._pcm_end_id, "sess-live")
+        self.assertIsNone(getattr(sess, "_pcm_drain_result", None))
+
     def test_listener_none_does_not_emit(self) -> None:
         sess = _session()
         sess.usage_session_id = "sess-live"
@@ -108,6 +123,7 @@ class PcmEndTests(unittest.TestCase):
         lst.drain.assert_not_called()
         self.assertEqual(events, [])
         sess._pcm_rx_bytes = 1600
+        lst.drain.side_effect = lambda *a, **k: setattr(sess, "_stt_tx_bytes", 1600) or True
         sess._finish_pcm_end_if_ready()
         lst.drain.assert_called_once()
         self.assertEqual(events[0]["type"], "pcm_drained")
@@ -182,6 +198,7 @@ class PcmEndTests(unittest.TestCase):
         ):
             sess._open_listener(resume=False)
         self.assertEqual(sess._pcm_rx_bytes, 0)
+        self.assertEqual(sess._stt_tx_bytes, 0)
         self.assertIsNone(sess._pcm_end_id)
         self.assertIsNone(sess._pcm_drain_result)
 
@@ -284,3 +301,97 @@ class SttSocketDrainTests(unittest.TestCase):
         lst._stop.set()
         t.join(0.5)
         self.assertTrue(ok)
+
+    def test_take_unsent_returns_queue_then_buf(self) -> None:
+        lst = _listener()
+        lst._q.put_nowait(b"\x02" * 50)
+        lst._pcm_buf.extend(b"\x01" * 100)
+        got = lst.take_unsent()
+        self.assertEqual(got, b"\x02" * 50 + b"\x01" * 100)
+        self.assertEqual(bytes(lst._pcm_buf), b"")
+
+    def test_restart_without_unsent_does_not_emit_pcm_drained(self) -> None:
+        sess = _session()
+        sess.usage_session_id = "sess-live"
+        sess._listen_wanted = True
+        sess._pcm_rx_bytes = 1600
+        sess._stt_tx_bytes = 0
+        sess._pcm_end_id = "sess-live"
+        sess._pcm_end_capture = "cap-a"
+        sess._pcm_end_offset = 1600
+        old = mock.Mock()
+        old.take_unsent.return_value = b""
+        sess._listener = old
+        new = mock.Mock()
+        new.drain.return_value = True
+        new.start = mock.Mock()
+        sess.pipeline._keys["ASSEMBLYAI_API_KEY"] = "k"
+        events: list[dict] = []
+        sess.emit = events.append
+        with (
+            mock.patch("server.app.CloudListener", return_value=new),
+            mock.patch("server.app._adopt_live_stt", return_value=None),
+            mock.patch("server.app._ensure_idle_watch_thread"),
+            mock.patch("server.app._drop_live_stt"),
+        ):
+            sess._restart_listener()
+        self.assertEqual([e for e in events if e.get("type") == "pcm_drained"], [])
+        self.assertEqual(sess._pcm_end_id, "sess-live")
+
+    def test_restart_listener_sends_handoff_tail_then_confirms(self) -> None:
+        sess = _session()
+        sess.usage_session_id = "sess-live"
+        sess._listen_wanted = True
+        sess.pipeline._keys["ASSEMBLYAI_API_KEY"] = "k"
+        payload = b"\x07" * 1600
+        old = _listener()
+        old._pcm_buf.extend(payload)
+        old._stop.clear()
+        sess._listener = old
+        sess._pcm_rx_bytes = 1600
+        sess._stt_tx_bytes = 0
+        sess._pcm_end_id = "sess-live"
+        sess._pcm_end_capture = "cap-a"
+        sess._pcm_end_offset = 1600
+        events: list[dict] = []
+        sess.emit = events.append
+
+        def factory(**kwargs):
+            lst = CloudListener(**kwargs)
+
+            def start() -> None:
+                lst._stop.clear()
+                lst._ws = _connected_ws()
+                lst._sender_thread = threading.Thread(target=lst._sender, daemon=True)
+                lst._sender_thread.start()
+
+            lst.start = start  # type: ignore[method-assign]
+            return lst
+
+        with (
+            mock.patch("server.app.CloudListener", side_effect=factory),
+            mock.patch("server.app._adopt_live_stt", return_value=None),
+            mock.patch("server.app._ensure_idle_watch_thread"),
+            mock.patch("server.app._drop_live_stt"),
+        ):
+            sess._restart_listener()
+        new = sess._listener
+        self.assertIsNotNone(new)
+        deadline = time.time() + 2.0
+        while time.time() < deadline and not any(e.get("type") == "pcm_drained" for e in events):
+            time.sleep(0.05)
+        if getattr(new, "_sender_thread", None):
+            new._stop.set()
+            new._sender_thread.join(1.0)
+        drained = [e for e in events if e.get("type") == "pcm_drained"]
+        self.assertEqual(
+            drained,
+            [{"type": "pcm_drained", "id": "sess-live", "capture_id": "cap-a", "byte_offset": 1600}],
+        )
+        sent = [
+            c.args[0]
+            for c in new._ws.send.call_args_list
+            if c.args and isinstance(c.args[0], (bytes, bytearray))
+        ]
+        self.assertTrue(any(frame[: len(payload)] == payload for frame in sent))
+        self.assertGreaterEqual(sess._stt_tx_bytes, 1600)

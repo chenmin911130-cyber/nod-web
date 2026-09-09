@@ -6,8 +6,10 @@ Ack layers (delete only after the next layer owns a copy):
 3. AudioUplink queue / socket write — not enough to stop STT or delete Watch copies.
 4. Server `pcm_drained` for this capture+session+offset — then Watch may delete,
    then `stop_listen`. Socket send / phone persist is not enough to delete Watch
-   copies; drain failure must still have shards to retry. Old clients omit
-   `pcm_end`; `stop_listen` stays immediate.
+   copies; drain failure must still have shards to retry. STT reconnect hands
+   off unsent PCM; confirm requires STT-sent bytes to reach the End offset.
+   Drain retry rewinds phone `nextByte` so Watch files are not duplicate.
+   Old clients omit `pcm_end`; `stop_listen` stays immediate.
 
 Caps: Watch disk 32 MiB (stop capture, keep files, visible error). Uplink RAM
 2 MiB with backpressure; never drop-oldest on the Watch ingest path.
@@ -237,6 +239,11 @@ export function watchMayDeleteWatchCopy(serverDrained: boolean): boolean {
   return serverDrained
 }
 
+/** Drain retry must re-offer Watch files; socket cursor is not STT consumption. */
+export function watchIngestRewindForRetry(opts: { pcmEndSent: boolean; nextByte: number }): number {
+  return opts.pcmEndSent ? 0 : opts.nextByte
+}
+
 export function watchMayDeletePhoneCopy(uplinkSent: boolean): boolean {
   return uplinkSent
 }
@@ -266,6 +273,7 @@ export class WatchReplayIngest {
   watchDeleted = new Set<string>()
   phoneDeleted = new Set<string>()
   delivered: number[] = []
+  pcmEndSent = false
   private parked: Parked[] = []
   private persistOk = true
   private watchKeys = new Set<string>()
@@ -351,6 +359,13 @@ export class WatchReplayIngest {
     for (const key of this.watchKeys) {
       if (watchMayDeleteWatchCopy(true)) this.watchDeleted.add(key)
     }
+  }
+
+  rewindForRetry(): void {
+    this.nextByte = watchIngestRewindForRetry({ pcmEndSent: true, nextByte: this.nextByte })
+    this.uplinkQueued = 0
+    this.uplinkSent = 0
+    this.pcmEndSent = false
   }
 
   private endOf(key: string, bytes: Uint8Array): number {
