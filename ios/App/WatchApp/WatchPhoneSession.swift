@@ -1,11 +1,13 @@
-import AVFoundation
 import Combine
 import Foundation
+#if !PCM_REPLAY_TESTING
+import AVFoundation
 import WatchConnectivity
 import WatchKit
+#endif
 
 final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WKExtendedRuntimeSessionDelegate, AVAudioPlayerDelegate {
-    static let shared = WatchPhoneSession()
+    static let shared = WatchPhoneSession(pcmStore: WatchPcmStore())
 
     @Published var listening = false
     @Published var starting = false
@@ -30,6 +32,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var drainFailed = false
     @Published var pcmStalled = false
     @Published var pcmStallText = ""
+    @Published var storageFailed = false
+    @Published var storageErrorText = ""
     @Published var pcmRejected = false
     @Published var pcmRejectText = ""
 
@@ -43,7 +47,17 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     /// Delete a user-confirmed, non-current capture. Returns the freed bytes (0 if
     /// refused — e.g. the current recording). The current capture is never deleted.
     func deleteUnfinishedCapture(_ id: String) -> Int {
-        pcmStore.deleteCapture(id)
+        let inSystem = WCSession.default.outstandingFileTransfers.contains {
+            $0.file.metadata?["captureId"] as? String == id
+        }
+        let inLocal = outstandingTransfers.keys.contains { $0.hasPrefix(id + "|") }
+        guard !inSystem, !inLocal else {
+            storageErrorText = WatchCopy.transferBusy
+            return 0
+        }
+        let freed = pcmStore.deleteCapture(id)
+        storageErrorText = freed > 0 ? "" : WatchCopy.deleteFailed
+        return freed
     }
 
     private var localModeHeld = false
@@ -60,7 +74,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     private var pendingSaveOffer = false
     private var saveAfterDrain = false
     private var pcmDrained = false
-    private let pcmStore = WatchPcmStore()
+    private let pcmStore: WatchPcmStore
     private var lastTransferAt: [Int: Date] = [:]
     /// One in-flight transferFile per shard, keyed by "captureId|seq". Prevents a
     /// timer, reconnect, End, or Retry from scheduling a second copy while the
@@ -87,12 +101,13 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     /// Phone-initiated sessions stay false so Pause / Resume / speech do not seize the mic.
     private var localWatchMic = false
 
-    override private init() {
+    init(pcmStore: WatchPcmStore, connect: Bool = true) {
+        self.pcmStore = pcmStore
         super.init()
         WatchRecorder.shared.onPcm = { [weak self] data in
             self?.forwardPcm(data)
         }
-        guard WCSession.isSupported() else { return }
+        guard connect, WCSession.isSupported() else { return }
         WCSession.default.delegate = self
         WCSession.default.activate()
         DispatchQueue.main.async { [weak self] in
@@ -194,6 +209,13 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         }
         resetPcmBuffer()
         pcmStore.beginCapture()
+        phoneSessionId = ""
+        storageFailed = false
+        storageErrorText = ""
+        pcmRejected = false
+        pcmRejectText = ""
+        pcmStalled = false
+        pcmStallText = ""
         lastTransferAt.removeAll()
         original = ""
         translation = ""
@@ -309,6 +331,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         drainFailed = false
         pcmDrained = false
         pcmStore.freeze()
+        if pcmRejected {
+            draining = false
+            drainFailed = true
+            return
+        }
         draining = true
         hint = WatchCopy.replaying
         armDrainWait()
@@ -356,14 +383,17 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         saveWaitWork = nil
         resetPcmBuffer()
         pcmStore.beginCapture()
+        phoneSessionId = ""
+        storageFailed = false
+        storageErrorText = ""
+        pcmRejected = false
+        pcmRejectText = ""
+        pcmStalled = false
+        pcmStallText = ""
         lastTransferAt.removeAll()
         draining = false
         drainFailed = false
         pcmDrained = false
-        pcmStalled = false
-        pcmStallText = ""
-        pcmRejected = false
-        pcmRejectText = ""
         pendingSaveOffer = false
         saveAfterDrain = false
         original = ""
@@ -646,9 +676,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         pendingPcm.removeAll(keepingCapacity: true)
         liveStreamed = false
         pcmLock.unlock()
-        // A fresh capture must not inherit an old capture's in-flight records
-        // (its shard seqs may collide) — issue #165 review P2-3.
-        outstandingTransfers.removeAll(keepingCapacity: false)
+        // Keep old in-flight ownership until its completion callback. Capture is
+        // part of the key; new captures cannot collide with old shard sequences.
     }
 
     private func forwardPcm(_ data: Data) {
@@ -659,12 +688,18 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     private func sendPcm(_ data: Data) {
+        guard !pcmRejected, !storageFailed, !pcmStore.frozen, !pcmStore.captureId.isEmpty else { return }
         guard let placed = pcmStore.append(data) else {
             WatchRecorder.shared.stop()
             stopRuntime()
-            if listening {
-                hint = WatchCopy.diskFull
-            }
+            pcmStore.freeze()
+            storageFailed = true
+            listening = false
+            paused = false
+            draining = false
+            drainFailed = true
+            hint = WatchCopy.diskFull
+            WatchGlanceStore.clear()
             flushTransfers()
             return
         }
@@ -690,17 +725,27 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         session.sendMessage(payload, replyHandler: { [weak self] reply in
             DispatchQueue.main.async { self?.apply(reply, live: false) }
         }, errorHandler: { [weak self] _ in
-            self?.pcmStore.closeShard()
-            self?.flushTransfers()
+            DispatchQueue.main.async {
+                self?.pcmStore.closeShard()
+                self?.flushTransfers()
+            }
         })
     }
 
     private func flushTransfers() {
+        guard !pcmRejected else { return }
         if draining || !reachable {
             pcmStore.closeShard()
         }
         let now = Date()
         let capture = pcmStore.captureId
+        for transfer in WCSession.default.outstandingFileTransfers {
+            let metadata = transfer.file.metadata ?? [:]
+            let cap = metadata["captureId"] as? String ?? ""
+            if !cap.isEmpty, let seq = Self.intField(metadata, "seq") {
+                outstandingTransfers[Self.transferKey(capture: cap, seq: seq)] = transfer
+            }
+        }
         for shard in pcmStore.unackedShards() {
             let key = Self.transferKey(capture: capture, seq: shard.seq)
             if outstandingTransfers[key] != nil { continue }  // already in flight
@@ -799,6 +844,34 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         }
         offeringSave = offer
         hint = offer ? WatchCopy.saveAsk : WatchCopy.ready
+    }
+
+    /// User chooses to leave an incomplete capture. Keep its files, detach it
+    /// from the active recording, and return to a usable Start/storage page.
+    func leaveIncomplete() {
+        guard drainFailed || pcmRejected || storageFailed else { return }
+        WatchRecorder.shared.stop()
+        stopRuntime()
+        drainWaitWork?.cancel()
+        drainWaitWork = nil
+        if !pcmRejected { send(action: "stop") }
+        cancelCaptureTransfers(pcmStore.captureId)
+        pcmStore.retireCapture()
+        listening = false
+        paused = false
+        starting = false
+        draining = false
+        drainFailed = false
+        offeringSave = false
+        pendingSaveOffer = false
+        saveAfterDrain = false
+        hint = WatchCopy.ready
+    }
+
+    private func cancelCaptureTransfers(_ id: String) {
+        for transfer in WCSession.default.outstandingFileTransfers {
+            if transfer.file.metadata?["captureId"] as? String == id { transfer.cancel() }
+        }
     }
 
     func retryDrain() {
@@ -910,6 +983,14 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     private func apply(_ payload: [String: Any], live: Bool) {
+        // Validate against the bound capture BEFORE applying any top-level
+        // sessionId from this payload. A stale status cannot authenticate itself.
+        if Self.flag(payload, "pcmRejected") {
+            let sid = payload["pcmRejectSessionId"] as? String ?? ""
+            let cap = payload["pcmRejectCaptureId"] as? String ?? ""
+            guard !sid.isEmpty, !cap.isEmpty,
+                  sid == pcmStore.sessionId, cap == pcmStore.captureId else { return }
+        }
         if let sessionId = payload["sessionId"] as? String, !sessionId.isEmpty {
             phoneSessionId = sessionId
             pcmStore.bindSession(sessionId)
@@ -968,27 +1049,23 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             }
         }
         if Self.flag(payload, "pcmRejected") {
-            let rejectSession = (payload["pcmRejectSessionId"] as? String) ?? ""
-            // Match against the session this Watch was draining. A stale rejection
-            // from an old session must not clobber a new capture (issue #165 P2-8).
-            if rejectSession.isEmpty || phoneSessionId.isEmpty || rejectSession == phoneSessionId {
-                let message = (payload["pcmRejectText"] as? String)
-                    ?? "会话已结束，补传未完成。"
-                pcmRejected = true
-                pcmRejectText = message
-                // The session is over and cannot be drained: end the drain wait
-                // and surface the failure. Preserve the original files; do not
-                // auto-start a new capture.
-                if draining {
-                    drainWaitWork?.cancel()
-                    drainWaitWork = nil
-                    draining = false
-                    drainFailed = true
-                }
-                if !message.isEmpty, !offeringSave, !savedAck, !saving, !saveFailed, !starting {
-                    hint = message
-                }
-            }
+            pcmRejected = true
+            pcmRejectText = payload["pcmRejectText"] as? String ?? WatchCopy.pcmRejected
+            WatchRecorder.shared.stop()
+            stopRuntime()
+            pcmStore.freeze()
+            listening = false
+            paused = false
+            localWatchMic = false
+            drainWaitWork?.cancel()
+            drainWaitWork = nil
+            draining = false
+            drainFailed = true
+            hint = pcmRejectText
+            cancelCaptureTransfers(pcmStore.captureId)
+            // The status also carries old capture/save fields; do not let them
+            // restart capture or offer Save after this terminal failure.
+            return
         }
         if let save = payload["save"] as? String {
             applySaveStatus(save, sessionId: (payload["sessionId"] as? String) ?? "")
@@ -1005,7 +1082,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let pair = payload["langPair"] as? String, !pair.isEmpty {
             langPair = pair
         }
-        if let capture = payload["capture"] as? String {
+        if let capture = payload["capture"] as? String, !pcmRejected, !storageFailed {
             syncFromCapture(capture)
         }
         if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck, !saving, !saveFailed, !starting, !localWatchMic, !draining, !drainFailed, !pcmStalled {

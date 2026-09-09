@@ -18,10 +18,14 @@ final class WatchPcmStore {
 
     private let lock = NSLock()
     private let fm = FileManager.default
+    private let rootOverride: URL?
+
+    init(rootURL: URL? = nil) { self.rootOverride = rootURL }
     private var handle: FileHandle?
     private var shardWritten = 0
     private var currentSeq = 0
     private var root: URL {
+        if let rootOverride { return rootOverride }
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.temporaryDirectory
         return base.appendingPathComponent("nod-watch-pcm", isDirectory: true)
@@ -73,6 +77,15 @@ final class WatchPcmStore {
             }
         }
         return total
+    }
+
+    func retireCapture() {
+        lock.lock()
+        defer { lock.unlock() }
+        closeHandleLocked()
+        frozen = true
+        captureId = ""
+        sessionId = ""
     }
 
     func bindSession(_ id: String) {
@@ -294,10 +307,9 @@ final class WatchPcmStore {
     }
 
     private func refreshUsed() {
-        let total = usedBytesOnDisk()
         lock.lock()
-        usedBytes = total
-        lock.unlock()
+        defer { lock.unlock() }
+        usedBytes = usedBytesOnDisk()
     }
 
     /// Minimal "unfinished recording" management entry (issue #165 review P2-7).
@@ -347,8 +359,8 @@ final class WatchPcmStore {
     /// freed bytes.
     func deleteCapture(_ id: String) -> Int {
         lock.lock()
+        defer { lock.unlock() }
         let current = captureId
-        lock.unlock()
         guard !id.isEmpty, id != current else { return 0 }
         let dir = root.appendingPathComponent(id, isDirectory: true)
         guard fm.fileExists(atPath: dir.path) else { return 0 }
@@ -366,7 +378,7 @@ final class WatchPcmStore {
         } catch {
             return 0
         }
-        refreshUsed()
+        usedBytes = usedBytesOnDisk()
         return freed
     }
 }

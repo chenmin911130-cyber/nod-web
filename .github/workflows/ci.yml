@@ -91,3 +91,10 @@ jobs:
           name: playwright-report
           path: web/playwright-report/
           retention-days: 7
+
+  native-replay:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test production native replay consumers with device transport doubles
+        run: bash scripts/test-watch-replay.sh

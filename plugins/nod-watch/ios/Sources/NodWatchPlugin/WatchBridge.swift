@@ -1,6 +1,8 @@
+#if !PCM_REPLAY_TESTING
 import AVFoundation
-import Foundation
 import WatchConnectivity
+#endif
+import Foundation
 
 /// Phone-side WatchConnectivity. Watch mic PCM is forwarded to JS; start/stop
 /// are queued until the workspace is ready so consent / start_listen stay intact.

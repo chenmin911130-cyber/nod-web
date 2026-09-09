@@ -35,6 +35,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     private var stash = Data()
     private var pending: [Data] = []
     private var pendingBytes = 0
+    private var acceptingPcm = true // under bufLock
     private var reconnectAttempt = 0
     private var reconnectWork: DispatchWorkItem?
     private var pingTimer: DispatchSourceTimer?
@@ -125,6 +126,9 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                 )
             }
             self.url = url
+            self.bufLock.lock()
+            self.acceptingPcm = true
+            self.bufLock.unlock()
             self.stopped = false
             self.reconnectAttempt = 0
             self.startCompletions = [completion]
@@ -188,6 +192,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         queue.async { [weak self] in
             guard let self else { return }
             self.bufLock.lock()
+            guard self.acceptingPcm else { self.bufLock.unlock(); return }
             self.append(data, dropOldest: true)
             self.bufLock.unlock()
             self.pump()
@@ -199,7 +204,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     func tryEnqueue(_ data: Data) -> Bool {
         guard !data.isEmpty else { return true }
         bufLock.lock()
-        let ok = pendingBytes + stash.count + data.count <= maxPendingBytes
+        let ok = acceptingPcm && pendingBytes + stash.count + data.count <= maxPendingBytes
         if ok {
             append(data, dropOldest: false)
         }
@@ -486,7 +491,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         }
     }
 
-    private func handleAudioText(_ text: String) {
+    func handleAudioText(_ text: String) {
         guard let data = text.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
@@ -517,15 +522,33 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                 ]
             )
         case "pcm_rejected":
+            let sid = obj["id"] as? String ?? ""
+            let wireCapture = obj["capture_id"] as? String ?? obj["captureId"] as? String ?? ""
+            guard !sid.isEmpty, sid == streamSessionId, !streamCaptureId.isEmpty,
+                  wireCapture.isEmpty || wireCapture == streamCaptureId else { return }
+            // Raw PCM has no capture header. A session-wide rejection on this
+            // bound socket applies to its current capture; never relabel a
+            // rejection that already carries a different capture.
+            let capture = wireCapture.isEmpty ? streamCaptureId : wireCapture
+            stopped = true
+            reconnectWork?.cancel()
+            flushWork?.cancel()
+            pumpWork?.cancel()
+            stopPing()
+            bufLock.lock()
+            acceptingPcm = false
+            pending.removeAll()
+            pendingBytes = 0
+            stash.removeAll()
+            bufLock.unlock()
+            WatchPcmIngest.shared.reject(sessionId: sid, captureId: capture)
+            // Keep enabled=true: a dead native rail must not fall back to JS.
             NotificationCenter.default.post(
                 name: Notification.Name("nod.watch.pcm.serverRejected"),
                 object: nil,
-                userInfo: [
-                    "sessionId": obj["id"] as? String ?? "",
-                    "captureId": obj["capture_id"] as? String ?? obj["captureId"] as? String ?? "",
-                    "reason": obj["reason"] as? String ?? "session_ended",
-                    "text": obj["text"] as? String ?? "",
-                ]
+                userInfo: ["sessionId": sid, "captureId": capture,
+                           "reason": obj["reason"] as? String ?? "session_ended",
+                           "text": obj["text"] as? String ?? ""]
             )
         default:
             break

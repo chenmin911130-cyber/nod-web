@@ -106,6 +106,9 @@ struct WatchRootView: View {
 
     private var livePage: some View {
         VStack(spacing: 4) {
+            if session.storageFailed {
+                Text(WatchCopy.diskFull).font(.caption).foregroundStyle(Color.orange)
+            }
             if session.pcmStalled && !session.draining && !session.drainFailed {
                 stallWarning
                     .padding(.horizontal, 6)
@@ -148,6 +151,9 @@ struct WatchRootView: View {
             }
             if session.pcmRejected {
                 rejectedWarning
+            }
+            if session.drainFailed {
+                Button(WatchCopy.done) { session.leaveIncomplete() }.tint(panel)
             }
             if session.drainFailed && !session.pcmRejected {
                 Button(WatchCopy.retry) { session.retryDrain() }
@@ -261,6 +267,9 @@ struct WatchRootView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(ink)
                 .multilineTextAlignment(.center)
+            if !session.storageErrorText.isEmpty {
+                Text(session.storageErrorText).font(.caption2).foregroundStyle(Color.orange)
+            }
             if items.isEmpty {
                 Text(WatchCopy.noUnfinished)
                     .font(.caption)

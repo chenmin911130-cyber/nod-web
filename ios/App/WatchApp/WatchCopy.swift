@@ -306,6 +306,9 @@ enum WatchCopy {
     }
 
     /// Storage-management entry (issue #165 review P2-7).
+    static var transferBusy: String { pick(["zh": "文件仍在传输，请稍后再删除", "en": "File is transferring. Try deleting later."]) }
+    static var deleteFailed: String { pick(["zh": "未能删除，录音已保留", "en": "Could not delete. Recording kept."]) }
+
     static var manageStorage: String {
         pick([
             "zh": "管理存储",

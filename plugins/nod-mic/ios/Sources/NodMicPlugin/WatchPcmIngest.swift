@@ -26,6 +26,7 @@ final class WatchPcmIngest {
     private var drainCapture = ""
     private var drainSession = ""
     private var pcmEndSent = false
+    private var rejected = false
     private var observers: [NSObjectProtocol] = []
 
     private var inboundRoot: URL {
@@ -137,6 +138,7 @@ final class WatchPcmIngest {
         queue.sync { [weak self] in
             guard let self else { return }
             if !self.captureId.isEmpty, !captureId.isEmpty, captureId != self.captureId {
+                self.rejected = false
                 self.nextByte = 0
                 self.parked.removeAll()
                 self.ackByte = 0
@@ -151,9 +153,21 @@ final class WatchPcmIngest {
         }
     }
 
+    func reject(sessionId: String, captureId: String) {
+        queue.async {
+            guard !sessionId.isEmpty, sessionId == self.sessionId,
+                  captureId == self.captureId else { return }
+            self.rejected = true
+            self.drainLastByte = -1
+            // Keep parked originals and nextByte. A terminal rejection must not
+            // become an offset rewind or another pump attempt.
+        }
+    }
+
     func reset() {
         queue.sync { [weak self] in
             guard let self else { return }
+            self.rejected = false
             self.nextByte = 0
             self.captureId = ""
             self.sessionId = ""
@@ -215,6 +229,11 @@ final class WatchPcmIngest {
         }
         var ok = true
         queue.sync {
+            if self.rejected {
+                try? self.fm.removeItem(at: dest)
+                ok = false
+                return
+            }
             let size = (try? self.fm.attributesOfItem(atPath: dest.path)[.size] as? Int) ?? 0
             let decision = Self.decision(
                 liveCapture: self.captureId,
@@ -254,6 +273,7 @@ final class WatchPcmIngest {
         sessionId: String,
         offset: Int
     ) -> String {
+        if rejected { return "session-ended" }
         if captureId.isEmpty { return "stale-capture" }
         let decision = Self.decision(
             liveCapture: self.captureId,
@@ -302,6 +322,7 @@ final class WatchPcmIngest {
     }
 
     private func beginDrainLocked(lastByte: Int, captureId: String, sessionId: String) {
+        guard !rejected else { return }
         if !self.captureId.isEmpty, !captureId.isEmpty, captureId != self.captureId { return }
         if !sessionId.isEmpty, !self.sessionId.isEmpty, sessionId != self.sessionId { return }
         drainLastByte = lastByte
@@ -314,7 +335,7 @@ final class WatchPcmIngest {
     }
 
     private func maybeRequestPcmEndLocked() {
-        guard !pcmEndSent, drainLastByte >= 0, !drainSession.isEmpty, !drainCapture.isEmpty else { return }
+        guard !rejected, !pcmEndSent, drainLastByte >= 0, !drainSession.isEmpty, !drainCapture.isEmpty else { return }
         if !drainCapture.isEmpty, drainCapture != captureId { return }
         guard nextByte >= drainLastByte else { return }
         pcmEndSent = true
@@ -322,7 +343,7 @@ final class WatchPcmIngest {
     }
 
     private func pumpLocked() {
-        guard !pumping else { return }
+        guard !rejected, !pumping else { return }
         pumping = true
         defer { pumping = false }
         while let head = parked.first {
