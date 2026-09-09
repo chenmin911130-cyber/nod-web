@@ -47,6 +47,23 @@ def take_frames(buf: bytearray) -> list[bytes]:
     return out
 
 
+def take_one_frame(buf: bytearray) -> bytes:
+    """Pull exactly one 50–100 ms frame, leaving the rest in place.
+
+    Unlike ``take_frames`` (which drains the whole buffer into a list, so the
+    sender holds a large backlog in a local variable and stops re-reading the
+    queue), this lets a sender send one frame per cycle and re-check newly
+    arrived data between sends — the ordering guarantee for a large seed/hold
+    followed by live frames (issue #165 P1).
+    """
+    if len(buf) < MIN_CHUNK_BYTES:
+        return b""
+    n = min(len(buf), TARGET_CHUNK_BYTES)
+    out = bytes(buf[:n])
+    del buf[:n]
+    return out
+
+
 def take_final_frames(buf: bytearray) -> list[bytes]:
     """End drain: send leftover audio padded to the 50 ms floor."""
     out = take_frames(buf)
