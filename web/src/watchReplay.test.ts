@@ -24,6 +24,7 @@ import {
   watchPcmEndMessage,
   watchDrainMessage,
   watchMayDeleteShard,
+  watchMayDeleteWatchCopy,
   watchConsumedApplies,
 } from './watchReplay'
 
@@ -185,7 +186,9 @@ eq(
   eq(pipe.nextByte, file.length, 'file larger than 2 MiB is sent in full')
   eq(pipe.delivered.length, file.length, 'every byte is delivered once')
   eq(pipe.droppedOldest, 0, 'complete send still never drops old frames')
-  eq(pipe.watchDeleted.has('big:0'), true, 'Watch copy deletes only after phone persist+consume')
+  eq(pipe.watchDeleted.has('big:0'), false, 'socket/phone consume must not delete the Watch original')
+  pipe.markServerDrained()
+  eq(pipe.watchDeleted.has('big:0'), true, 'Watch copy deletes only after matching pcm_drained')
 }
 
 {
@@ -295,8 +298,11 @@ eq(
   false,
   'delayed consume after capture change does not advance the new cursor',
 )
-eq(watchMayDeleteShard({ openSeq: 2, seq: 2, offset: 160000, bytes: 3200, ack: 163200 }), false, 'open shard is not deleted when ack catches its current length')
-eq(watchMayDeleteShard({ openSeq: 2, seq: 1, offset: 0, bytes: 160000, ack: 160000 }), true, 'sealed fully-acked shard may be deleted')
+eq(watchMayDeleteWatchCopy(false), false, 'phone persist or socket send is not enough to delete Watch copies')
+eq(watchMayDeleteWatchCopy(true), true, 'matching pcm_drained may delete Watch copies')
+eq(watchMayDeleteShard({ openSeq: 2, seq: 2, offset: 160000, bytes: 3200, ack: 163200, serverDrained: true }), false, 'open shard is not deleted when ack catches its current length')
+eq(watchMayDeleteShard({ openSeq: 2, seq: 1, offset: 0, bytes: 160000, ack: 160000, serverDrained: false }), false, 'socket ack without pcm_drained must not delete a sealed shard')
+eq(watchMayDeleteShard({ openSeq: 2, seq: 1, offset: 0, bytes: 160000, ack: 160000, serverDrained: true }), true, 'sealed fully-acked shard may be deleted after pcm_drained')
 
 eq(watchFilePumpStep({ queued: UPLINK_MAX_PENDING_BYTES, parked: 1 }), 'paused', 'full uplink pauses the file pump')
 eq(watchFilePumpStep({ queued: 0, parked: 1 }), 'continue', 'room to send continues the file pump')

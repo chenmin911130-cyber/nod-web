@@ -5,7 +5,9 @@ Ack layers (delete only after the next layer owns a copy):
 2. Phone inbound file — persist then stream. Not an STT ack.
 3. AudioUplink queue / socket write — not enough to stop STT or delete Watch copies.
 4. Server `pcm_drained` for this capture+session+offset — then Watch may delete,
-   then `stop_listen`. Old clients omit `pcm_end`; `stop_listen` stays immediate.
+   then `stop_listen`. Socket send / phone persist is not enough to delete Watch
+   copies; drain failure must still have shards to retry. Old clients omit
+   `pcm_end`; `stop_listen` stays immediate.
 
 Caps: Watch disk 32 MiB (stop capture, keep files, visible error). Uplink RAM
 2 MiB with backpressure; never drop-oldest on the Watch ingest path.
@@ -161,14 +163,16 @@ export function watchConsumedApplies(opts: {
   })
 }
 
-/** Sealed shards only. The open FileHandle shard must not be unlinked. */
+/** Sealed shards only, and only after server drain. Socket ack must not unlink. */
 export function watchMayDeleteShard(opts: {
   openSeq: number
   seq: number
   offset: number
   bytes: number
   ack: number
+  serverDrained: boolean
 }): boolean {
+  if (!opts.serverDrained) return false
   if (opts.openSeq > 0 && opts.seq === opts.openSeq) return false
   return opts.offset + opts.bytes <= opts.ack
 }
@@ -229,8 +233,8 @@ export function watchDrainTimedOut(opts: { freezeAt: number; now: number; lastBy
   return opts.now - opts.freezeAt >= watchDrainDeadlineSec(opts.lastByte)
 }
 
-export function watchMayDeleteWatchCopy(phonePersisted: boolean): boolean {
-  return phonePersisted
+export function watchMayDeleteWatchCopy(serverDrained: boolean): boolean {
+  return serverDrained
 }
 
 export function watchMayDeletePhoneCopy(uplinkSent: boolean): boolean {
@@ -264,6 +268,7 @@ export class WatchReplayIngest {
   delivered: number[] = []
   private parked: Parked[] = []
   private persistOk = true
+  private watchKeys = new Set<string>()
 
   setPersistOk(ok: boolean): void {
     this.persistOk = ok
@@ -276,6 +281,7 @@ export class WatchReplayIngest {
       this.uplinkQueued = 0
       this.uplinkSent = 0
       this.watchDeleted.clear()
+      this.watchKeys.clear()
     }
     if (captureId) this.captureId = captureId
     if (sessionId) this.sessionId = sessionId
@@ -309,6 +315,7 @@ export class WatchReplayIngest {
       if (!this.persistOk) return decision
       this.phoneFiles.set(opts.key, opts.bytes)
     }
+    this.watchKeys.add(opts.key)
 
     if (decision === 'future') {
       this.parked.push({ offset: opts.offset, bytes: opts.bytes, key: opts.key })
@@ -340,6 +347,12 @@ export class WatchReplayIngest {
     return this.nextByte
   }
 
+  markServerDrained(): void {
+    for (const key of this.watchKeys) {
+      if (watchMayDeleteWatchCopy(true)) this.watchDeleted.add(key)
+    }
+  }
+
   private endOf(key: string, bytes: Uint8Array): number {
     const parts = key.split(':')
     const offset = Number(parts[1] || 0)
@@ -362,7 +375,7 @@ export class WatchReplayIngest {
       for (let b = 0; b < take; b++) this.delivered.push(chunk[b]!)
       i += take
       if (this.phoneFiles.has(key) && this.nextByte >= this.endOf(key, this.phoneFiles.get(key)!)) {
-        if (watchMayDeleteWatchCopy(true)) this.watchDeleted.add(key)
+        if (watchMayDeleteWatchCopy(false)) this.watchDeleted.add(key)
       }
     }
   }

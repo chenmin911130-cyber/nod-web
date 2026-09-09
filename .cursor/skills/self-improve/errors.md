@@ -2,6 +2,12 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-09 · #165 复查：socket 确认删片、失败排空清空缓冲后 Retry 假成功
+- 我以为：`pcmAckByte` 删已封片、`take_final_frames` 清空 `_pcm_buf` 后标失败即可，Retry 会再走一遍 drain。
+- 实际：socket 成功不等于 STT 排空；删片后排空失败就没有可补原片。失败路径已把尾块从 `_pcm_buf` 拿走，下次 `drain()` 见空缓冲会直接成功。
+- 规则：Watch 原片只在匹配的 `pcm_drained` 之后删除；STT 发送失败必须把未发出的帧放回缓冲，Retry 不能把空队列当成功。
+- 涉及：`WatchPcmStore.ack` · `WatchPhoneSession.apply pcmAck` · `CloudListener._send_drain_tail`
+
 ## 2026-09-09 · #165 复审：假成功排空、park 丢确认、Resume 游标归零、删未封片、旧 drained 贴新 capture
 - 我以为：`drain()` 之后一律 `pcm_drained`、控制 WS emit、`_pcm_rx_bytes` 跟 STT 子流走、ack 追上当前片长度即可删、sessionId 足够区分排空。
 - 实际：`drain()==False` / listener 空 / STT socket 未连仍发成功；park 把 emit 换成空 sink 且 reattach 不重放；Pause/Resume 清累计字节，End 永远等不到；`deleteAckedShards` 不排除打开的 FileHandle；`markPcmDrained` 只核 session 再盖上当前 capture，旧确认能放行新录音。

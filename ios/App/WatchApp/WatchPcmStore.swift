@@ -123,7 +123,18 @@ final class WatchPcmStore {
         lock.unlock()
     }
 
+    /// Advance the live-transfer skip cursor. Does not delete shards; socket
+    /// send is not STT drain. Retry must still have the original files.
     func ack(_ byte: Int, captureId: String, sessionId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        if captureId.isEmpty || captureId != self.captureId { return }
+        if !sessionId.isEmpty, !self.sessionId.isEmpty, sessionId != self.sessionId { return }
+        if byte > ackedByte { ackedByte = byte }
+    }
+
+    /// Delete sealed shards only after server pcm_drained for this capture.
+    func confirmDrained(captureId: String, sessionId: String, through byte: Int) {
         lock.lock()
         if captureId.isEmpty || captureId != self.captureId {
             lock.unlock()
@@ -139,6 +150,12 @@ final class WatchPcmStore {
         lock.unlock()
         deleteAckedShards(captureId: id, through: ack)
         refreshUsed()
+    }
+
+    func resetAckForRetry() {
+        lock.lock()
+        ackedByte = 0
+        lock.unlock()
     }
 
     func unackedShards() -> [Shard] {

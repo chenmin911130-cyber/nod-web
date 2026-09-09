@@ -240,6 +240,39 @@ class SttSocketDrainTests(unittest.TestCase):
         lst._stop.set()
         t.join(0.5)
         self.assertFalse(ok)
+        self.assertGreater(len(lst._pcm_buf), 0)
+
+    def test_failed_drain_tail_restores_unsent_frames(self) -> None:
+        lst = _listener()
+        lst._ws = mock.Mock()
+        lst._ws.sock = None
+        lst._stop.clear()
+        payload = b"\x01" * 1600
+        lst._pcm_buf.extend(payload)
+        lst._send_drain_tail()
+        self.assertTrue(lst._drain_send_failed)
+        self.assertFalse(lst._drained.is_set())
+        self.assertEqual(bytes(lst._pcm_buf), payload)
+
+    def test_drain_retry_after_disconnect_sends_restored_tail(self) -> None:
+        lst = _listener()
+        lst._ws = mock.Mock()
+        lst._ws.sock = None
+        lst._stop.clear()
+        payload = b"\x02" * 1600
+        lst._pcm_buf.extend(payload)
+        t = threading.Thread(target=lst._sender, daemon=True)
+        t.start()
+        self.assertFalse(lst.drain(timeout=0.4))
+        self.assertGreater(len(lst._pcm_buf), 0)
+        ws = _connected_ws()
+        lst._ws = ws
+        ok = lst.drain(timeout=0.4)
+        lst._stop.set()
+        t.join(0.5)
+        self.assertTrue(ok)
+        sent = [c.args[0] for c in ws.send.call_args_list if c.args and isinstance(c.args[0], (bytes, bytearray))]
+        self.assertTrue(any(frame[: len(payload)] == payload for frame in sent))
 
     def test_connected_empty_drain_succeeds(self) -> None:
         lst = _listener()

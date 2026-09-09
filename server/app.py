@@ -1880,27 +1880,42 @@ class CloudListener:
             if not chunk:
                 continue
             self._pcm_buf.extend(chunk)
-            for frame in take_frames(self._pcm_buf):
+            remaining = take_frames(self._pcm_buf)
+            while remaining:
                 if self._stop.is_set():
+                    self._restore_unsent(remaining)
                     return
                 self._pace_before_send()
                 if self._stop.is_set():
+                    self._restore_unsent(remaining)
                     return
-                if not self._send_stt_frame(frame):
+                if not self._send_stt_frame(remaining[0]):
+                    self._restore_unsent(remaining)
                     return
+                remaining.pop(0)
+
+    def _restore_unsent(self, frames: list[bytes]) -> None:
+        if frames:
+            self._pcm_buf[0:0] = b"".join(frames)
 
     def _send_drain_tail(self) -> None:
-        for frame in take_final_frames(self._pcm_buf):
+        remaining = take_final_frames(self._pcm_buf)
+        while remaining:
             if self._stop.is_set():
+                self._restore_unsent(remaining)
                 return
             self._pace_before_send()
             if self._stop.is_set():
+                self._restore_unsent(remaining)
                 return
-            if not self._send_stt_frame(frame):
+            if not self._send_stt_frame(remaining[0]):
+                self._restore_unsent(remaining)
                 self._drain_send_failed = True
                 return
+            remaining.pop(0)
         self._drained.set()
         self._drain.clear()
+        self._drain_send_failed = False
 
     def _send_stt_frame(self, frame: bytes) -> bool:
         import websocket

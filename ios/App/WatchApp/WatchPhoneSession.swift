@@ -761,6 +761,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         draining = true
         hint = WatchCopy.replaying
         lastTransferAt.removeAll()
+        pcmStore.resetAckForRetry()
         armDrainWait()
         flushTransfers()
         send(action: "drain")
@@ -900,7 +901,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 drainByte: drainByte
             ) {
                 pcmDrained = true
-                pcmStore.ack(pcmStore.lastByte, captureId: drainCapture, sessionId: drainSession)
+                pcmStore.confirmDrained(captureId: drainCapture, sessionId: drainSession, through: drainByte)
                 maybeCompleteDrain()
             }
         }
