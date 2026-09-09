@@ -22,4 +22,10 @@ export const NodMic = {
   resume(): Promise<void> {
     return Promise.resolve()
   },
+  startUplink(_options: { url: string }): Promise<void> {
+    return Promise.resolve()
+  },
+  stopUplink(): Promise<void> {
+    return Promise.resolve()
+  },
 }

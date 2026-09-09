@@ -1,4 +1,4 @@
-import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, mergePendingHistory, parseRestoreDismissed, rememberRestoreDismissed, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce, startMeetingKind } from './historyRestore'
+import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, mergePendingHistory, parseRestoreDismissed, rememberRestoreDismissed, restoreAttachedClock, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce, startMeetingKind } from './historyRestore'
 import type { HistorySession } from './components/HistoryPane'
 
 function at(h: number, m: number, s = 0): string {
@@ -319,3 +319,8 @@ if (startMeetingKind({
 if (!resumeResetsKept({ kept: true, hasContent: restored.lines.length > 0 })) {
   throw new Error('path B Start must hide Saved to History')
 }
+
+const liveClock = restoreAttachedClock(restored.elapsedMs, 500_000)
+if (liveClock.meetingEnded) throw new Error('attached restore must not mark the live session ended')
+if (liveClock.meetingStartedAt !== clock.meetingStartedAt) throw new Error('attached restore must keep the same startedAt')
+if (liveClock.meetingElapsedMs !== 65_000) throw new Error('attached restore must keep elapsed')

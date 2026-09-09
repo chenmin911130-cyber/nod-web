@@ -406,6 +406,22 @@ export function restoreSessionClock(elapsedMs: number, now = Date.now()): {
   }
 }
 
+/** Live attach: keep the clock running so lock-screen time is not marked ended. */
+export function restoreAttachedClock(elapsedMs: number, now = Date.now()): {
+  meetingStartedAt: number
+  meetingEnded: false
+  meetingElapsedMs: number
+  partial: string
+} {
+  const ms = Math.max(0, elapsedMs)
+  return {
+    meetingStartedAt: now - ms,
+    meetingEnded: false,
+    meetingElapsedMs: ms,
+    partial: '',
+  }
+}
+
 /** Which Start branch a restored or ended Meeting takes. Path A and B must agree. */
 export function startMeetingKind(s: {
   meetingStartedAt: number | null

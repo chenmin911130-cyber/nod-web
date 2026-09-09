@@ -6,7 +6,7 @@ import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
-import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
+import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
 import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
@@ -296,6 +296,7 @@ type Action =
       summary: string
       pairs: TranslatePair[]
       elapsedMs?: number
+      live?: boolean
     }
 
 function formatClock(): string {
@@ -664,6 +665,8 @@ function reducer(state: AppState, action: Action): AppState {
           }
         case 'quota_exceeded':
           return { ...state, busy: false, status: quotaLimitText(ev.reason, state.quota as unknown as QuotaFields) }
+        case 'attached':
+          return state
         default:
           return state
       }
@@ -717,7 +720,8 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, workspaceMode: action.mode, view: 'workspace' }
     case 'restore_session': {
       const lastTurn = action.turns[action.turns.length - 1]
-      const clock = restoreSessionClock(action.elapsedMs ?? restoreElapsedMs({ lines: action.lines }))
+      const elapsed = action.elapsedMs ?? restoreElapsedMs({ lines: action.lines })
+      const clock = action.live ? restoreAttachedClock(elapsed) : restoreSessionClock(elapsed)
       return {
         ...state,
         workspaceMode: action.mode,
@@ -730,6 +734,7 @@ function reducer(state: AppState, action: Action): AppState {
         translatePairs: action.pairs,
         speakerDecided: {},
         ...clock,
+        meetingStartedAt: action.live && state.meetingStartedAt != null ? state.meetingStartedAt : clock.meetingStartedAt,
         view: 'workspace',
       }
     }
@@ -1541,6 +1546,18 @@ export default function App() {
         if (listenWanted.current) {
           queueMicrotask(() => api.send({ type: 'start_listen' }))
         }
+      }
+      if (e.type === 'attached') {
+        const sid = e.usage_session_id || ''
+        if (sid) persistRestoreDismissed(sid)
+        void authApi<{ sessions: HistorySession[] }>('/api/account/history?pending=1')
+          .then((out) => {
+            const session = (out.sessions || []).find((row) => row.id === sid) || (out.sessions || [])[0]
+            if (!session) return
+            persistRestoreDismissed(session.id)
+            dispatch({ type: 'restore_session', ...restoreFromSession(session), live: true })
+          })
+          .catch(() => undefined)
       }
       // Every chunk of the current translate ask re-arms the 25s timeout, so a
       // slow-but-alive stream doesn't time out mid-answer and double-fire.

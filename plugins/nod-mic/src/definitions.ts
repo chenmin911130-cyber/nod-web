@@ -12,6 +12,8 @@ export interface NodMicPlugin {
   startKeepAlive(): Promise<void>
   stopKeepAlive(): Promise<void>
   resume(): Promise<void>
+  startUplink(options: { url: string }): Promise<void>
+  stopUplink(): Promise<void>
   addListener(eventName: 'pcm', listenerFunc: (event: PcmEvent) => void): Promise<PluginListenerHandle>
   removeAllListeners(): Promise<void>
 }

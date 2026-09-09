@@ -25,4 +25,12 @@ export class NodMicWeb extends WebPlugin implements NodMicPlugin {
   async resume(): Promise<void> {
     return
   }
+
+  async startUplink(_options: { url: string }): Promise<void> {
+    return
+  }
+
+  async stopUplink(): Promise<void> {
+    return
+  }
 }

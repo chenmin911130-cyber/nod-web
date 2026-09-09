@@ -14,6 +14,8 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startKeepAlive", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopKeepAlive", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "resume", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "startUplink", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stopUplink", returnType: CAPPluginReturnPromise),
     ]
 
     private var engine = AVAudioEngine()
@@ -102,6 +104,20 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
             self.resumeAfterInterruption()
             call.resolve()
         }
+    }
+
+    @objc func startUplink(_ call: CAPPluginCall) {
+        guard let raw = call.getString("url"), let url = URL(string: raw) else {
+            call.reject("Missing url")
+            return
+        }
+        AudioUplink.shared.start(url: url)
+        call.resolve()
+    }
+
+    @objc func stopUplink(_ call: CAPPluginCall) {
+        AudioUplink.shared.stop()
+        call.resolve()
     }
 
     override public func load() {
@@ -254,6 +270,10 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
         if error != nil { return }
         guard let channel = out.int16ChannelData?[0], out.frameLength > 0 else { return }
         let data = Data(bytes: channel, count: Int(out.frameLength) * MemoryLayout<Int16>.size)
+        if AudioUplink.shared.isActive {
+            AudioUplink.shared.enqueue(data)
+            return
+        }
         let payload = data.base64EncodedString()
         DispatchQueue.main.async { [weak self] in
             self?.notifyListeners("pcm", data: ["data": payload])
