@@ -24,6 +24,16 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastPcmAckByte = 0
     private var lastPcmCaptureId = ""
     private var lastPcmAckSessionId = ""
+    private var ackTimer: DispatchWorkItem?
+    /// Coalesced-ack rate limit: ordinary progress is pushed at most once per
+    /// second (the latest cursor), but the LAST consumed progress is always sent
+    /// when the window opens — a tail send so the final byte is never dropped
+    /// (issue #165 P2-4).
+    private let ackCoalesceWindow: TimeInterval = 1.0
+    private var ackTimerActive = false
+    private var pendingAckByte = 0
+    private var pendingAckCapture = ""
+    private var pendingAckSession = ""
     private var lastPcmDrained = false
     private var lastPcmDrainedCaptureId = ""
     private var lastPcmDrainedSessionId = ""
@@ -90,6 +100,12 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
     }
 
+    /// Coalesce consumed-progress acks to at most one send per second. Ordinary
+    /// progress only updates a pending snapshot; a single timer drains it once the
+    /// window opens. If the LAST consumed lands inside the window, the timer still
+    /// sends the final cursor (a tail send) — with the rate limit, a burst of
+    /// high-frequency consumed notifications can never starve the final ack, nor
+    /// can a delayed/no-next-frame leave the last byte unacknowledged (P2-4).
     private func pushPcmAck() {
         let reply = NSMutableDictionary()
         NotificationCenter.default.post(
@@ -106,17 +122,46 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         if !session.isEmpty {
             lastPcmAckSessionId = session
         }
-        guard ack != lastPcmAckByte else { return }
-        lastPcmAckByte = ack
+        // Remember the latest cursor; do not advance lastPcmAckByte until it is
+        // actually sent, so a coalesced send carries the newest progress.
+        pendingAckByte = ack
+        pendingAckCapture = capture
+        pendingAckSession = session
+        if ackTimerActive {
+            return  // a drain is already scheduled; it will send the updated snapshot
+        }
+        ackTimerActive = true
+        let work = DispatchWorkItem { [weak self] in
+            self?.sendCoalescedAck()
+        }
+        ackTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + ackCoalesceWindow, execute: work)
+    }
+
+    private func sendCoalescedAck() {
+        ackTimerActive = false
+        ackTimer = nil
+        // Re-check identity at send time: a stale snapshot must never pair an old
+        // offset with a newer capture (issue #165 P2-4). If the capture changed,
+        // drop the pending snapshot rather than send it.
+        if !pendingAckCapture.isEmpty, !lastPcmCaptureId.isEmpty,
+           pendingAckCapture != lastPcmCaptureId {
+            pendingAckByte = 0
+            pendingAckCapture = ""
+            pendingAckSession = ""
+            return
+        }
+        guard pendingAckByte != lastPcmAckByte else { return }
+        lastPcmAckByte = pendingAckByte
         guard WCSession.isSupported() else { return }
         let wc = WCSession.default
         guard wc.activationState == .activated, wc.isReachable else { return }
-        var msg: [String: Any] = ["pcmAckByte": String(ack), "ok": true]
-        if !lastPcmCaptureId.isEmpty {
-            msg["pcmAckCaptureId"] = lastPcmCaptureId
+        var msg: [String: Any] = ["pcmAckByte": String(pendingAckByte), "ok": true]
+        if !pendingAckCapture.isEmpty {
+            msg["pcmAckCaptureId"] = pendingAckCapture
         }
-        if !lastPcmAckSessionId.isEmpty {
-            msg["pcmAckSessionId"] = lastPcmAckSessionId
+        if !pendingAckSession.isEmpty {
+            msg["pcmAckSessionId"] = pendingAckSession
         }
         wc.sendMessage(msg, replyHandler: nil, errorHandler: nil)
     }
@@ -359,6 +404,14 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
                 lastPcmRejectSessionId = ""
                 lastPcmRejectCaptureId = ""
                 lastPcmRejectText = ""
+                // Reset the coalesced-ack snapshot + timer so a stale offset from
+                // an old capture is never paired with the new capture (issue #165 P2-4).
+                ackTimer?.cancel()
+                ackTimer = nil
+                ackTimerActive = false
+                pendingAckByte = 0
+                pendingAckCapture = ""
+                pendingAckSession = ""
             }
             lastPcmCaptureId = captureId
             NotificationCenter.default.post(
