@@ -7,7 +7,7 @@ import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
 import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
-import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
+import { keepHistoryMessage, watchDiscardCommand, watchSaveCommand, watchSaveRepeatAction, watchSaveShouldWaitForNotes, watchSaveStatusPayload, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
 import { meetingRailIsPaused } from './meetingPause'
@@ -1043,6 +1043,7 @@ export default function App() {
   const performSignOutRef = useRef<() => void>(() => undefined)
   const performDeleteRef = useRef<() => void>(() => undefined)
   const handleEngineKeepRef = useRef<(e: EngineEvent) => void>(() => undefined)
+  const saveFromWatchRef = useRef<() => void>(() => undefined)
   // #36: a live session may show at most ONE Save UI. Set when the Save dialog is
   // first opened; gating the AUTO offers (Stop, save_prompt, reconnect Restore,
   // New-session leave) so the same session is never re-prompted. A user-initiated
@@ -1398,8 +1399,7 @@ export default function App() {
         }
       },
       onSave: () => {
-        window.api.send(watchSaveCommand())
-        markHistoryKept(true)
+        saveFromWatchRef.current()
       },
       onDiscard: () => {
         window.api.send(watchDiscardCommand())
@@ -1457,6 +1457,10 @@ export default function App() {
         history: face.history,
         mode: watchStatusMode(state.workspaceMode, state.listenScene),
         langPair: watchLangPair(state.workspaceMode === 'translate' ? state.translateTo : state.notesTranslateTo),
+        ...watchSaveStatusPayload({
+          status: historyKept ? 'saved' : saveBook.status,
+          liveId: saveBook.liveId,
+        }),
       })
     }, 180)
     return () => window.clearTimeout(timer)
@@ -1475,6 +1479,9 @@ export default function App() {
     state.listenScene,
     state.translateTo,
     state.notesTranslateTo,
+    saveBook.status,
+    saveBook.liveId,
+    historyKept,
   ])
 
   const acceptConsent = () => {
@@ -1796,7 +1803,8 @@ export default function App() {
   }
 
   const sendKeepNow = (opts: { content: boolean; audio: boolean }) => {
-    window.api.send({ type: 'keep_history', content: opts.content, audio: opts.audio })
+    const id = saveBookRef.current.liveId || undefined
+    window.api.send(keepHistoryMessage({ content: opts.content, audio: opts.audio, id }))
     clearKeepTimer()
     keepTimerRef.current = window.setTimeout(() => failKeep('timeout'), KEEP_ACK_TIMEOUT_MS)
   }
@@ -1854,7 +1862,15 @@ export default function App() {
     setSavePrompt(true)
   }
 
-  const saveLiveSession = (opts?: { content?: boolean; audio?: boolean; fromPrompt?: boolean }) => {
+  const saveLiveSession = (opts?: { content?: boolean; audio?: boolean; fromPrompt?: boolean; fromWatch?: boolean }) => {
+    if (opts?.fromWatch) {
+      const action = watchSaveRepeatAction({ kept: historyKeptRef.current, status: saveBookRef.current.status })
+      if (action === 'echoSaved') {
+        commitBook({ ...saveBookRef.current, status: 'saved' })
+        return
+      }
+      if (action === 'ignore') return
+    }
     if (historyKeptRef.current) {
       setHistoryOpen(true)
       return
@@ -1870,7 +1886,7 @@ export default function App() {
     commitBook(book)
     keepEpochRef.current = { liveId: book.liveId, generation: book.generation }
     if (phoneRef.current) setSaveBannerOpen(true)
-    const waitNotes = keepShouldWaitForNotes(stateRef.current.notesAskId)
+    const waitNotes = opts?.fromWatch ? watchSaveShouldWaitForNotes() : keepShouldWaitForNotes(stateRef.current.notesAskId)
     if (!book.liveId) {
       pendingKeepRef.current = { content, audio, waitNotes }
       clearKeepTimer()
@@ -1883,6 +1899,10 @@ export default function App() {
       return
     }
     sendKeepNow({ content, audio })
+  }
+
+  saveFromWatchRef.current = () => {
+    saveLiveSession({ fromWatch: true })
   }
 
   handleEngineKeepRef.current = (e) => {

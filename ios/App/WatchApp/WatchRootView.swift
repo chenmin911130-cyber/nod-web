@@ -277,9 +277,11 @@ struct WatchRootView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(slate)
                 .foregroundStyle(Color.black)
-            Button(WatchCopy.save) { session.confirmSave() }
+                .disabled(session.saving)
+            Button(session.saveFailed ? WatchCopy.retry : session.saving ? WatchCopy.saving : WatchCopy.save) { session.confirmSave() }
                 .buttonStyle(.borderedProminent)
                 .tint(cyan)
+                .disabled(session.saving)
         }
     }
 

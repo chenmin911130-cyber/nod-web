@@ -19,6 +19,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastHistory: [[String: String]] = []
     private var lastMode = ""
     private var lastLangPair = ""
+    private var lastSave = "none"
+    private var lastSessionId = ""
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
     private var uplinkActive = false
@@ -89,7 +91,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         previous: String = "",
         history: [[String: String]] = [],
         mode: String = "",
-        langPair: String = ""
+        langPair: String = "",
+        save: String = "",
+        sessionId: String = ""
     ) {
         if !capture.isEmpty {
             lastCapture = capture
@@ -104,6 +108,12 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         if !langPair.isEmpty {
             lastLangPair = langPair
+        }
+        if !save.isEmpty {
+            lastSave = save
+        }
+        if !sessionId.isEmpty {
+            lastSessionId = sessionId
         }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
@@ -120,6 +130,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         if !lastLangPair.isEmpty {
             payload["langPair"] = lastLangPair
+        }
+        payload["save"] = lastSave
+        if !lastSessionId.isEmpty {
+            payload["sessionId"] = lastSessionId
         }
         guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
         do {
@@ -348,6 +362,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         if !lastLangPair.isEmpty {
             reply["langPair"] = lastLangPair
+        }
+        reply["save"] = lastSave
+        if !lastSessionId.isEmpty {
+            reply["sessionId"] = lastSessionId
         }
         replyHandler(reply)
     }

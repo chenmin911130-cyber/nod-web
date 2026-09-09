@@ -17,6 +17,8 @@ type WatchPlugin = {
     history?: WatchHistItem[]
     mode?: string
     langPair?: string
+    save?: string
+    sessionId?: string
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {
@@ -300,6 +302,8 @@ export function pushWatchStatus(face: {
   history?: WatchHistItem[]
   mode?: string
   langPair?: string
+  save?: string
+  sessionId?: string
 }): void {
   if (!isNativeApp()) return
   void NodWatch.setStatus({
@@ -311,6 +315,8 @@ export function pushWatchStatus(face: {
     history: (face.history || []).slice(0, 8),
     mode: face.mode,
     langPair: face.langPair,
+    save: face.save,
+    sessionId: face.sessionId,
   }).catch(() => undefined)
 }
 

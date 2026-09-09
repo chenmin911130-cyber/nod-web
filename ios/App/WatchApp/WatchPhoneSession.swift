@@ -21,6 +21,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var speechLive = false
     @Published var speechVoice = "female"
     @Published var offeringSave = false
+    @Published var saving = false
+    @Published var saveFailed = false
     @Published var savedAck = false
     @Published var langPair = "Auto → CH"
     @Published var mode = "meeting"
@@ -29,6 +31,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     private var phoneModeSeen = false
     private var speechPlayer: AVAudioPlayer?
     private var savedAckWork: DispatchWorkItem?
+    private var saveWaitWork: DispatchWorkItem?
+    private var saveRequestId = ""
+    private var phoneSessionId = ""
     private var startBeganAt: Date?
     private var startWaitWork: DispatchWorkItem?
 
@@ -258,6 +263,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         WatchGlanceStore.clear()
         offeringSave = hadContent
         savedAck = false
+        saving = false
+        saveFailed = false
+        saveRequestId = ""
         hint = hadContent ? WatchCopy.saveAsk : WatchCopy.ready
         localModeHeld = false
         localWatchMic = false
@@ -267,16 +275,27 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     func confirmSave() {
-        offeringSave = false
-        savedAck = true
-        hint = WatchCopy.saved
+        if saving { return }
+        saveWaitWork?.cancel()
+        savedAckWork?.cancel()
+        offeringSave = true
+        savedAck = false
+        saving = true
+        saveFailed = false
+        saveRequestId = phoneSessionId
+        hint = WatchCopy.saving
         send(action: "save")
-        scheduleReady()
+        armSaveWait()
     }
 
     func declineSave() {
+        saveWaitWork?.cancel()
+        saveWaitWork = nil
         offeringSave = false
         savedAck = false
+        saving = false
+        saveFailed = false
+        saveRequestId = ""
         hint = WatchCopy.ready
         send(action: "discard")
     }
@@ -284,6 +303,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     func startSession() {
         guard !listening, !paused, !starting else { return }
         savedAckWork?.cancel()
+        saveWaitWork?.cancel()
+        saveWaitWork = nil
         resetPcmBuffer()
         original = ""
         translation = ""
@@ -291,6 +312,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         elapsedMs = 0
         offeringSave = false
         savedAck = false
+        saving = false
+        saveFailed = false
+        saveRequestId = ""
         localModeHeld = phoneModeSeen
         starting = true
         startBeganAt = Date()
@@ -336,6 +360,40 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         hint = WatchCopy.couldntStart
         localWatchMic = false
         send(action: "stop")
+    }
+
+    private func armSaveWait() {
+        saveWaitWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.saving else { return }
+            self.saving = false
+            self.saveFailed = true
+            self.hint = WatchCopy.saveFailed
+        }
+        saveWaitWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)
+    }
+
+    private func applySaveStatus(_ save: String, sessionId: String) {
+        guard !saveRequestId.isEmpty, !sessionId.isEmpty, sessionId == saveRequestId else { return }
+        if save == "saved" {
+            saveWaitWork?.cancel()
+            saveWaitWork = nil
+            offeringSave = false
+            saving = false
+            saveFailed = false
+            savedAck = true
+            hint = WatchCopy.saved
+            scheduleReady()
+            return
+        }
+        if save == "failed" {
+            saveWaitWork?.cancel()
+            saveWaitWork = nil
+            saving = false
+            saveFailed = true
+            hint = WatchCopy.saveFailed
+        }
     }
 
     private func scheduleReady() {
@@ -622,6 +680,12 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
 
     private func apply(_ payload: [String: Any], live: Bool) {
         if payload["ok"] != nil { return }
+        if let sessionId = payload["sessionId"] as? String, !sessionId.isEmpty {
+            phoneSessionId = sessionId
+        }
+        if let save = payload["save"] as? String {
+            applySaveStatus(save, sessionId: (payload["sessionId"] as? String) ?? "")
+        }
         if let next = payload["mode"] as? String, ["meeting", "lecture", "interview", "translate"].contains(next) {
             phoneModeSeen = true
             if next == mode {
@@ -636,7 +700,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let capture = payload["capture"] as? String {
             syncFromCapture(capture)
         }
-        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck, !starting, !localWatchMic {
+        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck, !saving, !saveFailed, !starting, !localWatchMic {
             self.hint = hint
         }
         if let original = payload["original"] as? String {

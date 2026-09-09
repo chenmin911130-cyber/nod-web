@@ -13,6 +13,8 @@ export interface NodWatchPlugin {
     history?: WatchHistItem[]
     mode?: string
     langPair?: string
+    save?: string
+    sessionId?: string
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {
