@@ -3,7 +3,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "cap:sync": "npm run build --prefix web && node scripts/prepare-ios-web.mjs && npx cap sync ios && node scripts/patch-ios-plist.mjs",
+    "cap:sync": "node scripts/iosWorktreePods.mjs assert-roots && npm run build --prefix web && node scripts/prepare-ios-web.mjs && npx cap sync ios && node scripts/patch-ios-plist.mjs && node scripts/iosWorktreePods.mjs pin",
     "cap:open": "npx cap open ios",
     "cap:ios": "bash scripts/package-ios.sh"
   },

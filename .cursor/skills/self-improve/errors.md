@@ -2,6 +2,12 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-09 · Bundle 71 把 node_modules 链到脏主仓，编进旧原生插件
+- 我以为：隔离 worktree 里 `node_modules` 链到主仓能共用依赖；committed `Podfile` 的 `../../plugins` 会编当前树。
+- 实际：`nod-mic` 相对链接解析到 `/Users/minchen/Projects/nod-web/plugins`。`cap sync` 按 realpath 写进 Pods。71 归档的 `NodMic.framework` 没有 `startUplink` / `AudioUplink`，`NodWatch` 也缺新会话字段。网页是新的，框架是旧的。
+- 规则：打包前 `node_modules` 与 `nod-mic` / `nod-watch` 的 realpath 必须在当前 worktree；禁止链到其他 checkout。Pods 工程不得引用主仓 `plugins`。装完核框架符号，不只核 Bundle 数字。
+- 涉及：`node_modules` symlink · `ios/App/Podfile` · `Pods.xcodeproj` · Bundle 71
+
 ## 2026-09-09 · #164 Save 消息不带 sessionId，手机保存当前会话
 - 我以为：手表本地 pin `saveRequestId`，手机 `keep_history` 当前 `liveId`，迟到 `sessionId` 闩进 requestId 就能 Saved。
 - 实际：`send(action: "save")` 和 Bridge `command` 都不带 sessionId；JS `onSave()` 无参；Retry 每次 `confirmSave` 重读 `phoneSessionId`。请求延迟期间手机换场，会 keep 错场。
