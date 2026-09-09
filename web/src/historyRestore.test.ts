@@ -1,4 +1,4 @@
-import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, mergePendingHistory, parseRestoreDismissed, rememberRestoreDismissed, restoreAttachedClock, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce, startMeetingKind } from './historyRestore'
+import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, mergePendingHistory, parseRestoreDismissed, rememberRestoreDismissed, restoreAttachedClock, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce, startMeetingKind, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession } from './historyRestore'
 import type { HistorySession } from './components/HistoryPane'
 
 function at(h: number, m: number, s = 0): string {
@@ -324,3 +324,34 @@ const liveClock = restoreAttachedClock(restored.elapsedMs, 500_000)
 if (liveClock.meetingEnded) throw new Error('attached restore must not mark the live session ended')
 if (liveClock.meetingStartedAt !== clock.meetingStartedAt) throw new Error('attached restore must keep the same startedAt')
 if (liveClock.meetingElapsedMs !== 65_000) throw new Error('attached restore must keep elapsed')
+
+if (pickAttachedSession([{ id: 'a' }, { id: 'b' }], 'b')?.id !== 'b') {
+  throw new Error('attached restore must match usage_session_id')
+}
+if (pickAttachedSession([{ id: 'a' }, { id: 'b' }], 'missing')) {
+  throw new Error('unknown id must not fall back to the first pending session')
+}
+if (pickAttachedSession([{ id: 'a' }], '')) {
+  throw new Error('empty attach id must not pick a session')
+}
+
+if (!attachRestoreIsCurrent(3, 3)) throw new Error('matching seq is current')
+if (attachRestoreIsCurrent(2, 3)) throw new Error('stale attach fetch must be ignored')
+if (attachRestoreIsCurrent(0, 0)) throw new Error('seq 0 is not a started restore')
+
+const merged = mergeAttachedLines(
+  [
+    { id: 'old', ts: '0:01', text: 'from history', rev: 0 },
+    { id: 'lock', ts: '0:20', text: 'said while locked', rev: 0 },
+  ],
+  [
+    { id: 'old', ts: '0:01', text: 'stale screen', rev: 0 },
+    { id: 'lock', ts: '0:20', text: 'extended after fetch', rev: 2 },
+    { id: 'new', ts: '0:45', text: 'arrived during fetch', rev: 0 },
+  ],
+)
+eq(merged.map((l) => l.id).join(','), 'old,lock,new', 'restore order then live-only ids')
+eq(merged[0].text, 'from history', 'stale on-screen text must not overwrite history')
+eq(merged[1].text, 'extended after fetch', 'higher-rev live line overlays the snapshot')
+eq(merged[2].text, 'arrived during fetch', 'lines that landed during the fetch stay')
+

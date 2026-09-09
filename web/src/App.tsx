@@ -6,7 +6,7 @@ import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
-import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
+import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
 import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
@@ -719,19 +719,28 @@ function reducer(state: AppState, action: Action): AppState {
     case 'workspace':
       return { ...state, workspaceMode: action.mode, view: 'workspace' }
     case 'restore_session': {
-      const lastTurn = action.turns[action.turns.length - 1]
-      const elapsed = action.elapsedMs ?? restoreElapsedMs({ lines: action.lines })
+      const meetingLines = action.live ? mergeAttachedLines(action.lines, state.meetingLines) : action.lines
+      const seenTurn = new Set(action.turns.map((t) => t.id))
+      const turns = action.live
+        ? [...action.turns, ...state.turns.filter((t) => !seenTurn.has(t.id))]
+        : action.turns
+      const seenPair = new Set(action.pairs.map((p) => p.id))
+      const translatePairs = action.live
+        ? [...action.pairs, ...state.translatePairs.filter((p) => !seenPair.has(p.id))]
+        : action.pairs
+      const lastTurn = turns[turns.length - 1]
+      const elapsed = action.elapsedMs ?? restoreElapsedMs({ lines: meetingLines })
       const clock = action.live ? restoreAttachedClock(elapsed) : restoreSessionClock(elapsed)
       return {
         ...state,
         workspaceMode: action.mode,
         listenScene: action.scene,
-        meetingLines: action.lines,
-        turns: action.turns,
+        meetingLines,
+        turns,
         currentQ: lastTurn?.q || PLACEHOLDER,
         currentQId: lastTurn?.id || '',
-        notesRaw: action.notes,
-        translatePairs: action.pairs,
+        notesRaw: action.live && state.notesRaw.length > action.notes.length ? state.notesRaw : action.notes,
+        translatePairs,
         speakerDecided: {},
         ...clock,
         meetingStartedAt: action.live && state.meetingStartedAt != null ? state.meetingStartedAt : clock.meetingStartedAt,
@@ -1025,6 +1034,7 @@ export default function App() {
   }
   const pendingNewAfterSave = useRef(false)
   const pendingRestoreId = useRef<string | null>(null)
+  const attachRestoreSeq = useRef(0)
   const restoreHistoryRef = useRef<(session: HistorySession) => void>(() => undefined)
   const lastRestoredKeepId = useRef<string | null>(null)
   const offerSaveAfterMeetingStopRef = useRef<() => void>(() => undefined)
@@ -1549,15 +1559,19 @@ export default function App() {
       }
       if (e.type === 'attached') {
         const sid = e.usage_session_id || ''
-        if (sid) persistRestoreDismissed(sid)
-        void authApi<{ sessions: HistorySession[] }>('/api/account/history?pending=1')
-          .then((out) => {
-            const session = (out.sessions || []).find((row) => row.id === sid) || (out.sessions || [])[0]
-            if (!session) return
-            persistRestoreDismissed(session.id)
-            dispatch({ type: 'restore_session', ...restoreFromSession(session), live: true })
-          })
-          .catch(() => undefined)
+        if (sid) {
+          persistRestoreDismissed(sid)
+          const seq = ++attachRestoreSeq.current
+          void authApi<{ sessions: HistorySession[] }>('/api/account/history?pending=1')
+            .then((out) => {
+              if (!attachRestoreIsCurrent(seq, attachRestoreSeq.current)) return
+              const session = pickAttachedSession(out.sessions || [], sid)
+              if (!session) return
+              persistRestoreDismissed(session.id)
+              dispatch({ type: 'restore_session', ...restoreFromSession(session), live: true })
+            })
+            .catch(() => undefined)
+        }
       }
       // Every chunk of the current translate ask re-arms the 25s timeout, so a
       // slow-but-alive stream doesn't time out mid-answer and double-fire.

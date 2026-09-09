@@ -2,6 +2,24 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-09 · #171 断线把 isActive 关掉，PCM 交回 JS
+- 我以为：`handleDrop()` 把 `isActive=false` 只表示 socket 断了，重连后会再打开；手机麦 / 表麦在这几秒走 JS 也没关系。
+- 实际：`NodMicPlugin.emitPcm` 和 `WatchBridge` 用同一个 `isActive` 决定要不要 `notifyListeners`。断线后 PCM 立刻进 WKWebView，离线音频进不了原生 2 MB 缓冲，锁屏重连等于没缓冲。
+- 规则：上行「模式已启用」和「socket 已连通」必须分开；`start()` 到 `stop()` / 4404 期间 PCM 只进原生队列，断线不得交回 JS。
+- 涉及：`AudioUplink` `isEnabled` vs `isConnected` · `NodMicPlugin.emitPcm` · `WatchBridge` `.nodUplinkState`
+
+## 2026-09-09 · #171 补发先清空缓冲且一次打完
+- 我以为：重连后把 pending 整段 `send` 出去，失败再靠下一轮重连。
+- 实际：`flushPending()` 先 `removeAll` 再忽略错误；服务端 `WS_FRAMES_PER_SEC = 40`，突发补发会被丢。失败的帧已经不在队列里。
+- 规则：待发送列队头只在 send 成功后弹出；补发按 ≤40 帧/秒；新 PCM 追加在队尾，不得插到补发前面。
+- 涉及：`AudioUplink.flushPending` / `pump`
+
+## 2026-09-09 · #171 attached 找不到 id 就用第一条历史
+- 我以为：pending 列表通常只有当前这场，找不到 id 时用 `[0]` 总能补上锁屏转写。
+- 实际：pending 可能有别的未保存场；异步回来时锁屏后的 `line_update` 已被 reducer 写进 `meetingLines`，整场 `restore_session` 会盖掉。
+- 规则：认领只匹配 `usage_session_id`；对不上就不动；用序号丢掉过期响应；合并时保留请求期间新到的行。
+- 涉及：`App.tsx` `attached` · `pickAttachedSession` · `mergeAttachedLines`
+
 ## 2026-09-08 · 手表 Resume 把手机麦会话翻成表麦
 
 - 我以为：#134 把 `onResume` 列入 `applyWatchMic` 调用方，Resume 也要确认表麦。

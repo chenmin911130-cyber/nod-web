@@ -10,11 +10,21 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
 
     private let queue = DispatchQueue(label: "nod.audio.uplink")
     private let lock = NSLock()
-    private var _active = false
-    var isActive: Bool {
+    private var _enabled = false
+    private var _connected = false
+
+    /// Uplink mode is on (`start` until `stop` / 4404). PCM stays native even while reconnecting.
+    var isEnabled: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return _active
+        return _enabled
+    }
+
+    /// Socket is open. Used only for send vs buffer.
+    private var isConnected: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _connected
     }
 
     private var session: URLSession!
@@ -28,10 +38,15 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     private var reconnectWork: DispatchWorkItem?
     private var pingTimer: DispatchSourceTimer?
     private var flushWork: DispatchWorkItem?
+    private var pumpWork: DispatchWorkItem?
+    private var sending = false
+    private var lastSendAt: TimeInterval = 0
     private var watchObserver: NSObjectProtocol?
 
     private let frameBytes = 3200
     private let maxPendingBytes = 2 * 1024 * 1024
+    /// Server `WS_FRAMES_PER_SEC = 40`.
+    private let minFrameInterval: TimeInterval = 1.0 / 40.0
 
     private override init() {
         super.init()
@@ -51,12 +66,13 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     func start(url: URL) {
         queue.async { [weak self] in
             guard let self else { return }
-            if self.url == url, self.task != nil, !self.stopped {
+            if self.url == url, self.isConnected, !self.stopped {
                 return
             }
             self.url = url
             self.stopped = false
             self.reconnectAttempt = 0
+            self.setEnabled(true)
             self.open()
         }
     }
@@ -69,10 +85,14 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             self.reconnectWork = nil
             self.flushWork?.cancel()
             self.flushWork = nil
+            self.pumpWork?.cancel()
+            self.pumpWork = nil
+            self.sending = false
             self.stopPing()
             self.task?.cancel(with: .goingAway, reason: nil)
             self.task = nil
-            self.setActive(false)
+            self.setConnected(false)
+            self.setEnabled(false)
             self.stash.removeAll(keepingCapacity: false)
             self.pending.removeAll(keepingCapacity: false)
             self.pendingBytes = 0
@@ -86,13 +106,23 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         }
     }
 
-    private func setActive(_ on: Bool) {
+    private func setEnabled(_ on: Bool) {
         lock.lock()
-        let changed = _active != on
-        _active = on
+        let changed = _enabled != on
+        _enabled = on
         lock.unlock()
         guard changed else { return }
-        NotificationCenter.default.post(name: .nodUplinkState, object: nil, userInfo: ["active": on])
+        NotificationCenter.default.post(
+            name: .nodUplinkState,
+            object: nil,
+            userInfo: ["enabled": on, "active": on]
+        )
+    }
+
+    private func setConnected(_ on: Bool) {
+        lock.lock()
+        _connected = on
+        lock.unlock()
     }
 
     private func open() {
@@ -132,17 +162,8 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
 
     private func sendOrBuffer(_ frame: Data) {
         guard !frame.isEmpty else { return }
-        if let task, isActive {
-            task.send(.data(frame)) { [weak self] error in
-                guard let self, error != nil else { return }
-                self.queue.async {
-                    self.buffer(frame)
-                    self.handleDrop()
-                }
-            }
-            return
-        }
         buffer(frame)
+        pump()
     }
 
     private func buffer(_ frame: Data) {
@@ -154,13 +175,38 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         }
     }
 
-    private func flushPending() {
-        guard let task, isActive else { return }
-        let frames = pending
-        pending.removeAll(keepingCapacity: false)
-        pendingBytes = 0
-        for frame in frames {
-            task.send(.data(frame)) { _ in }
+    private func pump() {
+        guard !sending, pumpWork == nil else { return }
+        guard isConnected, !pending.isEmpty, !stopped else { return }
+        let wait = max(0, minFrameInterval - (Date.timeIntervalSinceReferenceDate - lastSendAt))
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pumpWork = nil
+            self.sendHead()
+        }
+        pumpWork = work
+        queue.asyncAfter(deadline: .now() + wait, execute: work)
+    }
+
+    private func sendHead() {
+        guard !sending else { return }
+        guard isConnected, let task, let frame = pending.first, !stopped else { return }
+        sending = true
+        task.send(.data(frame)) { [weak self] error in
+            guard let self else { return }
+            self.queue.async {
+                self.sending = false
+                if error != nil {
+                    self.handleDrop()
+                    return
+                }
+                if self.pending.first == frame {
+                    self.pending.removeFirst()
+                    self.pendingBytes -= frame.count
+                }
+                self.lastSendAt = Date.timeIntervalSinceReferenceDate
+                self.pump()
+            }
         }
     }
 
@@ -181,7 +227,10 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
 
     private func handleDrop() {
         guard !stopped else { return }
-        setActive(false)
+        sending = false
+        pumpWork?.cancel()
+        pumpWork = nil
+        setConnected(false)
         stopPing()
         if task != nil {
             task?.cancel(with: .goingAway, reason: nil)
@@ -208,7 +257,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 20, repeating: 20)
         timer.setEventHandler { [weak self] in
-            guard let self, let task = self.task, !self.stopped else { return }
+            guard let self, let task = self.task, self.isConnected, !self.stopped else { return }
             task.send(.string("{\"type\":\"ping\"}")) { _ in }
         }
         pingTimer = timer
@@ -228,9 +277,9 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         queue.async { [weak self] in
             guard let self, webSocketTask === self.task else { return }
             self.reconnectAttempt = 0
-            self.setActive(true)
+            self.setConnected(true)
             self.startPing()
-            self.flushPending()
+            self.pump()
         }
     }
 
@@ -246,9 +295,13 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                 self.stopped = true
                 self.reconnectWork?.cancel()
                 self.reconnectWork = nil
+                self.pumpWork?.cancel()
+                self.pumpWork = nil
+                self.sending = false
                 self.stopPing()
                 self.task = nil
-                self.setActive(false)
+                self.setConnected(false)
+                self.setEnabled(false)
                 return
             }
             self.handleDrop()

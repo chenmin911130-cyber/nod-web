@@ -31,7 +31,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             object: nil,
             queue: .main
         ) { [weak self] note in
-            self?.uplinkActive = (note.userInfo?["active"] as? Bool) ?? false
+            self?.uplinkActive = (note.userInfo?["enabled"] as? Bool)
+                ?? (note.userInfo?["active"] as? Bool)
+                ?? false
         }
     }
 

@@ -270,7 +270,7 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
         if error != nil { return }
         guard let channel = out.int16ChannelData?[0], out.frameLength > 0 else { return }
         let data = Data(bytes: channel, count: Int(out.frameLength) * MemoryLayout<Int16>.size)
-        if AudioUplink.shared.isActive {
+        if AudioUplink.shared.isEnabled {
             AudioUplink.shared.enqueue(data)
             return
         }
