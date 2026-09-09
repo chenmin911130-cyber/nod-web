@@ -3,6 +3,11 @@ export function uplinkShouldForwardPcmFromJs(opts: { nativeApp: boolean; hasToke
   return !opts.nativeApp || !opts.hasToken
 }
 
+/** Store the token only after native startUplink resolves. Failure keeps JS PCM. */
+export function uplinkTokenAfterNativeStart(startOk: boolean, token: string): string {
+  return startOk ? token : ''
+}
+
 /** Reconnect the control WS with `?attach=` so the server can reclaim a parked Session. */
 export function controlWsUrl(base: string, attachToken: string): string {
   if (!attachToken) return base

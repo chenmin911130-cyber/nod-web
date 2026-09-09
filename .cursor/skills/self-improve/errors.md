@@ -2,6 +2,18 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-09 · #171 把 nod-mic 编进空 start/startUplink
+- 我以为：`src/shims/nod-mic.ts` 只给浏览器；真机 Capacitor 仍走 `registerPlugin('NodMic')`。
+- 实际：Vite/tsconfig 无条件 alias，WKWebView 也加载空实现。`start()` 假成功不开原生麦，`startUplink()` 假成功不连 `/ws/audio`，JS 拿到 token 后又停转 PCM。
+- 规则：`nod-mic` 只能解析到本仓库 `plugins/nod-mic` 的 `registerPlugin`；禁止空 shim。`startUplink` 必须等 socket 打开才 resolve；失败不得先 `setUplinkActive` / 切断 JS PCM。
+- 涉及：`web/vite.config.ts` · `web/src/shims/nod-mic.ts` · `bridge.ts applyUplinkToken` · `AudioUplink.start`
+
+## 2026-09-09 · #171 审原生上行漏了 Vite 把插件指向空实现
+- 我以为：`import('nod-mic')` 会调用包里的 `registerPlugin('NodMic')`；审 #171 只沿调用方与 Swift 插件看，没有核对构建时模块解析。
+- 实际：Bundle 66 用户报告手机 Start 不开麦、表麦开了手机无内容。生产 00:38–00:41Z 多场 `audio_s=0`，近 30 分钟无 `/ws/audio`。`web/vite.config.ts` 无条件 alias `nod-mic` 到空 `start` / `startUplink`；拿到 token 后 JS 又停转 PCM。
+- 规则：审原生插件必须核对构建 alias、`registerPlugin` 入口与同步产物；原生启动失败必须可观察，不能假成功后切断唯一数据通路。
+- 涉及：#171 · `web/vite.config.ts` · `web/src/shims/nod-mic.ts` · `bridge.ts applyUplinkToken`
+
 ## 2026-09-09 · #171 断线把 isActive 关掉，PCM 交回 JS
 - 我以为：`handleDrop()` 把 `isActive=false` 只表示 socket 断了，重连后会再打开；手机麦 / 表麦在这几秒走 JS 也没关系。
 - 实际：`NodMicPlugin.emitPcm` 和 `WatchBridge` 用同一个 `isActive` 决定要不要 `notifyListeners`。断线后 PCM 立刻进 WKWebView，离线音频进不了原生 2 MB 缓冲，锁屏重连等于没缓冲。

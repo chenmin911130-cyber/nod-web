@@ -111,8 +111,13 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
             call.reject("Missing url")
             return
         }
-        AudioUplink.shared.start(url: url)
-        call.resolve()
+        AudioUplink.shared.start(url: url) { error in
+            if let error {
+                call.reject(error.localizedDescription)
+            } else {
+                call.resolve()
+            }
+        }
     }
 
     @objc func stopUplink(_ call: CAPPluginCall) {

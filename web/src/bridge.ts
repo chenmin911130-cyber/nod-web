@@ -4,7 +4,7 @@ import { getToken } from './auth'
 import { MicCapture } from './audio'
 import { apiUrl, isNativeApp, wsUrl } from './native'
 import { micSilenceShouldWarn } from './micGuard'
-import { audioUplinkWsUrl, controlWsUrl, uplinkShouldForwardPcmFromJs } from './uplink'
+import { audioUplinkWsUrl, controlWsUrl, uplinkShouldForwardPcmFromJs, uplinkTokenAfterNativeStart } from './uplink'
 import { isWatchMicPreferred, setWatchPcmSink } from './watch'
 
 const EVENT_TYPES = new Set([
@@ -152,6 +152,7 @@ export function installWebApi(): void {
   let listenSince = 0
   let silenceWatch = 0
   let uplinkToken = ''
+  let uplinkStarting = ''
 
   const queueMsg = (msg: EngineMsg) => {
     if (msg.type === 'ping') return
@@ -233,16 +234,38 @@ export function installWebApi(): void {
   }
 
   const applyUplinkToken = (token: string) => {
-    if (!token || token === uplinkToken) return
-    uplinkToken = token
-    if (!isNativeApp()) return
-    mic.setUplinkActive(true)
+    if (!token || token === uplinkToken || token === uplinkStarting) return
+    if (!isNativeApp()) {
+      uplinkToken = uplinkTokenAfterNativeStart(true, token)
+      return
+    }
+    uplinkStarting = token
     void import('nod-mic')
       .then(({ NodMic }) => NodMic.startUplink({ url: audioUplinkWsUrl(wsUrl(), token) }))
-      .catch(() => undefined)
+      .then(() => {
+        if (uplinkStarting !== token) return
+        uplinkStarting = ''
+        uplinkToken = uplinkTokenAfterNativeStart(true, token)
+        mic.setUplinkActive(true)
+      })
+      .catch((err: unknown) => {
+        if (uplinkStarting !== token) return
+        uplinkStarting = ''
+        uplinkToken = uplinkTokenAfterNativeStart(false, token)
+        mic.setUplinkActive(false)
+        const detail =
+          err && typeof err === 'object' && 'message' in err
+            ? String((err as { message: unknown }).message) || 'connection failed'
+            : 'connection failed'
+        emit({
+          type: 'error',
+          text: `Could not open the native audio link (${detail}). Speech still goes through the app in the foreground.`,
+        })
+      })
   }
 
   const clearUplink = () => {
+    uplinkStarting = ''
     if (!uplinkToken && !isNativeApp()) {
       mic.setUplinkActive(false)
       return

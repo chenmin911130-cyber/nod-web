@@ -42,6 +42,8 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     private var sending = false
     private var lastSendAt: TimeInterval = 0
     private var watchObserver: NSObjectProtocol?
+    private var startCompletions: [(Error?) -> Void] = []
+    private var startTimeoutWork: DispatchWorkItem?
 
     private let frameBytes = 3200
     private let maxPendingBytes = 2 * 1024 * 1024
@@ -63,23 +65,59 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         }
     }
 
-    func start(url: URL) {
+    func start(url: URL, completion: @escaping (Error?) -> Void) {
         queue.async { [weak self] in
             guard let self else { return }
-            if self.url == url, self.isConnected, !self.stopped {
+            if self.url == url, self.isEnabled, !self.stopped {
+                DispatchQueue.main.async { completion(nil) }
                 return
+            }
+            if self.url == url, !self.stopped, !self.startCompletions.isEmpty {
+                self.startCompletions.append(completion)
+                return
+            }
+            if !self.startCompletions.isEmpty {
+                self.finishStart(
+                    NSError(
+                        domain: "NodMic",
+                        code: 4,
+                        userInfo: [NSLocalizedDescriptionKey: "Audio uplink restarted"]
+                    )
+                )
             }
             self.url = url
             self.stopped = false
             self.reconnectAttempt = 0
-            self.setEnabled(true)
+            self.startCompletions = [completion]
             self.open()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, !self.startCompletions.isEmpty else { return }
+                self.failInitialConnect()
+                self.finishStart(
+                    NSError(
+                        domain: "NodMic",
+                        code: 3,
+                        userInfo: [NSLocalizedDescriptionKey: "Audio uplink did not connect"]
+                    )
+                )
+            }
+            self.startTimeoutWork = work
+            self.queue.asyncAfter(deadline: .now() + 8, execute: work)
         }
     }
 
     func stop() {
         queue.async { [weak self] in
             guard let self else { return }
+            if !self.startCompletions.isEmpty {
+                self.finishStart(
+                    NSError(
+                        domain: "NodMic",
+                        code: 5,
+                        userInfo: [NSLocalizedDescriptionKey: "Audio uplink stopped"]
+                    )
+                )
+            }
             self.stopped = true
             self.reconnectWork?.cancel()
             self.reconnectWork = nil
@@ -104,6 +142,36 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         queue.async { [weak self] in
             self?.append(data)
         }
+    }
+
+    private func finishStart(_ error: Error?) {
+        startTimeoutWork?.cancel()
+        startTimeoutWork = nil
+        let cbs = startCompletions
+        startCompletions = []
+        guard !cbs.isEmpty else { return }
+        DispatchQueue.main.async {
+            for cb in cbs { cb(error) }
+        }
+    }
+
+    private func failInitialConnect() {
+        stopped = true
+        reconnectWork?.cancel()
+        reconnectWork = nil
+        flushWork?.cancel()
+        flushWork = nil
+        pumpWork?.cancel()
+        pumpWork = nil
+        sending = false
+        stopPing()
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
+        setConnected(false)
+        setEnabled(false)
+        stash.removeAll(keepingCapacity: false)
+        pending.removeAll(keepingCapacity: false)
+        pendingBytes = 0
     }
 
     private func setEnabled(_ on: Bool) {
@@ -278,8 +346,12 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             guard let self, webSocketTask === self.task else { return }
             self.reconnectAttempt = 0
             self.setConnected(true)
+            self.setEnabled(true)
             self.startPing()
             self.pump()
+            if !self.startCompletions.isEmpty {
+                self.finishStart(nil)
+            }
         }
     }
 
@@ -302,6 +374,15 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                 self.task = nil
                 self.setConnected(false)
                 self.setEnabled(false)
+                if !self.startCompletions.isEmpty {
+                    self.finishStart(
+                        NSError(
+                            domain: "NodMic",
+                            code: 6,
+                            userInfo: [NSLocalizedDescriptionKey: "Listen session ended"]
+                        )
+                    )
+                }
                 return
             }
             self.handleDrop()

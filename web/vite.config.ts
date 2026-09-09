@@ -31,7 +31,9 @@ export default defineConfig({
   plugins: [react(), appHtmlPlugin()],
   resolve: {
     alias: {
-      'nod-mic': fileURLToPath(new URL('./src/shims/nod-mic.ts', import.meta.url)),
+      // Always the real registerPlugin('NodMic') from this checkout. A stub here
+      // made start()/startUplink() resolve without native capture or /ws/audio.
+      'nod-mic': fileURLToPath(new URL('../plugins/nod-mic/src/index.ts', import.meta.url)),
     },
   },
   server: {

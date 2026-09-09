@@ -1,5 +1,5 @@
 import { nativeFallbackShouldSwitch } from './audio'
-import { audioUplinkWsUrl, controlWsUrl, uplinkShouldForwardPcmFromJs } from './uplink'
+import { audioUplinkWsUrl, controlWsUrl, uplinkShouldForwardPcmFromJs, uplinkTokenAfterNativeStart } from './uplink'
 
 function eq<T>(got: T, want: T, label: string) {
   if (got !== want) throw new Error(`${label}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`)
@@ -7,8 +7,10 @@ function eq<T>(got: T, want: T, label: string) {
 
 eq(uplinkShouldForwardPcmFromJs({ nativeApp: false, hasToken: false }), true, 'web without token still sends PCM on JS WS')
 eq(uplinkShouldForwardPcmFromJs({ nativeApp: false, hasToken: true }), true, 'web ignores native token and still sends PCM on JS WS')
-eq(uplinkShouldForwardPcmFromJs({ nativeApp: true, hasToken: false }), true, 'native without token still forwards PCM from JS')
-eq(uplinkShouldForwardPcmFromJs({ nativeApp: true, hasToken: true }), false, 'native with token must not send PCM on the control WS')
+eq(uplinkShouldForwardPcmFromJs({ nativeApp: true, hasToken: false }), true, 'native without a successful uplink start still forwards PCM from JS')
+eq(uplinkShouldForwardPcmFromJs({ nativeApp: true, hasToken: true }), false, 'native only stops JS PCM after startUplink resolves')
+eq(uplinkTokenAfterNativeStart(false, 'tok-1'), '', 'failed startUplink must not arm the JS token')
+eq(uplinkTokenAfterNativeStart(true, 'tok-1'), 'tok-1', 'successful startUplink arms the JS token')
 
 eq(
   nativeFallbackShouldSwitch({

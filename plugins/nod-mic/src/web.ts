@@ -27,7 +27,7 @@ export class NodMicWeb extends WebPlugin implements NodMicPlugin {
   }
 
   async startUplink(_options: { url: string }): Promise<void> {
-    return
+    throw this.unimplemented('Audio uplink is iOS-only')
   }
 
   async stopUplink(): Promise<void> {
