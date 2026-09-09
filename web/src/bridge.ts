@@ -4,7 +4,7 @@ import { getToken } from './auth'
 import { MicCapture } from './audio'
 import { apiUrl, isNativeApp, wsUrl } from './native'
 import { micSilenceShouldWarn } from './micGuard'
-import { audioUplinkWsUrl, controlWsUrl, uplinkShouldForwardPcmFromJs, uplinkTokenAfterNativeStart } from './uplink'
+import { audioUplinkWsUrl, controlWsUrl, shouldEmitUplinkNotice, uplinkFailureFromError, uplinkFailureLog, uplinkShouldForwardPcmFromJs, uplinkTokenAfterNativeStart } from './uplink'
 import { isWatchMicPreferred, setWatchPcmSink } from './watch'
 
 const EVENT_TYPES = new Set([
@@ -153,6 +153,7 @@ export function installWebApi(): void {
   let silenceWatch = 0
   let uplinkToken = ''
   let uplinkStarting = ''
+  let lastUplinkNotice = ''
 
   const queueMsg = (msg: EngineMsg) => {
     if (msg.type === 'ping') return
@@ -247,20 +248,22 @@ export function installWebApi(): void {
         uplinkStarting = ''
         uplinkToken = uplinkTokenAfterNativeStart(true, token)
         mic.setUplinkActive(true)
+        if (lastUplinkNotice) {
+          lastUplinkNotice = ''
+          emit({ type: 'status', text: '' })
+        }
       })
       .catch((err: unknown) => {
         if (uplinkStarting !== token) return
         uplinkStarting = ''
         uplinkToken = uplinkTokenAfterNativeStart(false, token)
         mic.setUplinkActive(false)
-        const detail =
-          err && typeof err === 'object' && 'message' in err
-            ? String((err as { message: unknown }).message) || 'connection failed'
-            : 'connection failed'
-        emit({
-          type: 'error',
-          text: `Could not open the native audio link (${detail}). Speech still goes through the app in the foreground.`,
-        })
+        const notice = uplinkFailureFromError(err)
+        const logged = uplinkFailureLog(err)
+        console.warn('nod uplink', { stage: 'startUplink', code: logged.code, message: logged.message })
+        if (!shouldEmitUplinkNotice(lastUplinkNotice, notice.text)) return
+        lastUplinkNotice = notice.text
+        emit({ type: 'error', text: notice.text })
       })
   }
 

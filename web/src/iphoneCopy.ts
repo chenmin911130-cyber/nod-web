@@ -115,6 +115,8 @@ export const IPHONE_COPY = {
   autoNotes: 'Auto notes',
   appliesToNextRecording: 'Applies to next recording',
   settingsLocked: 'Settings are locked while recording',
+  uplinkUnavailable: 'Background recording is unavailable. Reopen the app and try again.',
+  uplinkFailed: 'Background recording could not start. You can still record while the app is open.',
   settingsReadonlyAria: 'Session settings (read-only while recording)',
   leaveTitle: 'Start a new session?',
   leaveSubRecording: 'Recording will end first. Your notes stay until you choose.',

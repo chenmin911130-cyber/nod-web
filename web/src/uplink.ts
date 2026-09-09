@@ -1,3 +1,5 @@
+import { IPHONE_COPY } from './iphoneCopy'
+
 /** JS must not also send PCM on the control socket while native uplink is live. */
 export function uplinkShouldForwardPcmFromJs(opts: { nativeApp: boolean; hasToken: boolean }): boolean {
   return !opts.nativeApp || !opts.hasToken
@@ -20,4 +22,47 @@ export function audioUplinkWsUrl(controlUrl: string, token: string): string {
   const path = controlUrl.replace(/\/ws(?:\?.*)?$/, '/ws/audio')
   const sep = path.includes('?') ? '&' : '?'
   return `${path}${sep}token=${encodeURIComponent(token)}`
+}
+
+export type UplinkFailureKind = 'unavailable' | 'failed'
+
+function uplinkErrorText(err: unknown): string {
+  if (!err || typeof err !== 'object') return ''
+  if ('message' in err) return String((err as { message: unknown }).message || '')
+  return String(err)
+}
+
+function uplinkErrorCode(err: unknown): string {
+  if (!err || typeof err !== 'object' || !('code' in err)) return ''
+  return String((err as { code: unknown }).code || '')
+}
+
+function uplinkErrorIsUnimplemented(err: unknown): boolean {
+  const code = uplinkErrorCode(err).toUpperCase()
+  const text = uplinkErrorText(err)
+  return code === 'UNIMPLEMENTED' || /not implemented/i.test(text)
+}
+
+function stripUplinkSecrets(text: string): string {
+  return text.replace(/token=[^&\s"'`]+/gi, 'token=')
+}
+
+/** User-facing uplink failure. Never includes plugin method names or stack. */
+export function uplinkFailureFromError(err: unknown): { kind: UplinkFailureKind; text: string } {
+  if (uplinkErrorIsUnimplemented(err)) {
+    return { kind: 'unavailable', text: IPHONE_COPY.uplinkUnavailable }
+  }
+  return { kind: 'failed', text: IPHONE_COPY.uplinkFailed }
+}
+
+export function shouldEmitUplinkNotice(last: string, next: string): boolean {
+  return last !== next
+}
+
+/** Diagnostic fields only. Strip tokens; keep method names for install/version checks. */
+export function uplinkFailureLog(err: unknown): { code: string; message: string } {
+  return {
+    code: uplinkErrorCode(err) || 'unknown',
+    message: stripUplinkSecrets(uplinkErrorText(err)),
+  }
 }

@@ -97,7 +97,11 @@ html.nod-phone .app.iphone-v2.hist-open > .workspace,
 html.nod-web .app.hist-open > .workspace,
 html.nod-phone .app.iphone-v2.account-open > .workspace,
 html.nod-phone .app.iphone-v2.hist-open > .status-toast,
-html.nod-web .app.hist-open > .status-toast {
+html.nod-web .app.hist-open > .status-toast,
+html.nod-phone .app.iphone-v2.account-open > .status-toast,
+html.nod-phone .app.iphone-v2.hist-open > .uplink-status-banner,
+html.nod-web .app.hist-open > .uplink-status-banner,
+html.nod-phone .app.iphone-v2.account-open > .uplink-status-banner {
   display: none !important;
 }
 
@@ -3838,6 +3842,20 @@ a.tb-menu-action {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
+.uplink-status-banner {
+  flex-shrink: 0;
+  margin: 0 16px 10px;
+  padding: 10px 14px;
+  font-size: 16px;
+  line-height: 1.45;
+  color: #d7e3f4;
+  background: rgba(26, 18, 10, 0.96);
+  border: 1px solid rgba(255, 200, 87, 0.35);
+  border-radius: 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .rail-primary-ring {
   position: relative;
 }
@@ -6117,6 +6135,12 @@ html.nod-phone .app.iphone-v2 {
   --nod-rec: #FF514D;
   --nod-pause: #FFC857;
   background: #000;
+}
+
+html.nod-phone .app.iphone-v2 .uplink-status-banner {
+  margin-left: max(var(--iphone-gutter), env(safe-area-inset-left));
+  margin-right: max(var(--iphone-gutter), env(safe-area-inset-right));
+  font-size: 16px;
 }
 
 html.nod-phone .app.iphone-v2 .titlebar {

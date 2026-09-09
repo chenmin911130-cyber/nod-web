@@ -1,5 +1,6 @@
 import { nativeFallbackShouldSwitch } from './audio'
-import { audioUplinkWsUrl, controlWsUrl, uplinkShouldForwardPcmFromJs, uplinkTokenAfterNativeStart } from './uplink'
+import { IPHONE_COPY } from './iphoneCopy'
+import { audioUplinkWsUrl, controlWsUrl, shouldEmitUplinkNotice, uplinkFailureFromError, uplinkFailureLog, uplinkShouldForwardPcmFromJs, uplinkTokenAfterNativeStart } from './uplink'
 
 function eq<T>(got: T, want: T, label: string) {
   if (got !== want) throw new Error(`${label}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`)
@@ -39,5 +40,33 @@ eq(
   'wss://nodpilot.com/ws/audio?token=tok-1',
   'audio URL is never built from the attach query',
 )
+
+eq(
+  uplinkFailureFromError({ code: 'UNIMPLEMENTED', message: '"NodMic.startUplink()" is not implemented on ios' }).text,
+  IPHONE_COPY.uplinkUnavailable,
+  'missing native method becomes a short background-recording notice',
+)
+eq(
+  uplinkFailureFromError({ code: 'UNIMPLEMENTED', message: '"NodMic.startUplink()" is not implemented on ios' }).text.includes('startUplink'),
+  false,
+  'user copy must not include the plugin method name',
+)
+eq(
+  uplinkFailureFromError({ message: 'connection failed' }).text,
+  IPHONE_COPY.uplinkFailed,
+  'generic uplink failure still lets foreground recording continue',
+)
+{
+  const logged = uplinkFailureLog({
+    code: 'UNIMPLEMENTED',
+    message: '"NodMic.startUplink()" is not implemented on ios token=secret-token-value',
+  })
+  eq(logged.code, 'UNIMPLEMENTED', 'diagnostic log keeps the Capacitor code')
+  eq(logged.message.includes('startUplink'), true, 'diagnostic log keeps the method name')
+  eq(logged.message.includes('secret-token-value'), false, 'diagnostic log strips token values')
+}
+eq(shouldEmitUplinkNotice('', IPHONE_COPY.uplinkUnavailable), true, 'first uplink failure is shown')
+eq(shouldEmitUplinkNotice(IPHONE_COPY.uplinkUnavailable, IPHONE_COPY.uplinkUnavailable), false, 'duplicate uplink failure is not emitted again')
+eq(shouldEmitUplinkNotice(IPHONE_COPY.uplinkUnavailable, IPHONE_COPY.uplinkFailed), true, 'a different uplink failure replaces the notice')
 
 console.log('uplink.test.ts: ok')
