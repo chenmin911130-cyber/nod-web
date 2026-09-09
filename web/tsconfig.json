@@ -13,7 +13,10 @@
     "isolatedModules": true,
     "resolveJsonModule": true,
     "types": ["vite/client"],
-    "baseUrl": "."
+    "baseUrl": ".",
+    "paths": {
+      "nod-mic": ["./src/nod-mic.d.ts"]
+    }
   },
   "include": ["src"]
 }

@@ -31,9 +31,9 @@ export default defineConfig({
   plugins: [react(), appHtmlPlugin()],
   resolve: {
     alias: {
-      // Runtime: real registerPlugin('NodMic'). tsc uses web/src/nod-mic.d.ts so
-      // it does not typecheck plugin sources that resolve @capacitor/core from
-      // plugins/ instead of web/node_modules (CI frontend/e2e).
+      // Runtime: real registerPlugin('NodMic'). tsc maps nod-mic to
+      // src/nod-mic.d.ts (paths) so CI does not typecheck plugin sources that
+      // cannot see @capacitor/core from plugins/ (web/node_modules only).
       'nod-mic': fileURLToPath(new URL('../plugins/nod-mic/src/index.ts', import.meta.url)),
     },
   },
