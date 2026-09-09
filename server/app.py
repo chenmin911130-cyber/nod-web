@@ -11,6 +11,7 @@ import os
 import hashlib
 import queue
 import re
+import secrets
 import tempfile
 import threading
 import time
@@ -76,6 +77,7 @@ from server.settings import (
 )
 from server.ratelimit import MAX_WS_FRAME, WS_FRAMES_PER_SEC, allow, ws_client_ip, ws_connect, ws_disconnect
 from server.security import current_user, is_local_scope, user_from_token
+from server import uplink
 
 SR = 16000
 STT_CLOUD = "assemblyai"
@@ -625,6 +627,7 @@ def _tick_live_idle_watches() -> None:
             sess._maybe_stop_forgotten_listen()
         except Exception:
             logging.getLogger("nod").exception("idle watch failed")
+    uplink.reap(time.time())
 
 
 def _idle_watch_loop() -> None:
@@ -2090,6 +2093,13 @@ class Session:
         # ship for backward compatibility, then a `phase` event pairs them.
         self._paused = False
         self._engine = "idle"
+        self.audio_token = secrets.token_urlsafe(24)
+        self._uplink_connected = False
+        self._control_lost_at = 0.0
+        self._uplink_lost_at = 0.0
+        self._audio_ws = None
+        self._closed = False
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def _archive_prefix(self) -> str:
         return f"users/{self.user_id}/sessions/{self.usage_session_id}/audio/"
@@ -2217,8 +2227,55 @@ class Session:
         # so they can render from `capture`.
         self._emit_phase()
         self.emit({"type": "status", "text": STATUS_READY})
+        token = getattr(self, "audio_token", None)
+        if token:
+            self.emit({"type": "audio_uplink", "token": token})
+
+    def reattach(self) -> None:
+        st = self.pipeline.key_status()
+        self.emit({"type": "keys_status", "has_llm": st["has_llm"], "has_stt": st["has_stt"]})
+        self.emit({"type": "ready"})
+        self.emit({"type": "attached", "usage_session_id": self.usage_session_id})
+        self._emit_phase()
+        token = getattr(self, "audio_token", None)
+        if token:
+            self.emit({"type": "audio_uplink", "token": token})
+
+    def _sink_emit(self, _obj: dict) -> None:
+        return
+
+    def _detach_control_emit(self) -> None:
+        self.emit = self._sink_emit
+        pipeline = getattr(self, "pipeline", None)
+        if pipeline is not None:
+            pipeline.emit = self._sink_emit
+
+    def _close_audio_uplink(self) -> None:
+        ws = getattr(self, "_audio_ws", None)
+        self._audio_ws = None
+        self._uplink_connected = False
+        if ws is None:
+            return
+
+        async def _close() -> None:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+
+        loop = getattr(self, "_loop", None)
+        if loop is not None:
+            try:
+                if loop.is_running():
+                    asyncio.run_coroutine_threadsafe(_close(), loop)
+            except Exception:
+                pass
 
     def close(self) -> None:
+        self._closed = True
+        self._detach_control_emit()
+        self._close_audio_uplink()
+        uplink.unregister(getattr(self, "audio_token", None))
         self._listen_wanted = False
         self._stop_listening()
         self.pipeline.abort_stream()
@@ -2253,6 +2310,8 @@ class Session:
         self.emit({"type": "status", "text": _quota_copy(snap)})
 
     def _ensure_usage(self) -> bool:
+        if getattr(self, "_closed", False):
+            return False
         if not self.user_id:
             return True
         if not self._ensure_consent():
@@ -2278,6 +2337,8 @@ class Session:
 
     def push_pcm(self, pcm: bytes) -> None:
         if not pcm:
+            return
+        if getattr(self, "_closed", False):
             return
         if self._listener:
             # ANY byte (even silence, even while muted or consent-blocked) proves the
@@ -3945,11 +4006,23 @@ async def ws_endpoint(ws: WebSocket):
         note_event(obj)
         asyncio.run_coroutine_threadsafe(out.put(json.dumps(obj, ensure_ascii=False)), loop)
 
-    session = Session(emit, json.loads(json.dumps(CFG)), dict(KEYS), user.id if user else None)
     from server.live import attach, detach
 
-    attach(session)
-    session.start()
+    attach_tok = (ws.query_params.get("attach") or "").strip()
+    old = uplink.adopt(attach_tok, user.id) if attach_tok and user is not None else None
+    if old is not None:
+        old.emit = emit
+        old.pipeline.emit = emit
+        old._control_lost_at = 0.0
+        attach(old)
+        old.reattach()
+        session = old
+    else:
+        session = Session(emit, json.loads(json.dumps(CFG)), dict(KEYS), user.id if user else None)
+        uplink.register(session)
+        attach(session)
+        session.start()
+    session._loop = loop
     if user:
         from server.meter import usage_snapshot
 
@@ -3994,6 +4067,12 @@ async def ws_endpoint(ws: WebSocket):
         send_task.cancel()
         ws_disconnect(ip)
         detach(session)
+        if uplink.should_park(session):
+            session._control_lost_at = time.time()
+            session._detach_control_emit()
+            uplink.park(session)
+            return
+        uplink.unregister(getattr(session, "audio_token", None))
         try:
             await run_in_threadpool(session.close)
         except asyncio.CancelledError:
@@ -4003,6 +4082,69 @@ async def ws_endpoint(ws: WebSocket):
             raise
         except Exception:
             log.exception("session close failed")
+
+
+@app.websocket("/ws/audio")
+async def ws_audio(ws: WebSocket):
+    raw_headers = {k.decode("latin1"): v.decode("latin1") for k, v in (ws.scope.get("headers") or [])}
+    ip = ws_client_ip(ws.client.host if ws.client else "", raw_headers)
+    if not ws_connect(ip):
+        from server.live import mark
+
+        mark("ws_rejected")
+        await ws.close(code=4408)
+        return
+    token = (ws.query_params.get("token") or "").strip()
+    session = uplink.get(token)
+    if session is None:
+        ws_disconnect(ip)
+        await ws.close(code=4404)
+        return
+    if getattr(session, "_closed", False):
+        ws_disconnect(ip)
+        await ws.close(code=4404)
+        return
+    prev = getattr(session, "_audio_ws", None)
+    await ws.accept()
+    if prev is not None and prev is not ws:
+        try:
+            await prev.close()
+        except Exception:
+            pass
+    session._audio_ws = ws
+    session._uplink_connected = True
+    session._uplink_lost_at = 0.0
+    try:
+        while True:
+            message = await ws.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+            data = message.get("bytes")
+            text = message.get("text")
+            if getattr(session, "_closed", False):
+                break
+            if data:
+                if len(data) > MAX_WS_FRAME:
+                    continue
+                if not allow(f"wsframe:{ip}", WS_FRAMES_PER_SEC, 1.0):
+                    continue
+                await run_in_threadpool(session.push_pcm, data)
+            elif text:
+                try:
+                    payload = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict) or payload.get("type") != "ping":
+                    continue
+    except WebSocketDisconnect:
+        pass
+    finally:
+        ws_disconnect(ip)
+        if getattr(session, "_audio_ws", None) is ws:
+            session._audio_ws = None
+            session._uplink_connected = False
+            if uplink.is_parked(getattr(session, "audio_token", None)):
+                session._uplink_lost_at = time.time()
 
 
 HTML_NO_CACHE = {
