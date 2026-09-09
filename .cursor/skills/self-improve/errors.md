@@ -2,6 +2,12 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-09 · #165 审查：双向同步、忙循环、无身份 ack、只等 socket、短尾不发、5 秒内存窗
+- 我以为：ingest `queue.sync` + uplink `tryEnqueue`/`markSent` 同步、`pcmAckByte` 纯数字、socket send completion、160 kB 再落盘，就能完成有序补传和 End 排空。
+- 实际：ingest 与 uplink 互相 `sync` 会死锁；队列满时 `pumpLocked` 立刻重读同一文件；ack 无 capture/session，旧确认能删新片；socket 成功后 `stop` 会截断服务端 `_q`；stash <50ms 永不 flush；当前片在内存最多约 5 秒。
+- 规则：消费回调只异步回状态队列；容量不足必须退出 pump；ack 绑定 capture+session 且换场清零；End 等服务端 `pcm_drained` 再 stop；冻结时 flush 短尾；采集开始即追加写盘。
+- 涉及：`WatchPcmIngest` · `AudioUplink.tryEnqueue` · `WatchPhoneSession.apply pcmAck` · `CloudListener.drain` · `WatchPcmStore.append`
+
 ## 2026-09-09 · Bundle 71 把 node_modules 链到脏主仓，编进旧原生插件
 - 我以为：隔离 worktree 里 `node_modules` 链到主仓能共用依赖；committed `Podfile` 的 `../../plugins` 会编当前树。
 - 实际：`nod-mic` 相对链接解析到 `/Users/minchen/Projects/nod-web/plugins`。`cap sync` 按 realpath 写进 Pods。71 归档的 `NodMic.framework` 没有 `startUplink` / `AudioUplink`，`NodWatch` 也缺新会话字段。网页是新的，框架是旧的。

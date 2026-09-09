@@ -19,6 +19,7 @@ type WatchPlugin = {
     langPair?: string
     save?: string
     sessionId?: string
+    pcmDrained?: boolean
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {
@@ -315,6 +316,7 @@ export function pushWatchStatus(face: {
   langPair?: string
   save?: string
   sessionId?: string
+  pcmDrained?: boolean
 }): void {
   if (!isNativeApp()) return
   void NodWatch.setStatus({
@@ -328,6 +330,7 @@ export function pushWatchStatus(face: {
     langPair: face.langPair,
     save: face.save,
     sessionId: face.sessionId,
+    pcmDrained: face.pcmDrained,
   }).catch(() => undefined)
 }
 

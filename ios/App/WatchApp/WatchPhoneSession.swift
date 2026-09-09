@@ -42,6 +42,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     private var transferTimer: Timer?
     private var pendingSaveOffer = false
     private var saveAfterDrain = false
+    private var pcmDrained = false
     private let pcmStore = WatchPcmStore()
     private var lastTransferAt: [Int: Date] = [:]
 
@@ -285,11 +286,13 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         pendingSaveOffer = hadContent
         saveAfterDrain = false
         drainFailed = false
+        pcmDrained = false
         pcmStore.freeze()
         draining = true
         hint = WatchCopy.replaying
         armDrainWait()
         flushTransfers()
+        send(action: "drain")
         maybeCompleteDrain()
     }
 
@@ -335,6 +338,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         lastTransferAt.removeAll()
         draining = false
         drainFailed = false
+        pcmDrained = false
         pendingSaveOffer = false
         saveAfterDrain = false
         original = ""
@@ -603,6 +607,15 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         return nil
     }
 
+    static func flag(_ payload: [String: Any], _ key: String) -> Bool {
+        if let b = payload[key] as? Bool { return b }
+        if let n = payload[key] as? Int { return n != 0 }
+        if let s = payload[key] as? String {
+            return s == "true" || s == "1"
+        }
+        return false
+    }
+
     private func resetPcmBuffer() {
         pcmLock.lock()
         pendingPcm.removeAll(keepingCapacity: true)
@@ -684,14 +697,24 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         DispatchQueue.main.asyncAfter(deadline: .now() + max(30, slack), execute: work)
     }
 
+    static func pcmAckApplies(
+        liveCaptureId: String,
+        liveSessionId: String,
+        ackCaptureId: String,
+        ackSessionId: String
+    ) -> Bool {
+        if ackCaptureId.isEmpty || liveCaptureId.isEmpty || ackCaptureId != liveCaptureId { return false }
+        if !ackSessionId.isEmpty, !liveSessionId.isEmpty, ackSessionId != liveSessionId { return false }
+        return true
+    }
+
     private func maybeCompleteDrain() {
-        guard draining, !drainFailed else { return }
-        guard pcmStore.frozen, pcmStore.ackedByte >= pcmStore.lastByte, pcmStore.lastByte > 0 else {
-            if draining, pcmStore.frozen, pcmStore.lastByte == 0 {
-                completeDrain()
-            }
+        guard draining, !drainFailed, pcmStore.frozen else { return }
+        if pcmStore.lastByte == 0 {
+            completeDrain()
             return
         }
+        guard pcmDrained else { return }
         completeDrain()
     }
 
@@ -715,11 +738,13 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
 
     func retryDrain() {
         drainFailed = false
+        pcmDrained = false
         draining = true
         hint = WatchCopy.replaying
         lastTransferAt.removeAll()
         armDrainWait()
         flushTransfers()
+        send(action: "drain")
     }
 
     private func startRuntime() {
@@ -763,8 +788,14 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if Self.commandShouldSendMode(action), phoneModeSeen {
             payload["mode"] = mode
         }
-        if action == "start" || action == "record", !pcmStore.captureId.isEmpty {
+        if action == "start" || action == "record" || action == "drain", !pcmStore.captureId.isEmpty {
             payload["captureId"] = pcmStore.captureId
+        }
+        if action == "drain" {
+            payload["lastByte"] = String(pcmStore.lastByte)
+            if !pcmStore.sessionId.isEmpty {
+                payload["sessionId"] = pcmStore.sessionId
+            }
         }
         if action == "save" {
             guard let wire = Self.saveWireMessage(sessionId: saveRequestId) else { return }
@@ -809,13 +840,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     private func apply(_ payload: [String: Any], live: Bool) {
-        if let ack = Self.intField(payload, "pcmAckByte"), ack > 0 {
-            pcmStore.ack(ack)
-            lastTransferAt = lastTransferAt.filter { seq, _ in
-                pcmStore.unackedShards().contains(where: { $0.seq == seq })
-            }
-            maybeCompleteDrain()
-        }
         if let sessionId = payload["sessionId"] as? String, !sessionId.isEmpty {
             phoneSessionId = sessionId
             pcmStore.bindSession(sessionId)
@@ -823,6 +847,43 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             if pin.send {
                 saveRequestId = pin.pinnedId
                 send(action: "save")
+            }
+        }
+        if let ack = Self.intField(payload, "pcmAckByte"), ack > 0 {
+            let ackCapture = (payload["pcmAckCaptureId"] as? String)
+                ?? (payload["captureId"] as? String)
+                ?? ""
+            let ackSession = (payload["pcmAckSessionId"] as? String)
+                ?? (payload["sessionId"] as? String)
+                ?? ""
+            if Self.pcmAckApplies(
+                liveCaptureId: pcmStore.captureId,
+                liveSessionId: pcmStore.sessionId,
+                ackCaptureId: ackCapture,
+                ackSessionId: ackSession
+            ) {
+                pcmStore.ack(ack, captureId: ackCapture, sessionId: ackSession)
+                lastTransferAt = lastTransferAt.filter { seq, _ in
+                    pcmStore.unackedShards().contains(where: { $0.seq == seq })
+                }
+            }
+        }
+        if Self.flag(payload, "pcmDrained") {
+            let ackCapture = (payload["pcmAckCaptureId"] as? String)
+                ?? (payload["captureId"] as? String)
+                ?? pcmStore.captureId
+            let ackSession = (payload["pcmAckSessionId"] as? String)
+                ?? (payload["sessionId"] as? String)
+                ?? ""
+            if Self.pcmAckApplies(
+                liveCaptureId: pcmStore.captureId,
+                liveSessionId: pcmStore.sessionId,
+                ackCaptureId: ackCapture,
+                ackSessionId: ackSession
+            ) {
+                pcmDrained = true
+                pcmStore.ack(pcmStore.lastByte, captureId: ackCapture, sessionId: ackSession)
+                maybeCompleteDrain()
             }
         }
         if let save = payload["save"] as? String {

@@ -156,6 +156,7 @@ export type EngineEvent =
   | { type: 'history_keep_failed'; id?: string; reason?: string }
   | { type: 'disconnected' }
   | { type: 'attached'; usage_session_id?: string }
+  | { type: 'pcm_drained'; id: string; byte_offset: number }
 
 // 前端 → 引擎
 export type EngineMsg =

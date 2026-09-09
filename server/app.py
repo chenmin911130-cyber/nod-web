@@ -63,7 +63,7 @@ from server.meeting_lines import (
     tail_meta as meeting_tail_meta,
 )
 from server.turn_pacing import cut_decision, split_carry, turn_pacing_from_env, word_span_ms
-from server.stt_audio import duration_ms, duration_s, error_summary, pace_wait_s, take_frames
+from server.stt_audio import duration_ms, duration_s, error_summary, pace_wait_s, take_final_frames, take_frames
 from server.logging_setup import backup_now, setup_logging
 from server.settings import (
     AUTH_DISABLED,
@@ -1787,6 +1787,8 @@ class CloudListener:
         self._last_send_ms = 0.0
         self._last_send_interval_ms = 0.0
         self._send_count = 0
+        self._drain = threading.Event()
+        self._drained = threading.Event()
 
     def set_muted(self, muted: bool) -> None:
         self._muted = bool(muted)
@@ -1806,6 +1808,14 @@ class CloudListener:
             except queue.Full:
                 pass
 
+    def drain(self, timeout: float = 120.0) -> bool:
+        """Flush queued PCM into AssemblyAI, including a padded short tail. Does not stop."""
+        if self._stop.is_set():
+            return False
+        self._drained.clear()
+        self._drain.set()
+        return self._drained.wait(timeout)
+
     def start(self) -> None:
         import websocket
         url = assemblyai_ws_url(self.cfg)
@@ -1823,6 +1833,8 @@ class CloudListener:
         self._last_send_ms = 0.0
         self._last_send_interval_ms = 0.0
         self._send_count = 0
+        self._drain.clear()
+        self._drained.clear()
         self._ws = websocket.WebSocketApp(
             url,
             header=[f"Authorization: {self.api_key}"],
@@ -1859,6 +1871,10 @@ class CloudListener:
             try:
                 chunk = self._q.get(timeout=0.08)
             except queue.Empty:
+                if self._drain.is_set() and self._q.empty():
+                    self._send_drain_tail()
+                continue
+            if not chunk:
                 continue
             self._pcm_buf.extend(chunk)
             for frame in take_frames(self._pcm_buf):
@@ -1867,15 +1883,33 @@ class CloudListener:
                 self._pace_before_send()
                 if self._stop.is_set():
                     return
-                ws = self._ws
-                try:
-                    if ws and ws.sock and ws.sock.connected:
-                        ws.send(frame, websocket.ABNF.OPCODE_BINARY)
-                        self._record_send(frame)
-                except Exception as e:
-                    if not self._stop.is_set():
-                        self._notify_drop(str(e))
+                if not self._send_stt_frame(frame):
                     return
+
+    def _send_drain_tail(self) -> None:
+        for frame in take_final_frames(self._pcm_buf):
+            if self._stop.is_set():
+                return
+            self._pace_before_send()
+            if self._stop.is_set():
+                return
+            if not self._send_stt_frame(frame):
+                return
+        self._drained.set()
+        self._drain.clear()
+
+    def _send_stt_frame(self, frame: bytes) -> bool:
+        import websocket
+        ws = self._ws
+        try:
+            if ws and ws.sock and ws.sock.connected:
+                ws.send(frame, websocket.ABNF.OPCODE_BINARY)
+                self._record_send(frame)
+            return True
+        except Exception as e:
+            if not self._stop.is_set():
+                self._notify_drop(str(e))
+            return False
 
     def _pace_before_send(self) -> None:
         if self._last_send_at <= 0 or self._last_send_bytes <= 0:
@@ -2461,6 +2495,8 @@ class Session:
         if self._listener:
             self._archive_append(pcm)
             self._listener.push_pcm(pcm)
+            self._pcm_rx_bytes = getattr(self, "_pcm_rx_bytes", 0) + len(pcm)
+            self._finish_pcm_end_if_ready()
             self._maybe_stop_forgotten_listen()
 
     def dispatch(self, msg: dict) -> None:
@@ -2471,6 +2507,8 @@ class Session:
             self.toggle_listen()
         elif mtype == "start_listen":
             self.start_listen(mic=msg.get("mic"))
+        elif mtype == "pcm_end":
+            self.pcm_end(msg.get("id"), msg.get("byte_offset"))
         elif mtype == "stop_listen":
             self.stop_listen()
         elif mtype == "pause_listen":
@@ -3263,6 +3301,39 @@ class Session:
             self.emit({"type": "status", "text": STATUS_READY})
         self._offer_save_history()
 
+    def pcm_end(self, session_id: Any = None, byte_offset: Any = None) -> None:
+        """Watch End: wait until this session's audio is in STT, then emit pcm_drained.
+
+        Old clients never send this. Wrong or empty id is ignored so a leftover
+        End cannot drain or stop another session.
+        """
+        sid = str(session_id or "").strip()
+        if not sid or sid != (self.usage_session_id or ""):
+            return
+        try:
+            offset = int(byte_offset)
+        except (TypeError, ValueError):
+            return
+        if offset < 0:
+            return
+        self._pcm_end_id = sid
+        self._pcm_end_offset = offset
+        self._finish_pcm_end_if_ready()
+
+    def _finish_pcm_end_if_ready(self) -> None:
+        sid = getattr(self, "_pcm_end_id", None)
+        if not sid:
+            return
+        offset = int(getattr(self, "_pcm_end_offset", 0) or 0)
+        if getattr(self, "_pcm_rx_bytes", 0) < offset:
+            return
+        lst = self._listener
+        if lst is not None:
+            lst.drain()
+        self._pcm_end_id = None
+        self._pcm_end_offset = 0
+        self.emit({"type": "pcm_drained", "id": sid, "byte_offset": offset})
+
     def pause_listen(self) -> None:
         """Pause live capture and stop AssemblyAI billing.
 
@@ -3405,6 +3476,9 @@ class Session:
             on_error=lambda e: self.emit({"type": "error", "text": f"Transcription failed:{e}"}),
             on_drop=self._on_stt_drop,
         )
+        self._pcm_rx_bytes = 0
+        self._pcm_end_id = None
+        self._pcm_end_offset = 0
         slot = self._stt_slot()
         prev = _adopt_live_stt(slot, listener, self)
         if prev:
@@ -4212,8 +4286,13 @@ async def ws_audio(ws: WebSocket):
                     payload = json.loads(text)
                 except json.JSONDecodeError:
                     continue
-                if not isinstance(payload, dict) or payload.get("type") != "ping":
+                if not isinstance(payload, dict):
                     continue
+                mtype = payload.get("type")
+                if mtype == "ping":
+                    continue
+                if mtype == "pcm_end":
+                    await run_in_threadpool(session.pcm_end, payload.get("id"), payload.get("byte_offset"))
     except WebSocketDisconnect:
         pass
     finally:

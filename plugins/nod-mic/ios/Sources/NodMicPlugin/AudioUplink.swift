@@ -10,6 +10,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
 
     private let queue = DispatchQueue(label: "nod.audio.uplink")
     private let lock = NSLock()
+    private let bufLock = NSLock()
     private var _enabled = false
     private var _connected = false
 
@@ -51,6 +52,8 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     private let frameBytes = 3200 // 100 ms
     private let maxPendingBytes = 2 * 1024 * 1024
     private var lastSentAudioSeconds: TimeInterval = 0
+    private var pcmEndId = ""
+    private var pcmEndOffset = 0
 
     private override init() {
         super.init()
@@ -136,38 +139,76 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             self.task = nil
             self.setConnected(false)
             self.setEnabled(false)
+            self.bufLock.lock()
             self.stash.removeAll(keepingCapacity: false)
             self.pending.removeAll(keepingCapacity: false)
             self.pendingBytes = 0
+            self.bufLock.unlock()
+            self.pcmEndId = ""
+            self.pcmEndOffset = 0
         }
     }
 
     func enqueue(_ data: Data) {
         guard !data.isEmpty else { return }
         queue.async { [weak self] in
-            self?.append(data, dropOldest: true)
+            guard let self else { return }
+            self.bufLock.lock()
+            self.append(data, dropOldest: true)
+            self.bufLock.unlock()
+            self.pump()
         }
     }
 
     /// Watch replay: refuse the chunk instead of dropping older frames.
+    /// Uses bufLock only — must not wait on the uplink serial queue (ingest holds its own).
     func tryEnqueue(_ data: Data) -> Bool {
         guard !data.isEmpty else { return true }
-        var ok = false
-        queue.sync {
-            if self.pendingBytes + self.stash.count + data.count > self.maxPendingBytes {
-                ok = false
-                return
-            }
-            self.append(data, dropOldest: false)
-            ok = true
+        bufLock.lock()
+        let ok = pendingBytes + stash.count + data.count <= maxPendingBytes
+        if ok {
+            append(data, dropOldest: false)
+        }
+        bufLock.unlock()
+        if ok {
+            queue.async { [weak self] in self?.pump() }
         }
         return ok
     }
 
     func queuedBytes() -> Int {
-        var n = 0
-        queue.sync { n = self.pendingBytes + self.stash.count }
+        bufLock.lock()
+        let n = pendingBytes + stash.count
+        bufLock.unlock()
         return n
+    }
+
+    func flushTail() {
+        queue.async { [weak self] in
+            self?.flushTailLocked()
+            self?.pump()
+        }
+    }
+
+    func requestPcmEnd(sessionId: String, byteOffset: Int) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.pcmEndId = sessionId
+            self.pcmEndOffset = byteOffset
+            self.flushTailLocked()
+            self.pump()
+        }
+    }
+
+    private func flushTailLocked() {
+        bufLock.lock()
+        if !stash.isEmpty {
+            let frame = stash
+            stash = Data()
+            pending.append(frame)
+            pendingBytes += frame.count
+        }
+        bufLock.unlock()
     }
 
     private func finishStart(_ error: Error?) {
@@ -197,9 +238,13 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         task = nil
         setConnected(false)
         setEnabled(false)
+        bufLock.lock()
         stash.removeAll(keepingCapacity: false)
         pending.removeAll(keepingCapacity: false)
         pendingBytes = 0
+        bufLock.unlock()
+        pcmEndId = ""
+        pcmEndOffset = 0
     }
 
     private func setEnabled(_ on: Bool) {
@@ -238,29 +283,29 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         while stash.count >= frameBytes {
             let frame = Data(stash.prefix(frameBytes))
             stash.removeSubrange(0 ..< frameBytes)
-            sendOrBuffer(frame, dropOldest: dropOldest)
+            buffer(frame, dropOldest: dropOldest)
         }
         scheduleFlush()
     }
 
     private func scheduleFlush() {
         flushWork?.cancel()
-        // Hold tails shorter than 50 ms. Sending them is AssemblyAI 3007.
         guard stash.count >= minChunkBytes else { return }
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.stash.count >= self.minChunkBytes else { return }
+            guard let self else { return }
+            self.bufLock.lock()
+            guard self.stash.count >= self.minChunkBytes else {
+                self.bufLock.unlock()
+                return
+            }
             let frame = self.stash
             self.stash = Data()
-            self.sendOrBuffer(frame, dropOldest: true)
+            self.buffer(frame, dropOldest: true)
+            self.bufLock.unlock()
+            self.pump()
         }
         flushWork = work
         queue.asyncAfter(deadline: .now() + 0.1, execute: work)
-    }
-
-    private func sendOrBuffer(_ frame: Data, dropOldest: Bool) {
-        guard !frame.isEmpty else { return }
-        buffer(frame, dropOldest: dropOldest)
-        pump()
     }
 
     private func buffer(_ frame: Data, dropOldest: Bool) {
@@ -289,8 +334,14 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func pump() {
-        guard !sending, pumpWork == nil else { return }
-        guard isConnected, !pending.isEmpty, !stopped else { return }
+        guard !sending, pumpWork == nil, isConnected, !stopped else { return }
+        bufLock.lock()
+        let hasPending = !pending.isEmpty
+        bufLock.unlock()
+        if !hasPending {
+            sendPcmEndIfIdle()
+            return
+        }
         let elapsed = Date.timeIntervalSinceReferenceDate - lastSendAt
         let wait = lastSendAt == 0 ? 0 : max(0, lastSentAudioSeconds - elapsed)
         let work = DispatchWorkItem { [weak self] in
@@ -302,9 +353,47 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         queue.asyncAfter(deadline: .now() + wait, execute: work)
     }
 
+    private func sendPcmEndIfIdle() {
+        guard !pcmEndId.isEmpty, isConnected, let task, !stopped, !sending else { return }
+        bufLock.lock()
+        let idle = pending.isEmpty && stash.isEmpty
+        bufLock.unlock()
+        guard idle else { return }
+        let payload: [String: Any] = [
+            "type": "pcm_end",
+            "id": pcmEndId,
+            "byte_offset": pcmEndOffset,
+        ]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              let text = String(data: data, encoding: .utf8)
+        else { return }
+        sending = true
+        task.send(.string(text)) { [weak self] error in
+            guard let self else { return }
+            self.queue.async {
+                if error == nil {
+                    self.pcmEndId = ""
+                    self.pcmEndOffset = 0
+                }
+                self.sending = false
+                if error != nil {
+                    self.sendPcmEndIfIdle()
+                }
+            }
+        }
+    }
+
     private func sendHead() {
         guard !sending else { return }
-        guard isConnected, let task, let queued = pending.first, !stopped else { return }
+        guard isConnected, let task, !stopped else { return }
+        bufLock.lock()
+        guard let queued = pending.first else {
+            bufLock.unlock()
+            sendPcmEndIfIdle()
+            return
+        }
+        bufLock.unlock()
         let frame = sendableFrame(queued)
         sending = true
         task.send(.data(frame)) { [weak self] error in
@@ -315,10 +404,12 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                     self.handleDrop()
                     return
                 }
+                self.bufLock.lock()
                 if self.pending.first == queued {
                     self.pending.removeFirst()
                     self.pendingBytes -= queued.count
                 }
+                self.bufLock.unlock()
                 self.lastSendAt = Date.timeIntervalSinceReferenceDate
                 self.lastSentAudioSeconds = self.audioSeconds(frame)
                 NotificationCenter.default.post(

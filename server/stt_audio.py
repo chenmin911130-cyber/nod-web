@@ -47,6 +47,16 @@ def take_frames(buf: bytearray) -> list[bytes]:
     return out
 
 
+def take_final_frames(buf: bytearray) -> list[bytes]:
+    """End drain: send leftover audio padded to the 50 ms floor."""
+    out = take_frames(buf)
+    if buf:
+        pad = MIN_CHUNK_BYTES - len(buf)
+        out.append(bytes(buf) + b"\x00" * pad)
+        buf.clear()
+    return out
+
+
 def error_summary(data: dict[str, Any]) -> tuple[int | None, str]:
     """Desensitized AssemblyAI Error fields: code + message, no tokens/audio."""
     code_raw = data.get("error_code")

@@ -22,6 +22,10 @@ final class WatchPcmIngest {
     private(set) var ackByte = 0
     private var parked: [(offset: Int, url: URL, key: String)] = []
     private var pumping = false
+    private var drainLastByte = -1
+    private var drainCapture = ""
+    private var drainSession = ""
+    private var pcmEndSent = false
     private var observers: [NSObjectProtocol] = []
 
     private var inboundRoot: URL {
@@ -60,7 +64,7 @@ final class WatchPcmIngest {
             let decision = self.ingestLive(data: data, captureId: capture, sessionId: session, offset: offset)
             if let reply = note.userInfo?["reply"] as? NSMutableDictionary {
                 reply["decision"] = decision
-                reply["ackByte"] = self.currentAck()
+                self.fillAck(reply)
             }
         })
         observers.append(NotificationCenter.default.addObserver(
@@ -79,7 +83,7 @@ final class WatchPcmIngest {
             let ok = self.ingestFile(src: url, captureId: capture, sessionId: session, seq: seq, offset: offset)
             if let reply = note.userInfo?["reply"] as? NSMutableDictionary {
                 reply["ok"] = ok
-                reply["ackByte"] = self.currentAck()
+                self.fillAck(reply)
             }
         })
         observers.append(NotificationCenter.default.addObserver(
@@ -88,7 +92,17 @@ final class WatchPcmIngest {
             queue: nil
         ) { [weak self] note in
             if let reply = note.userInfo?["reply"] as? NSMutableDictionary {
-                reply["ackByte"] = self?.currentAck() ?? 0
+                var ack = 0
+                var capture = ""
+                var session = ""
+                self?.queue.sync {
+                    ack = self?.ackByte ?? 0
+                    capture = self?.captureId ?? ""
+                    session = self?.sessionId ?? ""
+                }
+                reply["ackByte"] = ack
+                reply["captureId"] = capture
+                reply["sessionId"] = session
             }
         })
         observers.append(NotificationCenter.default.addObserver(
@@ -97,8 +111,23 @@ final class WatchPcmIngest {
             queue: nil
         ) { [weak self] note in
             let n = (note.userInfo?["bytes"] as? Int) ?? 0
-            self?.markSent(n)
-            self?.pump()
+            self?.queue.async {
+                self?.markSentLocked(n)
+                self?.pumpLocked()
+            }
+        })
+        observers.append(NotificationCenter.default.addObserver(
+            forName: Notification.Name("nod.watch.pcm.drain"),
+            object: nil,
+            queue: nil
+        ) { [weak self] note in
+            let last = (note.userInfo?["lastByte"] as? Int)
+                ?? Int(note.userInfo?["lastByte"] as? String ?? "") ?? 0
+            let capture = note.userInfo?["captureId"] as? String ?? ""
+            let session = note.userInfo?["sessionId"] as? String ?? ""
+            self?.queue.async {
+                self?.beginDrainLocked(lastByte: last, captureId: capture, sessionId: session)
+            }
         })
     }
 
@@ -108,9 +137,15 @@ final class WatchPcmIngest {
             if !self.captureId.isEmpty, !captureId.isEmpty, captureId != self.captureId {
                 self.nextByte = 0
                 self.parked.removeAll()
+                self.ackByte = 0
+                self.drainLastByte = -1
+                self.drainCapture = ""
+                self.drainSession = ""
+                self.pcmEndSent = false
             }
             if !captureId.isEmpty { self.captureId = captureId }
             if !sessionId.isEmpty { self.sessionId = sessionId }
+            self.maybeRequestPcmEndLocked()
         }
     }
 
@@ -122,6 +157,10 @@ final class WatchPcmIngest {
             self.sessionId = ""
             self.ackByte = 0
             self.parked.removeAll()
+            self.drainLastByte = -1
+            self.drainCapture = ""
+            self.drainSession = ""
+            self.pcmEndSent = false
         }
     }
 
@@ -129,6 +168,20 @@ final class WatchPcmIngest {
         var n = 0
         queue.sync { n = self.ackByte }
         return n
+    }
+
+    private func fillAck(_ reply: NSMutableDictionary) {
+        var ack = 0
+        var capture = ""
+        var session = ""
+        queue.sync {
+            ack = self.ackByte
+            capture = self.captureId
+            session = self.sessionId
+        }
+        reply["ackByte"] = ack
+        reply["captureId"] = capture
+        reply["sessionId"] = session
     }
 
     @discardableResult
@@ -239,11 +292,29 @@ final class WatchPcmIngest {
         }
     }
 
-    private func markSent(_ n: Int) {
+    private func markSentLocked(_ n: Int) {
         guard n > 0 else { return }
-        queue.sync {
-            self.ackByte = min(self.nextByte, self.ackByte + n)
-        }
+        ackByte = min(nextByte, ackByte + n)
+    }
+
+    private func beginDrainLocked(lastByte: Int, captureId: String, sessionId: String) {
+        if !self.captureId.isEmpty, !captureId.isEmpty, captureId != self.captureId { return }
+        if !sessionId.isEmpty, !self.sessionId.isEmpty, sessionId != self.sessionId { return }
+        drainLastByte = lastByte
+        drainCapture = captureId.isEmpty ? self.captureId : captureId
+        drainSession = sessionId.isEmpty ? self.sessionId : sessionId
+        pcmEndSent = false
+        AudioUplink.shared.flushTail()
+        pumpLocked()
+        maybeRequestPcmEndLocked()
+    }
+
+    private func maybeRequestPcmEndLocked() {
+        guard !pcmEndSent, drainLastByte >= 0, !drainSession.isEmpty else { return }
+        if !drainCapture.isEmpty, drainCapture != captureId { return }
+        guard nextByte >= drainLastByte else { return }
+        pcmEndSent = true
+        AudioUplink.shared.requestPcmEnd(sessionId: drainSession, byteOffset: drainLastByte)
     }
 
     private func pumpLocked() {
@@ -251,36 +322,41 @@ final class WatchPcmIngest {
         pumping = true
         defer { pumping = false }
         while let head = parked.first {
+            if AudioUplink.shared.queuedBytes() >= 2 * 1024 * 1024 { break }
             if head.offset > nextByte { break }
             parked.removeFirst()
             if head.offset + fileSize(head.url) <= nextByte {
                 try? fm.removeItem(at: head.url)
                 continue
             }
-            streamFile(head.url, fileOffset: head.offset)
+            if !streamFile(head.url, fileOffset: head.offset) {
+                break
+            }
         }
+        maybeRequestPcmEndLocked()
     }
 
-    private func streamFile(_ url: URL, fileOffset: Int) {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return }
+    /// Returns false when the uplink is full so the caller must leave the pump.
+    private func streamFile(_ url: URL, fileOffset: Int) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return true }
         defer { try? handle.close() }
         let skip = max(0, nextByte - fileOffset)
-        do { try handle.seek(toOffset: UInt64(skip)) } catch { return }
+        do { try handle.seek(toOffset: UInt64(skip)) } catch { return true }
         while true {
             let chunk: Data
             do {
                 chunk = try handle.read(upToCount: Self.frameBytes) ?? Data()
             } catch {
-                return
+                return true
             }
             if chunk.isEmpty {
                 try? fm.removeItem(at: url)
-                return
+                return true
             }
             if !AudioUplink.shared.tryEnqueue(chunk) {
                 parked.append((offset: fileOffset, url: url, key: url.lastPathComponent))
                 parked.sort { $0.offset < $1.offset }
-                return
+                return false
             }
             nextByte += chunk.count
         }

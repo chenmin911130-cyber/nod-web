@@ -16,6 +16,12 @@ import {
   watchSaveTimerMayStart,
   watchStartListenCommand,
   watchUplinkCanTake,
+  watchPcmAckApplies,
+  watchFilePumpStep,
+  watchPersistDelayBytes,
+  watchEnqueueWaitsForConsume,
+  watchPcmEndMessage,
+  watchDrainMessage,
 } from './watchReplay'
 
 function eq<T>(got: T, want: T, label: string) {
@@ -198,20 +204,31 @@ eq(
 
 {
   const lastByte = 64_000
+  const ids = { ackCaptureId: 'cap-a', liveCaptureId: 'cap-a', ackSessionId: 'sess-1', liveSessionId: 'sess-1' }
   eq(
-    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: 32_000, uplinkQueued: 0 }),
+    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: 32_000, uplinkQueued: 0, serverDrained: true, ...ids }),
     false,
     'End must not stop while backlog remains',
   )
   eq(
-    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 3200 }),
+    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 3200, serverDrained: true, ...ids }),
     false,
     'End must not stop while uplink still holds frames',
   )
   eq(
-    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 0 }),
+    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 0, serverDrained: false, ...ids }),
+    false,
+    'socket send is not enough; wait for pcm_drained',
+  )
+  eq(
+    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 0, serverDrained: true, ...ids, ackCaptureId: 'cap-old' }),
+    false,
+    'old ack must not complete a new capture',
+  )
+  eq(
+    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 0, serverDrained: true, ...ids }),
     true,
-    'stop_listen only after drain',
+    'stop_listen only after server drain of this session',
   )
   eq(watchSaveTimerMayStart({ draining: true, stopSent: false }), false, '#164 15s timer does not cover replay')
   eq(watchSaveTimerMayStart({ draining: false, stopSent: true }), true, 'Save timer starts once keep_history can send')
@@ -228,9 +245,12 @@ eq(
   let saveArmed = false
   const frozen = true
   const lastByte = 6400
-  while (!watchEndShouldSendStop({ frozen, lastByte, nextByte: pipe.nextByte, uplinkQueued: pipe.uplinkQueued })) {
+  const ids = { ackCaptureId: 'cap-a', liveCaptureId: 'cap-a', ackSessionId: 'sess-1', liveSessionId: 'sess-1' }
+  let serverDrained = false
+  while (!watchEndShouldSendStop({ frozen, lastByte, nextByte: pipe.nextByte, uplinkQueued: pipe.uplinkQueued, serverDrained, ...ids })) {
     eq(stopSent, false, 'stop is held while draining')
-    pipe.consume(WATCH_PCM_FRAME_BYTES)
+    if (pipe.uplinkQueued > 0) pipe.consume(WATCH_PCM_FRAME_BYTES)
+    else serverDrained = true
   }
   stopSent = true
   if (watchSaveTimerMayStart({ draining: false, stopSent })) saveArmed = true
@@ -252,3 +272,42 @@ eq(
 
 eq(watchDiskWouldExceed(WATCH_DISK_LIMIT_BYTES, 1), true, 'disk cap refuses new capture bytes')
 eq(watchDiskWouldExceed(0, 3200), false, 'under the cap still records')
+
+eq(watchPcmAckApplies({ liveCaptureId: 'cap-a', liveSessionId: 'sess-1', ackCaptureId: 'cap-a', ackSessionId: 'sess-1' }), true, 'matching ack applies')
+eq(watchPcmAckApplies({ liveCaptureId: 'cap-a', liveSessionId: 'sess-1', ackCaptureId: 'cap-old', ackSessionId: 'sess-1' }), false, 'old capture ack is rejected')
+eq(watchPcmAckApplies({ liveCaptureId: 'cap-a', liveSessionId: 'sess-1', ackCaptureId: 'cap-a', ackSessionId: 'sess-old' }), false, 'old session ack is rejected')
+eq(watchPcmAckApplies({ liveCaptureId: 'cap-a', liveSessionId: 'sess-1', ackCaptureId: '', ackSessionId: 'sess-1' }), false, 'ack without capture is rejected')
+
+eq(watchFilePumpStep({ queued: UPLINK_MAX_PENDING_BYTES, parked: 1 }), 'paused', 'full uplink pauses the file pump')
+eq(watchFilePumpStep({ queued: 0, parked: 1 }), 'continue', 'room to send continues the file pump')
+eq(watchFilePumpStep({ queued: 0, parked: 0 }), 'done', 'empty parked list is done')
+
+{
+  let steps = 0
+  let queued = UPLINK_MAX_PENDING_BYTES
+  let parked = 1
+  while (watchFilePumpStep({ queued, parked }) === 'continue') steps++
+  eq(watchFilePumpStep({ queued, parked }), 'paused', 'backpressure does not reread in a loop')
+  eq(steps, 0, 'paused pump does not spin')
+}
+
+eq(watchPersistDelayBytes(), 0, 'every capture frame is durable; no 5s memory window')
+eq(watchEnqueueWaitsForConsume(), false, 'enqueue must not wait on the consume callback')
+eq(watchPcmEndMessage({ sessionId: 'sess-1', lastByte: 6400 }), { type: 'pcm_end', id: 'sess-1', byte_offset: 6400 }, 'pcm_end binds the usage session')
+eq(watchPcmEndMessage({ sessionId: '', lastByte: 6400 }), null, 'pcm_end without session id is not sent')
+eq(
+  watchDrainMessage({ lastByte: 6400, captureId: 'cap-a', sessionId: 'sess-1' }),
+  { action: 'drain', lastByte: 6400, captureId: 'cap-a', sessionId: 'sess-1' },
+  'End freeze sends drain, not stop_listen',
+)
+eq(watchDrainMessage({ lastByte: 6400, captureId: '', sessionId: 'sess-1' }), null, 'drain without capture is not sent')
+eq(watchMinFramePad(800), WATCH_PCM_MIN_CHUNK_BYTES, 'short End tail is padded before send')
+
+{
+  const pipe = new WatchReplayIngest()
+  pipe.bind('cap-a', 'sess-1')
+  pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: bytes(3200), key: 'a:0' })
+  pipe.bind('cap-b', 'sess-2')
+  eq(pipe.nextByte, 0, 'new capture resets the cursor')
+  eq(pipe.uplinkSent, 0, 'new capture resets sent bytes')
+}

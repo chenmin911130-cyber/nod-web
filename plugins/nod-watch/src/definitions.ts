@@ -15,6 +15,9 @@ export interface NodWatchPlugin {
     langPair?: string
     save?: string
     sessionId?: string
+    pcmDrained?: boolean
+    pcmAckCaptureId?: string
+    pcmAckSessionId?: string
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Watch-side PCM shards. Memory is a working buffer; disk is the source of truth.
+/// Watch-side PCM shards. Every capture frame is appended to disk immediately.
 final class WatchPcmStore {
     static let shardBytes = 160_000
     static let diskLimit = 32 * 1024 * 1024
@@ -16,9 +16,11 @@ final class WatchPcmStore {
     private(set) var frozen = false
     private(set) var ackedByte = 0
 
-    private var current = Data()
     private let lock = NSLock()
     private let fm = FileManager.default
+    private var handle: FileHandle?
+    private var shardWritten = 0
+    private var currentSeq = 0
     private var root: URL {
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.temporaryDirectory
@@ -34,16 +36,19 @@ final class WatchPcmStore {
 
     func beginCapture() {
         lock.lock()
-        defer { lock.unlock() }
+        closeHandleLocked()
         captureId = UUID().uuidString
         sessionId = ""
         nextSeq = 1
+        currentSeq = 0
+        shardWritten = 0
         byteOffset = 0
         lastByte = 0
         frozen = false
         diskFull = false
         ackedByte = 0
-        current = Data()
+        usedBytes = 0
+        lock.unlock()
         try? fm.createDirectory(at: captureDir(), withIntermediateDirectories: true)
     }
 
@@ -56,14 +61,16 @@ final class WatchPcmStore {
 
     func discardCapture() {
         lock.lock()
+        closeHandleLocked()
         let id = captureId
         captureId = ""
         sessionId = ""
         nextSeq = 1
+        currentSeq = 0
+        shardWritten = 0
         byteOffset = 0
         lastByte = 0
         frozen = false
-        current = Data()
         lock.unlock()
         if !id.isEmpty {
             try? fm.removeItem(at: root.appendingPathComponent(id, isDirectory: true))
@@ -80,36 +87,54 @@ final class WatchPcmStore {
             diskFull = true
             return nil
         }
+        if handle == nil, !openShardLocked() {
+            return nil
+        }
+        do {
+            try handle?.write(contentsOf: data)
+            try handle?.synchronize()
+        } catch {
+            diskFull = true
+            return nil
+        }
         let offset = byteOffset
-        let seq = nextSeq
-        current.append(data)
+        let seq = currentSeq
         byteOffset += data.count
         lastByte = byteOffset
+        shardWritten += data.count
         usedBytes += data.count
-        if current.count >= Self.shardBytes {
-            closeShardLocked()
+        if shardWritten >= Self.shardBytes {
+            closeHandleLocked()
         }
         return (offset, seq)
     }
 
     func closeShard() {
         lock.lock()
-        closeShardLocked()
+        closeHandleLocked()
         lock.unlock()
     }
 
     func freeze() {
         lock.lock()
-        closeShardLocked()
+        closeHandleLocked()
         frozen = true
         lastByte = byteOffset
         lock.unlock()
     }
 
-    func ack(_ byte: Int) {
+    func ack(_ byte: Int, captureId: String, sessionId: String) {
         lock.lock()
+        if captureId.isEmpty || captureId != self.captureId {
+            lock.unlock()
+            return
+        }
+        if !sessionId.isEmpty, !self.sessionId.isEmpty, sessionId != self.sessionId {
+            lock.unlock()
+            return
+        }
         if byte > ackedByte { ackedByte = byte }
-        let id = captureId
+        let id = self.captureId
         let ack = ackedByte
         lock.unlock()
         deleteAckedShards(captureId: id, through: ack)
@@ -121,9 +146,11 @@ final class WatchPcmStore {
         let id = captureId
         let session = sessionId
         let ack = ackedByte
+        let openSeq = handle != nil ? currentSeq : -1
         lock.unlock()
         guard !id.isEmpty else { return [] }
-        return shardsOnDisk(captureId: id, sessionId: session).filter { $0.byteOffset + $0.bytes > ack }
+        return shardsOnDisk(captureId: id, sessionId: session)
+            .filter { $0.byteOffset + $0.bytes > ack && $0.seq != openSeq }
             .sorted { $0.seq < $1.seq }
     }
 
@@ -139,18 +166,34 @@ final class WatchPcmStore {
         ]
     }
 
-    private func closeShardLocked() {
-        guard !current.isEmpty, !captureId.isEmpty else { return }
-        let seq = nextSeq
-        let start = byteOffset - current.count
-        let url = captureDir().appendingPathComponent("\(seq)_\(start).pcm")
+    private func openShardLocked() -> Bool {
+        guard handle == nil, !captureId.isEmpty else { return handle != nil }
+        currentSeq = nextSeq
+        let start = byteOffset
+        let url = captureDir().appendingPathComponent("\(currentSeq)_\(start).pcm")
+        if !fm.createFile(atPath: url.path, contents: nil) {
+            diskFull = true
+            return false
+        }
         do {
-            try current.write(to: url, options: .atomic)
-            nextSeq = seq + 1
-            current = Data()
-            writeManifest(seq: nextSeq, start: start)
+            handle = try FileHandle(forWritingTo: url)
         } catch {
             diskFull = true
+            return false
+        }
+        shardWritten = 0
+        writeManifest(seq: nextSeq, start: start)
+        return true
+    }
+
+    private func closeHandleLocked() {
+        guard handle != nil else { return }
+        try? handle?.synchronize()
+        try? handle?.close()
+        handle = nil
+        if shardWritten > 0 {
+            nextSeq = currentSeq + 1
+            shardWritten = 0
         }
     }
 
@@ -207,10 +250,8 @@ final class WatchPcmStore {
     }
 
     private func refreshUsed() {
-        lock.lock()
-        var total = current.count
+        var total = 0
         let rootPath = root
-        lock.unlock()
         if let dirs = try? fm.contentsOfDirectory(at: rootPath, includingPropertiesForKeys: [.fileSizeKey], options: []) {
             for url in dirs {
                 if let files = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: [.fileSizeKey]) {

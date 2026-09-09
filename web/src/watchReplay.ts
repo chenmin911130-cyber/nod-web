@@ -1,11 +1,11 @@
 /** Watch → phone PCM persist / replay (#165).
 
 Ack layers (delete only after the next layer owns a copy):
-1. Watch disk shard — source of truth until the phone has copied the file.
-2. Phone inbound file — received. Watch may delete that shard after `pcmAckByte`
-   covers it. Copy failure must not delete the Watch original.
-3. AudioUplink queue — not an ack. Socket send is not STT done.
-4. Uplink socket send — phone may delete its inbound copy. STT may still lag.
+1. Watch disk — appended on every capture frame. Copy failure does not delete it.
+2. Phone inbound file — persist then stream. Not an STT ack.
+3. AudioUplink queue / socket write — not enough to stop STT or delete Watch copies.
+4. Server `pcm_drained` for this capture+session+offset — then Watch may delete,
+   then `stop_listen`. Old clients omit `pcm_end`; `stop_listen` stays immediate.
 
 Caps: Watch disk 32 MiB (stop capture, keep files, visible error). Uplink RAM
 2 MiB with backpressure; never drop-oldest on the Watch ingest path.
@@ -96,8 +96,77 @@ export function watchEndShouldSendStop(opts: {
   lastByte: number
   nextByte: number
   uplinkQueued: number
+  serverDrained: boolean
+  ackCaptureId: string
+  liveCaptureId: string
+  ackSessionId: string
+  liveSessionId: string
 }): boolean {
-  return opts.frozen && opts.nextByte >= opts.lastByte && opts.uplinkQueued === 0
+  if (!opts.frozen || !opts.serverDrained) return false
+  if (!watchPcmAckApplies({
+    liveCaptureId: opts.liveCaptureId,
+    liveSessionId: opts.liveSessionId,
+    ackCaptureId: opts.ackCaptureId,
+    ackSessionId: opts.ackSessionId,
+  })) {
+    return false
+  }
+  return opts.nextByte >= opts.lastByte && opts.uplinkQueued === 0
+}
+
+export function watchPcmAckApplies(opts: {
+  liveCaptureId: string
+  liveSessionId: string
+  ackCaptureId: string
+  ackSessionId: string
+}): boolean {
+  if (!opts.ackCaptureId || !opts.liveCaptureId || opts.ackCaptureId !== opts.liveCaptureId) return false
+  if (opts.ackSessionId && opts.liveSessionId && opts.ackSessionId !== opts.liveSessionId) return false
+  return true
+}
+
+/** Capacity shortage must leave the pump, not reread the same file in a loop. */
+export function watchFilePumpStep(opts: { queued: number; parked: number }): 'paused' | 'continue' | 'done' {
+  if (opts.parked <= 0) return 'done'
+  if (opts.queued >= UPLINK_MAX_PENDING_BYTES) return 'paused'
+  return 'continue'
+}
+
+export function watchPersistDelayBytes(): number {
+  return 0
+}
+
+export function watchEnqueueWaitsForConsume(): boolean {
+  return false
+}
+
+export type WatchPcmEndMsg = { type: 'pcm_end'; id: string; byte_offset: number }
+
+export function watchPcmEndMessage(opts: { sessionId: string; lastByte: number }): WatchPcmEndMsg | null {
+  if (!opts.sessionId || opts.lastByte < 0) return null
+  return { type: 'pcm_end', id: opts.sessionId, byte_offset: opts.lastByte }
+}
+
+export type WatchDrainMsg = {
+  action: 'drain'
+  lastByte: number
+  captureId: string
+  sessionId: string
+}
+
+/** End freeze: tell the phone to flush the tail and wait for pcm_drained. Not stop_listen. */
+export function watchDrainMessage(opts: {
+  lastByte: number
+  captureId: string
+  sessionId: string
+}): WatchDrainMsg | null {
+  if (!opts.captureId || opts.lastByte < 0) return null
+  return {
+    action: 'drain',
+    lastByte: opts.lastByte,
+    captureId: opts.captureId,
+    sessionId: opts.sessionId,
+  }
 }
 
 export function watchSaveTimerMayStart(opts: { draining: boolean; stopSent: boolean }): boolean {
@@ -157,6 +226,8 @@ export class WatchReplayIngest {
       this.nextByte = 0
       this.parked = []
       this.uplinkQueued = 0
+      this.uplinkSent = 0
+      this.watchDeleted.clear()
     }
     if (captureId) this.captureId = captureId
     if (sessionId) this.sessionId = sessionId

@@ -27,6 +27,7 @@ const EVENT_TYPES = new Set([
   'history_kept',
   'history_keep_failed',
   'attached',
+  'pcm_drained',
 ])
 
 function asText(v: unknown): string {
@@ -91,6 +92,13 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
       }
     case 'attached':
       return { type: 'attached', usage_session_id: asText(o.usage_session_id) || undefined }
+    case 'pcm_drained': {
+      const id = asText(o.id)
+      if (!id) return null
+      const offset = typeof o.byte_offset === 'number' ? o.byte_offset : Number(o.byte_offset)
+      if (!Number.isFinite(offset)) return null
+      return { type: 'pcm_drained', id, byte_offset: offset }
+    }
     default:
       return { ...o, type } as EngineEvent
   }

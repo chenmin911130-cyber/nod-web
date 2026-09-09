@@ -36,6 +36,13 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
         let langPair = call.getString("langPair") ?? ""
         let save = call.getString("save") ?? ""
         let sessionId = call.getString("sessionId") ?? ""
+        if call.getBool("pcmDrained") == true {
+            WatchBridge.shared.markPcmDrained(sessionId: sessionId)
+            if (call.getString("capture") ?? "").isEmpty, (call.getString("hint") ?? "").isEmpty {
+                call.resolve()
+                return
+            }
+        }
         var history: [[String: String]] = []
         if let rows = call.getArray("history") {
             for row in rows {

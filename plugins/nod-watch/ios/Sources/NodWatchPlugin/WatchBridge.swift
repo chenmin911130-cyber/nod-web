@@ -22,6 +22,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastSave = "none"
     private var lastSessionId = ""
     private var lastPcmAckByte = 0
+    private var lastPcmCaptureId = ""
+    private var lastPcmAckSessionId = ""
+    private var lastPcmDrained = false
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
     private var uplinkActive = false
@@ -55,12 +58,46 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             userInfo: ["reply": reply]
         )
         let ack = reply["ackByte"] as? Int ?? 0
+        let capture = reply["captureId"] as? String ?? lastPcmCaptureId
+        let session = reply["sessionId"] as? String ?? lastSessionId
+        if !capture.isEmpty {
+            lastPcmCaptureId = capture
+        }
+        if !session.isEmpty {
+            lastPcmAckSessionId = session
+        }
         guard ack != lastPcmAckByte else { return }
         lastPcmAckByte = ack
         guard WCSession.isSupported() else { return }
-        let session = WCSession.default
-        guard session.activationState == .activated, session.isReachable else { return }
-        session.sendMessage(["pcmAckByte": String(ack), "ok": true], replyHandler: nil, errorHandler: nil)
+        let wc = WCSession.default
+        guard wc.activationState == .activated, wc.isReachable else { return }
+        var msg: [String: Any] = ["pcmAckByte": String(ack), "ok": true]
+        if !lastPcmCaptureId.isEmpty {
+            msg["pcmAckCaptureId"] = lastPcmCaptureId
+        }
+        if !lastPcmAckSessionId.isEmpty {
+            msg["pcmAckSessionId"] = lastPcmAckSessionId
+        }
+        wc.sendMessage(msg, replyHandler: nil, errorHandler: nil)
+    }
+
+    func markPcmDrained(sessionId: String) {
+        if !sessionId.isEmpty, !lastSessionId.isEmpty, sessionId != lastSessionId {
+            return
+        }
+        lastPcmDrained = true
+        if !sessionId.isEmpty {
+            lastSessionId = sessionId
+            lastPcmAckSessionId = sessionId
+        }
+        pushStatus(
+            capture: lastCapture,
+            hint: lastHint,
+            original: lastOriginal,
+            translation: lastTranslation,
+            previous: lastPrevious,
+            history: lastHistory
+        )
     }
 
     public func activate() {
@@ -165,6 +202,15 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             payload["sessionId"] = lastSessionId
         }
         payload["pcmAckByte"] = String(lastPcmAckByte)
+        if !lastPcmCaptureId.isEmpty {
+            payload["pcmAckCaptureId"] = lastPcmCaptureId
+        }
+        if !lastPcmAckSessionId.isEmpty {
+            payload["pcmAckSessionId"] = lastPcmAckSessionId
+        } else if !lastSessionId.isEmpty {
+            payload["pcmAckSessionId"] = lastSessionId
+        }
+        payload["pcmDrained"] = lastPcmDrained ? "true" : "false"
         guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
         do {
             try session.updateApplicationContext(payload)
@@ -183,7 +229,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
 
     /// Live sendMessage is a Watch tap. Queued leftovers need a fresh `at`.
     static func shouldRunWatchCommand(_ action: String, at: Double?, live: Bool, now: Double) -> Bool {
-        let listenCtl = action == "start" || action == "stop" || action == "record" || action == "pause" || action == "resume"
+        let listenCtl = action == "start" || action == "stop" || action == "record" || action == "pause" || action == "resume" || action == "drain"
         if !listenCtl { return true }
         if live { return true }
         guard let at else { return false }
@@ -195,7 +241,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             ingestPcmMessage(message, raw: pcm)
         }
         let raw = (message["action"] as? String ?? "").lowercased()
-        let allowed = ["stop", "start", "record", "pause", "resume", "speak", "save", "discard", "tts_live", "tts_tap", "tts_female", "tts_male"]
+        let allowed = ["stop", "start", "record", "pause", "resume", "speak", "save", "discard", "tts_live", "tts_tap", "tts_female", "tts_male", "drain"]
         let action = allowed.contains(raw) ? raw : ""
         guard !action.isEmpty else { return }
         let mode = Self.watchListenMode(message["mode"] as? String ?? "")
@@ -205,11 +251,29 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let now = Date().timeIntervalSince1970
         guard Self.shouldRunWatchCommand(action, at: at, live: live, now: now) else { return }
         if (action == "start" || action == "record"), !captureId.isEmpty {
+            if captureId != lastPcmCaptureId {
+                lastPcmAckByte = 0
+                lastPcmDrained = false
+                lastPcmAckSessionId = ""
+            }
+            lastPcmCaptureId = captureId
             NotificationCenter.default.post(
                 name: Notification.Name("nod.watch.pcm.bind"),
                 object: nil,
                 userInfo: ["captureId": captureId, "sessionId": lastSessionId]
             )
+        }
+        if action == "drain" {
+            NotificationCenter.default.post(
+                name: Notification.Name("nod.watch.pcm.drain"),
+                object: nil,
+                userInfo: [
+                    "lastByte": Self.intField(message, "lastByte"),
+                    "captureId": captureId,
+                    "sessionId": sessionId.isEmpty ? lastSessionId : sessionId,
+                ]
+            )
+            return
         }
         if action == "stop", live {
             NotificationCenter.default.post(name: Notification.Name("nod.watch.pcm.reset"), object: nil)
@@ -363,6 +427,12 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             if let ack = reply["ackByte"] as? Int {
                 lastPcmAckByte = ack
             }
+            if let cap = reply["captureId"] as? String, !cap.isEmpty {
+                lastPcmCaptureId = cap
+            }
+            if let sess = reply["sessionId"] as? String, !sess.isEmpty {
+                lastPcmAckSessionId = sess
+            }
             return
         }
         emitPcm(raw)
@@ -426,6 +496,15 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             reply["sessionId"] = lastSessionId
         }
         reply["pcmAckByte"] = String(lastPcmAckByte)
+        if !lastPcmCaptureId.isEmpty {
+            reply["pcmAckCaptureId"] = lastPcmCaptureId
+        }
+        if !lastPcmAckSessionId.isEmpty {
+            reply["pcmAckSessionId"] = lastPcmAckSessionId
+        } else if !lastSessionId.isEmpty {
+            reply["pcmAckSessionId"] = lastSessionId
+        }
+        reply["pcmDrained"] = lastPcmDrained ? "true" : "false"
         replyHandler(reply)
     }
 
@@ -461,6 +540,12 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         )
         if let ack = reply["ackByte"] as? Int {
             lastPcmAckByte = ack
+        }
+        if let cap = reply["captureId"] as? String, !cap.isEmpty {
+            lastPcmCaptureId = cap
+        }
+        if let sess = reply["sessionId"] as? String, !sess.isEmpty {
+            lastPcmAckSessionId = sess
         }
     }
 }

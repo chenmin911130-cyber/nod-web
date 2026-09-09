@@ -670,6 +670,8 @@ function reducer(state: AppState, action: Action): AppState {
           return { ...state, busy: false, status: quotaLimitText(ev.reason, state.quota as unknown as QuotaFields) }
         case 'attached':
           return state
+        case 'pcm_drained':
+          return state
         default:
           return state
       }
@@ -1593,6 +1595,13 @@ export default function App() {
             })
             .catch(() => undefined)
         }
+      }
+      if (e.type === 'pcm_drained') {
+        pushWatchStatus({
+          capture: '',
+          sessionId: e.id,
+          pcmDrained: true,
+        })
       }
       // Every chunk of the current translate ask re-arms the 25s timeout, so a
       // slow-but-alive stream doesn't time out mid-answer and double-fire.
