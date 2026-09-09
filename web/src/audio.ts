@@ -199,16 +199,17 @@ export class MicCapture {
   private async acquireNative(seq: number): Promise<void> {
     await this.bindAppState()
     const { NodMic } = await import('nod-mic')
-    this.nativeHandle = await NodMic.addListener('pcm', (ev) => {
+    const handle = await NodMic.addListener('pcm', (ev) => {
       const pcm = base64ToPcm(ev.data || '')
       if (!pcm.byteLength) return
       this.clearSilenceTimer()
       this.onPcm(pcm)
     })
+    this.nativeHandle = handle
     try {
       await NodMic.start()
     } catch (err) {
-      await this.nativeHandle.remove().catch(() => undefined)
+      await handle.remove().catch(() => undefined)
       this.nativeHandle = null
       throw err
     }

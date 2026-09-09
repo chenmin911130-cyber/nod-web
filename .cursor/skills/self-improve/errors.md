@@ -2,6 +2,12 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-09 · #171 补传审查只看入口帧率，漏了下游实时音频约束
+- 我以为：把补传限制在 `WS_FRAMES_PER_SEC=40` 以内，就补齐了发送节奏约束；没有继续核对 AssemblyAI 的音频时长与墙钟约束。
+- 实际：Bundle 67 用户报麦已开但不转写、自动停止。生产 2026-09-09 00:57:55Z `/ws/audio` accepted，随后反复收到 AssemblyAI 3007。官方文档列出两类原因：单块不在 50–1000ms 内，或音频发送快于实时。代码 `frameBytes=3200` 为 100ms，积压时按 40fps 补发允许约 4 倍实时；`scheduleFlush` 也可发不足 50ms 的尾块。当前日志未落完整 Error，尚不能判定此次具体触发哪一种。服务端 `_on_stt_drop` 超过 6 次会停听。
+- 规则：音频补传必须同时检查入口限流与最终 STT 接收约束；按音频时长制定节奏，不用“每秒几帧”替代。3007 必须保存脱敏错误详情、块字节数/时长和发送间隔再归因，不把错误码直接等同于某个子原因。
+- 涉及：#171 `AudioUplink.pump / scheduleFlush` · `CloudListener._sender` · https://www.assemblyai.com/docs/streaming/common-session-errors-and-closures
+
 ## 2026-09-09 · #171 把 nod-mic 编进空 start/startUplink
 - 我以为：`src/shims/nod-mic.ts` 只给浏览器；真机 Capacitor 仍走 `registerPlugin('NodMic')`。
 - 实际：Vite/tsconfig 无条件 alias，WKWebView 也加载空实现。`start()` 假成功不开原生麦，`startUplink()` 假成功不连 `/ws/audio`，JS 拿到 token 后又停转 PCM。
@@ -23,7 +29,7 @@ Newest first. Read before Watch / listen / Translate / phone-sync work.
 ## 2026-09-09 · #171 补发先清空缓冲且一次打完
 - 我以为：重连后把 pending 整段 `send` 出去，失败再靠下一轮重连。
 - 实际：`flushPending()` 先 `removeAll` 再忽略错误；服务端 `WS_FRAMES_PER_SEC = 40`，突发补发会被丢。失败的帧已经不在队列里。
-- 规则：待发送列队头只在 send 成功后弹出；补发按 ≤40 帧/秒；新 PCM 追加在队尾，不得插到补发前面。
+- 规则：待发送列队头只在 send 成功后弹出；补发按音频时长 ≤ 实时（100ms 音频至少隔 100ms），不用帧率上限代替；新 PCM 追加在队尾，不得插到补发前面。尾块不足 50ms 不得发出。
 - 涉及：`AudioUplink.flushPending` / `pump`
 
 ## 2026-09-09 · #171 attached 找不到 id 就用第一条历史

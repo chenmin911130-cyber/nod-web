@@ -1,0 +1,22 @@
+declare module 'nod-mic' {
+  import type { PluginListenerHandle } from '@capacitor/core'
+
+  export type PcmEvent = {
+    data: string
+  }
+
+  export interface NodMicPlugin {
+    start(): Promise<void>
+    stop(): Promise<void>
+    isActive(): Promise<{ active: boolean }>
+    startKeepAlive(): Promise<void>
+    stopKeepAlive(): Promise<void>
+    resume(): Promise<void>
+    startUplink(options: { url: string }): Promise<void>
+    stopUplink(): Promise<void>
+    addListener(eventName: 'pcm', listenerFunc: (event: PcmEvent) => void): Promise<PluginListenerHandle>
+    removeAllListeners(): Promise<void>
+  }
+
+  export const NodMic: NodMicPlugin
+}

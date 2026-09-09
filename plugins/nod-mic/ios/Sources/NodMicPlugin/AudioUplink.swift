@@ -45,10 +45,12 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     private var startCompletions: [(Error?) -> Void] = []
     private var startTimeoutWork: DispatchWorkItem?
 
-    private let frameBytes = 3200
+    /// 16 kHz PCM16 mono. Must match `server/stt_audio.py`.
+    private let sampleBytesPerSec = 16_000 * 2
+    private let minChunkBytes = 1600 // 50 ms — AssemblyAI 3007 floor
+    private let frameBytes = 3200 // 100 ms
     private let maxPendingBytes = 2 * 1024 * 1024
-    /// Server `WS_FRAMES_PER_SEC = 40`.
-    private let minFrameInterval: TimeInterval = 1.0 / 40.0
+    private var lastSentAudioSeconds: TimeInterval = 0
 
     private override init() {
         super.init()
@@ -126,6 +128,8 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             self.pumpWork?.cancel()
             self.pumpWork = nil
             self.sending = false
+            self.lastSendAt = 0
+            self.lastSentAudioSeconds = 0
             self.stopPing()
             self.task?.cancel(with: .goingAway, reason: nil)
             self.task = nil
@@ -164,6 +168,8 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         pumpWork?.cancel()
         pumpWork = nil
         sending = false
+        lastSendAt = 0
+        lastSentAudioSeconds = 0
         stopPing()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
@@ -217,9 +223,10 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
 
     private func scheduleFlush() {
         flushWork?.cancel()
-        guard !stash.isEmpty else { return }
+        // Hold tails shorter than 50 ms. Sending them is AssemblyAI 3007.
+        guard stash.count >= minChunkBytes else { return }
         let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.stash.isEmpty else { return }
+            guard let self, self.stash.count >= self.minChunkBytes else { return }
             let frame = self.stash
             self.stash = Data()
             self.sendOrBuffer(frame)
@@ -243,10 +250,22 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         }
     }
 
+    private func audioSeconds(_ data: Data) -> TimeInterval {
+        TimeInterval(data.count) / TimeInterval(sampleBytesPerSec)
+    }
+
+    private func sendableFrame(_ frame: Data) -> Data {
+        guard frame.count < minChunkBytes else { return frame }
+        var padded = frame
+        padded.append(Data(count: minChunkBytes - frame.count))
+        return padded
+    }
+
     private func pump() {
         guard !sending, pumpWork == nil else { return }
         guard isConnected, !pending.isEmpty, !stopped else { return }
-        let wait = max(0, minFrameInterval - (Date.timeIntervalSinceReferenceDate - lastSendAt))
+        let elapsed = Date.timeIntervalSinceReferenceDate - lastSendAt
+        let wait = lastSendAt == 0 ? 0 : max(0, lastSentAudioSeconds - elapsed)
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.pumpWork = nil
@@ -258,7 +277,8 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
 
     private func sendHead() {
         guard !sending else { return }
-        guard isConnected, let task, let frame = pending.first, !stopped else { return }
+        guard isConnected, let task, let queued = pending.first, !stopped else { return }
+        let frame = sendableFrame(queued)
         sending = true
         task.send(.data(frame)) { [weak self] error in
             guard let self else { return }
@@ -268,11 +288,12 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                     self.handleDrop()
                     return
                 }
-                if self.pending.first == frame {
+                if self.pending.first == queued {
                     self.pending.removeFirst()
-                    self.pendingBytes -= frame.count
+                    self.pendingBytes -= queued.count
                 }
                 self.lastSendAt = Date.timeIntervalSinceReferenceDate
+                self.lastSentAudioSeconds = self.audioSeconds(frame)
                 self.pump()
             }
         }
