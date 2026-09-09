@@ -71,24 +71,24 @@ if ! xcode-select -p >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ -L node_modules ]]; then
+  echo "package-ios: node_modules is a symlink; replacing it so native plugins compile from this worktree."
+  rm node_modules
+fi
 if [[ ! -d node_modules ]]; then
   npm ci
 fi
 if [[ ! -d web/node_modules ]]; then
   (cd web && npm ci)
 fi
+node scripts/iosWorktreePods.mjs assert-roots
 
 npm run cap:sync
 
-if command -v pod >/dev/null 2>&1; then
-  (cd ios/App && pod install)
-else
-  echo "CocoaPods (pod) is not on PATH. cap sync may have skipped pods." >&2
+if [[ ! -d ios/App/Pods ]]; then
+  echo "CocoaPods did not produce ios/App/Pods." >&2
   echo "Install with: sudo gem install cocoapods   or   brew install cocoapods" >&2
-  echo "Then: cd ios/App && pod install" >&2
-  if [[ ! -d ios/App/Pods ]]; then
-    exit 1
-  fi
+  exit 1
 fi
 
 WORKSPACE="$ROOT/ios/App/App.xcworkspace"
