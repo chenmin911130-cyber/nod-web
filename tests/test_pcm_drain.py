@@ -11,7 +11,7 @@ from unittest import mock
 from starlette.testclient import TestClient
 
 from server import uplink
-from server.app import CFG, CloudListener, Session, _reset_live_stt
+from server.app import CFG, CloudListener, Session, UnsentHandoff, _reset_live_stt
 from tests.test_stt_terminate import _connected_ws
 
 
@@ -307,7 +307,8 @@ class SttSocketDrainTests(unittest.TestCase):
         lst._q.put_nowait(b"\x02" * 50)
         lst._pcm_buf.extend(b"\x01" * 100)
         got = lst.take_unsent()
-        self.assertEqual(got, b"\x01" * 100 + b"\x02" * 50)
+        self.assertEqual(got.kind, "ready")
+        self.assertEqual(got.pcm, b"\x01" * 100 + b"\x02" * 50)
         self.assertEqual(bytes(lst._pcm_buf), b"")
 
     def test_take_unsent_keeps_failure_when_sender_blocked(self) -> None:
@@ -331,7 +332,7 @@ class SttSocketDrainTests(unittest.TestCase):
         lst._drain.set()
         self.assertTrue(started.wait(1.0))
         got = lst.take_unsent(timeout=2.0)
-        self.assertIsNone(got)
+        self.assertEqual(got.kind, "blocked")
         self.assertTrue(t.is_alive())
         lst._stop.set()
         t.join(5.0)
@@ -425,3 +426,490 @@ class SttSocketDrainTests(unittest.TestCase):
         self.assertEqual(joined[:1600], payload_early)
         self.assertEqual(joined[1600:3200], payload_late)
         self.assertGreaterEqual(sess._stt_tx_bytes, 3200)
+
+
+def _binary_sent(ws) -> list[bytes]:
+    return [
+        c.args[0]
+        for c in ws.send.call_args_list
+        if c.args and isinstance(c.args[0], (bytes, bytearray))
+    ]
+
+
+def _start_sender(lst: CloudListener, ws=None) -> mock.Mock:
+    sock = ws or _connected_ws()
+    lst._ws = sock
+    lst._stop.clear()
+    lst._was_ready = True
+    lst._ready.set()
+    t = threading.Thread(target=lst._sender, daemon=True)
+    lst._sender_thread = t
+    t.start()
+    return sock
+
+
+def _fake_listener_factory(sess: Session, *, on_start=None, fail_first: list | None = None):
+    created: list[CloudListener] = []
+
+    def factory(**kwargs):
+        if fail_first:
+            fail_first.pop()
+            lst = CloudListener(**kwargs)
+            lst.start = mock.Mock(side_effect=RuntimeError("handshake failed"))  # type: ignore[method-assign]
+            created.append(lst)
+            return lst
+        lst = CloudListener(**kwargs)
+
+        def start() -> None:
+            if on_start:
+                on_start(lst)
+            _start_sender(lst)
+
+        lst.start = start  # type: ignore[method-assign]
+        created.append(lst)
+        return lst
+
+    return factory, created
+
+
+class HandoffLifecycleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        uplink.reset()
+        _reset_live_stt()
+
+    def tearDown(self) -> None:
+        uplink.reset()
+        _reset_live_stt()
+        if getattr(self, "_new", None) and getattr(self._new, "_sender_thread", None):
+            self._new._stop.set()
+            self._new._sender_thread.join(1.0)
+
+    def _live_session(self) -> Session:
+        sess = _session()
+        sess.usage_session_id = "sess-live"
+        sess._listen_wanted = True
+        sess._listen_started_at = time.time()
+        sess.pipeline._keys["ASSEMBLYAI_API_KEY"] = "k"
+        return sess
+
+    def test_pause_terminate_then_final_then_close(self) -> None:
+        finals: list[str] = []
+        sess = self._live_session()
+        lst = CloudListener(
+            api_key="k",
+            cfg={"stt": {}},
+            on_final=lambda text, *a: finals.append(text),
+            on_partial=None,
+            on_error=None,
+        )
+        order: list[str] = []
+        ws = _connected_ws()
+
+        def send(payload, *a, **k):
+            order.append("send")
+            if isinstance(payload, str) and "Terminate" in payload:
+                lst._on_message(None, json.dumps({
+                    "type": "Turn",
+                    "end_of_turn": True,
+                    "turn_is_formatted": True,
+                    "transcript": "last words",
+                }))
+                lst._on_message(None, json.dumps({"type": "Termination"}))
+
+        def close():
+            order.append("close")
+
+        def sock_close():
+            order.append("sock.close")
+
+        ws.send.side_effect = send
+        ws.close.side_effect = close
+        ws.sock.close.side_effect = sock_close
+        _start_sender(lst, ws)
+        sess._listener = lst
+        sess.pause_listen()
+        self.assertIn("last words", finals)
+        self.assertTrue(sess._paused)
+        self.assertTrue(sess._listen_wanted)
+        self.assertIsNone(sess._listener)
+        self.assertNotIn("sock.close", order[:1])
+        self.assertIn("send", order)
+        self.assertLess(order.index("send"), order.index("close"))
+        if "sock.close" in order:
+            self.assertLess(order.index("send"), order.index("sock.close"))
+
+    def test_restart_sends_abc_once_in_order(self) -> None:
+        sess = self._live_session()
+        payload_a = b"\x0a" * 1600
+        payload_b = b"\x0b" * 1600
+        payload_c = b"\x0c" * 1600
+        old = _listener()
+        old._pcm_buf.extend(payload_a)
+        old._q.put_nowait(payload_b)
+        sess._listener = old
+        sess._pcm_rx_bytes = 3200
+        sess._stt_tx_bytes = 0
+        sess._pcm_end_id = "sess-live"
+        sess._pcm_end_capture = "cap-a"
+        sess._pcm_end_offset = 4800
+        events: list[dict] = []
+        sess.emit = events.append
+        in_start = threading.Event()
+
+        def on_start(lst: CloudListener) -> None:
+            in_start.set()
+            sess._hold_incoming_pcm(payload_c)
+
+        factory, created = _fake_listener_factory(sess, on_start=on_start)
+        with (
+            mock.patch("server.app.CloudListener", side_effect=factory),
+            mock.patch("server.app._adopt_live_stt", return_value=None),
+            mock.patch("server.app._ensure_idle_watch_thread"),
+            mock.patch("server.app._drop_live_stt"),
+        ):
+            sess._restart_listener()
+        self.assertTrue(in_start.is_set())
+        new = sess._listener
+        self.assertIsNotNone(new)
+        self._new = new
+        deadline = time.time() + 3.0
+        while time.time() < deadline and not any(e.get("type") == "pcm_drained" for e in events):
+            time.sleep(0.05)
+        if getattr(new, "_sender_thread", None):
+            new._stop.set()
+            new._sender_thread.join(1.0)
+        drained = [e for e in events if e.get("type") == "pcm_drained"]
+        self.assertEqual(
+            drained,
+            [{"type": "pcm_drained", "id": "sess-live", "capture_id": "cap-a", "byte_offset": 4800}],
+        )
+        joined = b"".join(_binary_sent(new._ws))
+        self.assertEqual(joined[:1600], payload_a)
+        self.assertEqual(joined[1600:3200], payload_b)
+        self.assertEqual(joined[3200:4800], payload_c)
+        self.assertEqual(joined.count(payload_a), 1)
+        self.assertEqual(joined.count(payload_b), 1)
+        self.assertEqual(joined.count(payload_c), 1)
+
+    def test_handshake_fail_keeps_pending_then_retry_sends_once(self) -> None:
+        sess = self._live_session()
+        payload = b"\x11" * 1600
+        old = _listener()
+        old._pcm_buf.extend(payload)
+        sess._listener = old
+        sess._pcm_rx_bytes = 1600
+        sess._stt_tx_bytes = 0
+        sess._pcm_end_id = "sess-live"
+        sess._pcm_end_capture = "cap-a"
+        sess._pcm_end_offset = 1600
+        events: list[dict] = []
+        sess.emit = events.append
+        fail_first = [True]
+        created: list[CloudListener] = []
+
+        def factory(**kwargs):
+            lst = CloudListener(**kwargs)
+            created.append(lst)
+            if fail_first:
+                fail_first.pop()
+
+                def boom() -> None:
+                    raise RuntimeError("handshake failed")
+
+                lst.start = boom  # type: ignore[method-assign]
+                return lst
+
+            def start() -> None:
+                _start_sender(lst)
+
+            lst.start = start  # type: ignore[method-assign]
+            return lst
+
+        with (
+            mock.patch("server.app.CloudListener", side_effect=factory),
+            mock.patch("server.app._adopt_live_stt", return_value=None),
+            mock.patch("server.app._ensure_idle_watch_thread"),
+            mock.patch("server.app._drop_live_stt"),
+        ):
+            sess._restart_listener()
+            sess._cancel_stt_restart_timer()
+            self.assertEqual(bytes(sess._stt_pending_pcm), payload)
+            self.assertIsNone(sess._listener)
+            sess._restart_if_listening()
+        new = sess._listener
+        self.assertIsNotNone(new)
+        self._new = new
+        deadline = time.time() + 3.0
+        while time.time() < deadline and not any(e.get("type") == "pcm_drained" for e in events):
+            time.sleep(0.05)
+        if getattr(new, "_sender_thread", None):
+            new._stop.set()
+            new._sender_thread.join(1.0)
+        joined = b"".join(_binary_sent(new._ws))
+        self.assertEqual(joined[:1600], payload)
+        self.assertEqual(joined.count(payload), 1)
+        self.assertEqual(
+            [e for e in events if e.get("type") == "pcm_drained"],
+            [{"type": "pcm_drained", "id": "sess-live", "capture_id": "cap-a", "byte_offset": 1600}],
+        )
+
+    def test_blocked_handoff_does_not_publish_or_drain(self) -> None:
+        sess = self._live_session()
+        started = threading.Event()
+        block = threading.Event()
+        lst = _listener()
+
+        def blocking_send(payload, *a, **k):
+            if isinstance(payload, (bytes, bytearray)):
+                started.set()
+                block.wait(10)
+                raise RuntimeError("send failed")
+
+        ws = _connected_ws()
+        ws.send.side_effect = blocking_send
+        lst._ws = ws
+        lst._pcm_buf.extend(b"\x22" * 1600)
+        t = threading.Thread(target=lst._sender, daemon=True)
+        lst._sender_thread = t
+        lst._stop.clear()
+        t.start()
+        lst._drain.set()
+        self.assertTrue(started.wait(1.0))
+        sess._listener = lst
+        sess._pcm_rx_bytes = 1600
+        sess._stt_tx_bytes = 0
+        sess._pcm_end_id = "sess-live"
+        sess._pcm_end_capture = "cap-a"
+        sess._pcm_end_offset = 1600
+        events: list[dict] = []
+        sess.emit = events.append
+        with (
+            mock.patch("server.app.CloudListener") as factory,
+            mock.patch("server.app._adopt_live_stt", return_value=None),
+            mock.patch("server.app._ensure_idle_watch_thread"),
+            mock.patch("server.app._drop_live_stt"),
+        ):
+            sess._restart_listener()
+            factory.assert_not_called()
+        self.assertTrue(sess._handoff_blocked)
+        self.assertIs(sess._handoff_listener, lst)
+        self.assertIsNone(sess._listener)
+        self.assertEqual([e for e in events if e.get("type") == "pcm_drained"], [])
+        self.addCleanup(lambda: (block.set(), t.join(5.0)))
+
+    def test_blocked_then_send_fail_recovers_once(self) -> None:
+        sess = self._live_session()
+        started = threading.Event()
+        block = threading.Event()
+        payload = b"\x33" * 1600
+        lst = _listener()
+
+        def blocking_send(payload_sent, *a, **k):
+            if isinstance(payload_sent, (bytes, bytearray)):
+                started.set()
+                block.wait(10)
+                raise RuntimeError("send failed")
+
+        ws = _connected_ws()
+        ws.send.side_effect = blocking_send
+        lst._ws = ws
+        lst._pcm_buf.extend(payload)
+        t = threading.Thread(target=lst._sender, daemon=True)
+        lst._sender_thread = t
+        lst._stop.clear()
+        t.start()
+        lst._drain.set()
+        self.assertTrue(started.wait(1.0))
+        sess._listener = lst
+        sess._pcm_rx_bytes = 1600
+        sess._stt_tx_bytes = 0
+        sess._pcm_end_id = "sess-live"
+        sess._pcm_end_capture = "cap-a"
+        sess._pcm_end_offset = 1600
+        events: list[dict] = []
+        sess.emit = events.append
+        factory, created = _fake_listener_factory(sess)
+        with (
+            mock.patch("server.app.CloudListener", side_effect=factory),
+            mock.patch("server.app._adopt_live_stt", return_value=None),
+            mock.patch("server.app._ensure_idle_watch_thread"),
+            mock.patch("server.app._drop_live_stt"),
+        ):
+            sess._restart_listener()
+            self.assertTrue(sess._handoff_blocked)
+            block.set()
+            deadline = time.time() + 3.0
+            while time.time() < deadline and sess._listener is None:
+                time.sleep(0.05)
+            new = sess._listener
+            self.assertIsNotNone(new)
+            self._new = new
+            while time.time() < deadline and not any(e.get("type") == "pcm_drained" for e in events):
+                time.sleep(0.05)
+            sess.pcm_end("sess-live", 1600, "cap-a")
+        if getattr(new, "_sender_thread", None):
+            new._stop.set()
+            new._sender_thread.join(1.0)
+        joined = b"".join(_binary_sent(new._ws))
+        self.assertEqual(joined[:1600], payload)
+        self.assertEqual(joined.count(payload), 1)
+        drained = [e for e in events if e.get("type") == "pcm_drained"]
+        self.assertEqual(len(drained), 2)
+        self.assertEqual(drained[0]["byte_offset"], 1600)
+
+    def test_blocked_unblocks_while_paused_does_not_reopen_stt(self) -> None:
+        sess = self._live_session()
+        started = threading.Event()
+        block = threading.Event()
+        payload = b"\x44" * 1600
+        lst = _listener()
+
+        def blocking_send(payload_sent, *a, **k):
+            if isinstance(payload_sent, (bytes, bytearray)):
+                started.set()
+                block.wait(10)
+                raise RuntimeError("send failed")
+
+        ws = _connected_ws()
+        ws.send.side_effect = blocking_send
+        lst._ws = ws
+        lst._pcm_buf.extend(payload)
+        t = threading.Thread(target=lst._sender, daemon=True)
+        lst._sender_thread = t
+        lst._stop.clear()
+        t.start()
+        lst._drain.set()
+        self.assertTrue(started.wait(1.0))
+        sess._listener = lst
+        factory, _created = _fake_listener_factory(sess)
+        with (
+            mock.patch("server.app.CloudListener", side_effect=factory),
+            mock.patch("server.app._adopt_live_stt", return_value=None),
+            mock.patch("server.app._ensure_idle_watch_thread"),
+            mock.patch("server.app._drop_live_stt"),
+        ):
+            sess.pause_listen()
+            self.assertTrue(sess._paused)
+            self.assertTrue(sess._handoff_blocked)
+            block.set()
+            deadline = time.time() + 3.0
+            while time.time() < deadline and sess._handoff_blocked:
+                time.sleep(0.05)
+        self.assertTrue(sess._paused)
+        self.assertTrue(sess._listen_wanted)
+        self.assertIsNone(sess._listener)
+        self.assertEqual(bytes(sess._stt_pending_pcm), payload)
+        self.assertFalse(sess._handoff_blocked)
+
+    def test_prefix_not_replayed_after_tail_rebuild(self) -> None:
+        sess = self._live_session()
+        prefix = b"\x55" * 1600
+        tail = b"\x66" * 1600
+        old = _listener()
+        old._pcm_buf.extend(tail)
+        sess._listener = old
+        sess._pcm_rx_bytes = 3200
+        sess._stt_tx_bytes = 1600
+        sess._pcm_end_id = "sess-live"
+        sess._pcm_end_capture = "cap-a"
+        sess._pcm_end_offset = 3200
+        events: list[dict] = []
+        sess.emit = events.append
+        factory, _created = _fake_listener_factory(sess)
+        with (
+            mock.patch("server.app.CloudListener", side_effect=factory),
+            mock.patch("server.app._adopt_live_stt", return_value=None),
+            mock.patch("server.app._ensure_idle_watch_thread"),
+            mock.patch("server.app._drop_live_stt"),
+        ):
+            sess._restart_listener()
+        new = sess._listener
+        self.assertIsNotNone(new)
+        self._new = new
+        deadline = time.time() + 3.0
+        while time.time() < deadline and not any(e.get("type") == "pcm_drained" for e in events):
+            time.sleep(0.05)
+        if getattr(new, "_sender_thread", None):
+            new._stop.set()
+            new._sender_thread.join(1.0)
+        joined = b"".join(_binary_sent(new._ws))
+        self.assertNotIn(prefix, joined)
+        self.assertEqual(joined[:1600], tail)
+        self.assertEqual(joined.count(tail), 1)
+        self.assertGreaterEqual(sess._stt_tx_bytes, 3200)
+
+    def test_lost_pcm_drained_retry_does_not_resend_audio(self) -> None:
+        sess = self._live_session()
+        payload = b"\x77" * 1600
+        old = _listener()
+        old._pcm_buf.extend(payload)
+        sess._listener = old
+        sess._pcm_rx_bytes = 1600
+        sess._stt_tx_bytes = 0
+        sess._pcm_end_id = "sess-live"
+        sess._pcm_end_capture = "cap-a"
+        sess._pcm_end_offset = 1600
+        events: list[dict] = []
+        sess.emit = events.append
+        factory, _created = _fake_listener_factory(sess)
+        with (
+            mock.patch("server.app.CloudListener", side_effect=factory),
+            mock.patch("server.app._adopt_live_stt", return_value=None),
+            mock.patch("server.app._ensure_idle_watch_thread"),
+            mock.patch("server.app._drop_live_stt"),
+        ):
+            sess._restart_listener()
+        new = sess._listener
+        self.assertIsNotNone(new)
+        self._new = new
+        deadline = time.time() + 3.0
+        while time.time() < deadline and not any(e.get("type") == "pcm_drained" for e in events):
+            time.sleep(0.05)
+        before = list(_binary_sent(new._ws))
+        events.clear()
+        sess.pcm_end("sess-live", 1600, "cap-a")
+        after = _binary_sent(new._ws)
+        self.assertEqual(after, before)
+        self.assertEqual(
+            events,
+            [{"type": "pcm_drained", "id": "sess-live", "capture_id": "cap-a", "byte_offset": 1600}],
+        )
+        if getattr(new, "_sender_thread", None):
+            new._stop.set()
+            new._sender_thread.join(1.0)
+
+    def test_end_during_blocked_handoff_does_not_succeed(self) -> None:
+        sess = self._live_session()
+        started = threading.Event()
+        block = threading.Event()
+        lst = _listener()
+
+        def blocking_send(payload, *a, **k):
+            if isinstance(payload, (bytes, bytearray)):
+                started.set()
+                block.wait(10)
+                raise RuntimeError("send failed")
+
+        ws = _connected_ws()
+        ws.send.side_effect = blocking_send
+        lst._ws = ws
+        lst._pcm_buf.extend(b"\x88" * 1600)
+        t = threading.Thread(target=lst._sender, daemon=True)
+        lst._sender_thread = t
+        lst._stop.clear()
+        t.start()
+        lst._drain.set()
+        self.assertTrue(started.wait(1.0))
+        sess._listener = lst
+        sess._pcm_rx_bytes = 1600
+        sess._stt_tx_bytes = 0
+        events: list[dict] = []
+        sess.emit = events.append
+        with mock.patch("server.app.CloudListener") as factory:
+            sess._restart_listener()
+            sess.pcm_end("sess-live", 1600, "cap-a")
+            factory.assert_not_called()
+        self.assertEqual([e for e in events if e.get("type") == "pcm_drained"], [])
+        self.assertEqual(sess._pcm_end_id, "sess-live")
+        self.addCleanup(lambda: (block.set(), t.join(5.0)))
+

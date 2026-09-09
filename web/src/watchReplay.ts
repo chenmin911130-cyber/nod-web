@@ -240,15 +240,12 @@ export function watchMayDeleteWatchCopy(serverDrained: boolean): boolean {
   return serverDrained
 }
 
-/** Retry re-requests confirmation, or resumes after STT-consumed bytes. Never rewinds to 0 unless STT sent nothing. */
+/** Retry re-requests pcm_end confirmation. The server keeps the tail; the phone cursor does not rewind. */
 export function watchIngestRewindForRetry(opts: {
   pcmEndSent: boolean
   nextByte: number
-  sttTxByte?: number
 }): number {
-  if (!opts.pcmEndSent) return opts.nextByte
-  if (opts.sttTxByte == null) return opts.nextByte
-  return Math.min(opts.nextByte, Math.max(0, opts.sttTxByte))
+  return opts.nextByte
 }
 
 export function watchMayDeletePhoneCopy(uplinkSent: boolean): boolean {
@@ -368,11 +365,10 @@ export class WatchReplayIngest {
     }
   }
 
-  rewindForRetry(sttTxByte?: number): void {
+  rewindForRetry(): void {
     this.nextByte = watchIngestRewindForRetry({
       pcmEndSent: true,
       nextByte: this.nextByte,
-      sttTxByte,
     })
     this.pcmEndSent = false
   }

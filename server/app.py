@@ -17,9 +17,10 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 from urllib.parse import urlencode
 
 import httpx
@@ -91,6 +92,27 @@ ASSEMBLYAI_FILE_MODELS = ["universal-3-5-pro", "universal-2"]
 # billing; unterminated sessions stay open and bill for up to 3 hours.
 ASSEMBLYAI_TERMINATE = {"type": "Terminate"}
 ASSEMBLYAI_TERMINATE_WAIT_SEC = 1.5
+STT_HANDOFF_JOIN_SEC = 2.0
+STT_HANDOFF_INTERRUPT_JOIN_SEC = 0.5
+STT_PCM_HOLD_MAX = 2 * 1024 * 1024
+STT_PCM_OWNER_WAIT_SEC = 12.0
+HandoffKind = Literal["ready", "empty", "blocked"]
+
+
+@dataclass(frozen=True)
+class UnsentHandoff:
+    """Result of taking PCM from a CloudListener that is shutting down.
+
+    ``ready`` has audio, ``empty`` finished with none, ``blocked`` means the
+    sender has not exited — callers must not treat that as silence.
+    """
+
+    kind: HandoffKind
+    pcm: bytes = b""
+
+    @property
+    def blocked(self) -> bool:
+        return self.kind == "blocked"
 STATUS_READY = "Ready · F2 record / F3 listen / F4 clear · browser mic + cloud STT"
 STATUS_RECORD = "Recording · accurate captions follow shortly"
 STATUS_LISTEN = "Listening for the next question…"
@@ -1793,6 +1815,7 @@ class CloudListener:
         self._drain_send_failed = False
         self._stt_tx_bytes = 0
         self._sender_thread: threading.Thread | None = None
+        self._pcm_mu = threading.Lock()
 
     def set_muted(self, muted: bool) -> None:
         self._muted = bool(muted)
@@ -1821,30 +1844,59 @@ class CloudListener:
         self._drain.set()
         return self._drained.wait(timeout)
 
-    def take_unsent(self, timeout: float = 2.0) -> bytes | None:
-        """Earlier dequeued audio (`_pcm_buf`) then later `_q`. None if the sender is still in flight."""
+    def take_unsent(self, timeout: float = STT_HANDOFF_JOIN_SEC) -> UnsentHandoff:
+        """Stop taking new frames, then harvest `_pcm_buf` (A) then `_q` (B).
+
+        Does not Terminate or close a healthy socket — Pause still needs that
+        path. Returns ``blocked`` if the sender has not exited; callers must
+        keep this listener and retry rather than treat timeout as silence.
+        """
         self._stop.set()
+        if not self._join_sender(timeout):
+            self._interrupt_socket()
+            if not self._join_sender(min(STT_HANDOFF_INTERRUPT_JOIN_SEC, timeout)):
+                return UnsentHandoff("blocked")
+        pcm = self._harvest_unsent()
+        return UnsentHandoff("ready" if pcm else "empty", pcm)
+
+    def seed_unsent(self, pcm: bytes) -> None:
+        if not pcm:
+            return
+        with self._pcm_mu:
+            self._pcm_buf.extend(pcm)
+
+    def _join_sender(self, timeout: float) -> bool:
+        t = getattr(self, "_sender_thread", None)
+        if t is None or t is threading.current_thread():
+            return True
+        t.join(timeout)
+        return not t.is_alive()
+
+    def _interrupt_socket(self) -> None:
+        """Bounded force-close to unblock a stuck send. Not a Termination."""
         ws = self._ws
         self._ws = None
-        if ws is not None:
-            sock = getattr(ws, "sock", None)
-            if sock is not None:
-                try:
-                    sock.close()
-                except Exception:
-                    pass
+        if ws is None:
+            return
+        sock = getattr(ws, "sock", None)
+        if sock is not None:
             try:
-                ws.close()
+                sock.settimeout(0.2)
             except Exception:
                 pass
-        t = getattr(self, "_sender_thread", None)
-        if t is not None and t is not threading.current_thread():
-            t.join(timeout)
-            if t.is_alive():
-                return None
-        out = bytearray()
-        out.extend(self._pcm_buf)
-        self._pcm_buf.clear()
+            try:
+                sock.close()
+            except Exception:
+                pass
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+    def _harvest_unsent(self) -> bytes:
+        with self._pcm_mu:
+            out = bytearray(self._pcm_buf)
+            self._pcm_buf.clear()
         while True:
             try:
                 out.extend(self._q.get_nowait())
@@ -1852,13 +1904,11 @@ class CloudListener:
                 break
         return bytes(out)
 
-    def seed_unsent(self, pcm: bytes) -> None:
-        if pcm:
-            self._pcm_buf.extend(pcm)
-
     def start(self) -> None:
         import websocket
         url = assemblyai_ws_url(self.cfg)
+        with self._pcm_mu:
+            seeded = bytes(self._pcm_buf)
         self._stop.clear()
         self._ready.clear()
         self._terminated.clear()
@@ -1867,7 +1917,8 @@ class CloudListener:
         self._drop_sent = False
         self._force_pending = False
         self._force_inflight = 0.0
-        self._pcm_buf = bytearray()
+        with self._pcm_mu:
+            self._pcm_buf = bytearray(seeded)
         self._last_send_at = 0.0
         self._last_send_bytes = 0
         self._last_send_ms = 0.0
@@ -1913,13 +1964,21 @@ class CloudListener:
             try:
                 chunk = self._q.get(timeout=0.08)
             except queue.Empty:
-                if self._drain.is_set() and self._q.empty() and not getattr(self, "_drain_send_failed", False):
+                chunk = b""
+            if chunk:
+                with self._pcm_mu:
+                    self._pcm_buf.extend(chunk)
+            if self._drain.is_set() and self._q.empty():
+                if not getattr(self, "_drain_send_failed", False):
                     self._send_drain_tail()
                 continue
-            if not chunk:
+            ws = self._ws
+            if not (ws and getattr(ws, "sock", None) and ws.sock.connected):
                 continue
-            self._pcm_buf.extend(chunk)
-            remaining = take_frames(self._pcm_buf)
+            with self._pcm_mu:
+                remaining = take_frames(self._pcm_buf)
+            if not remaining:
+                continue
             while remaining:
                 if self._stop.is_set():
                     self._restore_unsent(remaining)
@@ -1935,10 +1994,12 @@ class CloudListener:
 
     def _restore_unsent(self, frames: list[bytes]) -> None:
         if frames:
-            self._pcm_buf[0:0] = b"".join(frames)
+            with self._pcm_mu:
+                self._pcm_buf[0:0] = b"".join(frames)
 
     def _send_drain_tail(self) -> None:
-        remaining = take_final_frames(self._pcm_buf)
+        with self._pcm_mu:
+            remaining = take_final_frames(self._pcm_buf)
         while remaining:
             if self._stop.is_set():
                 self._restore_unsent(remaining)
@@ -2202,6 +2263,19 @@ class Session:
         self.usage_session_id: str | None = None
         self._pcm_unmetered = 0
         self._listener: CloudListener | None = None
+        self._handoff_listener: CloudListener | None = None
+        self._handoff_blocked = False
+        self._handoff_collected = False
+        self._handoff_waiter: threading.Thread | None = None
+        self._stt_pending_pcm = b""
+        self._pcm_hold = bytearray()
+        self._pcm_owner_ready = threading.Event()
+        self._pcm_owner_ready.set()
+        self._pcm_in_lock = threading.Lock()
+        self._listen_gen = 0
+        self._stt_stream_gen = 0
+        self._pcm_rx_bytes = 0
+        self._stt_tx_bytes = 0
         self._listen_mu = threading.RLock()
         self._listen_starting = False
         self._stt_restart_timer: threading.Timer | None = None
@@ -2558,12 +2632,19 @@ class Session:
             else:
                 self._maybe_flush_manual_chunk()
             return
-        if self._listener:
-            self._archive_append(pcm)
-            self._listener.push_pcm(pcm)
-            self._pcm_rx_bytes = getattr(self, "_pcm_rx_bytes", 0) + len(pcm)
-            self._finish_pcm_end_if_ready()
-            self._maybe_stop_forgotten_listen()
+        lst = self._pcm_destination()
+        if lst is None:
+            if self._hold_incoming_pcm(pcm):
+                return
+            return
+        self._last_pcm_at = time.time()
+        self._archive_append(pcm)
+        with self._pcm_input_lock():
+            self._flush_pcm_hold_into(lst)
+            lst.push_pcm(pcm)
+        self._pcm_rx_bytes = getattr(self, "_pcm_rx_bytes", 0) + len(pcm)
+        self._finish_pcm_end_if_ready()
+        self._maybe_stop_forgotten_listen()
 
     def dispatch(self, msg: dict) -> None:
         mtype = msg.get("type")
@@ -2733,14 +2814,18 @@ class Session:
         with self._listen_lock():
             if getattr(self, "_listen_starting", False):
                 return False
+            if getattr(self, "_handoff_blocked", False):
+                return False
             if self._listener is not None and not resume:
                 return False
             self._listen_starting = True
+            self._pcm_ready_event().clear()
             return True
 
     def _release_listen_start(self) -> None:
         with self._listen_lock():
             self._listen_starting = False
+        self._release_pcm_waiters()
 
     def _cancel_stt_restart_timer(self) -> None:
         timer = getattr(self, "_stt_restart_timer", None)
@@ -2760,34 +2845,203 @@ class Session:
         except Exception:
             pass
 
-    def _restart_listener(self) -> None:
-        with self._listen_lock():
-            if not self._listen_wanted:
-                return
-            lst = self._listener
-            self._listener = None
-        self._stash_unsent(lst)
-        self._stop_listener(lst)
-        self._flush_translate_carry("restart")
-        self._start_listening(resume=True)
+    def _pcm_destination(self) -> CloudListener | None:
+        lst = self._listener
+        if lst is not None:
+            return lst
+        if (
+            getattr(self, "_listen_starting", False)
+            and self._listen_wanted
+            and not self._paused
+            and not getattr(self, "_closed", False)
+        ):
+            self._pcm_ready_event().wait(timeout=STT_PCM_OWNER_WAIT_SEC)
+            return self._listener
+        return None
 
-    def _stash_unsent(self, lst: CloudListener | None) -> None:
-        if not lst:
-            return
-        take = getattr(lst, "take_unsent", None)
-        if not callable(take):
-            return
-        extra = take()
+    def _pcm_ready_event(self) -> threading.Event:
+        ev = getattr(self, "_pcm_owner_ready", None)
+        if ev is None:
+            ev = threading.Event()
+            ev.set()
+            self._pcm_owner_ready = ev
+        return ev
+
+    def _pcm_input_lock(self) -> threading.Lock:
+        mu = getattr(self, "_pcm_in_lock", None)
+        if mu is None:
+            mu = threading.Lock()
+            self._pcm_in_lock = mu
+        return mu
+
+    def _release_pcm_waiters(self) -> None:
+        self._pcm_ready_event().set()
+
+    def _hold_incoming_pcm(self, pcm: bytes) -> bool:
+        if getattr(self, "_closed", False) or self._paused or not self._listen_wanted:
+            return False
+        if self._listener is not None:
+            return False
+        with self._listen_lock():
+            if self._listener is not None:
+                return False
+            hold = getattr(self, "_pcm_hold", None)
+            if not isinstance(hold, bytearray):
+                hold = bytearray()
+            if len(hold) + len(pcm) > STT_PCM_HOLD_MAX:
+                logging.getLogger("nod").warning("stt pcm hold full bytes=%s", len(hold))
+                return False
+            hold.extend(pcm)
+            self._pcm_hold = hold
+            self._last_pcm_at = time.time()
+            self._pcm_rx_bytes = getattr(self, "_pcm_rx_bytes", 0) + len(pcm)
+        self._archive_append(pcm)
+        return True
+
+    def _flush_pcm_hold_into(self, lst: CloudListener) -> None:
+        with self._listen_lock():
+            hold = bytes(getattr(self, "_pcm_hold", b"") or b"")
+            self._pcm_hold = bytearray()
+        if hold:
+            lst.push_pcm(hold)
+
+    def _normalize_handoff(self, extra: Any) -> UnsentHandoff:
+        if isinstance(extra, UnsentHandoff):
+            return extra
         if extra is None:
-            return
-        if not isinstance(extra, (bytes, bytearray)) or not extra:
+            return UnsentHandoff("blocked")
+        if isinstance(extra, (bytes, bytearray)):
+            pcm = bytes(extra)
+            return UnsentHandoff("ready" if pcm else "empty", pcm)
+        return UnsentHandoff("empty")
+
+    def _apply_handoff(self, result: UnsentHandoff) -> None:
+        if result.kind == "blocked" or not result.pcm:
             return
         prev = getattr(self, "_stt_pending_pcm", b"") or b""
         if not isinstance(prev, (bytes, bytearray)):
             prev = b""
-        self._stt_pending_pcm = bytes(prev) + bytes(extra)
+        self._stt_pending_pcm = bytes(prev) + result.pcm
 
-    def _on_stt_sent(self, n: int) -> None:
+    def _stash_unsent(self, lst: CloudListener | None) -> UnsentHandoff:
+        if not lst:
+            return UnsentHandoff("empty")
+        take = getattr(lst, "take_unsent", None)
+        if not callable(take):
+            return UnsentHandoff("empty")
+        result = self._normalize_handoff(take())
+        if result.kind == "blocked":
+            return result
+        self._apply_handoff(result)
+        return result
+
+    def _clear_handoff(self) -> None:
+        self._handoff_listener = None
+        self._handoff_blocked = False
+        self._handoff_collected = False
+        self._handoff_waiter = None
+
+    def _abandon_handoff(self) -> None:
+        self._listen_gen = getattr(self, "_listen_gen", 0) + 1
+        lst = getattr(self, "_handoff_listener", None)
+        self._clear_handoff()
+        self._stt_pending_pcm = b""
+        self._pcm_hold = bytearray()
+        self._release_pcm_waiters()
+        if lst is not None and lst is not self._listener:
+            self._stop_listener(lst)
+
+    def _mark_handoff_blocked(self, lst: CloudListener) -> None:
+        self._handoff_blocked = True
+        self._handoff_listener = lst
+        logging.getLogger("nod").warning("stt handoff blocked")
+        self._release_pcm_waiters()
+        existing = getattr(self, "_handoff_waiter", None)
+        if existing is not None and existing.is_alive():
+            return
+        gen = getattr(self, "_listen_gen", 0)
+
+        def wait() -> None:
+            t = getattr(lst, "_sender_thread", None)
+            if t is not None and t is not threading.current_thread():
+                t.join()
+            if getattr(self, "_closed", False):
+                return
+            if getattr(self, "_listen_gen", 0) != gen:
+                return
+            self._complete_blocked_handoff(lst)
+
+        th = threading.Thread(target=wait, name="nod-stt-handoff", daemon=True)
+        self._handoff_waiter = th
+        th.start()
+
+    def _complete_blocked_handoff(self, lst: CloudListener) -> None:
+        with self._listen_lock():
+            if getattr(self, "_handoff_listener", None) is not lst:
+                return
+            if getattr(self, "_handoff_collected", False):
+                return
+        result = self._stash_unsent(lst)
+        if result.kind == "blocked":
+            return
+        with self._listen_lock():
+            if getattr(self, "_handoff_collected", False):
+                return
+            self._handoff_collected = True
+        self._stop_listener(lst)
+        self._clear_handoff()
+        self._flush_translate_carry("restart")
+        if self._listen_wanted and not self._paused:
+            self._start_listening(resume=True)
+        else:
+            self._release_pcm_waiters()
+
+    def _try_complete_handoff(self) -> None:
+        lst = getattr(self, "_handoff_listener", None)
+        if lst is None:
+            return
+        if getattr(self, "_handoff_collected", False):
+            return
+        result = self._stash_unsent(lst)
+        if result.kind == "blocked":
+            self._mark_handoff_blocked(lst)
+            return
+        self._handoff_collected = True
+        self._stop_listener(lst)
+        self._clear_handoff()
+        self._flush_translate_carry("restart")
+        if self._listen_wanted and not self._paused:
+            self._start_listening(resume=True)
+
+    def _restart_listener(self) -> None:
+        with self._listen_lock():
+            if not self._listen_wanted and not getattr(self, "_handoff_listener", None):
+                return
+            lst = self._listener or getattr(self, "_handoff_listener", None)
+            self._listener = None
+            if lst is not None:
+                self._handoff_listener = lst
+            self._pcm_ready_event().clear()
+        if lst is None:
+            self._release_pcm_waiters()
+            if self._listen_wanted and not self._paused:
+                self._start_listening(resume=True)
+            return
+        result = self._stash_unsent(lst)
+        if result.kind == "blocked":
+            self._mark_handoff_blocked(lst)
+            return
+        self._stop_listener(lst)
+        self._clear_handoff()
+        self._flush_translate_carry("restart")
+        if self._listen_wanted and not self._paused:
+            self._start_listening(resume=True)
+        else:
+            self._release_pcm_waiters()
+
+    def _on_stt_sent(self, n: int, stream_gen: int | None = None) -> None:
+        if stream_gen is not None and stream_gen != getattr(self, "_stt_stream_gen", 0):
+            return
         if n > 0:
             self._stt_tx_bytes = getattr(self, "_stt_tx_bytes", 0) + int(n)
 
@@ -2801,6 +3055,7 @@ class Session:
         self._listen_wanted = False
         self._pending_q.clear()
         self._cancel_stt_restart_timer()
+        self._abandon_handoff()
         with self._listen_lock():
             lst = self._listener
             self._listener = None
@@ -3417,12 +3672,20 @@ class Session:
         self._pcm_end_id = sid
         self._pcm_end_capture = cap
         self._pcm_end_offset = offset
+        if getattr(self, "_handoff_blocked", False) or getattr(self, "_handoff_listener", None):
+            self._try_complete_handoff()
         self._finish_pcm_end_if_ready()
 
     def _finish_pcm_end_if_ready(self) -> None:
         sid = getattr(self, "_pcm_end_id", None)
         cap = str(getattr(self, "_pcm_end_capture", "") or "")
         if not sid or not cap:
+            return
+        if getattr(self, "_handoff_blocked", False) or getattr(self, "_handoff_listener", None):
+            return
+        if getattr(self, "_stt_pending_pcm", b""):
+            return
+        if getattr(self, "_pcm_hold", b""):
             return
         offset = int(getattr(self, "_pcm_end_offset", 0) or 0)
         if getattr(self, "_pcm_rx_bytes", 0) < offset:
@@ -3481,15 +3744,21 @@ class Session:
             self.emit({"type": "status", "text": "Not listening"})
             return
         self._paused = True
-        if self._listener:
+        if self._listener or getattr(self, "_handoff_listener", None):
             # Bank the just-listened segment into the accumulated 2h quota so
             # the wall-clock pause doesn't keep consuming the cap.
             self._listen_accum_sec = getattr(self, "_listen_accum_sec", 0.0) + (time.time() - self._listen_started_at)
             with self._listen_lock():
-                lst = self._listener
+                lst = self._listener or getattr(self, "_handoff_listener", None)
                 self._listener = None
-            self._stash_unsent(lst)
-            self._stop_listener(lst)
+                if lst is not None:
+                    self._handoff_listener = lst
+            result = self._stash_unsent(lst)
+            if result.kind == "blocked":
+                self._mark_handoff_blocked(lst)
+            else:
+                self._stop_listener(lst)
+                self._clear_handoff()
         self._flush_translate_carry("pause")
         # Flush any held half-sentence, drain the worker (its queued finals may
         # re-open _open_line via _hold_or_emit_meeting), THEN close the open line
@@ -3601,23 +3870,39 @@ class Session:
         if not key:
             self.emit({"type": "error", "text": "Missing AssemblyAI key — add it to start cloud listening"})
             return
-        listener = CloudListener(
-            api_key=key,
-            cfg=self._stt_cfg(),
-            on_final=self._on_final,
-            on_partial=self._on_partial,
-            on_error=lambda e: self.emit({"type": "error", "text": f"Transcription failed:{e}"}),
-            on_drop=self._on_stt_drop,
-            on_sent=self._on_stt_sent,
-        )
         if not resume:
+            self._listen_gen = getattr(self, "_listen_gen", 0) + 1
             self._pcm_rx_bytes = 0
             self._stt_tx_bytes = 0
             self._stt_pending_pcm = b""
+            self._pcm_hold = bytearray()
             self._pcm_end_id = None
             self._pcm_end_capture = ""
             self._pcm_end_offset = 0
             self._pcm_drain_result = None
+        self._stt_stream_gen = getattr(self, "_stt_stream_gen", 0) + 1
+        listen_gen = getattr(self, "_listen_gen", 0)
+        stream_gen = self._stt_stream_gen
+        listener = CloudListener(
+            api_key=key,
+            cfg=self._stt_cfg(),
+            on_final=lambda *a, g=listen_gen, sg=stream_gen: (
+                self._on_final(*a)
+                if g == getattr(self, "_listen_gen", 0) and sg == getattr(self, "_stt_stream_gen", 0)
+                else None
+            ),
+            on_partial=self._on_partial,
+            on_error=lambda e: self.emit({"type": "error", "text": f"Transcription failed:{e}"}),
+            on_drop=lambda r, sg=stream_gen: (
+                self._on_stt_drop(r) if sg == getattr(self, "_stt_stream_gen", 0) else None
+            ),
+            on_sent=lambda n, sg=stream_gen: self._on_stt_sent(n, sg),
+        )
+        pending = bytes(getattr(self, "_stt_pending_pcm", b"") or b"")
+        if pending:
+            seed = getattr(listener, "seed_unsent", None)
+            if callable(seed):
+                seed(pending)
         slot = self._stt_slot()
         prev = _adopt_live_stt(slot, listener, self)
         if prev:
@@ -3644,6 +3929,7 @@ class Session:
         if not self._listen_wanted:
             self._stop_listener(listener)
             return
+        self._stt_pending_pcm = b""
         if self._mic_muted:
             listener.set_muted(True)
         with self._listen_lock():
@@ -3652,8 +3938,11 @@ class Session:
                 return
             old = self._listener
             self._listener = listener
+        self._release_pcm_waiters()
         if old and old is not listener:
             self._stop_listener(old)
+        with self._pcm_input_lock():
+            self._flush_pcm_hold_into(listener)
         now = time.time()
         if not resume:
             self._listen_accum_sec = 0.0  # a new session zeroes the accumulated quota
@@ -3666,14 +3955,6 @@ class Session:
         self._emit_phase()
         if not resume:
             self.emit({"type": "status", "text": STATUS_LISTEN})
-        pending = getattr(self, "_stt_pending_pcm", b"") or b""
-        if isinstance(pending, (bytes, bytearray)) and pending:
-            self._stt_pending_pcm = b""
-            seed = getattr(listener, "seed_unsent", None)
-            if callable(seed):
-                seed(bytes(pending))
-            else:
-                self._stt_pending_pcm = bytes(pending)
         self._finish_pcm_end_if_ready()
 
     def _mark_voice(self) -> None:
@@ -3720,6 +4001,7 @@ class Session:
         self._last_pcm_at = 0.0  # zero-PCM guard must not carry into the next session
         self._pending_q.clear()
         self._cancel_stt_restart_timer()
+        self._abandon_handoff()
         with self._listen_lock():
             lst = self._listener
             self._listener = None

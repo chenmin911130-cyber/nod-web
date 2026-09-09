@@ -332,8 +332,6 @@ eq(watchDrainMessage({ lastByte: 6400, captureId: '', sessionId: 'sess-1' }), nu
 eq(watchMinFramePad(800), WATCH_PCM_MIN_CHUNK_BYTES, 'short End tail is padded before send')
 eq(watchIngestRewindForRetry({ pcmEndSent: false, nextByte: 6400 }), 6400, 'first drain keeps the phone cursor')
 eq(watchIngestRewindForRetry({ pcmEndSent: true, nextByte: 6400 }), 6400, 'lost confirmation only re-requests drain; does not rewind to 0')
-eq(watchIngestRewindForRetry({ pcmEndSent: true, nextByte: 6400, sttTxByte: 3200 }), 3200, 'Retry resumes after STT-consumed bytes')
-eq(watchIngestRewindForRetry({ pcmEndSent: true, nextByte: 6400, sttTxByte: 0 }), 0, 'rewind to zero only if STT consumed nothing')
 
 {
   const pipe = new WatchReplayIngest()
@@ -341,7 +339,6 @@ eq(watchIngestRewindForRetry({ pcmEndSent: true, nextByte: 6400, sttTxByte: 0 })
   const shard = bytes(6400, 9)
   eq(pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: shard, key: 'r:0' }), 'accept', 'first ingest')
   pipe.consume(6400)
-  const prefix = pipe.delivered.slice()
   eq(
     pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: shard, key: 'r:0' }),
     'duplicate',
@@ -353,18 +350,8 @@ eq(watchIngestRewindForRetry({ pcmEndSent: true, nextByte: 6400, sttTxByte: 0 })
   eq(
     pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: shard, key: 'r:0' }),
     'duplicate',
-    'partial STT success must not re-send the already-consumed prefix',
+    'Retry does not replay audio the phone already delivered',
   )
-  pipe.pcmEndSent = true
-  pipe.rewindForRetry(3200)
-  eq(pipe.nextByte, 3200, 'STT offset retry resumes at the consume cursor')
-  eq(
-    pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: shard, key: 'r:0' }),
-    'overlap',
-    'retry from STT offset is overlap, not a full replay',
-  )
-  eq(pipe.delivered.length, prefix.length + 3200, 'already-sent prefix is not delivered again')
-  eq(pipe.delivered.slice(3200, 6400).length, 3200, 'only the unsent tail is appended')
 }
 
 {
