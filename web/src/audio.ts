@@ -99,7 +99,9 @@ export function nativeFallbackShouldSwitch(opts: {
   appActive?: boolean
   running: boolean
   hasStream: boolean
+  uplinkActive?: boolean
 }): boolean {
+  if (opts.uplinkActive) return false
   if (opts.hidden) return false
   if (opts.appActive === false) return false
   return opts.running && !opts.hasStream
@@ -122,6 +124,7 @@ export class MicCapture {
   private nativeTeardown: Promise<void> = Promise.resolve()
   private appActive = true
   private appStateBound = false
+  private uplinkActive = false
   private resampler = new PcmDownsampler()
   onPcm: (buf: ArrayBuffer) => void = () => undefined
   onFallbackFailed: () => void = () => undefined
@@ -130,6 +133,11 @@ export class MicCapture {
   // idle mic and opens a competing getUserMedia.
   get active(): boolean {
     return this.running || this.starting !== null
+  }
+
+  setUplinkActive(on: boolean): void {
+    this.uplinkActive = on
+    if (on) this.clearSilenceTimer()
   }
 
   start(): Promise<void> {
@@ -191,16 +199,17 @@ export class MicCapture {
   private async acquireNative(seq: number): Promise<void> {
     await this.bindAppState()
     const { NodMic } = await import('nod-mic')
-    this.nativeHandle = await NodMic.addListener('pcm', (ev) => {
+    const handle = await NodMic.addListener('pcm', (ev) => {
       const pcm = base64ToPcm(ev.data || '')
       if (!pcm.byteLength) return
       this.clearSilenceTimer()
       this.onPcm(pcm)
     })
+    this.nativeHandle = handle
     try {
       await NodMic.start()
     } catch (err) {
-      await this.nativeHandle.remove().catch(() => undefined)
+      await handle.remove().catch(() => undefined)
       this.nativeHandle = null
       throw err
     }
@@ -289,6 +298,10 @@ export class MicCapture {
   }
 
   private armSilenceFallback(seq: number): void {
+    if (this.uplinkActive) {
+      this.clearSilenceTimer()
+      return
+    }
     this.clearSilenceTimer()
     this.silenceTimer = window.setTimeout(() => {
       void this.onNativeSilence(seq)
@@ -297,6 +310,7 @@ export class MicCapture {
 
   private async onNativeSilence(seq: number): Promise<void> {
     if (seq !== this.stopSeq || !this.running || this.stream) return
+    if (this.uplinkActive) return
     await this.refreshAppState()
     if (
       !nativeFallbackShouldSwitch({
@@ -304,6 +318,7 @@ export class MicCapture {
         appActive: this.appActive,
         running: this.running,
         hasStream: this.stream !== null,
+        uplinkActive: this.uplinkActive,
       })
     ) {
       this.armSilenceFallback(seq)
@@ -313,6 +328,7 @@ export class MicCapture {
   }
 
   private async switchNativeToWeb(seq: number): Promise<void> {
+    if (this.uplinkActive) return
     await this.refreshAppState()
     if (this.pageIsBackground()) return
     const handle = this.nativeHandle

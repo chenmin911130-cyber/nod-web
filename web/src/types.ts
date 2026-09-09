@@ -155,6 +155,7 @@ export type EngineEvent =
   | { type: 'history_kept'; id?: string }
   | { type: 'history_keep_failed'; id?: string; reason?: string }
   | { type: 'disconnected' }
+  | { type: 'attached'; usage_session_id?: string }
 
 // 前端 → 引擎
 export type EngineMsg =

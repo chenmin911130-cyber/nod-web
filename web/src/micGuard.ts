@@ -7,9 +7,11 @@ export function micSilenceShouldWarn(opts: {
   elapsedMs: number
   graceMs?: number
   watchPreferred?: boolean
+  uplinkActive?: boolean
 }): boolean {
   if (!opts.listening) return false
   if (opts.watchPreferred) return false
+  if (opts.uplinkActive) return false
   if (opts.pcmBytes > 0) return false
   return opts.elapsedMs >= (opts.graceMs ?? MIC_SILENCE_GRACE_MS)
 }

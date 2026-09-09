@@ -21,9 +21,20 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastLangPair = ""
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
+    private var uplinkActive = false
+    private var uplinkObserver: NSObjectProtocol?
 
     override private init() {
         super.init()
+        uplinkObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name("nod.uplink.state"),
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            self?.uplinkActive = (note.userInfo?["enabled"] as? Bool)
+                ?? (note.userInfo?["active"] as? Bool)
+                ?? false
+        }
     }
 
     public func activate() {
@@ -270,6 +281,14 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     }
 
     private func emitPcm(_ data: String) {
+        if uplinkActive, let raw = Data(base64Encoded: data), !raw.isEmpty {
+            NotificationCenter.default.post(
+                name: Notification.Name("nod.watch.pcm"),
+                object: nil,
+                userInfo: ["data": raw]
+            )
+            return
+        }
         if jsReady {
             plugin?.notifyListeners("pcm", data: ["data": data])
             return
@@ -281,6 +300,14 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     }
 
     private func emitPcmData(_ data: Data) {
+        if uplinkActive {
+            NotificationCenter.default.post(
+                name: Notification.Name("nod.watch.pcm"),
+                object: nil,
+                userInfo: ["data": data]
+            )
+            return
+        }
         let chunk = 3200
         var offset = 0
         while offset < data.count {

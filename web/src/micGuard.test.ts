@@ -25,3 +25,7 @@ if (micSilenceShouldWarn({ listening: false, pcmBytes: 0, elapsedMs: 8000 })) {
 if (micSilenceShouldWarn({ listening: true, pcmBytes: 0, elapsedMs: 8000, watchPreferred: true })) {
   throw new Error('Watch-mic listen must not trip the iPhone silent-mic warning')
 }
+
+if (micSilenceShouldWarn({ listening: true, pcmBytes: 0, elapsedMs: 8000, uplinkActive: true })) {
+  throw new Error('native uplink listen must not trip the JS silent-mic warning')
+}

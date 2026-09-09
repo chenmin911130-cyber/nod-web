@@ -4,6 +4,7 @@ import { getToken } from './auth'
 import { MicCapture } from './audio'
 import { apiUrl, isNativeApp, wsUrl } from './native'
 import { micSilenceShouldWarn } from './micGuard'
+import { audioUplinkWsUrl, controlWsUrl, uplinkShouldForwardPcmFromJs, uplinkTokenAfterNativeStart } from './uplink'
 import { isWatchMicPreferred, setWatchPcmSink } from './watch'
 
 const EVENT_TYPES = new Set([
@@ -25,6 +26,7 @@ const EVENT_TYPES = new Set([
   'save_prompt',
   'history_kept',
   'history_keep_failed',
+  'attached',
 ])
 
 function asText(v: unknown): string {
@@ -87,6 +89,8 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
         id: typeof o.id === 'string' ? o.id : undefined,
         reason: asText(o.reason) || undefined,
       }
+    case 'attached':
+      return { type: 'attached', usage_session_id: asText(o.usage_session_id) || undefined }
     default:
       return { ...o, type } as EngineEvent
   }
@@ -147,6 +151,8 @@ export function installWebApi(): void {
   let pcmBytes = 0
   let listenSince = 0
   let silenceWatch = 0
+  let uplinkToken = ''
+  let uplinkStarting = ''
 
   const queueMsg = (msg: EngineMsg) => {
     if (msg.type === 'ping') return
@@ -200,6 +206,7 @@ export function installWebApi(): void {
                 pcmBytes,
                 elapsedMs: Date.now() - listenSince,
                 watchPreferred: isWatchMicPreferred(),
+                uplinkActive: Boolean(uplinkToken) && isNativeApp(),
               })
             ) {
               window.clearInterval(silenceWatch)
@@ -226,9 +233,55 @@ export function installWebApi(): void {
     }
   }
 
+  const applyUplinkToken = (token: string) => {
+    if (!token || token === uplinkToken || token === uplinkStarting) return
+    if (!isNativeApp()) {
+      uplinkToken = uplinkTokenAfterNativeStart(true, token)
+      return
+    }
+    uplinkStarting = token
+    void import('nod-mic')
+      .then(({ NodMic }) => NodMic.startUplink({ url: audioUplinkWsUrl(wsUrl(), token) }))
+      .then(() => {
+        if (uplinkStarting !== token) return
+        uplinkStarting = ''
+        uplinkToken = uplinkTokenAfterNativeStart(true, token)
+        mic.setUplinkActive(true)
+      })
+      .catch((err: unknown) => {
+        if (uplinkStarting !== token) return
+        uplinkStarting = ''
+        uplinkToken = uplinkTokenAfterNativeStart(false, token)
+        mic.setUplinkActive(false)
+        const detail =
+          err && typeof err === 'object' && 'message' in err
+            ? String((err as { message: unknown }).message) || 'connection failed'
+            : 'connection failed'
+        emit({
+          type: 'error',
+          text: `Could not open the native audio link (${detail}). Speech still goes through the app in the foreground.`,
+        })
+      })
+  }
+
+  const clearUplink = () => {
+    uplinkStarting = ''
+    if (!uplinkToken && !isNativeApp()) {
+      mic.setUplinkActive(false)
+      return
+    }
+    uplinkToken = ''
+    mic.setUplinkActive(false)
+    if (!isNativeApp()) return
+    void import('nod-mic')
+      .then(({ NodMic }) => NodMic.stopUplink())
+      .catch(() => undefined)
+  }
+
   const scheduleReconnect = (authExpired: boolean) => {
     if (closing) return
     if (retries >= RECONNECT_MAX_TRIES) {
+      clearUplink()
       emit({ type: 'error', text: `Lost connection to ${PRODUCT_NAME}. Reload the page to reconnect.` })
       return
     }
@@ -251,7 +304,7 @@ export function installWebApi(): void {
 
   const connect = () => {
     if (closing) return
-    const socket = new WebSocket(wsUrl())
+    const socket = new WebSocket(controlWsUrl(wsUrl(), uplinkToken))
     ws = socket
     socket.binaryType = 'arraybuffer'
     socket.onopen = () => {
@@ -274,6 +327,9 @@ export function installWebApi(): void {
         raw = JSON.parse(ev.data)
       } catch {
         return
+      }
+      if (raw && typeof raw === 'object' && (raw as { type?: unknown }).type === 'audio_uplink') {
+        applyUplinkToken(asText((raw as { token?: unknown }).token))
       }
       const payload = normalizeEvent(raw)
       if (!payload) return
@@ -306,6 +362,9 @@ export function installWebApi(): void {
   mic.onPcm = (buf) => {
     pcmBytes += buf.byteLength
     if (micMuted) return
+    if (!uplinkShouldForwardPcmFromJs({ nativeApp: isNativeApp(), hasToken: Boolean(uplinkToken) })) {
+      return
+    }
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(buf)
       return

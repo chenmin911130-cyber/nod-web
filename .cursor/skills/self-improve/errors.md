@@ -2,6 +2,42 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-09 · #171 补传审查只看入口帧率，漏了下游实时音频约束
+- 我以为：把补传限制在 `WS_FRAMES_PER_SEC=40` 以内，就补齐了发送节奏约束；没有继续核对 AssemblyAI 的音频时长与墙钟约束。
+- 实际：Bundle 67 用户报麦已开但不转写、自动停止。生产 2026-09-09 00:57:55Z `/ws/audio` accepted，随后反复收到 AssemblyAI 3007。官方文档列出两类原因：单块不在 50–1000ms 内，或音频发送快于实时。代码 `frameBytes=3200` 为 100ms，积压时按 40fps 补发允许约 4 倍实时；`scheduleFlush` 也可发不足 50ms 的尾块。当前日志未落完整 Error，尚不能判定此次具体触发哪一种。服务端 `_on_stt_drop` 超过 6 次会停听。
+- 规则：音频补传必须同时检查入口限流与最终 STT 接收约束；按音频时长制定节奏，不用“每秒几帧”替代。3007 必须保存脱敏错误详情、块字节数/时长和发送间隔再归因，不把错误码直接等同于某个子原因。
+- 涉及：#171 `AudioUplink.pump / scheduleFlush` · `CloudListener._sender` · https://www.assemblyai.com/docs/streaming/common-session-errors-and-closures
+
+## 2026-09-09 · #171 把 nod-mic 编进空 start/startUplink
+- 我以为：`src/shims/nod-mic.ts` 只给浏览器；真机 Capacitor 仍走 `registerPlugin('NodMic')`。
+- 实际：Vite/tsconfig 无条件 alias，WKWebView 也加载空实现。`start()` 假成功不开原生麦，`startUplink()` 假成功不连 `/ws/audio`，JS 拿到 token 后又停转 PCM。
+- 规则：`nod-mic` 只能解析到本仓库 `plugins/nod-mic` 的 `registerPlugin`；禁止空 shim。`startUplink` 必须等 socket 打开才 resolve；失败不得先 `setUplinkActive` / 切断 JS PCM。
+- 涉及：`web/vite.config.ts` · `web/src/shims/nod-mic.ts` · `bridge.ts applyUplinkToken` · `AudioUplink.start`
+
+## 2026-09-09 · #171 审原生上行漏了 Vite 把插件指向空实现
+- 我以为：`import('nod-mic')` 会调用包里的 `registerPlugin('NodMic')`；审 #171 只沿调用方与 Swift 插件看，没有核对构建时模块解析。
+- 实际：Bundle 66 用户报告手机 Start 不开麦、表麦开了手机无内容。生产 00:38–00:41Z 多场 `audio_s=0`，近 30 分钟无 `/ws/audio`。`web/vite.config.ts` 无条件 alias `nod-mic` 到空 `start` / `startUplink`；拿到 token 后 JS 又停转 PCM。
+- 规则：审原生插件必须核对构建 alias、`registerPlugin` 入口与同步产物；原生启动失败必须可观察，不能假成功后切断唯一数据通路。
+- 涉及：#171 · `web/vite.config.ts` · `web/src/shims/nod-mic.ts` · `bridge.ts applyUplinkToken`
+
+## 2026-09-09 · #171 断线把 isActive 关掉，PCM 交回 JS
+- 我以为：`handleDrop()` 把 `isActive=false` 只表示 socket 断了，重连后会再打开；手机麦 / 表麦在这几秒走 JS 也没关系。
+- 实际：`NodMicPlugin.emitPcm` 和 `WatchBridge` 用同一个 `isActive` 决定要不要 `notifyListeners`。断线后 PCM 立刻进 WKWebView，离线音频进不了原生 2 MB 缓冲，锁屏重连等于没缓冲。
+- 规则：上行「模式已启用」和「socket 已连通」必须分开；`start()` 到 `stop()` / 4404 期间 PCM 只进原生队列，断线不得交回 JS。
+- 涉及：`AudioUplink` `isEnabled` vs `isConnected` · `NodMicPlugin.emitPcm` · `WatchBridge` `.nodUplinkState`
+
+## 2026-09-09 · #171 补发先清空缓冲且一次打完
+- 我以为：重连后把 pending 整段 `send` 出去，失败再靠下一轮重连。
+- 实际：`flushPending()` 先 `removeAll` 再忽略错误；服务端 `WS_FRAMES_PER_SEC = 40`，突发补发会被丢。失败的帧已经不在队列里。
+- 规则：待发送列队头只在 send 成功后弹出；补发按音频时长 ≤ 实时（100ms 音频至少隔 100ms），不用帧率上限代替；新 PCM 追加在队尾，不得插到补发前面。尾块不足 50ms 不得发出。
+- 涉及：`AudioUplink.flushPending` / `pump`
+
+## 2026-09-09 · #171 attached 找不到 id 就用第一条历史
+- 我以为：pending 列表通常只有当前这场，找不到 id 时用 `[0]` 总能补上锁屏转写。
+- 实际：pending 可能有别的未保存场；异步回来时锁屏后的 `line_update` 已被 reducer 写进 `meetingLines`，整场 `restore_session` 会盖掉。
+- 规则：认领只匹配 `usage_session_id`；对不上就不动；用序号丢掉过期响应；合并时保留请求期间新到的行。
+- 涉及：`App.tsx` `attached` · `pickAttachedSession` · `mergeAttachedLines`
+
 ## 2026-09-08 · 手表 Resume 把手机麦会话翻成表麦
 
 - 我以为：#134 把 `onResume` 列入 `applyWatchMic` 调用方，Resume 也要确认表麦。

@@ -63,6 +63,7 @@ from server.meeting_lines import (
     tail_meta as meeting_tail_meta,
 )
 from server.turn_pacing import cut_decision, split_carry, turn_pacing_from_env, word_span_ms
+from server.stt_audio import duration_ms, duration_s, error_summary, pace_wait_s, take_frames
 from server.logging_setup import backup_now, setup_logging
 from server.settings import (
     AUTH_DISABLED,
@@ -1780,6 +1781,12 @@ class CloudListener:
         self._turn_pacing = pacing if isinstance(pacing, dict) else None
         self._force_inflight = 0.0
         self._force_pending = False
+        self._pcm_buf = bytearray()
+        self._last_send_at = 0.0
+        self._last_send_bytes = 0
+        self._last_send_ms = 0.0
+        self._last_send_interval_ms = 0.0
+        self._send_count = 0
 
     def set_muted(self, muted: bool) -> None:
         self._muted = bool(muted)
@@ -1810,6 +1817,12 @@ class CloudListener:
         self._drop_sent = False
         self._force_pending = False
         self._force_inflight = 0.0
+        self._pcm_buf = bytearray()
+        self._last_send_at = 0.0
+        self._last_send_bytes = 0
+        self._last_send_ms = 0.0
+        self._last_send_interval_ms = 0.0
+        self._send_count = 0
         self._ws = websocket.WebSocketApp(
             url,
             header=[f"Authorization: {self.api_key}"],
@@ -1847,14 +1860,56 @@ class CloudListener:
                 chunk = self._q.get(timeout=0.08)
             except queue.Empty:
                 continue
-            ws = self._ws
-            try:
-                if ws and ws.sock and ws.sock.connected:
-                    ws.send(chunk, websocket.ABNF.OPCODE_BINARY)
-            except Exception as e:
-                if not self._stop.is_set():
-                    self._notify_drop(str(e))
+            self._pcm_buf.extend(chunk)
+            for frame in take_frames(self._pcm_buf):
+                if self._stop.is_set():
+                    return
+                self._pace_before_send()
+                if self._stop.is_set():
+                    return
+                ws = self._ws
+                try:
+                    if ws and ws.sock and ws.sock.connected:
+                        ws.send(frame, websocket.ABNF.OPCODE_BINARY)
+                        self._record_send(frame)
+                except Exception as e:
+                    if not self._stop.is_set():
+                        self._notify_drop(str(e))
+                    return
+
+    def _pace_before_send(self) -> None:
+        if self._last_send_at <= 0 or self._last_send_bytes <= 0:
+            return
+        wait = pace_wait_s(duration_s(self._last_send_bytes), time.monotonic() - self._last_send_at)
+        deadline = time.monotonic() + wait
+        while not self._stop.is_set():
+            left = deadline - time.monotonic()
+            if left <= 0:
                 return
+            time.sleep(min(0.05, left))
+
+    def _record_send(self, frame: bytes) -> None:
+        now = time.monotonic()
+        interval_ms = 0.0 if self._last_send_at <= 0 else (now - self._last_send_at) * 1000.0
+        self._last_send_bytes = len(frame)
+        self._last_send_ms = duration_ms(self._last_send_bytes)
+        self._last_send_interval_ms = interval_ms
+        self._last_send_at = now
+        self._send_count += 1
+        if self._send_count <= 3 or os.environ.get("NOD_STT_TRACE") == "1":
+            logging.getLogger("nod").info(
+                "stt send n=%s bytes=%s ms=%s interval_ms=%s",
+                self._send_count,
+                self._last_send_bytes,
+                round(self._last_send_ms, 1),
+                round(self._last_send_interval_ms, 1),
+            )
+
+    def _stt_send_fields(self) -> str:
+        return (
+            f"chunk_bytes={self._last_send_bytes} chunk_ms={round(self._last_send_ms, 1)} "
+            f"interval_ms={round(self._last_send_interval_ms, 1)} sends={self._send_count}"
+        )
 
     def _flush_force_endpoint(self) -> None:
         if not self._force_pending:
@@ -1974,7 +2029,14 @@ class CloudListener:
                 data.get("audio_duration_seconds"),
             )
         elif kind == "Error":
-            err = str(data.get("error") or message)
+            code, err_text = error_summary(data if isinstance(data, dict) else {})
+            err = f"{code} {err_text}".strip() if code is not None else (err_text or str(message))
+            logging.getLogger("nod").warning(
+                "assemblyai error code=%s error=%s %s",
+                code if code is not None else "",
+                (err_text or "")[:500],
+                self._stt_send_fields(),
+            )
             self._terminated.set()
             if self.on_error:
                 self.on_error(err)
@@ -2003,9 +2065,20 @@ class CloudListener:
 
     def _on_close(self, _ws, status, msg) -> None:
         self._terminated.set()
+        extra = f"{status or ''} {msg or ''}".strip()
+        try:
+            status_n = int(status) if status is not None else 0
+        except (TypeError, ValueError):
+            status_n = 0
+        if status_n >= 3000 or (not self._stop.is_set() and extra):
+            logging.getLogger("nod").warning(
+                "assemblyai close status=%s reason=%s %s",
+                status if status is not None else "",
+                (str(msg or ""))[:200],
+                self._stt_send_fields(),
+            )
         if self._stop.is_set():
             return
-        extra = f"{status or ''} {msg or ''}".strip()
         if not self._ready.is_set():
             self._fail.append(f"AssemblyAI connection closed {extra}".strip())
             self._ready.set()
@@ -2635,6 +2708,11 @@ class Session:
             self._stt_drops = 0
         self._stt_drops += 1
         self._stt_drop_at = now
+        logging.getLogger("nod").warning(
+            "stt drop n=%s reason=%s",
+            self._stt_drops,
+            str(reason or "")[:500],
+        )
         if self._stt_drops > 6:
             self.emit({"type": "error", "text": "Transcription connection lost. Tap Start Listening."})
             self._listen_wanted = False

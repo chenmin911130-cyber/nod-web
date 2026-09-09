@@ -15,7 +15,7 @@
     "types": ["vite/client"],
     "baseUrl": ".",
     "paths": {
-      "nod-mic": ["src/shims/nod-mic.ts"]
+      "nod-mic": ["./src/nod-mic.d.ts"]
     }
   },
   "include": ["src"]

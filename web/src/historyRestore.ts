@@ -212,6 +212,42 @@ export function restoreOfferBody(offer: Pick<RestoreOffer, 'title' | 'startedAt'
   return when ? `${title} · ${when}` : title
 }
 
+/** Attached restore must match this usage session; never fall back to another row. */
+export function pickAttachedSession<T extends { id: string }>(
+  sessions: readonly T[],
+  usageSessionId: string,
+): T | undefined {
+  if (!usageSessionId) return undefined
+  return sessions.find((row) => row.id === usageSessionId)
+}
+
+export function attachRestoreIsCurrent(startedSeq: number, currentSeq: number): boolean {
+  return startedSeq > 0 && startedSeq === currentSeq
+}
+
+/**
+ * History snapshot is the base (includes lock-screen rows JS never saw).
+ * Live rows with a higher rev overlay that id; live-only ids (arrived during the
+ * fetch) append so restore cannot wipe new transcripts.
+ */
+export function mergeAttachedLines(restored: MeetingLine[], live: MeetingLine[]): MeetingLine[] {
+  const liveById = new Map(live.map((line) => [line.id, line]))
+  const seen = new Set<string>()
+  const out: MeetingLine[] = []
+  for (const line of restored) {
+    const newer = liveById.get(line.id)
+    if (newer && (newer.rev ?? 0) > (line.rev ?? 0)) out.push(newer)
+    else out.push(line)
+    seen.add(line.id)
+  }
+  for (const line of live) {
+    if (seen.has(line.id)) continue
+    out.push(line)
+    seen.add(line.id)
+  }
+  return out
+}
+
 export function restoreFromSession(session: HistorySession): RestorePayload {
   const scene = sceneOf(session)
   const mode = modeOf(session)
@@ -401,6 +437,22 @@ export function restoreSessionClock(elapsedMs: number, now = Date.now()): {
   return {
     meetingStartedAt: now - ms,
     meetingEnded: true,
+    meetingElapsedMs: ms,
+    partial: '',
+  }
+}
+
+/** Live attach: keep the clock running so lock-screen time is not marked ended. */
+export function restoreAttachedClock(elapsedMs: number, now = Date.now()): {
+  meetingStartedAt: number
+  meetingEnded: false
+  meetingElapsedMs: number
+  partial: string
+} {
+  const ms = Math.max(0, elapsedMs)
+  return {
+    meetingStartedAt: now - ms,
+    meetingEnded: false,
     meetingElapsedMs: ms,
     partial: '',
   }

@@ -25,4 +25,12 @@ export class NodMicWeb extends WebPlugin implements NodMicPlugin {
   async resume(): Promise<void> {
     return
   }
+
+  async startUplink(_options: { url: string }): Promise<void> {
+    throw this.unimplemented('Audio uplink is iOS-only')
+  }
+
+  async stopUplink(): Promise<void> {
+    return
+  }
 }
