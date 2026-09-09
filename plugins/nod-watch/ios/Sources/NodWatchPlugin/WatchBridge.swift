@@ -9,7 +9,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
 
     weak var plugin: NodWatchPlugin?
     private(set) var jsReady = false
-    private var pending: [(action: String, at: Double?, live: Bool, mode: String)] = []
+    private var pending: [(action: String, at: Double?, live: Bool, mode: String, sessionId: String)] = []
     private var pendingPcm: [String] = []
     private var lastCapture = ""
     private var lastHint = "Ready"
@@ -19,6 +19,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastHistory: [[String: String]] = []
     private var lastMode = ""
     private var lastLangPair = ""
+    private var lastSave = "none"
+    private var lastSessionId = ""
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
     private var uplinkActive = false
@@ -63,7 +65,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let now = Date().timeIntervalSince1970
         for item in queued {
             if Self.shouldRunWatchCommand(item.action, at: item.at, live: item.live, now: now) {
-                emit(item.action, mode: item.mode)
+                emit(item.action, mode: item.mode, sessionId: item.sessionId)
             }
         }
         let pcm = pendingPcm
@@ -89,7 +91,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         previous: String = "",
         history: [[String: String]] = [],
         mode: String = "",
-        langPair: String = ""
+        langPair: String = "",
+        save: String = "",
+        sessionId: String = ""
     ) {
         if !capture.isEmpty {
             lastCapture = capture
@@ -104,6 +108,12 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         if !langPair.isEmpty {
             lastLangPair = langPair
+        }
+        if !save.isEmpty {
+            lastSave = save
+        }
+        if !sessionId.isEmpty {
+            lastSessionId = sessionId
         }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
@@ -120,6 +130,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         if !lastLangPair.isEmpty {
             payload["langPair"] = lastLangPair
+        }
+        payload["save"] = lastSave
+        if !lastSessionId.isEmpty {
+            payload["sessionId"] = lastSessionId
         }
         guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
         do {
@@ -155,13 +169,14 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let action = allowed.contains(raw) ? raw : ""
         guard !action.isEmpty else { return }
         let mode = Self.watchListenMode(message["mode"] as? String ?? "")
+        let sessionId = message["sessionId"] as? String ?? ""
         let at = message["at"] as? Double
         let now = Date().timeIntervalSince1970
         guard Self.shouldRunWatchCommand(action, at: at, live: live, now: now) else { return }
         if jsReady {
-            emit(action, mode: mode)
+            emit(action, mode: mode, sessionId: sessionId)
         } else {
-            pending.append((action, at, live, mode))
+            pending.append((action, at, live, mode, sessionId))
         }
     }
 
@@ -272,10 +287,13 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
     }
 
-    private func emit(_ action: String, mode: String = "") {
+    private func emit(_ action: String, mode: String = "", sessionId: String = "") {
         var data: [String: Any] = ["action": action]
         if !mode.isEmpty {
             data["mode"] = mode
+        }
+        if !sessionId.isEmpty {
+            data["sessionId"] = sessionId
         }
         plugin?.notifyListeners("command", data: data)
     }
@@ -348,6 +366,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         if !lastLangPair.isEmpty {
             reply["langPair"] = lastLangPair
+        }
+        reply["save"] = lastSave
+        if !lastSessionId.isEmpty {
+            reply["sessionId"] = lastSessionId
         }
         replyHandler(reply)
     }

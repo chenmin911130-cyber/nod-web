@@ -34,6 +34,8 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
         let previous = call.getString("previous") ?? ""
         let mode = call.getString("mode") ?? ""
         let langPair = call.getString("langPair") ?? ""
+        let save = call.getString("save") ?? ""
+        let sessionId = call.getString("sessionId") ?? ""
         var history: [[String: String]] = []
         if let rows = call.getArray("history") {
             for row in rows {
@@ -53,7 +55,9 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
             previous: previous,
             history: history,
             mode: mode,
-            langPair: langPair
+            langPair: langPair,
+            save: save,
+            sessionId: sessionId
         )
         call.resolve()
     }

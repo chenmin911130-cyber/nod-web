@@ -57,6 +57,45 @@ enum WatchCopy {
         ])
     }
 
+    static var saving: String {
+        pick([
+            "zh": "正在保存…",
+            "en": "Saving…",
+            "it": "Salvataggio…",
+            "es": "Guardando…",
+            "fr": "Enregistrement…",
+            "de": "Speichern…",
+            "pt": "Salvando…",
+            "ja": "保存中…",
+        ])
+    }
+
+    static var saveFailed: String {
+        pick([
+            "zh": "无法保存",
+            "en": "Couldn't save",
+            "it": "Salvataggio non riuscito",
+            "es": "No se pudo guardar",
+            "fr": "Enregistrement impossible",
+            "de": "Speichern fehlgeschlagen",
+            "pt": "Não foi possível salvar",
+            "ja": "保存できません",
+        ])
+    }
+
+    static var retry: String {
+        pick([
+            "zh": "重试",
+            "en": "Retry",
+            "it": "Riprova",
+            "es": "Reintentar",
+            "fr": "Réessayer",
+            "de": "Erneut",
+            "pt": "Tentar de novo",
+            "ja": "再試行",
+        ])
+    }
+
     static var paused: String {
         pick([
             "zh": "已暂停",

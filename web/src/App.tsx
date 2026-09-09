@@ -7,7 +7,7 @@ import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
 import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
-import { watchDiscardCommand, watchSaveCommand, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
+import { flushPendingKeepMessage, keepHistoryMessage, watchDiscardCommand, watchKeepNotesWait, watchSaveCommand, watchSaveKeepTarget, watchSaveRepeatAction, watchSaveStatusPayload, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
 import { meetingRailIsPaused } from './meetingPause'
@@ -38,6 +38,7 @@ import {
   setPendingAfterSave,
   type KeepAfterNotesJob,
   type SaveBook,
+  type SaveStatus,
 } from './sessionSave'
 import { isTranslateChunk, looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, sttTag, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough, wrongScriptForTarget } from './translateGate'
 import { applyNotesTranslateTo, nextMeetingLineToTranslate } from './meetingTranslate'
@@ -57,7 +58,7 @@ import { usePhoneChrome } from './phoneChrome'
 import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode } from './watch'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
-import { keepShouldWaitForNotes, shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
+import { shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
 import {
   clearWatchReport,
   markWatchReport,
@@ -1027,6 +1028,16 @@ export default function App() {
   const [saveBook, setSaveBook] = useState<SaveBook>(emptySaveBook)
   const saveBookRef = useRef(saveBook)
   saveBookRef.current = saveBook
+  const [watchInboundSave, setWatchInboundSave] = useState<{ id: string; status: SaveStatus } | null>(null)
+  const watchInboundSaveRef = useRef(watchInboundSave)
+  watchInboundSaveRef.current = watchInboundSave
+  const watchInboundTimerRef = useRef(0)
+  const clearWatchInboundTimer = () => {
+    if (watchInboundTimerRef.current) {
+      window.clearTimeout(watchInboundTimerRef.current)
+      watchInboundTimerRef.current = 0
+    }
+  }
   const [historyKept, setHistoryKept] = useState(false)
   const historyKeptRef = useRef(false)
   const markHistoryKept = (kept: boolean) => {
@@ -1043,6 +1054,7 @@ export default function App() {
   const performSignOutRef = useRef<() => void>(() => undefined)
   const performDeleteRef = useRef<() => void>(() => undefined)
   const handleEngineKeepRef = useRef<(e: EngineEvent) => void>(() => undefined)
+  const saveFromWatchRef = useRef<(sessionId: string) => void>(() => undefined)
   // #36: a live session may show at most ONE Save UI. Set when the Save dialog is
   // first opened; gating the AUTO offers (Stop, save_prompt, reconnect Restore,
   // New-session leave) so the same session is never re-prompted. A user-initiated
@@ -1397,9 +1409,8 @@ export default function App() {
           }
         }
       },
-      onSave: () => {
-        window.api.send(watchSaveCommand())
-        markHistoryKept(true)
+      onSave: (sessionId) => {
+        saveFromWatchRef.current(sessionId)
       },
       onDiscard: () => {
         window.api.send(watchDiscardCommand())
@@ -1457,6 +1468,11 @@ export default function App() {
         history: face.history,
         mode: watchStatusMode(state.workspaceMode, state.listenScene),
         langPair: watchLangPair(state.workspaceMode === 'translate' ? state.translateTo : state.notesTranslateTo),
+        ...watchSaveStatusPayload(
+          watchInboundSave
+            ? { status: watchInboundSave.status, liveId: watchInboundSave.id }
+            : { status: saveBook.status, liveId: saveBook.liveId },
+        ),
       })
     }, 180)
     return () => window.clearTimeout(timer)
@@ -1475,6 +1491,9 @@ export default function App() {
     state.listenScene,
     state.translateTo,
     state.notesTranslateTo,
+    saveBook.status,
+    saveBook.liveId,
+    watchInboundSave,
   ])
 
   const acceptConsent = () => {
@@ -1795,8 +1814,9 @@ export default function App() {
     dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.saveFailed } })
   }
 
-  const sendKeepNow = (opts: { content: boolean; audio: boolean }) => {
-    window.api.send({ type: 'keep_history', content: opts.content, audio: opts.audio })
+  const sendKeepNow = (opts: { content: boolean; audio: boolean; id?: string }) => {
+    const id = opts.id || saveBookRef.current.liveId || undefined
+    window.api.send(keepHistoryMessage({ content: opts.content, audio: opts.audio, id }))
     clearKeepTimer()
     keepTimerRef.current = window.setTimeout(() => failKeep('timeout'), KEEP_ACK_TIMEOUT_MS)
   }
@@ -1804,13 +1824,19 @@ export default function App() {
   const flushPendingKeep = () => {
     const pending = pendingKeepRef.current
     const book = saveBookRef.current
-    if (!pending || !book.liveId || book.status !== 'saving') return
+    const result = flushPendingKeepMessage({
+      pending,
+      liveId: book.liveId,
+      status: book.status,
+      notesAskId: stateRef.current.notesAskId,
+    })
+    if (!pending || (!result.send && !result.parkNotes)) return
     pendingKeepRef.current = null
-    if (pending.waitNotes && keepShouldWaitForNotes(stateRef.current.notesAskId)) {
+    if (result.parkNotes) {
       keepAfterNotes.current = {
         content: pending.content,
         audio: pending.audio,
-        liveId: book.liveId,
+        liveId: book.liveId || '',
         generation: book.generation,
       }
       return
@@ -1854,7 +1880,45 @@ export default function App() {
     setSavePrompt(true)
   }
 
-  const saveLiveSession = (opts?: { content?: boolean; audio?: boolean; fromPrompt?: boolean }) => {
+  const saveLiveSession = (opts?: { content?: boolean; audio?: boolean; fromPrompt?: boolean; fromWatch?: boolean; sessionId?: string }) => {
+    if (opts?.fromWatch) {
+      const target = watchSaveKeepTarget({
+        requestedId: opts.sessionId || '',
+        liveId: saveBookRef.current.liveId,
+      })
+      if (!target.keepId) return
+      if (!target.adopt) {
+        setWatchInboundSave({ id: target.keepId, status: 'saving' })
+        window.api.send(keepHistoryMessage({ content: true, audio: true, id: target.keepId }))
+        clearWatchInboundTimer()
+        watchInboundTimerRef.current = window.setTimeout(() => {
+          setWatchInboundSave((cur) => (cur && cur.id === target.keepId ? { ...cur, status: 'failed' } : cur))
+        }, KEEP_ACK_TIMEOUT_MS)
+        return
+      }
+      setWatchInboundSave(null)
+      clearWatchInboundTimer()
+      const action = watchSaveRepeatAction({ kept: historyKeptRef.current, status: saveBookRef.current.status })
+      if (action === 'echoSaved') {
+        commitBook({ ...saveBookRef.current, status: 'saved' })
+        return
+      }
+      if (action === 'ignore') return
+      const content = opts.content !== false
+      const audio = opts.audio !== false
+      const book = beginSave(saveBookRef.current, target.keepId)
+      commitBook(book)
+      keepEpochRef.current = { liveId: book.liveId, generation: book.generation }
+      if (phoneRef.current) setSaveBannerOpen(true)
+      const waitNotes = watchKeepNotesWait(true, stateRef.current.notesAskId)
+      if (waitNotes) {
+        keepAfterNotes.current = { content, audio, liveId: book.liveId || target.keepId, generation: book.generation }
+        dispatch({ type: 'engine', ev: { type: 'status', text: 'Saving after notes finish…' } })
+        return
+      }
+      sendKeepNow({ content, audio, id: target.keepId })
+      return
+    }
     if (historyKeptRef.current) {
       setHistoryOpen(true)
       return
@@ -1870,7 +1934,7 @@ export default function App() {
     commitBook(book)
     keepEpochRef.current = { liveId: book.liveId, generation: book.generation }
     if (phoneRef.current) setSaveBannerOpen(true)
-    const waitNotes = keepShouldWaitForNotes(stateRef.current.notesAskId)
+    const waitNotes = watchKeepNotesWait(!!opts?.fromWatch, stateRef.current.notesAskId)
     if (!book.liveId) {
       pendingKeepRef.current = { content, audio, waitNotes }
       clearKeepTimer()
@@ -1883,6 +1947,10 @@ export default function App() {
       return
     }
     sendKeepNow({ content, audio })
+  }
+
+  saveFromWatchRef.current = (sessionId) => {
+    saveLiveSession({ fromWatch: true, sessionId })
   }
 
   handleEngineKeepRef.current = (e) => {
@@ -1918,12 +1986,22 @@ export default function App() {
       return
     }
     if (e.type === 'history_keep_failed') {
+      const inbound = watchInboundSaveRef.current
+      if (inbound && e.id === inbound.id) {
+        setWatchInboundSave({ id: inbound.id, status: 'failed' })
+        clearWatchInboundTimer()
+      }
       const book = saveBookRef.current
       if (e.id && book.liveId && e.id !== book.liveId) return
       failKeep('error')
       return
     }
     if (e.type !== 'history_kept') return
+    const inboundKept = watchInboundSaveRef.current
+    if (inboundKept && e.id === inboundKept.id) {
+      setWatchInboundSave({ id: inboundKept.id, status: 'saved' })
+      clearWatchInboundTimer()
+    }
     if (!shouldMarkKeptOnAck(e.id, lastRestoredKeepId.current)) {
       lastRestoredKeepId.current = null
       return
