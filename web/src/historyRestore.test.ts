@@ -237,15 +237,41 @@ if (restoreLaunchSurface({ ...idleRestore, workspaceMode: 'translate' }) !== 'no
   }
 }
 {
-  const saved = { id: 'kept-1', title: 'Saved standup', kept: true as boolean | undefined }
-  const pending = { id: 'pending-1', title: 'Crash meeting' }
+  const saved = { id: 'kept-1', title: 'Saved standup', started_at: '2026-09-09T10:00:00.000Z', kept: true as boolean | undefined }
+  const pending = { id: 'pending-1', title: 'Crash meeting', started_at: '2026-09-09T09:00:00.000Z' }
   const merged = mergePendingHistory([saved], [pending])
-  eq(merged.map((row) => row.id).join('|'), 'pending-1|kept-1', 'unsaved pending sits above saved History')
-  if (!sessionIsUnsaved(merged[0])) throw new Error('pending History row is unsaved')
-  if (sessionIsUnsaved(merged[1])) throw new Error('kept History row stays saved')
-  const dup = mergePendingHistory([{ id: 'pending-1', kept: true }], [{ id: 'pending-1' }])
+  eq(merged.map((row) => row.id).join('|'), 'kept-1|pending-1', 'newer saved session ranks above older unsaved')
+  if (sessionIsUnsaved(merged[0])) throw new Error('newer saved History row stays saved')
+  if (!sessionIsUnsaved(merged[1])) throw new Error('older pending History row stays unsaved')
+  const dup = mergePendingHistory(
+    [{ id: 'pending-1', started_at: '2026-09-09T10:00:00.000Z', kept: true }],
+    [{ id: 'pending-1', started_at: '2026-09-09T10:00:00.000Z' }],
+  )
   eq(dup.map((row) => row.id).join('|'), 'pending-1', 'the same id is not listed twice')
   if (!sessionIsUnsaved(dup[0])) throw new Error('pending copy wins when the id collides')
+  const acrossDays = mergePendingHistory(
+    [{ id: 'older-kept', started_at: '2026-09-08T18:00:00.000Z', kept: true }],
+    [{ id: 'newer-pending', started_at: '2026-09-09T08:00:00.000Z' }],
+  )
+  eq(acrossDays.map((row) => row.id).join('|'), 'newer-pending|older-kept', 'cross-day order uses timestamps not day labels')
+  const sameTime = mergePendingHistory(
+    [{ id: 'saved-noon', started_at: '2026-09-09T12:00:00.000Z', kept: true }],
+    [{ id: 'pending-noon', started_at: '2026-09-09T12:00:00.000Z' }],
+  )
+  eq(sameTime.map((row) => row.id).join('|'), 'pending-noon|saved-noon', 'equal start times keep stable merge order')
+  const missing = mergePendingHistory(
+    [
+      { id: 'dated', started_at: '2026-09-09T11:00:00.000Z', kept: true },
+      { id: 'invalid', started_at: 'not-a-date', kept: true },
+    ],
+    [{ id: 'empty', started_at: null }],
+  )
+  eq(missing.map((row) => row.id).join('|'), 'dated|empty|invalid', 'missing and invalid start times sort last')
+  const savedIn = [{ id: 's', started_at: '2026-09-09T10:00:00.000Z', kept: true }]
+  const pendingIn = [{ id: 'p', started_at: '2026-09-09T09:00:00.000Z' }]
+  mergePendingHistory(savedIn, pendingIn)
+  eq(savedIn[0].id, 's', 'saved input is not mutated')
+  eq(pendingIn[0].id, 'p', 'pending input is not mutated')
 }
 if (JSON.stringify(rememberRestoreDismissed([], 'p1')) !== JSON.stringify(['p1'])) throw new Error('first dismiss is recorded')
 if (JSON.stringify(rememberRestoreDismissed(['p1'], 'p1')) !== JSON.stringify(['p1'])) throw new Error('repeat dismiss does not duplicate')

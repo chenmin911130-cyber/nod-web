@@ -173,17 +173,30 @@ export function sessionIsUnsaved(session: { kept?: boolean } | null | undefined)
   return session?.kept === false
 }
 
-/** Pending unsaved rows sit above saved History; the same id is not listed twice. */
-export function mergePendingHistory<T extends { id: string }>(saved: T[], pending: T[]): Array<T & { kept: boolean }> {
+function historyStartedAtMs(value: string | null | undefined): number {
+  if (!value) return Number.NEGATIVE_INFINITY
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) ? ms : Number.NEGATIVE_INFINITY
+}
+
+/** Merge saved + pending History, then rank by start time newest-first. Unsaved is a label, not a pin. */
+export function mergePendingHistory<T extends { id: string; started_at?: string | null }>(
+  saved: T[],
+  pending: T[],
+): Array<T & { kept: boolean }> {
   const unsaved = pending.filter((row) => row.id).map((row) => ({ ...row, kept: false }))
   const ids = new Set(unsaved.map((row) => row.id))
-  return [
+  const merged = [
     ...unsaved,
     ...saved.filter((row) => !ids.has(row.id)).map((row) => ({
       ...row,
       kept: (row as T & { kept?: boolean }).kept !== false,
     })),
   ]
+  return merged
+    .map((row, index) => ({ row, index, ms: historyStartedAtMs(row.started_at) }))
+    .sort((a, b) => b.ms - a.ms || a.index - b.index)
+    .map((item) => item.row)
 }
 
 export function rememberRestoreDismissed(ids: readonly string[], id: string): string[] {
