@@ -1,6 +1,9 @@
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { defineConfig, type Connect } from 'vite'
 import react from '@vitejs/plugin-react'
+
+const require = createRequire(import.meta.url)
 
 function rewriteAppPath(): Connect.NextHandleFunction {
   return (req, _res, next) => {
@@ -32,9 +35,10 @@ export default defineConfig({
   resolve: {
     alias: {
       // Runtime: real registerPlugin('NodMic'). tsc maps nod-mic to
-      // src/nod-mic.d.ts (paths) so CI does not typecheck plugin sources that
-      // cannot see @capacitor/core from plugins/ (web/node_modules only).
+      // src/nod-mic.d.ts so it does not typecheck plugin sources.
       'nod-mic': fileURLToPath(new URL('../plugins/nod-mic/src/index.ts', import.meta.url)),
+      // Plugin sources live outside web/; CI only has web/node_modules.
+      '@capacitor/core': require.resolve('@capacitor/core'),
     },
   },
   server: {
