@@ -4,6 +4,8 @@ struct WatchRootView: View {
     @EnvironmentObject private var session: WatchPhoneSession
     @Environment(\.isLuminanceReduced) private var dimmed
     @State private var listenPage = 0
+    @State private var showStorage = false
+    @State private var confirmDeleteId = ""
 
     private let ink = Color(red: 244 / 255, green: 248 / 255, blue: 252 / 255)
     private let muted = Color(red: 142 / 255, green: 163 / 255, blue: 184 / 255)
@@ -233,6 +235,77 @@ struct WatchRootView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(ink)
                 }
+            }
+            if !session.unfinishedCaptureList.isEmpty {
+                Button { showStorage = true } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "externaldrive")
+                            .font(.caption)
+                        Text(WatchCopy.manageStorage)
+                            .font(.caption)
+                        Text("(\(session.unfinishedCaptureList.count))")
+                            .font(.caption.monospacedDigit())
+                    }
+                    .foregroundStyle(muted)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .sheet(isPresented: $showStorage, content: { storagePage })
+    }
+
+    private var storagePage: some View {
+        let items = session.unfinishedCaptureList
+        return VStack(spacing: 8) {
+            Text(WatchCopy.unfinishedRecordings)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(ink)
+                .multilineTextAlignment(.center)
+            if items.isEmpty {
+                Text(WatchCopy.noUnfinished)
+                    .font(.caption)
+                    .foregroundStyle(muted)
+                    .multilineTextAlignment(.center)
+            } else {
+                ScrollView {
+                    ForEach(items, id: \.captureId) { item in
+                        storageRow(item)
+                    }
+                }
+            }
+            Button(WatchCopy.done) { showStorage = false }
+                .tint(panel)
+        }
+    }
+
+    private func storageRow(_ item: WatchPcmStore.CaptureInfo) -> some View {
+        let date = item.modifiedAt
+        let when = date.formatted(date: .abbreviated, time: .shortened)
+        return HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(ByteCountFormatter.string(fromByteCount: Int64(item.bytes), countStyle: .file))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(ink)
+                Text("\(when) · \(item.shardCount)")
+                    .font(.caption2)
+                    .foregroundStyle(muted)
+            }
+            Spacer()
+            if confirmDeleteId == item.captureId {
+                Button(WatchCopy.confirmDelete) {
+                    _ = session.deleteUnfinishedCapture(item.captureId)
+                    confirmDeleteId = ""
+                }
+                .tint(Color.red)
+            } else {
+                Button {
+                    confirmDeleteId = item.captureId
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                        .foregroundStyle(Color.red)
+                }
+                .buttonStyle(.plain)
             }
         }
     }

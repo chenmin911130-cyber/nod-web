@@ -33,6 +33,19 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var pcmRejected = false
     @Published var pcmRejectText = ""
 
+    /// Unfinished (non-current) capture recordings on disk, for the storage
+    /// management page (issue #165 review P2-7). Each carries an identifiable
+    /// size + modified time; the user must confirm before delete.
+    var unfinishedCaptureList: [WatchPcmStore.CaptureInfo] {
+        pcmStore.unfinishedCaptures()
+    }
+
+    /// Delete a user-confirmed, non-current capture. Returns the freed bytes (0 if
+    /// refused — e.g. the current recording). The current capture is never deleted.
+    func deleteUnfinishedCapture(_ id: String) -> Int {
+        pcmStore.deleteCapture(id)
+    }
+
     private var localModeHeld = false
     private var phoneModeSeen = false
     private var speechPlayer: AVAudioPlayer?

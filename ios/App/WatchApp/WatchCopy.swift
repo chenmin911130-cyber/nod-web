@@ -87,12 +87,25 @@ enum WatchCopy {
         pick([
             "zh": "重试",
             "en": "Retry",
-            "it": "Riprova",
-            "es": "Reintentar",
             "fr": "Réessayer",
-            "de": "Erneut",
-            "pt": "Tentar de novo",
+            "es": "Reintentar",
+            "it": "Riprova",
+            "de": "Erneut versuchen",
+            "pt": "Tentar novamente",
             "ja": "再試行",
+        ])
+    }
+
+    static var done: String {
+        pick([
+            "zh": "完成",
+            "en": "Done",
+            "fr": "Terminé",
+            "es": "Listo",
+            "it": "Fatto",
+            "de": "Fertig",
+            "pt": "Concluído",
+            "ja": "完了",
         ])
     }
 
@@ -289,6 +302,59 @@ enum WatchCopy {
             "de": "Sitzung beendet — Upload unvollständig.",
             "pt": "Sessão encerrada — envio incompleto.",
             "ja": "セッションが終了し、アップロードが未完了です。",
+        ])
+    }
+
+    /// Storage-management entry (issue #165 review P2-7).
+    static var manageStorage: String {
+        pick([
+            "zh": "管理存储",
+            "en": "Manage storage",
+            "it": "Gestisci spazio",
+            "es": "Gestionar almacenamiento",
+            "fr": "Gérer le stockage",
+            "de": "Speicher verwalten",
+            "pt": "Gerir armazenamento",
+            "ja": "ストレージを管理",
+        ])
+    }
+
+    static var unfinishedRecordings: String {
+        pick([
+            "zh": "未完成录音",
+            "en": "Unfinished recordings",
+            "it": "Registrazioni incomplete",
+            "es": "Grabaciones incompletas",
+            "fr": "Enregistrements incomplets",
+            "de": "Unvollständige Aufnahmen",
+            "pt": "Gravações incompletas",
+            "ja": "未完了の録音",
+        ])
+    }
+
+    static var noUnfinished: String {
+        pick([
+            "zh": "没有未完成录音",
+            "en": "No unfinished recordings",
+            "it": "Nessuna registrazione incompleta",
+            "es": "No hay grabaciones incompletas",
+            "fr": "Aucun enregistrement incomplet",
+            "de": "Keine unvollständigen Aufnahmen",
+            "pt": "Sem gravações incompletas",
+            "ja": "未完了の録音はありません",
+        ])
+    }
+
+    static var confirmDelete: String {
+        pick([
+            "zh": "删除？",
+            "en": "Delete?",
+            "it": "Eliminare?",
+            "es": "¿Eliminar?",
+            "fr": "Supprimer ?",
+            "de": "Löschen?",
+            "pt": "Excluir?",
+            "ja": "削除しますか？",
         ])
     }
 

@@ -37,6 +37,11 @@ final class WatchPcmStore {
     func beginCapture() {
         lock.lock()
         closeHandleLocked()
+        // A fresh capture must NOT reset usedBytes to 0: old originals from a prior
+        // capture still consume the 32 MiB budget. Recount every shard under the
+        // root first (issue #165 review P2-7), so a new Start cannot write past the
+        // cap by pretending old files are gone.
+        let existing = usedBytesOnDisk()
         captureId = UUID().uuidString
         sessionId = ""
         nextSeq = 1
@@ -45,11 +50,29 @@ final class WatchPcmStore {
         byteOffset = 0
         lastByte = 0
         frozen = false
-        diskFull = false
+        diskFull = existing >= Self.diskLimit
         ackedByte = 0
-        usedBytes = 0
+        usedBytes = existing
         lock.unlock()
         try? fm.createDirectory(at: captureDir(), withIntermediateDirectories: true)
+    }
+
+    /// The total bytes of every .pcm shard across ALL captures on disk.
+    private func usedBytesOnDisk() -> Int {
+        var total = 0
+        let rootPath = root
+        if let dirs = try? fm.contentsOfDirectory(at: rootPath, includingPropertiesForKeys: [.fileSizeKey], options: []) {
+            for url in dirs {
+                if let files = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: [.fileSizeKey]) {
+                    for f in files {
+                        if let n = try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                            total += n
+                        }
+                    }
+                }
+            }
+        }
+        return total
     }
 
     func bindSession(_ id: String) {
@@ -271,21 +294,79 @@ final class WatchPcmStore {
     }
 
     private func refreshUsed() {
-        var total = 0
-        let rootPath = root
-        if let dirs = try? fm.contentsOfDirectory(at: rootPath, includingPropertiesForKeys: [.fileSizeKey], options: []) {
-            for url in dirs {
-                if let files = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: [.fileSizeKey]) {
-                    for f in files {
-                        if let n = try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize {
-                            total += n
-                        }
-                    }
-                }
-            }
-        }
+        let total = usedBytesOnDisk()
         lock.lock()
         usedBytes = total
         lock.unlock()
+    }
+
+    /// Minimal "unfinished recording" management entry (issue #165 review P2-7).
+    /// Lists every capture on disk EXCEPT the current one, with a human-readable
+    /// size and a modified timestamp so the user can identify an old, unconfirmed
+    /// recording before deleting it. A capture is "unfinished" (has a pending
+    /// transfer / unconfirmed drain) once any shard file exists; it is never
+    /// auto-deleted by a new Start or time expiry here.
+    struct CaptureInfo {
+        let captureId: String
+        let bytes: Int
+        let modifiedAt: Date
+        let shardCount: Int
+    }
+
+    func unfinishedCaptures() -> [CaptureInfo] {
+        lock.lock()
+        let current = captureId
+        lock.unlock()
+        var out: [CaptureInfo] = []
+        let rootPath = root
+        guard let dirs = try? fm.contentsOfDirectory(
+            at: rootPath, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey], options: []
+        ) else { return [] }
+        for url in dirs {
+            let name = url.lastPathComponent
+            guard name != current, fm.fileExists(atPath: url.path) else { continue }
+            guard let files = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: [.fileSizeKey]) else { continue }
+            let shards = files.filter { $0.pathExtension == "pcm" }
+            guard !shards.isEmpty else { continue }
+            var bytes = 0
+            for f in shards {
+                if let n = try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                    bytes += n
+                }
+            }
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
+            out.append(CaptureInfo(captureId: name, bytes: bytes, modifiedAt: modified, shardCount: shards.count))
+        }
+        return out
+    }
+
+    /// Delete a previously-listed, non-current capture. Never deletes the current
+    /// recording (still in progress or awaiting completion), and never deletes a
+    /// capture whose shards are still being transferred — the caller must have
+    /// drained its in-flight transfers first (issue #165 review P2-7). Returns the
+    /// freed bytes.
+    func deleteCapture(_ id: String) -> Int {
+        lock.lock()
+        let current = captureId
+        lock.unlock()
+        guard !id.isEmpty, id != current else { return 0 }
+        let dir = root.appendingPathComponent(id, isDirectory: true)
+        guard fm.fileExists(atPath: dir.path) else { return 0 }
+        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        var freed = 0
+        for f in files where f.pathExtension == "pcm" {
+            if let n = try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                freed += n
+            }
+        }
+        // Remove the whole capture dir (shards + manifest). If the removal fails we
+        // must not report the space as freed — recount below reflects reality.
+        do {
+            try fm.removeItem(at: dir)
+        } catch {
+            return 0
+        }
+        refreshUsed()
+        return freed
     }
 }
