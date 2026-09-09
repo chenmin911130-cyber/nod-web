@@ -70,7 +70,6 @@ from server.stt_audio import (
     duration_s,
     error_summary,
     pace_wait_s,
-    take_final_frames,
     take_frames,
     take_one_frame,
 )
