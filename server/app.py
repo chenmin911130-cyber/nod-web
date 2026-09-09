@@ -2098,6 +2098,8 @@ class Session:
         self._control_lost_at = 0.0
         self._uplink_lost_at = 0.0
         self._audio_ws = None
+        self._closed = False
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def _archive_prefix(self) -> str:
         return f"users/{self.user_id}/sessions/{self.usage_session_id}/audio/"
@@ -2239,7 +2241,40 @@ class Session:
         if token:
             self.emit({"type": "audio_uplink", "token": token})
 
+    def _sink_emit(self, _obj: dict) -> None:
+        return
+
+    def _detach_control_emit(self) -> None:
+        self.emit = self._sink_emit
+        pipeline = getattr(self, "pipeline", None)
+        if pipeline is not None:
+            pipeline.emit = self._sink_emit
+
+    def _close_audio_uplink(self) -> None:
+        ws = getattr(self, "_audio_ws", None)
+        self._audio_ws = None
+        self._uplink_connected = False
+        if ws is None:
+            return
+
+        async def _close() -> None:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+
+        loop = getattr(self, "_loop", None)
+        if loop is not None:
+            try:
+                if loop.is_running():
+                    asyncio.run_coroutine_threadsafe(_close(), loop)
+            except Exception:
+                pass
+
     def close(self) -> None:
+        self._closed = True
+        self._detach_control_emit()
+        self._close_audio_uplink()
         uplink.unregister(getattr(self, "audio_token", None))
         self._listen_wanted = False
         self._stop_listening()
@@ -2275,6 +2310,8 @@ class Session:
         self.emit({"type": "status", "text": _quota_copy(snap)})
 
     def _ensure_usage(self) -> bool:
+        if getattr(self, "_closed", False):
+            return False
         if not self.user_id:
             return True
         if not self._ensure_consent():
@@ -2300,6 +2337,8 @@ class Session:
 
     def push_pcm(self, pcm: bytes) -> None:
         if not pcm:
+            return
+        if getattr(self, "_closed", False):
             return
         if self._listener:
             # ANY byte (even silence, even while muted or consent-blocked) proves the
@@ -3983,6 +4022,7 @@ async def ws_endpoint(ws: WebSocket):
         uplink.register(session)
         attach(session)
         session.start()
+    session._loop = loop
     if user:
         from server.meter import usage_snapshot
 
@@ -4029,6 +4069,7 @@ async def ws_endpoint(ws: WebSocket):
         detach(session)
         if uplink.should_park(session):
             session._control_lost_at = time.time()
+            session._detach_control_emit()
             uplink.park(session)
             return
         uplink.unregister(getattr(session, "audio_token", None))
@@ -4059,6 +4100,10 @@ async def ws_audio(ws: WebSocket):
         ws_disconnect(ip)
         await ws.close(code=4404)
         return
+    if getattr(session, "_closed", False):
+        ws_disconnect(ip)
+        await ws.close(code=4404)
+        return
     prev = getattr(session, "_audio_ws", None)
     await ws.accept()
     if prev is not None and prev is not ws:
@@ -4076,6 +4121,8 @@ async def ws_audio(ws: WebSocket):
                 break
             data = message.get("bytes")
             text = message.get("text")
+            if getattr(session, "_closed", False):
+                break
             if data:
                 if len(data) > MAX_WS_FRAME:
                     continue

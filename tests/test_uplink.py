@@ -7,12 +7,16 @@ import time
 import unittest
 from unittest import mock
 
+from datetime import datetime, timezone
+
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from server import uplink
 from server.app import CFG, KEYS, Session, _reset_live_stt, _tick_live_idle_watches
-from server.settings import UPLINK_ORPHAN_SECONDS
+from server.db import HistoryItem, User, db_session
+from server.security import issue_jwt, new_id
+from server.settings import COOKIE_NAME, UPLINK_ORPHAN_SECONDS
 
 
 def _emit(_ev: dict) -> None:
@@ -171,6 +175,114 @@ class NoAttachRegressionTests(unittest.TestCase):
         sess._listener = object()
         sess._uplink_connected = False
         self.assertFalse(uplink.should_park(sess))
+
+
+def _wait_until(pred, timeout: float = 2.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pred():
+            return
+        time.sleep(0.01)
+    raise AssertionError("timed out")
+
+
+def _drain_until(ws, typ: str, limit: int = 30) -> list[dict]:
+    events: list[dict] = []
+    for _ in range(limit):
+        ev = ws.receive_json()
+        events.append(ev)
+        if ev.get("type") == typ:
+            return events
+    raise AssertionError(f"no {typ} in {[e.get('type') for e in events]}")
+
+
+def _authed_client() -> tuple[TestClient, str]:
+    from server.app import app
+
+    uid = new_id()
+    email = f"{uid}@test.local"
+    with db_session() as db:
+        db.add(User(id=uid, email=email, password_hash="", recording_consent_at=datetime.now(timezone.utc)))
+    token = issue_jwt(uid, email)
+    client = TestClient(app)
+    client.cookies.set(COOKIE_NAME, token)
+    return client, uid
+
+
+class UplinkWsLifecycleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        uplink.reset()
+        _reset_live_stt()
+
+    def tearDown(self) -> None:
+        uplink.reset()
+        _reset_live_stt()
+
+    def test_control_close_cuts_audio_ws_and_skips_metering(self) -> None:
+        client, _uid = _authed_client()
+        ctrl_cm = client.websocket_connect("/ws")
+        control = ctrl_cm.__enter__()
+        audio_cm = None
+        try:
+            events = _drain_until(control, "audio_uplink")
+            token = next(e["token"] for e in events if e.get("type") == "audio_uplink")
+            audio_cm = client.websocket_connect(f"/ws/audio?token={token}")
+            audio = audio_cm.__enter__()
+            sess = uplink.get(token)
+            self.assertIsNotNone(sess)
+            _wait_until(lambda: bool(sess._uplink_connected))
+            ctrl_cm.__exit__(None, None, None)
+            ctrl_cm = None
+            time.sleep(0.15)
+            with mock.patch("server.meter.open_usage_session") as opened:
+                try:
+                    audio.send_bytes(b"\x00" * 16000)
+                    time.sleep(0.2)
+                except Exception:
+                    pass
+                opened.assert_not_called()
+            self.assertIsNone(sess.usage_session_id)
+            self.assertFalse(sess._uplink_connected)
+        finally:
+            if audio_cm is not None:
+                audio_cm.__exit__(None, None, None)
+            if ctrl_cm is not None:
+                ctrl_cm.__exit__(None, None, None)
+
+    def test_park_drops_control_queue_saves_transcript_then_reattach(self) -> None:
+        client, uid = _authed_client()
+        ctrl_cm = client.websocket_connect("/ws")
+        control = ctrl_cm.__enter__()
+        events = _drain_until(control, "audio_uplink")
+        token = next(e["token"] for e in events if e.get("type") == "audio_uplink")
+        audio_cm = client.websocket_connect(f"/ws/audio?token={token}")
+        audio = audio_cm.__enter__()
+        try:
+            sess = uplink.get(token)
+            self.assertIsNotNone(sess)
+            sess._listener = object()
+            _wait_until(lambda: bool(sess._uplink_connected))
+            ctrl_cm.__exit__(None, None, None)
+            _wait_until(lambda: uplink.is_parked(token))
+            self.assertIs(uplink.get(token), sess)
+            for i in range(40):
+                sess.emit({"type": "status", "text": f"parked-{i}"})
+            sess.usage_session_id = "park-sess"
+            sess._workspace = "meeting"
+            sess._emit_meeting_line("lock screen still writing", "en")
+            with db_session() as db:
+                rows = db.query(HistoryItem).filter(HistoryItem.session_id == "park-sess").all()
+            self.assertTrue(any("lock screen still writing" in (r.text or "") for r in rows))
+            with client.websocket_connect(f"/ws?attach={token}") as control2:
+                attached = _drain_until(control2, "attached")
+                types = [e.get("type") for e in attached]
+                self.assertIn("attached", types)
+                self.assertFalse(any(str(e.get("text") or "").startswith("parked-") for e in attached))
+                sess.emit({"type": "status", "text": "live-again"})
+                live = _drain_until(control2, "status")
+                self.assertTrue(any(e.get("text") == "live-again" for e in live))
+        finally:
+            audio_cm.__exit__(None, None, None)
 
 
 if __name__ == "__main__":
