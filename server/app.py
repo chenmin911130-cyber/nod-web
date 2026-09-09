@@ -2487,6 +2487,10 @@ class Session:
         drained = getattr(self, "_pcm_drain_result", None)
         if isinstance(drained, dict) and drained.get("type") == "pcm_drained":
             self.emit(drained)
+        # A session that dropped audio (overflow) must re-announce the failure to a
+        # reconnecting client — reattach only re-sends the drain-success otherwise.
+        if getattr(self, "_pcm_stall_reported", False):
+            self.emit({"type": "error", "text": "Recording buffer full — audio may be incomplete."})
 
     def _sink_emit(self, _obj: dict) -> None:
         return
@@ -2684,6 +2688,9 @@ class Session:
                 or not getattr(self, "_listen_wanted", False)
             ):
                 return True
+            # Keep the overflow frame in the recording archive so the audio is not
+            # lost even though the live STT rail can no longer hold it (原片保留).
+            self._archive_append(pcm)
             self._report_pcm_stalled()
             return False
 
@@ -2938,7 +2945,13 @@ class Session:
             return
         self._pcm_stall_reported = True
         logging.getLogger("nod").warning("stt pcm hold overflow: audio rail stalled")
-        self.emit({"type": "error", "text": "Recording buffer full — audio may be incomplete."})
+        notice = {"type": "error", "text": "Recording buffer full — audio may be incomplete."}
+        # Retain the failure as session state and reach the device on BOTH channels:
+        # the control emit (which may be a sink while parked) AND the native audio
+        # path (_send_audio_text), so a lock-screen/watch session is notified even
+        # when the control emit is parked. reattach() re-emits it for a reconnect.
+        self.emit(notice)
+        self._send_audio_text(notice)
 
     def _flush_pcm_hold_into(self, lst: CloudListener) -> None:
         with self._listen_lock():
@@ -3731,6 +3744,10 @@ class Session:
         if not sid or not cap:
             return
         if getattr(self, "_handoff_blocked", False) or getattr(self, "_handoff_listener", None):
+            return
+        # A dropped window must never be reported as a completed/drained success:
+        # an overflow stall marks the session incomplete, so do not acknowledge it.
+        if getattr(self, "_pcm_stall_reported", False):
             return
         if getattr(self, "_stt_pending_pcm", b""):
             return

@@ -1074,3 +1074,56 @@ class HandoffConcurrencyTests(unittest.TestCase):
         self.assertEqual(bytes(sess._stt_pending_pcm), payload)
         self.addCleanup(lambda: (block.set(), t.join(5.0)))
 
+
+
+    def test_park_overflow_is_retained_and_reattached_not_false_success(self) -> None:
+        """Fable follow-up P1: the overflow failure must survive a parked control emit.
+
+        Lock screen / control-connection park replaces self.emit with a sink, so a
+        fire-and-forget emit would erase the notice AND the dropped frame. The stall
+        must be retained, pushed over the native audio path, re-emitted on reattach,
+        and must never let the session claim complete success.
+        """
+        sess = self._live_session()
+        sess._listener = None
+        sess._handoff_listener = None
+        sess._pcm_hold = bytearray(STT_PCM_HOLD_MAX)  # capacity exhausted
+        # Park the control emit (phone lock screen): self.emit becomes a no-op sink.
+        sess._detach_control_emit()
+        self.assertIs(sess.emit.__func__, Session._sink_emit)
+        native = mock.Mock()
+        sess._send_audio_text = native
+        # The overflow frame cannot be held; only the native path can reach the device.
+        sess.push_pcm(b"\xab" * 1600)
+        # 1) The failure is RETAINED as session state (queryable after park) ...
+        self.assertTrue(sess._pcm_stall_reported)
+        # ... and is pushed over the native-reachable channel, not silently dropped.
+        native.assert_called_once()
+        self.assertEqual(native.call_args[0][0]["type"], "error")
+        # 2) The already-buffered original audio is NOT clobbered by the overflow.
+        self.assertEqual(len(sess._pcm_hold), STT_PCM_HOLD_MAX)
+        # 3) Reconnect: re-emit the retained failure so the user (re)sees it.
+        events: list[dict] = []
+        sess.emit = events.append
+        sess.reattach()
+        self.assertTrue(
+            any(e.get("type") == "error" for e in events),
+            f"retained stall not re-emitted on reattach; events={events!r}",
+        )
+        # 4) A dropped window must NOT be reported as a complete/drained success.
+        sess._listener = mock.Mock()
+        sess._listener.drain.return_value = True
+        sess._stt_pending_pcm = b""
+        sess._pcm_hold = bytearray()
+        sess._pcm_rx_bytes = 1600
+        sess._stt_tx_bytes = 1600
+        sess._pcm_end_id = "sess-live"
+        sess._pcm_end_capture = "cap-a"
+        sess._pcm_end_offset = 1600
+        before = len(events)
+        sess._finish_pcm_end_if_ready()
+        self.assertEqual(
+            [e for e in events[before:] if e.get("type") == "pcm_drained"],
+            [],
+            "session claimed complete success after an overflow drop",
+        )
