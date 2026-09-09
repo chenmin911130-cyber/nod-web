@@ -26,6 +26,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var savedAck = false
     @Published var langPair = "Auto → CH"
     @Published var mode = "meeting"
+    @Published var draining = false
+    @Published var drainFailed = false
 
     private var localModeHeld = false
     private var phoneModeSeen = false
@@ -36,6 +38,12 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     private var phoneSessionId = ""
     private var startBeganAt: Date?
     private var startWaitWork: DispatchWorkItem?
+    private var drainWaitWork: DispatchWorkItem?
+    private var transferTimer: Timer?
+    private var pendingSaveOffer = false
+    private var saveAfterDrain = false
+    private let pcmStore = WatchPcmStore()
+    private var lastTransferAt: [Int: Date] = [:]
 
     struct WatchHistItem: Identifiable, Equatable {
         let id: String
@@ -65,6 +73,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         guard WCSession.isSupported() else { return }
         WCSession.default.delegate = self
         WCSession.default.activate()
+        DispatchQueue.main.async { [weak self] in
+            self?.transferTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+                self?.flushTransfers()
+            }
+        }
     }
 
     private static let modeKey = "nod.watch.listenMode"
@@ -158,6 +171,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             return
         }
         resetPcmBuffer()
+        pcmStore.beginCapture()
+        lastTransferAt.removeAll()
         original = ""
         translation = ""
         previous = ""
@@ -261,20 +276,29 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         startedAt = nil
         elapsedMs = 0
         WatchGlanceStore.clear()
-        offeringSave = hadContent
+        offeringSave = false
         savedAck = false
         saving = false
         saveFailed = false
-        saveRequestId = ""
-        hint = hadContent ? WatchCopy.saveAsk : WatchCopy.ready
         localModeHeld = false
         localWatchMic = false
-        send(action: "stop")
-        flushUnsent()
-        resetPcmBuffer()
+        pendingSaveOffer = hadContent
+        saveAfterDrain = false
+        drainFailed = false
+        pcmStore.freeze()
+        draining = true
+        hint = WatchCopy.replaying
+        armDrainWait()
+        flushTransfers()
+        maybeCompleteDrain()
     }
 
     func confirmSave() {
+        if draining {
+            saveAfterDrain = true
+            pendingSaveOffer = true
+            return
+        }
         if saving { return }
         saveWaitWork?.cancel()
         savedAckWork?.cancel()
@@ -307,6 +331,12 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         saveWaitWork?.cancel()
         saveWaitWork = nil
         resetPcmBuffer()
+        pcmStore.beginCapture()
+        lastTransferAt.removeAll()
+        draining = false
+        drainFailed = false
+        pendingSaveOffer = false
+        saveAfterDrain = false
         original = ""
         translation = ""
         previous = ""
@@ -357,6 +387,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         WatchRecorder.shared.stop()
         stopRuntime()
         resetPcmBuffer()
+        pcmStore.discardCapture()
         WatchGlanceStore.clear()
         hint = WatchCopy.couldntStart
         localWatchMic = false
@@ -565,30 +596,18 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         pendingBytes > 0
     }
 
+    static func intField(_ payload: [String: Any], _ key: String) -> Int? {
+        if let n = payload[key] as? Int { return n }
+        if let n = payload[key] as? Double { return Int(n) }
+        if let s = payload[key] as? String, let n = Int(s) { return n }
+        return nil
+    }
+
     private func resetPcmBuffer() {
         pcmLock.lock()
         pendingPcm.removeAll(keepingCapacity: true)
         liveStreamed = false
         pcmLock.unlock()
-    }
-
-    private func bufferUnsent(_ data: Data) {
-        pcmLock.lock()
-        liveStreamed = false
-        if pendingPcm.count < maxPending {
-            pendingPcm.append(data)
-        }
-        pcmLock.unlock()
-    }
-
-    private func takeUnsentPcm() -> Data {
-        pcmLock.lock()
-        defer { pcmLock.unlock() }
-        guard Self.flushShouldSend(pendingBytes: pendingPcm.count) else { return Data() }
-        let data = pendingPcm
-        pendingPcm.removeAll()
-        liveStreamed = false
-        return data
     }
 
     private func forwardPcm(_ data: Data) {
@@ -599,30 +618,108 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     private func sendPcm(_ data: Data) {
+        guard let placed = pcmStore.append(data) else {
+            WatchRecorder.shared.stop()
+            stopRuntime()
+            if listening {
+                hint = WatchCopy.diskFull
+            }
+            flushTransfers()
+            return
+        }
         let session = WCSession.default
         let reachable = session.activationState == .activated && session.isReachable
         if Self.pcmShouldBuffer(reachable: reachable) {
-            bufferUnsent(data)
             return
         }
         pcmLock.lock()
         liveStreamed = true
         pcmLock.unlock()
-        session.sendMessage(["pcm": data.base64EncodedString()], replyHandler: nil, errorHandler: { [weak self] _ in
-            self?.bufferUnsent(data)
+        var payload: [String: Any] = [
+            "pcm": data.base64EncodedString(),
+            "kind": "pcm16",
+            "sr": "16000",
+            "captureId": pcmStore.captureId,
+            "seq": String(placed.seq),
+            "byteOffset": String(placed.offset),
+        ]
+        if !pcmStore.sessionId.isEmpty {
+            payload["sessionId"] = pcmStore.sessionId
+        }
+        session.sendMessage(payload, replyHandler: { [weak self] reply in
+            DispatchQueue.main.async { self?.apply(reply, live: false) }
+        }, errorHandler: { [weak self] _ in
+            self?.pcmStore.closeShard()
+            self?.flushTransfers()
         })
     }
 
-    private func flushUnsent() {
-        let data = takeUnsentPcm()
-        guard !data.isEmpty else { return }
-        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nod-watch.pcm")
-        do {
-            try data.write(to: url, options: .atomic)
-            WCSession.default.transferFile(url, metadata: ["kind": "pcm16", "sr": "16000"])
-        } catch {
-            WCSession.default.transferUserInfo(["pcm": data.base64EncodedString()])
+    private func flushTransfers() {
+        if draining || !reachable {
+            pcmStore.closeShard()
         }
+        let now = Date()
+        for shard in pcmStore.unackedShards() {
+            if let at = lastTransferAt[shard.seq], now.timeIntervalSince(at) < 8 { continue }
+            lastTransferAt[shard.seq] = now
+            WCSession.default.transferFile(shard.url, metadata: pcmStore.metadata(for: shard))
+        }
+        maybeCompleteDrain()
+    }
+
+    private func flushUnsent() {
+        flushTransfers()
+    }
+
+    private func armDrainWait() {
+        drainWaitWork?.cancel()
+        let slack = Double(pcmStore.lastByte) / 32_000.0 + 90
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.draining else { return }
+            self.draining = false
+            self.drainFailed = true
+            self.hint = WatchCopy.drainFailed
+        }
+        drainWaitWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(30, slack), execute: work)
+    }
+
+    private func maybeCompleteDrain() {
+        guard draining, !drainFailed else { return }
+        guard pcmStore.frozen, pcmStore.ackedByte >= pcmStore.lastByte, pcmStore.lastByte > 0 else {
+            if draining, pcmStore.frozen, pcmStore.lastByte == 0 {
+                completeDrain()
+            }
+            return
+        }
+        completeDrain()
+    }
+
+    private func completeDrain() {
+        drainWaitWork?.cancel()
+        drainWaitWork = nil
+        draining = false
+        drainFailed = false
+        send(action: "stop")
+        let offer = pendingSaveOffer
+        pendingSaveOffer = false
+        if saveAfterDrain {
+            saveAfterDrain = false
+            offeringSave = offer
+            confirmSave()
+            return
+        }
+        offeringSave = offer
+        hint = offer ? WatchCopy.saveAsk : WatchCopy.ready
+    }
+
+    func retryDrain() {
+        drainFailed = false
+        draining = true
+        hint = WatchCopy.replaying
+        lastTransferAt.removeAll()
+        armDrainWait()
+        flushTransfers()
     }
 
     private func startRuntime() {
@@ -666,6 +763,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if Self.commandShouldSendMode(action), phoneModeSeen {
             payload["mode"] = mode
         }
+        if action == "start" || action == "record", !pcmStore.captureId.isEmpty {
+            payload["captureId"] = pcmStore.captureId
+        }
         if action == "save" {
             guard let wire = Self.saveWireMessage(sessionId: saveRequestId) else { return }
             payload["sessionId"] = wire
@@ -684,6 +784,10 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         DispatchQueue.main.async {
             if self.starting {
                 self.hint = WatchCopy.starting
+            } else if self.draining {
+                self.hint = WatchCopy.replaying
+            } else if self.drainFailed {
+                self.hint = WatchCopy.drainFailed
             } else if self.listening {
                 self.hint = "Recording on Watch"
             } else if self.paused {
@@ -705,8 +809,16 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     private func apply(_ payload: [String: Any], live: Bool) {
+        if let ack = Self.intField(payload, "pcmAckByte"), ack > 0 {
+            pcmStore.ack(ack)
+            lastTransferAt = lastTransferAt.filter { seq, _ in
+                pcmStore.unackedShards().contains(where: { $0.seq == seq })
+            }
+            maybeCompleteDrain()
+        }
         if let sessionId = payload["sessionId"] as? String, !sessionId.isEmpty {
             phoneSessionId = sessionId
+            pcmStore.bindSession(sessionId)
             let pin = Self.savePinIncoming(saving: saving, pinnedId: saveRequestId, incomingSessionId: sessionId)
             if pin.send {
                 saveRequestId = pin.pinnedId
@@ -731,7 +843,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let capture = payload["capture"] as? String {
             syncFromCapture(capture)
         }
-        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck, !saving, !saveFailed, !starting, !localWatchMic {
+        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck, !saving, !saveFailed, !starting, !localWatchMic, !draining, !drainFailed {
             self.hint = hint
         }
         if let original = payload["original"] as? String {
@@ -788,6 +900,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 if self.original.isEmpty, self.translation.isEmpty {
                     self.hint = session.isReachable ? "Watch mic" : "Recording on Watch"
                 }
+                self.flushTransfers()
+            } else if self.draining {
+                self.flushTransfers()
             } else if self.paused {
                 self.hint = WatchCopy.paused
             }

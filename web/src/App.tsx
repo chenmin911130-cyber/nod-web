@@ -55,7 +55,8 @@ import { api as authApi, deleteAccount, fetchMe, logout, type Me } from './auth'
 import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
-import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode } from './watch'
+import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
+import { watchStartListenCommand } from './watchReplay'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
 import { shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
@@ -1139,7 +1140,7 @@ export default function App() {
     if (s.workspaceMode === 'translate' || s.translateOn) {
       unlockSpeech()
     }
-    window.api.send({ type: 'start_listen' })
+    window.api.send(watchStartListenCommand(!!opts?.fromWatch))
   }
   const stopListen = () => {
     listenWanted.current = false
@@ -1574,7 +1575,7 @@ export default function App() {
         syncWorkspace()
         checkPendingRestore()
         if (listenWanted.current) {
-          queueMicrotask(() => api.send({ type: 'start_listen' }))
+          queueMicrotask(() => api.send(watchStartListenCommand(isWatchMicPreferred())))
         }
       }
       if (e.type === 'attached') {

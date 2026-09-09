@@ -16,6 +16,7 @@
 		D0D100000000000000000015 /* WatchRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000003 /* WatchRootView.swift */; };
 		D0D100000000000000000040 /* WatchCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000041 /* WatchCopy.swift */; };
 		D0D100000000000000000016 /* WatchPhoneSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000004 /* WatchPhoneSession.swift */; };
+		D0D100000000000000000042 /* WatchPcmStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000043 /* WatchPcmStore.swift */; };
 		D0D100000000000000000017 /* WatchRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000005 /* WatchRecorder.swift */; };
 		D0D100000000000000000031 /* WatchGlanceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000029 /* WatchGlanceStore.swift */; };
 		D0D100000000000000000032 /* ComplicationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000030 /* ComplicationController.swift */; };
@@ -40,6 +41,7 @@
 		D0D100000000000000000003 /* WatchRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRootView.swift; sourceTree = "<group>"; };
 		D0D100000000000000000041 /* WatchCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchCopy.swift; sourceTree = "<group>"; };
 		D0D100000000000000000004 /* WatchPhoneSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchPhoneSession.swift; sourceTree = "<group>"; };
+		D0D100000000000000000043 /* WatchPcmStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchPcmStore.swift; sourceTree = "<group>"; };
 		D0D100000000000000000005 /* WatchRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRecorder.swift; sourceTree = "<group>"; };
 		D0D100000000000000000029 /* WatchGlanceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchGlanceStore.swift; sourceTree = "<group>"; };
 		D0D100000000000000000030 /* ComplicationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComplicationController.swift; sourceTree = "<group>"; };
@@ -137,6 +139,7 @@
 				D0D100000000000000000003 /* WatchRootView.swift */,
 				D0D100000000000000000041 /* WatchCopy.swift */,
 				D0D100000000000000000004 /* WatchPhoneSession.swift */,
+				D0D100000000000000000043 /* WatchPcmStore.swift */,
 				D0D100000000000000000005 /* WatchRecorder.swift */,
 				D0D100000000000000000029 /* WatchGlanceStore.swift */,
 				D0D100000000000000000030 /* ComplicationController.swift */,
@@ -339,6 +342,7 @@
 				D0D100000000000000000015 /* WatchRootView.swift in Sources */,
 				D0D100000000000000000040 /* WatchCopy.swift in Sources */,
 				D0D100000000000000000016 /* WatchPhoneSession.swift in Sources */,
+				D0D100000000000000000042 /* WatchPcmStore.swift in Sources */,
 				D0D100000000000000000017 /* WatchRecorder.swift in Sources */,
 				D0D100000000000000000031 /* WatchGlanceStore.swift in Sources */,
 				D0D100000000000000000032 /* ComplicationController.swift in Sources */,

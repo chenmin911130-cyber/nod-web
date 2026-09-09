@@ -252,6 +252,45 @@ enum WatchCopy {
         ])
     }
 
+    static var replaying: String {
+        pick([
+            "zh": "正在补传",
+            "en": "Catching up",
+            "it": "Invio in corso",
+            "es": "Enviando audio",
+            "fr": "Envoi en cours",
+            "de": "Wird nachgereicht",
+            "pt": "Enviando áudio",
+            "ja": "送信中",
+        ])
+    }
+
+    static var diskFull: String {
+        pick([
+            "zh": "手表存储已满",
+            "en": "Watch storage full",
+            "it": "Memoria piena",
+            "es": "Almacenamiento lleno",
+            "fr": "Stockage plein",
+            "de": "Speicher voll",
+            "pt": "Armazenamento cheio",
+            "ja": "容量不足",
+        ])
+    }
+
+    static var drainFailed: String {
+        pick([
+            "zh": "补传未完成",
+            "en": "Couldn't finish sending",
+            "it": "Invio non riuscito",
+            "es": "No se pudo enviar",
+            "fr": "Envoi impossible",
+            "de": "Senden fehlgeschlagen",
+            "pt": "Falha no envio",
+            "ja": "送信できませんでした",
+        ])
+    }
+
     static var saveAsk: String {
         pick([
             "zh": "存进 History？",

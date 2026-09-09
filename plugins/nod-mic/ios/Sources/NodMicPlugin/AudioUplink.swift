@@ -57,6 +57,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = true
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        _ = WatchPcmIngest.shared
         watchObserver = NotificationCenter.default.addObserver(
             forName: Notification.Name("nod.watch.pcm"),
             object: nil,
@@ -144,8 +145,29 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     func enqueue(_ data: Data) {
         guard !data.isEmpty else { return }
         queue.async { [weak self] in
-            self?.append(data)
+            self?.append(data, dropOldest: true)
         }
+    }
+
+    /// Watch replay: refuse the chunk instead of dropping older frames.
+    func tryEnqueue(_ data: Data) -> Bool {
+        guard !data.isEmpty else { return true }
+        var ok = false
+        queue.sync {
+            if self.pendingBytes + self.stash.count + data.count > self.maxPendingBytes {
+                ok = false
+                return
+            }
+            self.append(data, dropOldest: false)
+            ok = true
+        }
+        return ok
+    }
+
+    func queuedBytes() -> Int {
+        var n = 0
+        queue.sync { n = self.pendingBytes + self.stash.count }
+        return n
     }
 
     private func finishStart(_ error: Error?) {
@@ -211,12 +233,12 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         listen(next)
     }
 
-    private func append(_ data: Data) {
+    private func append(_ data: Data, dropOldest: Bool) {
         stash.append(data)
         while stash.count >= frameBytes {
             let frame = Data(stash.prefix(frameBytes))
             stash.removeSubrange(0 ..< frameBytes)
-            sendOrBuffer(frame)
+            sendOrBuffer(frame, dropOldest: dropOldest)
         }
         scheduleFlush()
     }
@@ -229,24 +251,29 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             guard let self, self.stash.count >= self.minChunkBytes else { return }
             let frame = self.stash
             self.stash = Data()
-            self.sendOrBuffer(frame)
+            self.sendOrBuffer(frame, dropOldest: true)
         }
         flushWork = work
         queue.asyncAfter(deadline: .now() + 0.1, execute: work)
     }
 
-    private func sendOrBuffer(_ frame: Data) {
+    private func sendOrBuffer(_ frame: Data, dropOldest: Bool) {
         guard !frame.isEmpty else { return }
-        buffer(frame)
+        buffer(frame, dropOldest: dropOldest)
         pump()
     }
 
-    private func buffer(_ frame: Data) {
+    private func buffer(_ frame: Data, dropOldest: Bool) {
+        if !dropOldest, pendingBytes + frame.count > maxPendingBytes {
+            return
+        }
         pending.append(frame)
         pendingBytes += frame.count
-        while pendingBytes > maxPendingBytes, let oldest = pending.first {
-            pending.removeFirst()
-            pendingBytes -= oldest.count
+        if dropOldest {
+            while pendingBytes > maxPendingBytes, let oldest = pending.first {
+                pending.removeFirst()
+                pendingBytes -= oldest.count
+            }
         }
     }
 
@@ -294,6 +321,11 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                 }
                 self.lastSendAt = Date.timeIntervalSinceReferenceDate
                 self.lastSentAudioSeconds = self.audioSeconds(frame)
+                NotificationCenter.default.post(
+                    name: Notification.Name("nod.uplink.consumed"),
+                    object: nil,
+                    userInfo: ["bytes": queued.count]
+                )
                 self.pump()
             }
         }

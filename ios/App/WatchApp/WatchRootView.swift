@@ -32,7 +32,12 @@ struct WatchRootView: View {
         let qa = session.mode == "interview"
         let translate = session.mode == "translate"
         return Group {
-            if session.offeringSave || session.savedAck || (!session.listening && !session.paused) {
+            if session.draining || session.drainFailed {
+                Text(session.drainFailed ? WatchCopy.drainFailed : WatchCopy.replaying)
+                    .font(.caption)
+                    .foregroundStyle(muted)
+                    .multilineTextAlignment(.center)
+            } else if session.offeringSave || session.savedAck || (!session.listening && !session.paused) {
                 Color.black
             } else if session.paused {
                 VStack(spacing: 6) {
@@ -98,6 +103,8 @@ struct WatchRootView: View {
                 savePrompt
             } else if session.savedAck {
                 savedAck
+            } else if session.draining || session.drainFailed {
+                drainPage
             } else if session.listening || session.paused {
                 TabView(selection: $listenPage) {
                     sessionPage.tag(0)
@@ -110,6 +117,19 @@ struct WatchRootView: View {
         .padding(.horizontal, 6)
         .onChange(of: session.listening) { listening in
             if listening { listenPage = 0 }
+        }
+    }
+
+    private var drainPage: some View {
+        VStack(spacing: 10) {
+            Text(session.drainFailed ? WatchCopy.drainFailed : WatchCopy.replaying)
+                .font(.headline)
+                .foregroundStyle(ink)
+                .multilineTextAlignment(.center)
+            if session.drainFailed {
+                Button(WatchCopy.retry) { session.retryDrain() }
+                    .tint(cyan)
+            }
         }
     }
 

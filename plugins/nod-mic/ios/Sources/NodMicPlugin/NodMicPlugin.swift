@@ -127,6 +127,8 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
 
     override public func load() {
         super.load()
+        _ = AudioUplink.shared
+        _ = WatchPcmIngest.shared
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
             object: nil,
