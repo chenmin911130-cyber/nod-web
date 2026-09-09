@@ -111,7 +111,6 @@ STT_PCM_HOLD_MAX = 2 * 1024 * 1024
 # (a single item can be 2 MiB). Reaching it latches incomplete + keeps the
 # original; it is not an unbounded buffer.
 STT_PCM_BUF_MAX = 4 * 1024 * 1024
-STT_PCM_OWNER_WAIT_SEC = 12.0
 # push_pcm() accept result. "backpressure" means the byte budget is exhausted —
 # the caller must not treat the call as a success; it latches incomplete and the
 # frame is preserved by the Session archive, not silently dropped.
@@ -2379,8 +2378,7 @@ class Session:
         self._handoff_waiter: threading.Thread | None = None
         self._stt_pending_pcm = b""
         self._pcm_hold = bytearray()
-        self._pcm_owner_ready = threading.Event()
-        self._pcm_owner_ready.set()
+
         self._pcm_in_lock = threading.Lock()
         self._listen_gen = 0
         self._stt_stream_gen = 0
@@ -3005,13 +3003,11 @@ class Session:
             if self._listener is not None and not resume:
                 return False
             self._listen_starting = True
-            self._pcm_ready_event().clear()
             return True
 
     def _release_listen_start(self) -> None:
         with self._listen_lock():
             self._listen_starting = False
-        self._release_pcm_waiters()
 
     def _cancel_stt_restart_timer(self) -> None:
         timer = getattr(self, "_stt_restart_timer", None)
@@ -3031,23 +3027,12 @@ class Session:
         except Exception:
             pass
 
-    def _pcm_ready_event(self) -> threading.Event:
-        ev = getattr(self, "_pcm_owner_ready", None)
-        if ev is None:
-            ev = threading.Event()
-            ev.set()
-            self._pcm_owner_ready = ev
-        return ev
-
     def _pcm_input_lock(self) -> threading.Lock:
         mu = getattr(self, "_pcm_in_lock", None)
         if mu is None:
             mu = threading.Lock()
             self._pcm_in_lock = mu
         return mu
-
-    def _release_pcm_waiters(self) -> None:
-        self._pcm_ready_event().set()
 
     def _hold_incoming_pcm(self, pcm: bytes) -> bool:
         if getattr(self, "_closed", False) or self._paused or not self._listen_wanted:
@@ -3151,7 +3136,6 @@ class Session:
         self._clear_handoff()
         self._stt_pending_pcm = b""
         self._pcm_hold = bytearray()
-        self._release_pcm_waiters()
         if lst is not None and lst is not self._listener:
             self._stop_listener(lst)
 
@@ -3159,7 +3143,6 @@ class Session:
         self._handoff_blocked = True
         self._handoff_listener = lst
         logging.getLogger("nod").warning("stt handoff blocked")
-        self._release_pcm_waiters()
         existing = getattr(self, "_handoff_waiter", None)
         if existing is not None and existing.is_alive():
             return
@@ -3222,8 +3205,7 @@ class Session:
         self._flush_translate_carry("restart")
         if getattr(self, "_listen_wanted", False) and not getattr(self, "_paused", False):
             self._start_listening(resume=True)
-        else:
-            self._release_pcm_waiters()
+        # else: leave the session idle; no waiter exists to release.
 
     def _complete_blocked_handoff(self, lst: CloudListener) -> None:
         self._collect_handoff(lst)
@@ -3242,9 +3224,7 @@ class Session:
             self._listener = None
             if lst is not None:
                 self._handoff_listener = lst
-            self._pcm_ready_event().clear()
         if lst is None:
-            self._release_pcm_waiters()
             if self._listen_wanted and not self._paused:
                 self._start_listening(resume=True)
             return
@@ -4212,7 +4192,6 @@ class Session:
                 return
             old = self._listener
             self._listener = listener
-        self._release_pcm_waiters()
         if old and old is not listener:
             self._stop_listener(old)
         with self._pcm_input_lock():
