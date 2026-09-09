@@ -108,6 +108,10 @@ struct WatchRootView: View {
                 stallWarning
                     .padding(.horizontal, 6)
             }
+            if session.pcmRejected && !session.draining {
+                rejectedWarning
+                    .padding(.horizontal, 6)
+            }
             Group {
                 if session.offeringSave {
                     savePrompt
@@ -140,7 +144,10 @@ struct WatchRootView: View {
             if session.pcmStalled {
                 stallWarning
             }
-            if session.drainFailed {
+            if session.pcmRejected {
+                rejectedWarning
+            }
+            if session.drainFailed && !session.pcmRejected {
                 Button(WatchCopy.retry) { session.retryDrain() }
                     .tint(cyan)
             }
@@ -154,6 +161,18 @@ struct WatchRootView: View {
         Text(session.pcmStallText.isEmpty ? WatchCopy.pcmIncomplete : session.pcmStallText)
             .font(.caption2)
             .foregroundStyle(Color.orange)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    /// A terminal session rejection (session ended server-side). Not retryable —
+    /// the capture's session is already over, so Retry must not feed old audio
+    /// into a new session (issue #165 P2-8).
+    private var rejectedWarning: some View {
+        Text(session.pcmRejectText.isEmpty ? WatchCopy.pcmRejected : session.pcmRejectText)
+            .font(.caption2)
+            .foregroundStyle(Color.red)
             .multilineTextAlignment(.center)
             .lineLimit(2)
             .frame(maxWidth: .infinity, alignment: .center)

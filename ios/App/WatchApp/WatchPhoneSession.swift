@@ -30,6 +30,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var drainFailed = false
     @Published var pcmStalled = false
     @Published var pcmStallText = ""
+    @Published var pcmRejected = false
+    @Published var pcmRejectText = ""
 
     private var localModeHeld = false
     private var phoneModeSeen = false
@@ -343,6 +345,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         pcmDrained = false
         pcmStalled = false
         pcmStallText = ""
+        pcmRejected = false
+        pcmRejectText = ""
         pendingSaveOffer = false
         saveAfterDrain = false
         original = ""
@@ -760,6 +764,10 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     }
 
     func retryDrain() {
+        // A terminal rejection (session ended server-side) is not retryable: the
+        // session is already over, so Retry must not feed old audio into a dead
+        // session or into a new capture (issue #165 P2-8).
+        guard !pcmRejected else { return }
         drainFailed = false
         pcmDrained = false
         draining = true
@@ -916,6 +924,29 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                     ?? "Recording incomplete — audio may be missing"
                 pcmStalled = true
                 pcmStallText = message
+                if !message.isEmpty, !offeringSave, !savedAck, !saving, !saveFailed, !starting {
+                    hint = message
+                }
+            }
+        }
+        if Self.flag(payload, "pcmRejected") {
+            let rejectSession = (payload["pcmRejectSessionId"] as? String) ?? ""
+            // Match against the session this Watch was draining. A stale rejection
+            // from an old session must not clobber a new capture (issue #165 P2-8).
+            if rejectSession.isEmpty || phoneSessionId.isEmpty || rejectSession == phoneSessionId {
+                let message = (payload["pcmRejectText"] as? String)
+                    ?? "会话已结束，补传未完成。"
+                pcmRejected = true
+                pcmRejectText = message
+                // The session is over and cannot be drained: end the drain wait
+                // and surface the failure. Preserve the original files; do not
+                // auto-start a new capture.
+                if draining {
+                    drainWaitWork?.cancel()
+                    drainWaitWork = nil
+                    draining = false
+                    drainFailed = true
+                }
                 if !message.isEmpty, !offeringSave, !savedAck, !saving, !saveFailed, !starting {
                     hint = message
                 }

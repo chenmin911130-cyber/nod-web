@@ -516,6 +516,17 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                     "text": obj["text"] as? String ?? "",
                 ]
             )
+        case "pcm_rejected":
+            NotificationCenter.default.post(
+                name: Notification.Name("nod.watch.pcm.serverRejected"),
+                object: nil,
+                userInfo: [
+                    "sessionId": obj["id"] as? String ?? "",
+                    "captureId": obj["capture_id"] as? String ?? obj["captureId"] as? String ?? "",
+                    "reason": obj["reason"] as? String ?? "session_ended",
+                    "text": obj["text"] as? String ?? "",
+                ]
+            )
         default:
             break
         }

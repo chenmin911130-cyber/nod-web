@@ -31,6 +31,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastPcmStalled = false
     private var lastPcmStallSessionId = ""
     private var lastPcmStallText = ""
+    private var lastPcmRejected = false
+    private var lastPcmRejectSessionId = ""
+    private var lastPcmRejectCaptureId = ""
+    private var lastPcmRejectText = ""
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
     private var uplinkActive = false
@@ -72,6 +76,17 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             let session = note.userInfo?["sessionId"] as? String ?? ""
             let message = note.userInfo?["text"] as? String ?? ""
             self?.markPcmStalled(sessionId: session, text: message)
+        }
+        NotificationCenter.default.addObserver(
+            forName: Notification.Name("nod.watch.pcm.serverRejected"),
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let session = note.userInfo?["sessionId"] as? String ?? ""
+            let capture = note.userInfo?["captureId"] as? String ?? ""
+            let reason = note.userInfo?["reason"] as? String ?? "session_ended"
+            let message = note.userInfo?["text"] as? String ?? ""
+            self?.markPcmRejected(sessionId: session, captureId: capture, reason: reason, text: message)
         }
     }
 
@@ -128,6 +143,25 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         lastPcmStallText = text.isEmpty ? "Recording incomplete — audio may be missing" : text
         lastPcmStalled = true
+        pushStatus(
+            capture: lastCapture,
+            hint: lastHint,
+            original: lastOriginal,
+            translation: lastTranslation,
+            previous: lastPrevious,
+            history: lastHistory
+        )
+    }
+
+    func markPcmRejected(sessionId: String, captureId: String, reason: String, text: String) {
+        lastPcmRejected = true
+        if !sessionId.isEmpty {
+            lastPcmRejectSessionId = sessionId
+        }
+        if !captureId.isEmpty {
+            lastPcmRejectCaptureId = captureId
+        }
+        lastPcmRejectText = text.isEmpty ? "会话已结束，补传未完成。" : text
         pushStatus(
             capture: lastCapture,
             hint: lastHint,
@@ -261,6 +295,16 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             }
             payload["pcmStallText"] = lastPcmStallText
         }
+        payload["pcmRejected"] = lastPcmRejected ? "true" : "false"
+        if lastPcmRejected {
+            if !lastPcmRejectSessionId.isEmpty {
+                payload["pcmRejectSessionId"] = lastPcmRejectSessionId
+            }
+            if !lastPcmRejectCaptureId.isEmpty {
+                payload["pcmRejectCaptureId"] = lastPcmRejectCaptureId
+            }
+            payload["pcmRejectText"] = lastPcmRejectText
+        }
         guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
         do {
             try session.updateApplicationContext(payload)
@@ -311,6 +355,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
                 lastPcmStalled = false
                 lastPcmStallSessionId = ""
                 lastPcmStallText = ""
+                lastPcmRejected = false
+                lastPcmRejectSessionId = ""
+                lastPcmRejectCaptureId = ""
+                lastPcmRejectText = ""
             }
             lastPcmCaptureId = captureId
             NotificationCenter.default.post(

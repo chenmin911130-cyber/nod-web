@@ -278,6 +278,20 @@ enum WatchCopy {
         ])
     }
 
+    /// Session ended server-side; the trailing upload cannot complete (issue #165 P2-8).
+    static var pcmRejected: String {
+        pick([
+            "zh": "会话已结束，补传未完成。",
+            "en": "Session ended — upload incomplete.",
+            "it": "Sessione terminata, caricamento incompleto.",
+            "es": "Sesión finalizada — carga incompleta.",
+            "fr": "Session terminée — envoi incomplet.",
+            "de": "Sitzung beendet — Upload unvollständig.",
+            "pt": "Sessão encerrada — envio incompleto.",
+            "ja": "セッションが終了し、アップロードが未完了です。",
+        ])
+    }
+
     static var diskFull: String {
         pick([
             "zh": "手表存储已满",

@@ -2431,6 +2431,7 @@ class Session:
         self._listen_wanted = False
         self._listen_started_at = 0.0
         self._listen_accum_sec = 0.0
+        self._listen_ended = False
         self._last_pcm_at = 0.0
         self._last_voice_at = 0.0
         self._idle_check_at = 0.0
@@ -2747,6 +2748,19 @@ class Session:
                 self._maybe_flush_manual_chunk()
             return
         if not self._deliver_pcm(pcm):
+            return
+        # A terminated session (closed / listen stolen / stopped) still streaming
+        # audio is rejected ONCE with its identity, so the Watch's trailing frames
+        # end the drain wait instead of silently disappearing into a dead session
+        # (issue #165 P2-8). Single-shot; the latch resets on a fresh listen.
+        if self._session_terminated():
+            if not getattr(self, "_pcm_reject_sent", False):
+                self._pcm_reject_sent = True
+                self._reject_pcm_ended(
+                    str(getattr(self, "usage_session_id", "") or ""),
+                    str(getattr(self, "_pcm_end_capture", "") or ""),
+                    "session_ended",
+                )
             return
         # NOTE: _pcm_stall_reported is deliberately NOT reset here. Once a session
         # drops audio under hold overflow, it is "incomplete" for its whole lifetime;
@@ -3250,6 +3264,7 @@ class Session:
         """
         self._paused = False
         self._listen_wanted = False
+        self._listen_ended = True  # stolen -> decisively over (issue #165 P2-8)
         self._pending_q.clear()
         self._cancel_stt_restart_timer()
         self._abandon_handoff()
@@ -3840,15 +3855,50 @@ class Session:
             self.emit({"type": "status", "text": STATUS_READY})
         self._offer_save_history()
 
+    def _session_terminated(self) -> bool:
+        """True when this Session object is decisively over and no longer receives audio.
+
+        Uses the explicit ``_listen_ended`` latch set only on the definitive stop
+        paths (close, stop_listening, listen-taken, quota/idle stop). A session
+        with no current listener but still LIVE — a transient rebuild, a Pause,
+        or a momentary handoff — is NOT terminated and must not be reported as an
+        expired error (issue #165 P2-8).
+        """
+        return bool(getattr(self, "_listen_ended", False)) or bool(getattr(self, "_closed", False))
+
+    def _reject_pcm_ended(self, sid: str, cap: str, reason: str) -> None:
+        """Surface an explicit expired/terminated rejection to the native device.
+
+        Carries the ORIGINAL session + capture identity so the Watch can match it
+        against the session it was draining, end the drain wait, and show
+        "补传未完成" without starting a new session (issue #165 P2-8).
+        """
+        text = "会话已结束，补传未完成。"
+        logging.getLogger("nod").warning(
+            "stt pcm_rejected session=%s capture=%s reason=%s", sid, cap, reason
+        )
+        self.emit({"type": "error", "text": text})
+        self._send_audio_text({
+            "type": "pcm_rejected",
+            "id": sid,
+            "capture_id": cap,
+            "reason": reason,
+            "text": text,
+        })
+
     def pcm_end(self, session_id: Any = None, byte_offset: Any = None, capture_id: Any = None) -> None:
         """Watch End: wait until this capture's audio is in STT, then emit pcm_drained.
 
-        Old clients never send this. Wrong/empty id or capture is ignored so a
-        leftover End cannot drain or stop another session.
+        Old clients never send this. A wrong/empty id or capture is ignored so a
+        leftover End cannot drain or stop another session. A terminated session
+        (closed, or listen stolen/stopped with no listener) that still receives a
+        trailing End is REJECTED explicitly with its original identity, so the
+        Watch ends its drain wait and shows "补传未完成" instead of waiting out the
+        timeout for a drain that can never happen (issue #165 P2-8).
         """
         sid = str(session_id or "").strip()
         cap = str(capture_id or "").strip()
-        if not sid or not cap or sid != (self.usage_session_id or ""):
+        if not sid or not cap:
             return
         try:
             offset = int(byte_offset)
@@ -3856,6 +3906,8 @@ class Session:
             return
         if offset < 0:
             return
+        # A repeated End of ALREADY-confirmed success re-publishes the saved result
+        # (reconnect path); it is not a fresh drain.
         prev = getattr(self, "_pcm_drain_result", None)
         if (
             isinstance(prev, dict)
@@ -3865,6 +3917,14 @@ class Session:
             and int(prev.get("byte_offset") or 0) == offset
         ):
             self._publish_pcm_drained(prev)
+            return
+        # Terminated session: reject an expired/backfilled End with identity.
+        if self._session_terminated():
+            self._reject_pcm_ended(sid, cap, "session_ended")
+            return
+        if sid != (self.usage_session_id or ""):
+            # Transient (a new/mismatched session, still live): ignore, do not
+            # drain or reject — a leftover End must not affect a live session.
             return
         self._pcm_end_id = sid
         self._pcm_end_capture = cap
@@ -4092,6 +4152,8 @@ class Session:
             self._pcm_end_offset = 0
             self._pcm_drain_result = None
             self._pcm_stall_reported = False
+            self._listen_ended = False
+        self._pcm_reject_sent = False
         self._stt_stream_gen = getattr(self, "_stt_stream_gen", 0) + 1
         listen_gen = getattr(self, "_listen_gen", 0)
         stream_gen = self._stt_stream_gen
@@ -4210,6 +4272,7 @@ class Session:
 
     def _stop_listening(self) -> None:
         self._listen_accum_sec = 0.0  # session over; reset the accumulated quota
+        self._listen_ended = True  # definitive stop (issue #165 P2-8)
         self._last_pcm_at = 0.0  # zero-PCM guard must not carry into the next session
         self._pending_q.clear()
         self._cancel_stt_restart_timer()
