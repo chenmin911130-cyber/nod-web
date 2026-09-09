@@ -1109,8 +1109,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     /// not an immediate infinite reschedule (issue #165 review P2-3).
     func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
         DispatchQueue.main.async {
-            let id = fileTransfer.transferIdentifier
-            for (key, ft) in self.outstandingTransfers where ft.transferIdentifier == id {
+            // WCSessionFileTransfer on watchOS exposes only `progress` — no
+            // transferIdentifier or fileURL. The completion delivers the same
+            // instance `transferFile` returned, so match the in-flight record by
+            // object identity (unique per shard).
+            for (key, ft) in self.outstandingTransfers where ft === fileTransfer {
                 self.outstandingTransfers.removeValue(forKey: key)
             }
         }
