@@ -99,6 +99,7 @@ ASSEMBLYAI_FILE_MODELS = ["universal-3-5-pro", "universal-2"]
 # billing; unterminated sessions stay open and bill for up to 3 hours.
 ASSEMBLYAI_TERMINATE = {"type": "Terminate"}
 ASSEMBLYAI_TERMINATE_WAIT_SEC = 1.5
+MEETING_STOP_DRAIN_SEC = 4.0
 STT_HANDOFF_JOIN_SEC = 2.0
 STT_HANDOFF_INTERRUPT_JOIN_SEC = 0.5
 STT_PCM_HOLD_MAX = 2 * 1024 * 1024
@@ -1814,6 +1815,8 @@ class CloudListener:
         self._fail: list[str] = []
         self._ws = None
         self._last_final = ""
+        self._committed_turns: dict[int, str] = {}
+        self._last_partial: dict[str, Any] | None = None
         self._muted = False
         self._was_ready = False
         self._drop_sent = False
@@ -2197,6 +2200,92 @@ class CloudListener:
             len(words),
         )
 
+    def _stt_turn_key(self, data: dict[str, Any]) -> int:
+        raw = data.get("turn_order")
+        try:
+            n = int(raw)
+            if n >= 0:
+                return n
+        except (TypeError, ValueError):
+            pass
+        self._turn_order += 1
+        return self._turn_order
+
+    def _turn_word_meta(self, data: dict[str, Any]) -> dict[str, Any]:
+        words = data.get("words") or []
+        first_w = words[0] if words else {}
+        last_w = words[-1] if words else {}
+        return {
+            "first_word_ms": (first_w or {}).get("start"),
+            "last_word_ms": (last_w or {}).get("end"),
+            "n_words": len(words),
+        }
+
+    def _note_partial(self, text: str, lang: str | None, speaker: str | None, data: dict[str, Any]) -> None:
+        stt_turn = None
+        raw = data.get("turn_order")
+        try:
+            stt_turn = int(raw)
+        except (TypeError, ValueError):
+            pass
+        self._last_partial = {
+            "text": text.strip(),
+            "lang": lang,
+            "speaker": speaker,
+            "stt_turn": stt_turn,
+            **self._turn_word_meta(data),
+        }
+
+    def uncovered_tail(self) -> dict[str, Any] | None:
+        p = getattr(self, "_last_partial", None)
+        if not p or not (p.get("text") or "").strip():
+            return None
+        text = str(p["text"]).strip()
+        stt = p.get("stt_turn")
+        committed = self._committed_turns.get(stt) if stt is not None else None
+        if committed:
+            if text == committed or committed.startswith(text):
+                return None
+            if text.startswith(committed) and len(text) <= len(committed):
+                return None
+            if len(text) <= len(committed):
+                return None
+        elif text == (self._last_final or ""):
+            return None
+        return dict(p)
+
+    def _commit_turn_final(
+        self,
+        text: str,
+        lang: str | None,
+        speaker: str | None,
+        data: dict[str, Any],
+        *,
+        formatted: bool,
+    ) -> None:
+        cleaned = text.strip()
+        if not cleaned:
+            return
+        stt_turn = self._stt_turn_key(data)
+        prev = self._committed_turns.get(stt_turn)
+        if prev == cleaned:
+            return
+        revision = prev is not None
+        self._committed_turns[stt_turn] = cleaned
+        self._last_final = cleaned
+        self._turn_order = max(self._turn_order, stt_turn)
+        meta: dict[str, Any] = {
+            **self._turn_word_meta(data),
+            "turn_order": stt_turn,
+            "stt_turn": stt_turn,
+            "listener_id": id(self),
+            "revision": revision,
+            "formatted": formatted,
+            "stop_commit": self._stop.is_set(),
+        }
+        if self.on_final:
+            self.on_final(cleaned, lang, speaker, meta)
+
     def _on_message(self, _ws, message) -> None:
         try:
             data = json.loads(message)
@@ -2214,32 +2303,17 @@ class CloudListener:
             speechy = bool(re.search(r"[A-Za-z0-9\u00C0-\u024F\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]", text))
             lang = heard_lang_from_turn(data)
             speaker = speaker_from_turn(data)
+            if speechy:
+                self._note_partial(text, lang, speaker, data)
             if data.get("end_of_turn"):
                 if data.get("turn_is_formatted") is False:
-                    if speechy and self.on_partial:
+                    if self._stop.is_set():
+                        self._commit_turn_final(text, lang, speaker, data, formatted=False)
+                    elif speechy and self.on_partial:
                         self.on_partial(text, lang, speaker)
                     return
                 cleaned = text.strip()
-                if cleaned and cleaned != self._last_final:
-                    self._last_final = cleaned
-                    self._turn_order += 1
-                    words = data.get("words") or []
-                    first_w = words[0] if words else {}
-                    last_w = words[-1] if words else {}
-                    # Turn meta for the meeting continuation decision (issue #29).
-                    meta: dict[str, Any] = {
-                        "first_word_ms": (first_w or {}).get("start"),
-                        "last_word_ms": (last_w or {}).get("end"),
-                        "turn_order": self._turn_order,
-                        "n_words": len(words),
-                    }
-                    # Run on_final on the listener's (single) message thread so the
-                    # meeting enqueue order matches AssemblyAI's turn order — a
-                    # per-final thread could enqueue a later turn before an earlier
-                    # one, breaking the continuation decision (issue #29). _on_final
-                    # itself is non-blocking (LLM work is threaded), so this never
-                    # stalls the websocket reader.
-                    self.on_final(cleaned, lang, speaker, meta)
+                self._commit_turn_final(text, lang, speaker, data, formatted=True)
                 if os.environ.get("NOD_STT_TRACE") == "1":
                     # Instrument turn boundaries for the "English line every 10s /
                     # half-sentence cut" investigation (issue #22). Logging only.
@@ -2284,6 +2358,9 @@ class CloudListener:
                 self._stt_send_fields(),
             )
             self._terminated.set()
+            if self._stop.is_set():
+                logging.getLogger("nod").info("assemblyai error ignored during stop")
+                return
             if self.on_error:
                 self.on_error(err)
             self._notify_drop(err)
@@ -2331,11 +2408,18 @@ class CloudListener:
             return
         self._notify_drop(extra or "session closed")
 
-    def stop(self) -> None:
+    def stop(self, *, force_endpoint: bool = False) -> None:
         self._stop.set()
         self._force_pending = False
         self._force_inflight = 0.0
         ws = self._ws
+        if force_endpoint and ws is not None:
+            try:
+                sock = getattr(ws, "sock", None)
+                if sock is not None and getattr(sock, "connected", False):
+                    ws.send(json.dumps({"type": "ForceEndpoint"}))
+            except Exception:
+                pass
         self._ws = None
         if ws:
             _terminate_assemblyai_session(ws, self._terminated)
@@ -2409,6 +2493,12 @@ class Session:
         self._listen_started_at = 0.0
         self._listen_accum_sec = 0.0
         self._listen_ended = False
+        self._stt_line_by_turn: dict[tuple[Any, Any], str] = {}
+        self._stop_flushing = False
+        self._listen_flush_done = False
+        self._listen_flush_seq = 0
+        self._listen_flush_history_ok = True
+        self._listen_flush_client_id: str | None = None
         self._last_pcm_at = 0.0
         self._last_voice_at = 0.0
         self._idle_check_at = 0.0
@@ -2847,7 +2937,7 @@ class Session:
         elif mtype == "pcm_end":
             self.pcm_end(msg.get("id"), msg.get("byte_offset"), msg.get("capture_id") or msg.get("captureId"))
         elif mtype == "stop_listen":
-            self.stop_listen()
+            self.stop_listen(flush_id=msg.get("flush_id"))
         elif mtype == "pause_listen":
             self.pause_listen()
         elif mtype == "resume_listen":
@@ -3024,11 +3114,13 @@ class Session:
             except Exception:
                 pass
 
-    def _stop_listener(self, lst: CloudListener | None) -> None:
+    def _stop_listener(self, lst: CloudListener | None, *, force_endpoint: bool = False) -> None:
         if not lst:
             return
         _drop_live_stt(self._stt_slot(), lst)
         try:
+            lst.stop(force_endpoint=force_endpoint)
+        except TypeError:
             lst.stop()
         except Exception:
             pass
@@ -3138,8 +3230,9 @@ class Session:
         self._handoff_collected = False
         self._handoff_waiter = None
 
-    def _abandon_handoff(self) -> None:
-        self._listen_gen = getattr(self, "_listen_gen", 0) + 1
+    def _abandon_handoff(self, *, bump_gen: bool = True) -> None:
+        if bump_gen:
+            self._listen_gen = getattr(self, "_listen_gen", 0) + 1
         lst = getattr(self, "_handoff_listener", None)
         self._clear_handoff()
         self._stt_pending_pcm = b""
@@ -3462,10 +3555,16 @@ class Session:
             if speaker:
                 qev["speaker"] = speaker
             self.emit(qev)
+            self._remember_stt_turn(meta, qev["id"])
             if self.user_id and self.usage_session_id:
                 from server.meter import save_history
 
-                save_history(self.user_id, self.usage_session_id, "transcript", piece, qev["id"], qev.get("speaker") or "")
+                try:
+                    save_history(self.user_id, self.usage_session_id, "transcript", piece, qev["id"], qev.get("speaker") or "")
+                except Exception:
+                    logging.getLogger("nod").exception("listen_flush history save failed")
+                    if getattr(self, "_stop_flushing", False):
+                        self._listen_flush_history_ok = False
             last_piece = {"id": qev["id"], "text": piece, "speaker": speaker, "lang": piece_heard or lang}
         # Only the LAST piece of a code-switched turn may be extended by the next final.
         # Word-level timestamps come from the turn meta so the continuation decision
@@ -3498,7 +3597,7 @@ class Session:
         self._meeting_worker_thread = t
         t.start()
 
-    def _stop_meeting_worker(self, wait: bool = False) -> None:
+    def _stop_meeting_worker(self, wait: bool = False, timeout: float = 1.0) -> None:
         # Tell the worker to flush + exit ONLY if one is actually running. If no
         # worker has been started yet (e.g. the very first set_workspace on a fresh
         # connection), putting a drain sentinel would be consumed by the NEXT
@@ -3513,13 +3612,15 @@ class Session:
             self._meeting_worker_started = False
         if was_started:
             q.put(self._drain_item())
-            # pause / stop / listen_taken MUST wait for the worker to drain the
-            # queued finals (they may call _hold_or_emit_meeting and re-open
-            # _open_line) BEFORE closing the open line (issue #31 P1-c).
-            if wait:
-                t = getattr(self, "_meeting_worker_thread", None)
-                if t is not None:
-                    t.join(timeout=1.0)
+        # pause / stop / listen_taken MUST wait for the worker to drain the
+        # queued finals (they may call _hold_or_emit_meeting and re-open
+        # _open_line) BEFORE closing the open line (issue #31 P1-c). Join even
+        # after the started flag is cleared so a still-running drain is not
+        # treated as finished.
+        if wait:
+            t = getattr(self, "_meeting_worker_thread", None)
+            if t is not None:
+                t.join(timeout=max(0.05, timeout))
 
     def _drain_item(self) -> tuple[int, int, str, str | None, str | None, dict[str, Any]]:
         return (getattr(self, "_meeting_gen", 0), 10 ** 9, "", None, None, {"__drain__": True})
@@ -3571,6 +3672,88 @@ class Session:
     def _close_open_line(self) -> None:
         with getattr(self, "_meeting_lock", threading.Lock()):
             self._open_line = None
+
+    def _remember_stt_turn(self, meta: dict[str, Any] | None, line_id: str) -> None:
+        if not meta or meta.get("stt_turn") is None or not line_id:
+            return
+        by = getattr(self, "_stt_line_by_turn", None)
+        if by is None:
+            self._stt_line_by_turn = {}
+            by = self._stt_line_by_turn
+        by[(meta.get("listener_id"), meta.get("stt_turn"))] = line_id
+
+    def _apply_meeting_revision(
+        self,
+        cleaned: str,
+        lang: str | None,
+        speaker: str | None,
+        meta: dict[str, Any],
+    ) -> bool:
+        key = (meta.get("listener_id"), meta.get("stt_turn"))
+        qid = getattr(self, "_stt_line_by_turn", {}).get(key)
+        if qid:
+            self._revise_meeting_line(qid, cleaned, lang, speaker, meta)
+            return True
+        replaced_hold = False
+        with self._meeting_lock:
+            ptxt, pts, plang = self._pending_wait
+            pmeta = getattr(self, "_pending_meta", None) or {}
+            if ptxt and pmeta.get("stt_turn") is not None and pmeta.get("stt_turn") == meta.get("stt_turn"):
+                self._pending_wait = (cleaned, pts, lang or plang)
+                merged = dict(pmeta)
+                merged.update(meta)
+                self._pending_meta = merged
+                if speaker:
+                    self._pending_speaker = speaker
+                replaced_hold = True
+        if replaced_hold:
+            self.emit({"type": "partial", "text": cleaned})
+            return True
+        open_line = getattr(self, "_open_line", None)
+        if open_line and open_line.get("id"):
+            self._revise_meeting_line(str(open_line["id"]), cleaned, lang, speaker, meta)
+            return True
+        return False
+
+    def _revise_meeting_line(
+        self,
+        qid: str,
+        cleaned: str,
+        lang: str | None,
+        speaker: str | None,
+        meta: dict[str, Any],
+    ) -> None:
+        rev = 1
+        with self._meeting_lock:
+            open_line = self._open_line
+            if open_line and open_line.get("id") == qid:
+                rev = int(open_line.get("rev") or 0) + 1
+                open_line["text"] = cleaned
+                open_line["rev"] = rev
+                open_line["last_final_at"] = time.time()
+                if meta.get("last_word_ms") is not None:
+                    open_line["last_word_ms"] = meta.get("last_word_ms")
+                if meta.get("n_words"):
+                    open_line["n_words"] = meta.get("n_words")
+            elif open_line:
+                rev = int(open_line.get("rev") or 0) + 1
+        heard = heard_lang_from_text(cleaned, lang)
+        self._remember_final(cleaned)
+        ev: dict[str, Any] = {"type": "line_update", "id": qid, "text": cleaned, "rev": rev}
+        if heard:
+            ev["language"] = heard
+        if speaker:
+            ev["speaker"] = speaker
+        self.emit(ev)
+        if self.user_id and self.usage_session_id:
+            from server.meter import update_history_text
+
+            try:
+                update_history_text(self.user_id, self.usage_session_id, qid, cleaned, speaker or "")
+            except Exception:
+                logging.getLogger("nod").exception("listen_flush history revise failed")
+                if getattr(self, "_stop_flushing", False):
+                    self._listen_flush_history_ok = False
 
     def _hold_or_emit_meeting(self, cleaned: str, lang: str | None, speaker: str | None = None, meta: dict[str, Any] | None = None) -> None:
         meta = meta or {}
@@ -3705,7 +3888,12 @@ class Session:
             if self.user_id and self.usage_session_id:
                 from server.meter import update_history_text
 
-                update_history_text(self.user_id, self.usage_session_id, line_id, merged, pspeaker or "")
+                try:
+                    update_history_text(self.user_id, self.usage_session_id, line_id, merged, pspeaker or "")
+                except Exception:
+                    logging.getLogger("nod").exception("listen_flush history update failed")
+                    if getattr(self, "_stop_flushing", False):
+                        self._listen_flush_history_ok = False
             if tail_ctx:
                 # §1.1 split: the absorbed line was closed above; the remainder
                 # opens a NEW line (and becomes the new open line), emitted AFTER
@@ -3829,7 +4017,11 @@ class Session:
             return
         self._start_listening()
 
-    def stop_listen(self) -> None:
+    def stop_listen(self, flush_id: Any = None) -> None:
+        raw = str(flush_id or "").strip()
+        self._listen_flush_client_id = raw or None
+        if getattr(self, "_stop_flushing", False):
+            return
         self._paused = False
         self._listen_wanted = False
         if self._manual:
@@ -3839,6 +4031,9 @@ class Session:
             self._stop_listening()
         else:
             self._flush_translate_carry("stop")
+            if not getattr(self, "_listen_flush_done", False):
+                self._emit_listen_flush(ok=True, timeout=False)
+                self._listen_flush_done = True
             self._emit_phase()
             self.emit({"type": "status", "text": STATUS_READY})
         self._offer_save_history()
@@ -4151,6 +4346,7 @@ class Session:
             self._pcm_drain_result = None
             self._pcm_stall_reported = False
             self._listen_ended = False
+            self._listen_flush_done = False
             self._pcm_reject_result = None
         self._pcm_reject_sent = False
         self._stt_stream_gen = getattr(self, "_stt_stream_gen", 0) + 1
@@ -4269,30 +4465,122 @@ class Session:
             self._offer_save_history()
 
     def _stop_listening(self) -> None:
+        if getattr(self, "_stop_flushing", False):
+            return
+        if self._listener is None and getattr(self, "_listen_flush_done", False):
+            return
+        self._stop_flushing = True
+        self._listen_flush_history_ok = True
+        timeout = False
         self._listen_accum_sec = 0.0  # session over; reset the accumulated quota
         self._listen_ended = True  # definitive stop (issue #165 P2-8)
         self._last_pcm_at = 0.0  # zero-PCM guard must not carry into the next session
         self._pending_q.clear()
         self._cancel_stt_restart_timer()
-        self._abandon_handoff()
+        self._abandon_handoff(bump_gen=False)
         with self._listen_lock():
             lst = self._listener
             self._listener = None
-        self._stop_listener(lst)
+        meeting = getattr(self, "_workspace", "") == "meeting"
+        self._stop_listener(lst, force_endpoint=meeting)
         self._flush_translate_carry("stop")
-        if self._workspace == "interview":
-            self._cancel_interview_wait_timer()
-            self._flush_interview_wait()
-        else:
-            self._flush_meeting_hold()
-        # Close the open meeting line and drain queued finals so no half-sentence
-        # survives into the next session (issue #29). Drain FIRST (queued finals
-        # may re-open _open_line), then close (issue #31 P1-c).
-        self._stop_meeting_worker(wait=True)
-        self._close_open_line()
-        self._emit_phase()
-        self.emit({"type": "status", "text": STATUS_READY})
-        self._flush_cloud_archive(final=False)
+        try:
+            if self._workspace == "interview":
+                self._cancel_interview_wait_timer()
+                self._flush_interview_wait()
+            else:
+                self._commit_listener_tail(lst)
+                self._flush_meeting_hold()
+            # Close the open meeting line and drain queued finals so no half-sentence
+            # survives into the next session (issue #29). Drain FIRST (queued finals
+            # may re-open _open_line), then close (issue #31 P1-c).
+            if not self._drain_meeting_after_stop():
+                timeout = True
+                logging.getLogger("nod").info("listen_flush worker drain timeout")
+            self._close_open_line()
+        finally:
+            self._listen_gen = getattr(self, "_listen_gen", 0) + 1
+            ok = (not timeout) and bool(getattr(self, "_listen_flush_history_ok", True))
+            self._emit_listen_flush(ok=ok, timeout=timeout)
+            self._listen_flush_done = True
+            self._stop_flushing = False
+            self._emit_phase()
+            self.emit({"type": "status", "text": STATUS_READY})
+            self._flush_cloud_archive(final=False)
+
+    def _commit_listener_tail(self, lst: CloudListener | None) -> None:
+        if getattr(self, "_workspace", "") != "meeting" or lst is None:
+            return
+        tail_fn = getattr(lst, "uncovered_tail", None)
+        if not callable(tail_fn):
+            return
+        try:
+            tail = tail_fn()
+        except Exception:
+            return
+        if not isinstance(tail, dict) or not (tail.get("text") or "").strip():
+            return
+        meta: dict[str, Any] = {
+            "first_word_ms": tail.get("first_word_ms"),
+            "last_word_ms": tail.get("last_word_ms"),
+            "n_words": tail.get("n_words") or 0,
+            "stt_turn": tail.get("stt_turn"),
+            "listener_id": id(lst),
+            "fallback": True,
+            "stop_commit": True,
+        }
+        logging.getLogger("nod").info(
+            "listen_flush fallback stt_turn=%s text_len=%s",
+            tail.get("stt_turn"),
+            len(str(tail.get("text") or "")),
+        )
+        self._on_final(str(tail["text"]), tail.get("lang"), tail.get("speaker"), meta)
+
+    def _emit_listen_flush(self, *, ok: bool, timeout: bool) -> None:
+        self._listen_flush_seq = getattr(self, "_listen_flush_seq", 0) + 1
+        client_id = getattr(self, "_listen_flush_client_id", None)
+        self._listen_flush_client_id = None
+        session_id = getattr(self, "usage_session_id", None) or ""
+        logging.getLogger("nod").info(
+            "listen_flush ok=%s timeout=%s seq=%s history_ok=%s flush_id=%s session=%s",
+            ok,
+            timeout,
+            self._listen_flush_seq,
+            getattr(self, "_listen_flush_history_ok", True),
+            client_id or "",
+            session_id,
+        )
+        ev: dict[str, Any] = {
+            "type": "listen_flush",
+            "id": str(self._listen_flush_seq),
+            "ok": ok,
+            "timeout": timeout,
+        }
+        if client_id:
+            ev["flush_id"] = client_id
+        if session_id:
+            ev["session_id"] = session_id
+        self.emit(ev)
+
+    def _drain_meeting_after_stop(self) -> bool:
+        deadline = time.monotonic() + MEETING_STOP_DRAIN_SEC
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            if getattr(self, "_workspace", "") == "meeting":
+                self._flush_meeting_hold()
+            self._stop_meeting_worker(wait=True, timeout=max(0.05, remaining))
+            ptxt = (getattr(self, "_pending_wait", (None, 0.0, None)) or (None, 0.0, None))[0]
+            q = getattr(self, "_meeting_finals", None)
+            worker = getattr(self, "_meeting_worker_thread", None)
+            alive = bool(worker is not None and worker.is_alive())
+            busy = bool(getattr(self, "_meeting_worker_started", False) or alive)
+            queued = bool(q is not None and not q.empty())
+            if not ptxt and not busy and not queued:
+                return True
+            if deadline - time.monotonic() <= 0:
+                return False
 
     def manual(self) -> None:
         if self._mic_muted:
@@ -4584,12 +4872,22 @@ class Session:
         self.emit(ev)
 
     def _on_final(self, text: str, lang: str | None = None, speaker: str | None = None, meta: dict[str, Any] | None = None) -> None:
+        meta = dict(meta or {})
+        meta_gen = meta.get("listen_gen")
+        if meta_gen is not None and meta_gen != getattr(self, "_listen_gen", 0):
+            return
         if text:
             self._mark_voice()
+        identity_turn = (
+            meta.get("stt_turn") is not None
+            or meta.get("fallback")
+            or meta.get("revision")
+            or meta.get("stop_commit")
+        )
         recent = [t for t, _ in self._recent_finals[-3:]]
         cleaned, _reason = clean_transcript(
             text,
-            recent,
+            None if identity_turn else recent,
             self.pipeline._last_answer,
             keep_fillers=self._workspace in ("meeting", "translate"),
         )
@@ -4600,9 +4898,13 @@ class Session:
             self.emit({"type": "partial", "text": ""})
             return
         now = time.time()
-        for t, ts in self._recent_finals:
-            if now - ts < 5.0 and _ratio(cleaned.lower(), t.lower()) > 0.85:
-                self.emit({"type": "partial", "text": ""})
+        if not identity_turn:
+            for t, ts in self._recent_finals:
+                if now - ts < 5.0 and _ratio(cleaned.lower(), t.lower()) > 0.85:
+                    self.emit({"type": "partial", "text": ""})
+                    return
+        if self._workspace == "meeting" and meta.get("revision"):
+            if self._apply_meeting_revision(cleaned, lang, speaker, meta):
                 return
         if self._workspace == "translate":
             locked = self._effective_stt_lang()

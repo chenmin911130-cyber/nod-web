@@ -28,6 +28,7 @@ const EVENT_TYPES = new Set([
   'history_keep_failed',
   'attached',
   'pcm_drained',
+  'listen_flush',
 ])
 
 function asText(v: unknown): string {
@@ -100,6 +101,15 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
       if (!Number.isFinite(offset)) return null
       return { type: 'pcm_drained', id, capture_id: captureId, byte_offset: offset }
     }
+    case 'listen_flush':
+      return {
+        type: 'listen_flush',
+        id: asText(o.id) || undefined,
+        flush_id: asText(o.flush_id) || undefined,
+        session_id: asText(o.session_id) || undefined,
+        ok: o.ok !== false,
+        timeout: o.timeout === true,
+      }
     default:
       return { ...o, type } as EngineEvent
   }
