@@ -3813,7 +3813,11 @@ class Session:
                 decision, reason = meeting_decide_full(self._open_line, nxt_open, now)
                 decide_prev = self._open_line
                 # §1.1: does the incoming turn carry a sentence end to close on?
-                split_at = meeting_last_sentence_index(cleaned) if (decision == "extend" and decide_prev) else None
+                split_at = (
+                    meeting_last_sentence_index(cleaned, skip_false_period=True)
+                    if (decision == "extend" and decide_prev)
+                    else None
+                )
                 tail = cleaned[split_at:].strip() if split_at else ""
                 self._trace_meeting_decision(
                     decide_prev, nxt_open, decision, reason, now, cleaned,
@@ -3831,6 +3835,14 @@ class Session:
                         rev = prev.get("rev", 0) + 1
                         head_n_words = round((meta.get("n_words") or 0) * split_at / len(cleaned)) if len(cleaned) else 0
                         merged = join_meeting_text(prev["text"], head, gap_ms=gap_ms_val)
+                        fw = meta.get("first_word_ms")
+                        lw = meta.get("last_word_ms")
+                        if not tail and lw is not None:
+                            head_last_ms = lw
+                        elif tail and fw is not None and lw is not None and lw >= fw and len(cleaned) > 0:
+                            head_last_ms = fw + (lw - fw) * (split_at / len(cleaned))
+                        else:
+                            head_last_ms = prev.get("last_word_ms")
                         self._open_line = {
                             "id": prev["id"],
                             "text": merged,
@@ -3838,7 +3850,7 @@ class Session:
                             "lang": prev.get("lang"),
                             "opened_at": prev.get("opened_at"),
                             "last_final_at": now,
-                            "last_word_ms": prev.get("last_word_ms"),
+                            "last_word_ms": head_last_ms,
                             "n_words": (prev.get("n_words") or 0) + head_n_words,
                             "rev": rev,
                             "closed": True,

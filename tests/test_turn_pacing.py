@@ -83,6 +83,15 @@ class SplitCarryTests(unittest.TestCase):
         self.assertEqual(head, "")
         self.assertEqual(tail, "We know exactly")
 
+    def test_last_sentence_index_default_still_counts_function_word_period(self):
+        # Meeting skip_false_period must not leak into Translate carry (#33 / #105).
+        from server.meeting_lines import last_sentence_index
+        text = "We finished that part. changing me into."
+        self.assertEqual(last_sentence_index(text), len(text))
+        head, tail = split_carry(text)
+        self.assertEqual(head, "We finished that part.")
+        self.assertEqual(tail, "changing me into.")
+
 
 class TurnPacingEnvTests(unittest.TestCase):
     def test_defaults(self):
