@@ -36,7 +36,7 @@ struct WatchRootView: View {
         return Group {
             if session.draining || session.drainFailed {
                 VStack(spacing: 4) {
-                    Text(session.drainFailed ? WatchCopy.drainFailed : WatchCopy.replaying)
+                    Text(session.drainFailed ? WatchCopy.drainFailed : WatchCopy.sendingLast)
                         .font(.caption)
                         .foregroundStyle(muted)
                         .multilineTextAlignment(.center)
@@ -142,7 +142,7 @@ struct WatchRootView: View {
 
     private var drainPage: some View {
         VStack(spacing: 10) {
-            Text(session.drainFailed ? WatchCopy.drainFailed : WatchCopy.replaying)
+            Text(session.drainFailed ? WatchCopy.drainFailed : WatchCopy.sendingLast)
                 .font(.headline)
                 .foregroundStyle(ink)
                 .multilineTextAlignment(.center)
@@ -342,6 +342,12 @@ struct WatchRootView: View {
             capsule(WatchPhoneSession.modeLabel(session.mode))
             Text(WatchCopy.paused)
                 .font(.caption)
+            if session.hint == WatchCopy.linkLost {
+                Text(WatchCopy.linkLost)
+                    .font(.caption2)
+                    .foregroundStyle(Color.orange)
+                    .multilineTextAlignment(.center)
+            }
             Text(clock(session.elapsedMs))
                 .font(.title3.monospacedDigit().weight(.semibold))
                 .foregroundStyle(timer)
@@ -420,6 +426,10 @@ struct WatchRootView: View {
 
     private var savePrompt: some View {
         VStack(spacing: 8) {
+            Text(session.saveFailed ? WatchCopy.saveFailed : session.saving ? WatchCopy.saving : WatchCopy.savedLocal)
+                .font(.caption)
+                .foregroundStyle(muted)
+                .multilineTextAlignment(.center)
             Button(WatchCopy.dontSave) { session.declineSave() }
                 .buttonStyle(.borderedProminent)
                 .tint(slate)
@@ -437,8 +447,9 @@ struct WatchRootView: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.title)
                 .foregroundStyle(cyan)
-            Text(WatchCopy.saved)
+            Text(WatchCopy.savedHistory)
                 .font(.headline)
+                .multilineTextAlignment(.center)
         }
     }
 

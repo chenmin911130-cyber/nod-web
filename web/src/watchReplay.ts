@@ -1,19 +1,11 @@
-/** Watch → phone PCM persist / replay (#165).
+/** Watch → phone PCM (#181).
 
-Ack layers (delete only after the next layer owns a copy):
-1. Watch disk — appended on every capture frame. Copy failure does not delete it.
-2. Phone inbound file — persist then stream. Not an STT ack.
-3. AudioUplink queue / socket write — not enough to stop STT or delete Watch copies.
-4. Server `pcm_drained` for this capture+session+offset — then Watch may delete,
-   then `stop_listen`. Socket send / phone persist is not enough to delete Watch
-   copies; drain failure must still have shards to retry. STT reconnect hands
-   off unsent PCM (buffer then queue) after the sender has exited. Confirm
-   requires STT-sent bytes to reach the End offset. Drain retry re-requests
-   confirmation or resumes from the STT consume offset — never from byte 0.
-   Old clients omit `pcm_end`; `stop_listen` stays immediate.
+Watch is capture + bounded memory retry only. iPhone native persists the
+contiguous prefix, acks that prefix, uploads from the file, and owns Save.
+Socket send and STT drain are not Watch End completion.
 
-Caps: Watch disk 32 MiB (stop capture, keep files, visible error). Uplink RAM
-2 MiB with backpressure; never drop-oldest on the Watch ingest path.
+Caps: Watch send buffer 128 KiB (4s). Phone disk 256 MiB. Uplink RAM 2 MiB
+with backpressure; never drop-oldest.
 */
 
 export const WATCH_PCM_BYTES_PER_SEC = 16_000 * 2
@@ -21,8 +13,11 @@ export const WATCH_PCM_FRAME_BYTES = 3200
 export const WATCH_PCM_MIN_CHUNK_BYTES = 1600
 export const WATCH_SHARD_BYTES = 160_000
 export const WATCH_DISK_LIMIT_BYTES = 32 * 1024 * 1024
+export const PHONE_DISK_LIMIT_BYTES = 256 * 1024 * 1024
+export const WATCH_SEND_LIMIT_BYTES = 128_000
 export const UPLINK_MAX_PENDING_BYTES = 2 * 1024 * 1024
-export const WATCH_DRAIN_SLACK_SEC = 90
+export const WATCH_END_ACK_TIMEOUT_SEC = 20
+export const WATCH_DRAIN_SLACK_SEC = WATCH_END_ACK_TIMEOUT_SEC
 
 export type WatchStartListenMsg = { type: 'start_listen'; mic?: 'watch' }
 
@@ -33,6 +28,7 @@ export type WatchPcmDecision =
   | 'future'
   | 'stale-session'
   | 'stale-capture'
+  | 'persist-failed'
 
 export function watchStartListenCommand(fromWatch: boolean): WatchStartListenMsg {
   return fromWatch ? { type: 'start_listen', mic: 'watch' } : { type: 'start_listen' }
@@ -87,6 +83,10 @@ export function watchDiskWouldExceed(used: number, incoming: number, limit = WAT
   return used + incoming > limit
 }
 
+export function watchPhoneDiskWouldExceed(used: number, incoming: number, limit = PHONE_DISK_LIMIT_BYTES): boolean {
+  return used + incoming > limit
+}
+
 export function watchUplinkCanTake(queued: number, incoming: number, max = UPLINK_MAX_PENDING_BYTES): boolean {
   return queued + incoming <= max
 }
@@ -99,27 +99,34 @@ export function watchUplinkTakeBytes(queued: number, incoming: number, max = UPL
 export function watchEndShouldSendStop(opts: {
   frozen: boolean
   lastByte: number
-  nextByte: number
-  uplinkQueued: number
-  serverDrained: boolean
+  heldByte: number
   ackCaptureId: string
   liveCaptureId: string
   ackSessionId: string
   liveSessionId: string
-  drainByte?: number
 }): boolean {
-  if (!opts.frozen || !opts.serverDrained) return false
-  if (!watchPcmDrainApplies({
+  if (!opts.frozen) return false
+  if (!watchPcmAckApplies({
     liveCaptureId: opts.liveCaptureId,
     liveSessionId: opts.liveSessionId,
-    liveLastByte: opts.lastByte,
-    drainCaptureId: opts.ackCaptureId,
-    drainSessionId: opts.ackSessionId,
-    drainByte: opts.drainByte ?? opts.lastByte,
+    ackCaptureId: opts.ackCaptureId,
+    ackSessionId: opts.ackSessionId,
   })) {
     return false
   }
-  return opts.nextByte >= opts.lastByte && opts.uplinkQueued === 0
+  return opts.heldByte >= opts.lastByte
+}
+
+export function watchDisconnectShouldPause(listening: boolean, reachable: boolean): boolean {
+  return listening && !reachable
+}
+
+export function watchSendWouldExceed(unacked: number, incoming: number, limit = WATCH_SEND_LIMIT_BYTES): boolean {
+  return unacked + incoming > limit
+}
+
+export function watchStartMayRecord(capture: string, pcmReady: boolean): boolean {
+  return (capture === 'listening' || capture === 'recording') && pcmReady
 }
 
 export function watchPcmAckApplies(opts: {
@@ -209,7 +216,7 @@ export type WatchDrainMsg = {
   sessionId: string
 }
 
-/** End freeze: tell the phone to flush the tail and wait for pcm_drained. Not stop_listen. */
+/** End freeze: tell the phone to seal the persist prefix. Not stop_listen. */
 export function watchDrainMessage(opts: {
   lastByte: number
   captureId: string
@@ -228,16 +235,18 @@ export function watchSaveTimerMayStart(opts: { draining: boolean; stopSent: bool
   return !opts.draining && opts.stopSent
 }
 
-export function watchDrainDeadlineSec(lastByte: number): number {
-  return lastByte / WATCH_PCM_BYTES_PER_SEC + WATCH_DRAIN_SLACK_SEC
+/** End waits a bounded persist-ack window, not whole-session cloud drain. */
+export function watchDrainDeadlineSec(_lastByte: number): number {
+  return WATCH_END_ACK_TIMEOUT_SEC
 }
 
 export function watchDrainTimedOut(opts: { freezeAt: number; now: number; lastByte: number }): boolean {
   return opts.now - opts.freezeAt >= watchDrainDeadlineSec(opts.lastByte)
 }
 
-export function watchMayDeleteWatchCopy(serverDrained: boolean): boolean {
-  return serverDrained
+/** Leftover Watch files are never auto-deleted. User deletes from storage UI. */
+export function watchMayDeleteWatchCopy(_serverDrained: boolean): boolean {
+  return false
 }
 
 /** Retry re-requests pcm_end confirmation. The server keeps the tail; the phone cursor does not rewind. */
@@ -267,6 +276,7 @@ type Parked = { offset: number; bytes: Uint8Array; key: string }
 /** Ordered Watch PCM ingest: persist, dedupe, backpressure into a 2 MiB uplink. */
 export class WatchReplayIngest {
   nextByte = 0
+  heldByte = 0
   captureId = ''
   sessionId = ''
   uplinkQueued = 0
@@ -279,6 +289,7 @@ export class WatchReplayIngest {
   delivered: number[] = []
   pcmEndSent = false
   private parked: Parked[] = []
+  private uplinkHeld: Parked[] = []
   private persistOk = true
   private watchKeys = new Set<string>()
 
@@ -289,7 +300,9 @@ export class WatchReplayIngest {
   bind(captureId: string, sessionId: string): void {
     if (this.captureId && captureId && captureId !== this.captureId) {
       this.nextByte = 0
+      this.heldByte = 0
       this.parked = []
+      this.uplinkHeld = []
       this.uplinkQueued = 0
       this.uplinkSent = 0
       this.watchDeleted.clear()
@@ -308,25 +321,22 @@ export class WatchReplayIngest {
     fromFile?: boolean
   }): WatchPcmDecision {
     if (opts.fromFile && !this.captureId) return 'stale-capture'
+    if (!this.captureId && opts.captureId) this.captureId = opts.captureId
+    if (!this.sessionId && opts.sessionId) this.sessionId = opts.sessionId
     const decision = watchPcmDecision({
       liveCaptureId: this.captureId,
       liveSessionId: this.sessionId,
       incomingCaptureId: opts.captureId,
       incomingSessionId: opts.sessionId,
-      nextByte: this.nextByte,
+      nextByte: this.heldByte,
       incomingOffset: opts.offset,
       incomingBytes: opts.bytes.length,
     })
     if (decision === 'stale-capture' || decision === 'stale-session' || decision === 'duplicate') {
       return decision
     }
-    if (!this.captureId) this.captureId = opts.captureId
-    if (!this.sessionId && opts.sessionId) this.sessionId = opts.sessionId
-
-    if (opts.fromFile) {
-      if (!this.persistOk) return decision
-      this.phoneFiles.set(opts.key, opts.bytes)
-    }
+    if (!this.persistOk) return 'persist-failed'
+    this.phoneFiles.set(opts.key, opts.bytes)
     this.watchKeys.add(opts.key)
 
     if (decision === 'future') {
@@ -335,8 +345,9 @@ export class WatchReplayIngest {
       return decision
     }
 
-    const slice = watchPcmOverlapSlice(this.nextByte, opts.offset, opts.bytes)
-    this.feed(slice, opts.key)
+    const slice = watchPcmOverlapSlice(this.heldByte, opts.offset, opts.bytes)
+    this.heldByte += slice.length
+    this.enqueueUplink(slice, opts.key)
     this.flushParked()
     return decision === 'overlap' ? 'overlap' : 'accept'
   }
@@ -346,6 +357,7 @@ export class WatchReplayIngest {
     const take = Math.min(n, this.uplinkQueued)
     this.uplinkQueued -= take
     this.uplinkSent += take
+    this.flushUplink()
     this.flushParked()
     for (const [key, bytes] of this.phoneFiles) {
       if (this.uplinkSent >= this.endOf(key, bytes) && watchMayDeletePhoneCopy(true)) {
@@ -356,7 +368,7 @@ export class WatchReplayIngest {
   }
 
   ackByte(): number {
-    return this.nextByte
+    return this.heldByte
   }
 
   markServerDrained(): void {
@@ -379,45 +391,54 @@ export class WatchReplayIngest {
     return offset + bytes.length
   }
 
-  private feed(bytes: Uint8Array, key: string): void {
-    let i = 0
-    while (i < bytes.length) {
-      const frame = Math.min(WATCH_PCM_FRAME_BYTES, bytes.length - i)
+  private enqueueUplink(bytes: Uint8Array, key: string): void {
+    if (!bytes.length) return
+    this.uplinkHeld.push({ offset: this.nextByte, bytes, key })
+    this.flushUplink()
+  }
+
+  private flushUplink(): void {
+    while (this.uplinkHeld.length) {
+      const head = this.uplinkHeld[0]!
+      const frame = Math.min(WATCH_PCM_FRAME_BYTES, head.bytes.length)
       const take = watchUplinkTakeBytes(this.uplinkQueued, frame)
-      if (take <= 0) {
-        this.parked.push({ offset: this.nextByte, bytes: bytes.subarray(i), key })
-        this.parked.sort((a, b) => a.offset - b.offset)
-        return
-      }
-      const chunk = bytes.subarray(i, i + take)
+      if (take <= 0) return
+      const chunk = head.bytes.subarray(0, take)
       this.uplinkQueued += take
       this.nextByte += take
       for (let b = 0; b < take; b++) this.delivered.push(chunk[b]!)
-      i += take
-      if (this.phoneFiles.has(key) && this.nextByte >= this.endOf(key, this.phoneFiles.get(key)!)) {
-        if (watchMayDeleteWatchCopy(false)) this.watchDeleted.add(key)
+      if (take === head.bytes.length) this.uplinkHeld.shift()
+      else {
+        this.uplinkHeld[0] = {
+          offset: head.offset + take,
+          bytes: head.bytes.subarray(take),
+          key: head.key,
+        }
+      }
+      if (this.phoneFiles.has(head.key) && this.nextByte >= this.endOf(head.key, this.phoneFiles.get(head.key)!)) {
+        if (watchMayDeleteWatchCopy(false)) this.watchDeleted.add(head.key)
       }
     }
   }
 
   private flushParked(): void {
     while (this.parked.length) {
-      if (watchUplinkTakeBytes(this.uplinkQueued, 1) <= 0) return
       const head = this.parked[0]!
       const decision = watchPcmDecision({
         liveCaptureId: this.captureId,
         liveSessionId: this.sessionId,
         incomingCaptureId: this.captureId,
         incomingSessionId: this.sessionId,
-        nextByte: this.nextByte,
+        nextByte: this.heldByte,
         incomingOffset: head.offset,
         incomingBytes: head.bytes.length,
       })
       if (decision === 'future') return
       this.parked.shift()
       if (decision === 'duplicate') continue
-      const slice = watchPcmOverlapSlice(this.nextByte, head.offset, head.bytes)
-      this.feed(slice, head.key)
+      const slice = watchPcmOverlapSlice(this.heldByte, head.offset, head.bytes)
+      this.heldByte += slice.length
+      this.enqueueUplink(slice, head.key)
     }
   }
 }

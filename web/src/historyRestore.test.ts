@@ -1,4 +1,4 @@
-import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, mergePendingHistory, parseRestoreDismissed, rememberRestoreDismissed, restoreAttachedClock, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce, startMeetingKind, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession } from './historyRestore'
+import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, mergeLocalCaptures, mergePendingHistory, parseRestoreDismissed, rememberRestoreDismissed, restoreAttachedClock, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce, startMeetingKind, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession } from './historyRestore'
 import type { HistorySession } from './components/HistoryPane'
 
 function at(h: number, m: number, s = 0): string {
@@ -272,6 +272,16 @@ if (restoreLaunchSurface({ ...idleRestore, workspaceMode: 'translate' }) !== 'no
   mergePendingHistory(savedIn, pendingIn)
   eq(savedIn[0].id, 's', 'saved input is not mutated')
   eq(pendingIn[0].id, 'p', 'pending input is not mutated')
+  const localMerged = mergeLocalCaptures(
+    [{ id: 'cloud-1', started_at: '2026-09-09T10:00:00.000Z', kept: true }],
+    [
+      { captureId: 'cap-a', sessionId: 'cloud-1', bytes: 3200, sealed: true, intent: 'none', modifiedAt: '2026-09-09T11:00:00.000Z' },
+      { captureId: 'cap-b', sessionId: '', bytes: 6400, sealed: true, intent: 'none', modifiedAt: '2026-09-09T12:00:00.000Z' },
+      { captureId: 'cap-c', sessionId: '', bytes: 100, sealed: true, intent: 'discard', modifiedAt: '2026-09-09T13:00:00.000Z' },
+    ],
+    (row) => ({ id: row.sessionId || `local:${row.captureId}`, started_at: row.modifiedAt, kept: false }),
+  )
+  eq(localMerged.map((row) => row.id).join('|'), 'local:cap-b|cloud-1', 'local phone capture appears once and skips discard / already-listed sessions')
 }
 if (JSON.stringify(rememberRestoreDismissed([], 'p1')) !== JSON.stringify(['p1'])) throw new Error('first dismiss is recorded')
 if (JSON.stringify(rememberRestoreDismissed(['p1'], 'p1')) !== JSON.stringify(['p1'])) throw new Error('repeat dismiss does not duplicate')

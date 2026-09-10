@@ -27,6 +27,13 @@ import {
   watchMayDeleteWatchCopy,
   watchIngestRewindForRetry,
   watchConsumedApplies,
+  watchDisconnectShouldPause,
+  watchSendWouldExceed,
+  watchStartMayRecord,
+  watchPhoneDiskWouldExceed,
+  WATCH_SEND_LIMIT_BYTES,
+  WATCH_END_ACK_TIMEOUT_SEC,
+  PHONE_DISK_LIMIT_BYTES,
 } from './watchReplay'
 
 function eq<T>(got: T, want: T, label: string) {
@@ -189,7 +196,7 @@ eq(
   eq(pipe.droppedOldest, 0, 'complete send still never drops old frames')
   eq(pipe.watchDeleted.has('big:0'), false, 'socket/phone consume must not delete the Watch original')
   pipe.markServerDrained()
-  eq(pipe.watchDeleted.has('big:0'), true, 'Watch copy deletes only after matching pcm_drained')
+  eq(pipe.watchDeleted.has('big:0'), false, 'Watch copies are never auto-deleted after cloud drain')
 }
 
 {
@@ -206,6 +213,7 @@ eq(
   })
   eq(pipe.phoneFiles.has('fail:0'), false, 'failed persist does not claim a phone copy')
   eq(pipe.watchDeleted.has('fail:0'), false, 'failed file must not delete the Watch original')
+  eq(pipe.ackByte(), 0, 'failed persist does not advance the Watch ack')
   eq(watchFailedPersistMayDelete(), false, 'delete is forbidden until persist succeeds')
 }
 
@@ -213,34 +221,19 @@ eq(
   const lastByte = 64_000
   const ids = { ackCaptureId: 'cap-a', liveCaptureId: 'cap-a', ackSessionId: 'sess-1', liveSessionId: 'sess-1' }
   eq(
-    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: 32_000, uplinkQueued: 0, serverDrained: true, ...ids }),
+    watchEndShouldSendStop({ frozen: true, lastByte, heldByte: 32_000, ...ids }),
     false,
-    'End must not stop while backlog remains',
+    'End must not stop while the phone prefix is short',
   )
   eq(
-    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 3200, serverDrained: true, ...ids }),
-    false,
-    'End must not stop while uplink still holds frames',
-  )
-  eq(
-    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 0, serverDrained: false, ...ids }),
-    false,
-    'socket send is not enough; wait for pcm_drained',
-  )
-  eq(
-    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 0, serverDrained: true, ...ids, ackCaptureId: 'cap-old' }),
+    watchEndShouldSendStop({ frozen: true, lastByte, heldByte: lastByte, ...ids, ackCaptureId: 'cap-old' }),
     false,
     'old ack must not complete a new capture',
   )
   eq(
-    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 0, serverDrained: true, ...ids, drainByte: 32_000 }),
-    false,
-    'old drain offset must not complete a new capture length',
-  )
-  eq(
-    watchEndShouldSendStop({ frozen: true, lastByte, nextByte: lastByte, uplinkQueued: 0, serverDrained: true, ...ids, drainByte: lastByte }),
+    watchEndShouldSendStop({ frozen: true, lastByte, heldByte: lastByte, ...ids }),
     true,
-    'stop_listen only after server drain of this capture and offset',
+    'Watch End completes once the phone holds the final persist prefix',
   )
   eq(watchSaveTimerMayStart({ draining: true, stopSent: false }), false, '#164 15s timer does not cover replay')
   eq(watchSaveTimerMayStart({ draining: false, stopSent: true }), true, 'Save timer starts once keep_history can send')
@@ -258,32 +251,29 @@ eq(
   const frozen = true
   const lastByte = 6400
   const ids = { ackCaptureId: 'cap-a', liveCaptureId: 'cap-a', ackSessionId: 'sess-1', liveSessionId: 'sess-1' }
-  let serverDrained = false
-  while (!watchEndShouldSendStop({ frozen, lastByte, nextByte: pipe.nextByte, uplinkQueued: pipe.uplinkQueued, serverDrained, ...ids })) {
-    eq(stopSent, false, 'stop is held while draining')
-    if (pipe.uplinkQueued > 0) pipe.consume(WATCH_PCM_FRAME_BYTES)
-    else serverDrained = true
-  }
+  eq(pipe.ackByte(), lastByte, 'persist ack reaches End offset before cloud consume')
+  eq(watchEndShouldSendStop({ frozen, lastByte, heldByte: pipe.ackByte(), ...ids }), true, 'cloud backlog does not lock Watch End')
   stopSent = true
   if (watchSaveTimerMayStart({ draining: false, stopSent })) saveArmed = true
-  eq(stopSent, true, 'stop fires after the last byte')
+  eq(stopSent, true, 'stop fires after persist ack')
   eq(saveArmed, true, 'Save may arm only after stop')
-  eq(pipe.nextByte, lastByte, 'same seq continues across the drain')
 }
 
 eq(
   watchDrainTimedOut({ freezeAt: 0, now: 10, lastByte: 32_000 * 60 }),
   false,
-  'a 1-minute backlog plus slack has not expired at 10s',
+  'bounded End ack has not expired at 10s',
 )
 eq(
-  watchDrainTimedOut({ freezeAt: 0, now: 32_000 * 60 / 32_000 + 90, lastByte: 32_000 * 60 }),
+  watchDrainTimedOut({ freezeAt: 0, now: WATCH_END_ACK_TIMEOUT_SEC, lastByte: 32_000 * 60 }),
   true,
-  'past audio-duration + slack is an explicit drain failure',
+  'End persist-ack timeout is 20s, not whole-session cloud drain',
 )
 
-eq(watchDiskWouldExceed(WATCH_DISK_LIMIT_BYTES, 1), true, 'disk cap refuses new capture bytes')
-eq(watchDiskWouldExceed(0, 3200), false, 'under the cap still records')
+eq(watchDiskWouldExceed(WATCH_DISK_LIMIT_BYTES, 1), true, 'leftover Watch disk cap refuses new capture bytes')
+eq(watchDiskWouldExceed(0, 3200), false, 'under the leftover Watch cap still lists')
+eq(watchPhoneDiskWouldExceed(PHONE_DISK_LIMIT_BYTES, 1), true, 'phone disk cap refuses new persist bytes')
+eq(watchPhoneDiskWouldExceed(0, 3200), false, 'under the phone cap still records')
 
 eq(watchPcmAckApplies({ liveCaptureId: 'cap-a', liveSessionId: 'sess-1', ackCaptureId: 'cap-a', ackSessionId: 'sess-1' }), true, 'matching ack applies')
 eq(watchPcmAckApplies({ liveCaptureId: 'cap-a', liveSessionId: 'sess-1', ackCaptureId: 'cap-old', ackSessionId: 'sess-1' }), false, 'old capture ack is rejected')
@@ -300,7 +290,7 @@ eq(
   'delayed consume after capture change does not advance the new cursor',
 )
 eq(watchMayDeleteWatchCopy(false), false, 'phone persist or socket send is not enough to delete Watch copies')
-eq(watchMayDeleteWatchCopy(true), true, 'matching pcm_drained may delete Watch copies')
+eq(watchMayDeleteWatchCopy(true), false, 'cloud drain must not auto-delete leftover Watch files')
 eq(watchMayDeleteShard({ openSeq: 2, seq: 2, offset: 160000, bytes: 3200, ack: 163200, serverDrained: true }), false, 'open shard is not deleted when ack catches its current length')
 eq(watchMayDeleteShard({ openSeq: 2, seq: 1, offset: 0, bytes: 160000, ack: 160000, serverDrained: false }), false, 'socket ack without pcm_drained must not delete a sealed shard')
 eq(watchMayDeleteShard({ openSeq: 2, seq: 1, offset: 0, bytes: 160000, ack: 160000, serverDrained: true }), true, 'sealed fully-acked shard may be deleted after pcm_drained')
@@ -361,4 +351,21 @@ eq(watchIngestRewindForRetry({ pcmEndSent: true, nextByte: 6400 }), 6400, 'lost 
   pipe.bind('cap-b', 'sess-2')
   eq(pipe.nextByte, 0, 'new capture resets the cursor')
   eq(pipe.uplinkSent, 0, 'new capture resets sent bytes')
+}
+
+eq(watchDisconnectShouldPause(true, false), true, 'Watch-phone drop pauses capture')
+eq(watchDisconnectShouldPause(true, true), false, 'reachable Watch stays live')
+eq(watchDisconnectShouldPause(false, false), false, 'idle Watch does not pause')
+eq(watchSendWouldExceed(WATCH_SEND_LIMIT_BYTES, 1), true, 'unacked 4s buffer refuses more frames')
+eq(watchSendWouldExceed(0, 3200), false, 'under the send cap still records')
+eq(watchStartMayRecord('listening', true), true, 'Start records after persist-ready')
+eq(watchStartMayRecord('listening', false), false, 'Start waits until the phone file exists')
+eq(watchStartMayRecord('off', true), false, 'persist-ready without capture is not Recording')
+
+{
+  const pipe = new WatchReplayIngest()
+  pipe.bind('cap-a', 'sess-1')
+  eq(pipe.ingest({ captureId: 'cap-a', sessionId: 'sess-1', offset: 0, bytes: bytes(1600), key: 'live:0' }), 'accept', 'live frames persist on the phone')
+  eq(pipe.ackByte(), 1600, 'Watch ack is the phone persist prefix, not uplink consume')
+  eq(pipe.phoneFiles.has('live:0'), true, 'live path writes a phone file before ack')
 }

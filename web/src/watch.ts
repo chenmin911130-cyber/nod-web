@@ -1,5 +1,6 @@
 import { registerPlugin } from '@capacitor/core'
-import { isNativeApp } from './native'
+import { getToken } from './auth'
+import { isNativeApp, NATIVE_API_ORIGIN } from './native'
 
 type WatchCommand = { action?: string; mode?: string; sessionId?: string }
 type WatchPcm = { data?: string }
@@ -31,11 +32,18 @@ type WatchPlugin = {
   }): Promise<void>
   playSpeech(opts: { data: string; dest?: 'phone' | 'watch' }): Promise<void>
   stopSpeech(): Promise<void>
+  storeAccount(opts: { token: string; origin: string }): Promise<void>
   addListener(event: 'command', cb: (ev: WatchCommand) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'pcm', cb: (ev: WatchPcm) => void): Promise<{ remove: () => Promise<void> }>
 }
 
 const NodWatch = registerPlugin<WatchPlugin>('NodWatch')
+
+function storeWatchAccount(): void {
+  if (!isNativeApp()) return
+  const token = getToken()
+  void NodWatch.storeAccount({ token, origin: NATIVE_API_ORIGIN }).catch(() => undefined)
+}
 
 let preferWatchMic = false
 let pcmSink: ((buf: ArrayBuffer) => void) | null = null
@@ -265,6 +273,7 @@ export function installWatchRemote(handlers: {
   const handles: Array<{ remove: () => Promise<void> }> = []
   void (async () => {
     await NodWatch.ready()
+    storeWatchAccount()
     const command = await NodWatch.addListener('command', (ev) => {
       if (gone) return
       const { action, sessionId } = watchCommandFromBridge(ev)
@@ -325,6 +334,7 @@ export function pushWatchStatus(face: {
   pcmDrainedByte?: number
 }): void {
   if (!isNativeApp()) return
+  storeWatchAccount()
   void NodWatch.setStatus({
     capture: face.capture,
     hint: (face.hint || '').slice(0, 140),

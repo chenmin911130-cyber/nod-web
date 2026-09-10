@@ -122,16 +122,44 @@ enum WatchCopy {
         ])
     }
 
-    static var saved: String {
+    static var saved: String { savedHistory }
+
+    static var savedLocal: String {
         pick([
-            "zh": "已同步到手机",
-            "en": "Saved to iPhone",
-            "it": "Salvato su iPhone",
-            "es": "Guardado en iPhone",
-            "fr": "Sauvé sur iPhone",
-            "de": "Auf iPhone",
-            "pt": "Salvo no iPhone",
-            "ja": "iPhoneに保存",
+            "zh": "已保存到手机，转写处理中",
+            "en": "Saved on iPhone · transcribing",
+            "it": "Salvato su iPhone · trascrizione",
+            "es": "Guardado en iPhone · transcribiendo",
+            "fr": "Sauvé sur iPhone · transcription",
+            "de": "Auf iPhone · Transkription",
+            "pt": "Salvo no iPhone · transcrevendo",
+            "ja": "iPhoneに保存 · 文字起こし中",
+        ])
+    }
+
+    static var savedHistory: String {
+        pick([
+            "zh": "已保存到 History",
+            "en": "Saved to History",
+            "it": "Salvato in History",
+            "es": "Guardado en History",
+            "fr": "Enregistré dans History",
+            "de": "In History gespeichert",
+            "pt": "Salvo no History",
+            "ja": "Historyに保存しました",
+        ])
+    }
+
+    static var linkLost: String {
+        pick([
+            "zh": "连接中断",
+            "en": "Connection lost",
+            "it": "Connessione persa",
+            "es": "Conexión perdida",
+            "fr": "Connexion perdue",
+            "de": "Verbindung unterbrochen",
+            "pt": "Conexão perdida",
+            "ja": "接続が切れました",
         ])
     }
 
@@ -265,18 +293,20 @@ enum WatchCopy {
         ])
     }
 
-    static var replaying: String {
+    static var sendingLast: String {
         pick([
-            "zh": "正在补传",
-            "en": "Catching up",
-            "it": "Invio in corso",
-            "es": "Enviando audio",
-            "fr": "Envoi en cours",
-            "de": "Wird nachgereicht",
-            "pt": "Enviando áudio",
-            "ja": "送信中",
+            "zh": "正在发送最后一段",
+            "en": "Sending the last bit…",
+            "it": "Invio dell'ultima parte…",
+            "es": "Enviando el final…",
+            "fr": "Envoi de la fin…",
+            "de": "Letztes Stück wird gesendet…",
+            "pt": "Enviando o final…",
+            "ja": "最後の音声を送信中…",
         ])
     }
+
+    static var replaying: String { sendingLast }
 
     static var pcmIncomplete: String {
         pick([

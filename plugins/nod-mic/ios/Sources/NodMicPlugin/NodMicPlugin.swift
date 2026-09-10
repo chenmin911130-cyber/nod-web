@@ -16,6 +16,8 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "resume", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startUplink", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopUplink", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "listPendingCaptures", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "deletePendingCapture", returnType: CAPPluginReturnPromise),
     ]
 
     private var engine = AVAudioEngine()
@@ -123,6 +125,26 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func stopUplink(_ call: CAPPluginCall) {
         AudioUplink.shared.stop()
         call.resolve()
+    }
+
+    @objc func listPendingCaptures(_ call: CAPPluginCall) {
+        let rows = WatchPcmIngest.shared.listCaptures().map { info -> [String: Any] in
+            [
+                "captureId": info.captureId,
+                "sessionId": info.sessionId,
+                "bytes": info.bytes,
+                "sealed": info.sealed,
+                "intent": info.intent,
+                "modifiedAt": ISO8601DateFormatter().string(from: info.modifiedAt),
+            ]
+        }
+        call.resolve(["captures": rows])
+    }
+
+    @objc func deletePendingCapture(_ call: CAPPluginCall) {
+        let id = call.getString("captureId") ?? ""
+        let freed = WatchPcmIngest.shared.deleteCapture(id)
+        call.resolve(["freed": freed])
     }
 
     override public func load() {

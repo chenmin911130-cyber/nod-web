@@ -23,6 +23,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastLangPair = ""
     private var lastSave = "none"
     private var lastSessionId = ""
+    private static let accountTokenKey = "nod.watch.accountToken"
+    private static let accountOriginKey = "nod.watch.accountOrigin"
     private var lastPcmAckByte = 0
     private var lastPcmCaptureId = ""
     private var lastPcmAckSessionId = ""
@@ -47,6 +49,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastPcmRejectSessionId = ""
     private var lastPcmRejectCaptureId = ""
     private var lastPcmRejectText = ""
+    private var lastPcmReady = false
+    private var lastPcmSealed = false
+    private var lastHandshakeFailed = false
+    private var lastHandshakeStatus = 0
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
     private var uplinkActive = false
@@ -64,11 +70,19 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
                 ?? false
         }
         NotificationCenter.default.addObserver(
-            forName: Notification.Name("nod.uplink.consumed"),
+            forName: Notification.Name("nod.watch.pcm.held"),
             object: nil,
             queue: .main
         ) { [weak self] _ in
             self?.pushPcmAck()
+        }
+        NotificationCenter.default.addObserver(
+            forName: Notification.Name("nod.uplink.handshakeFailed"),
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let code = (note.userInfo?["status"] as? Int) ?? 0
+            self?.markUplinkHandshakeFailed(status: code)
         }
         NotificationCenter.default.addObserver(
             forName: Notification.Name("nod.watch.pcm.serverDrained"),
@@ -118,6 +132,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let ack = reply["ackByte"] as? Int ?? 0
         let capture = reply["captureId"] as? String ?? lastPcmCaptureId
         let session = reply["sessionId"] as? String ?? lastSessionId
+        lastPcmReady = (reply["pcmReady"] as? Bool) ?? lastPcmReady
+        lastPcmSealed = (reply["pcmSealed"] as? Bool) ?? lastPcmSealed
         if !capture.isEmpty {
             lastPcmCaptureId = capture
         }
@@ -165,7 +181,22 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         if !pendingAckSession.isEmpty {
             msg["pcmAckSessionId"] = pendingAckSession
         }
+        msg["pcmReady"] = lastPcmReady ? "true" : "false"
+        msg["pcmSealed"] = lastPcmSealed ? "true" : "false"
         wc.sendMessage(msg, replyHandler: nil, errorHandler: nil)
+    }
+
+    func markUplinkHandshakeFailed(status: Int) {
+        lastHandshakeFailed = true
+        lastHandshakeStatus = status
+        pushStatus(
+            capture: lastCapture,
+            hint: lastHint,
+            original: lastOriginal,
+            translation: lastTranslation,
+            previous: lastPrevious,
+            history: lastHistory
+        )
     }
 
     func markPcmDrained(sessionId: String, captureId: String, byteOffset: Int) {
@@ -352,6 +383,12 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             }
             payload["pcmRejectText"] = lastPcmRejectText
         }
+        payload["pcmReady"] = lastPcmReady ? "true" : "false"
+        payload["pcmSealed"] = lastPcmSealed ? "true" : "false"
+        if lastHandshakeFailed {
+            payload["uplinkHandshakeFailed"] = "true"
+            payload["uplinkHandshakeStatus"] = String(lastHandshakeStatus)
+        }
         guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
         do {
             try session.updateApplicationContext(payload)
@@ -406,6 +443,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
                 lastPcmRejectSessionId = ""
                 lastPcmRejectCaptureId = ""
                 lastPcmRejectText = ""
+                lastPcmReady = false
+                lastPcmSealed = false
+                lastHandshakeFailed = false
+                lastHandshakeStatus = 0
                 // Reset the coalesced-ack snapshot + timer so a stale offset from
                 // an old capture is never paired with the new capture (issue #165 P2-4).
                 ackTimer?.cancel()
@@ -421,6 +462,26 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
                 object: nil,
                 userInfo: ["captureId": captureId, "sessionId": lastSessionId]
             )
+            let readyReply = NSMutableDictionary()
+            NotificationCenter.default.post(
+                name: Notification.Name("nod.watch.pcm.ack"),
+                object: nil,
+                userInfo: ["reply": readyReply]
+            )
+            lastPcmReady = (readyReply["pcmReady"] as? Bool) ?? false
+            if let ack = readyReply["ackByte"] as? Int {
+                lastPcmAckByte = ack
+            }
+        }
+        if action == "discard" {
+            NotificationCenter.default.post(
+                name: Notification.Name("nod.watch.pcm.discard"),
+                object: nil,
+                userInfo: ["captureId": captureId.isEmpty ? lastPcmCaptureId : captureId]
+            )
+        }
+        if action == "save" {
+            lastSave = nativeWatchSave(sessionId: sessionId)
         }
         if action == "drain" {
             NotificationCenter.default.post(
@@ -442,6 +503,74 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         } else {
             pending.append((action, at, live, mode, sessionId))
         }
+    }
+
+    func storeAccount(token: String, origin: String) {
+        if token.isEmpty {
+            UserDefaults.standard.removeObject(forKey: Self.accountTokenKey)
+        } else {
+            UserDefaults.standard.set(token, forKey: Self.accountTokenKey)
+        }
+        if !origin.isEmpty {
+            UserDefaults.standard.set(origin, forKey: Self.accountOriginKey)
+        }
+    }
+
+    /// Watch Save must not wait for WKWebView. Persist the keep intent, reply
+    /// `local` immediately, then POST History from native if a token exists.
+    private func nativeWatchSave(sessionId: String) -> String {
+        NotificationCenter.default.post(
+            name: Notification.Name("nod.watch.pcm.intent"),
+            object: nil,
+            userInfo: [
+                "intent": "keep",
+                "captureId": lastPcmCaptureId,
+                "sessionId": sessionId,
+            ]
+        )
+        if sessionId.isEmpty { return "failed" }
+        lastSessionId = sessionId
+        startNativeKeep(sessionId)
+        return "local"
+    }
+
+    private func startNativeKeep(_ sessionId: String) {
+        #if PCM_REPLAY_TESTING
+        return
+        #else
+        let token = UserDefaults.standard.string(forKey: Self.accountTokenKey) ?? ""
+        var origin = UserDefaults.standard.string(forKey: Self.accountOriginKey) ?? ""
+        if origin.isEmpty { origin = "https://nodpilot.com" }
+        let root = origin.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !token.isEmpty, let url = URL(string: "\(root)/api/account/history/\(sessionId)/keep") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: req) { [weak self] _, resp, _ in
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200 ..< 300).contains(code) else { return }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.lastSessionId = sessionId
+                self.lastSave = "saved"
+                self.pushSaveToWatch()
+            }
+        }.resume()
+        #endif
+    }
+
+    private func pushSaveToWatch() {
+        #if PCM_REPLAY_TESTING
+        return
+        #else
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+        guard session.activationState == .activated, session.isReachable else { return }
+        var msg: [String: Any] = ["ok": true, "save": lastSave]
+        if !lastSessionId.isEmpty { msg["sessionId"] = lastSessionId }
+        session.sendMessage(msg, replyHandler: nil, errorHandler: nil)
+        #endif
     }
 
     func stopSpeechPlayback() {
@@ -592,6 +721,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             if let sess = reply["sessionId"] as? String, !sess.isEmpty {
                 lastPcmAckSessionId = sess
             }
+            lastPcmReady = (reply["pcmReady"] as? Bool) ?? lastPcmReady
+            lastPcmSealed = (reply["pcmSealed"] as? Bool) ?? lastPcmSealed
             return
         }
         emitPcm(raw)
@@ -669,6 +800,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             reply["pcmDrainedSessionId"] = lastPcmDrainedSessionId
             reply["pcmDrainedByte"] = String(lastPcmDrainedByte)
         }
+        reply["pcmReady"] = lastPcmReady ? "true" : "false"
+        reply["pcmSealed"] = lastPcmSealed ? "true" : "false"
         replyHandler(reply)
     }
 

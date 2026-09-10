@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from server.db import AuditLog, Feedback, Order, ResetToken, StripeEvent, User, db_session, utcnow
+from server.db import AuditLog, Feedback, Order, ResetToken, StripeEvent, UsageSession, User, db_session, utcnow
 from server.mailer import send_otp_email, send_reset_email
 from server.otp import OTP_OK, consume_otp, issue_otp
 from server.meter import delete_history_session, delete_user_data, list_history, list_pending_history, plan_of, session_file_key, session_file_url, usage_snapshot
@@ -453,6 +453,21 @@ def history(pending: bool = False, user: User = Depends(workspace_user)):
         # re-offer "Save this session to History?" after a reconnect.
         return {"ok": True, "sessions": list_pending_history(user.id)}
     return {"ok": True, "sessions": list_history(user.id)}
+
+
+@router.post("/api/account/history/{session_id}/keep")
+def keep_history_http(session_id: str, user: User = Depends(workspace_user)):
+    """Watch Save from iPhone native when WKWebView is not running."""
+    from server.meter import keep_usage_session
+
+    if not session_id:
+        raise HTTPException(400, "Missing session")
+    with db_session() as db:
+        row = db.get(UsageSession, session_id)
+        if not row or row.user_id != user.id:
+            raise HTTPException(404, "Session not found")
+    keep_usage_session(user.id, session_id, keep_content=True, keep_audio=True)
+    return {"ok": True, "id": session_id}
 
 
 @router.delete("/api/account/history/{session_id}")

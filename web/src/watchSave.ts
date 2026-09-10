@@ -100,7 +100,7 @@ export function watchApplySavePayload(opts: {
   saving: boolean
   requestId: string
   payload: { ok?: unknown; save?: string; sessionId?: string }
-}): { requestId: string; ack: 'ignore' | 'saved' | 'failed' } {
+}): { requestId: string; ack: 'ignore' | 'saved' | 'failed' | 'local' } {
   const incomingSessionId = opts.payload.sessionId || ''
   return {
     requestId: opts.requestId,
@@ -112,18 +112,20 @@ export function watchApplySavePayload(opts: {
   }
 }
 
-export type WatchSaveFace = 'none' | 'saving' | 'saved' | 'failed'
+export type WatchSaveFace = 'none' | 'saving' | 'saved' | 'failed' | 'local'
 
 /** Fields the phone must push on the Watch status chain. */
 export function watchSaveStatusPayload(opts: {
   status: SaveStatus
   liveId: string | null
+  localHeld?: boolean
 }): { save: WatchSaveFace; sessionId: string } {
-  const save: WatchSaveFace =
-    opts.status === 'saving' || opts.status === 'saved' || opts.status === 'failed'
-      ? opts.status
-      : 'none'
-  return { save, sessionId: opts.liveId || '' }
+  const sessionId = opts.liveId || ''
+  if (opts.status === 'saved') return { save: 'saved', sessionId }
+  if (opts.status === 'saving') return { save: 'saving', sessionId }
+  if (opts.status === 'failed') return { save: 'failed', sessionId }
+  if (opts.localHeld) return { save: 'local', sessionId }
+  return { save: 'none', sessionId }
 }
 
 /**
@@ -134,11 +136,12 @@ export function watchSaveAckApplies(opts: {
   requestedId: string
   incomingSave: string
   incomingSessionId: string
-}): 'ignore' | 'saved' | 'failed' {
+}): 'ignore' | 'saved' | 'failed' | 'local' {
   if (!opts.requestedId || !opts.incomingSessionId) return 'ignore'
   if (opts.requestedId !== opts.incomingSessionId) return 'ignore'
   if (opts.incomingSave === 'saved') return 'saved'
   if (opts.incomingSave === 'failed') return 'failed'
+  if (opts.incomingSave === 'local') return 'local'
   return 'ignore'
 }
 

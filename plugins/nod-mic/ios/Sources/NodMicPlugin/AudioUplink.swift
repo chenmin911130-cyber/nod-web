@@ -652,10 +652,64 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let http = task.response as? HTTPURLResponse {
+            queue.async { [weak self] in
+                guard let self, task === self.task else { return }
+                if Self.shouldStopOnHandshake(http.statusCode) {
+                    self.failHandshake(http.statusCode)
+                    return
+                }
+                if error != nil { self.handleDrop() }
+            }
+            return
+        }
         guard error != nil else { return }
         queue.async { [weak self] in
             guard let self, task === self.task else { return }
             self.handleDrop()
+        }
+    }
+
+    /// HTTP 4xx on the audio websocket upgrade is a handshake reject, not a
+    /// listen-session expiry (that is close code 4404). 403 must not rewind or
+    /// relabel the local capture as ended.
+    static func shouldStopOnHandshake(_ status: Int) -> Bool {
+        status >= 400 && status < 500 && status != 4404
+    }
+
+    static func handshakeMeansSessionExpired(_ status: Int) -> Bool {
+        false
+    }
+
+    func handleHandshakeStatus(_ status: Int) {
+        queue.async { [weak self] in
+            self?.failHandshake(status)
+        }
+    }
+
+    private func failHandshake(_ status: Int) {
+        stopped = true
+        reconnectWork?.cancel()
+        reconnectWork = nil
+        pumpWork?.cancel()
+        pumpWork = nil
+        sending = false
+        stopPing()
+        task = nil
+        setConnected(false)
+        NotificationCenter.default.post(
+            name: Notification.Name("nod.uplink.handshakeFailed"),
+            object: nil,
+            userInfo: ["status": status]
+        )
+        if !startCompletions.isEmpty {
+            finishStart(
+                NSError(
+                    domain: "NodMic",
+                    code: 7,
+                    userInfo: [NSLocalizedDescriptionKey: "Audio uplink handshake failed (\(status))"]
+                )
+            )
         }
     }
 }
