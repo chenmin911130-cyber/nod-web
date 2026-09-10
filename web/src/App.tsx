@@ -59,7 +59,7 @@ import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, w
 import { watchStartListenCommand } from './watchReplay'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
-import { shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
+import { applyListenFlushEvent, beginListenFlushWait, idleKeepLastListenFlush, idleListenFlushWait, shouldGenerateAutoReport, timeoutListenFlushWait } from './recordReport'
 import {
   clearWatchReport,
   markWatchReport,
@@ -246,6 +246,7 @@ const initial: AppState = {
   speakerDecided: {},
   partialSpeaker: '',
   quota: null as { stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; ok: boolean; sessions: number; session_limit: number; daily_cost_usd: number; daily_cost_limit: number; daily_stt_seconds: number; daily_stt_limit: number; quota_disabled?: boolean } | null,
+  listenFlushWait: idleListenFlushWait(),
 }
 
 type Action =
@@ -287,6 +288,8 @@ type Action =
   | { type: 'expect_catch'; title?: string; kind?: 'catch' | 'ask'; question?: string }
   | { type: 'retry_ask'; noteId: string }
   | { type: 'expect_notes' }
+  | { type: 'expect_listen_flush'; id: string; sessionId?: string }
+  | { type: 'listen_flush_timeout' }
   | { type: 'rename_speaker'; id: string; name: string }
   | { type: 'dismiss_speaker_suggestion'; id: string }
   | {
@@ -394,10 +397,12 @@ function reducer(state: AppState, action: Action): AppState {
           let autoOn = state.autoOn
           let view = state.view
           let meetingStartedAt = state.meetingStartedAt
+          let listenFlushWait = state.listenFlushWait
           if (capture === 'listening' || capture === 'recording') {
             if (!isWeb && state.workspaceMode === 'interview' && !autoOn && view === 'workspace') view = 'focus'
             autoOn = true
             if (state.workspaceMode === 'meeting' && meetingStartedAt == null) meetingStartedAt = Date.now()
+            listenFlushWait = idleKeepLastListenFlush(listenFlushWait)
           } else if (capture === 'off') {
             autoOn = false
             if (view !== 'workspace') view = 'workspace'
@@ -407,7 +412,7 @@ function reducer(state: AppState, action: Action): AppState {
           let busy = state.busy
           if (engine === 'generating' || engine === 'transcribing') busy = true
           else if (engine === 'idle' && !generating && !interviewAsking) busy = false
-          return { ...state, capture, engine, autoOn, view, busy, meetingStartedAt }
+          return { ...state, capture, engine, autoOn, view, busy, meetingStartedAt, listenFlushWait }
         }
         case 'listen_taken': {
           // Stolen STT must leave Listening. Do not clear Interview / Ask busy.
@@ -672,6 +677,18 @@ function reducer(state: AppState, action: Action): AppState {
           return state
         case 'pcm_drained':
           return state
+        case 'listen_flush': {
+          return {
+            ...state,
+            listenFlushWait: applyListenFlushEvent(state.listenFlushWait, {
+              id: ev.id,
+              flushId: ev.flush_id,
+              sessionId: ev.session_id,
+              ok: ev.ok,
+              timeout: ev.timeout,
+            }),
+          }
+        }
         default:
           return state
       }
@@ -720,6 +737,7 @@ function reducer(state: AppState, action: Action): AppState {
         catchAskId: '',
         notesRaw: '',
         notesAskId: '',
+        listenFlushWait: idleListenFlushWait(),
       }
     case 'workspace':
       return { ...state, workspaceMode: action.mode, view: 'workspace' }
@@ -793,6 +811,7 @@ function reducer(state: AppState, action: Action): AppState {
         meetingElapsedMs: 0,
         translateAskId: '',
         translateBindId: '',
+        listenFlushWait: idleListenFlushWait(),
       }
     case 'meeting_resume':
       return applyMeetingResume(state)
@@ -838,6 +857,13 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case 'expect_notes':
       return { ...state, notesAskId: '__pending__', notesRaw: '', busy: true, status: 'Writing notes…', translateBindId: '', translateAskId: '' }
+    case 'expect_listen_flush':
+      return {
+        ...state,
+        listenFlushWait: beginListenFlushWait(state.listenFlushWait, action.id, action.sessionId || ''),
+      }
+    case 'listen_flush_timeout':
+      return { ...state, listenFlushWait: timeoutListenFlushWait(state.listenFlushWait) }
     case 'translate_from':
       return { ...state, translateFrom: action.lang }
     case 'translate_to':
@@ -1117,6 +1143,8 @@ export default function App() {
   const watchAutoNotes = useRef(false)
   const autoReport = useRef(false)
   const recordHeard = useRef(false)
+  const listenFlushSeq = useRef(0)
+  const endMeetingListeningRef = useRef<(status: string, offerSave: boolean) => void>(() => undefined)
   const watchRestoreTried = useRef(false)
   const handleModeRef = useRef<(mode: WorkspaceMode, scene?: ListenScene) => void>(() => undefined)
   const [watchReportOpen, setWatchReportOpen] = useState(false)
@@ -1147,9 +1175,24 @@ export default function App() {
     }
     window.api.send(watchStartListenCommand(!!opts?.fromWatch))
   }
-  const stopListen = () => {
+  const stopListen = (flushId?: string) => {
     listenWanted.current = false
-    window.api.send({ type: 'stop_listen' })
+    window.api.send(flushId ? { type: 'stop_listen', flush_id: flushId } : { type: 'stop_listen' })
+  }
+  endMeetingListeningRef.current = (status, offerSave) => {
+    autoReport.current = true
+    recordHeard.current = true
+    listenFlushSeq.current += 1
+    const flushId = `f${listenFlushSeq.current}`
+    dispatch({
+      type: 'expect_listen_flush',
+      id: flushId,
+      sessionId: saveBookRef.current.liveId || '',
+    })
+    stopListen(flushId)
+    dispatch({ type: 'meeting_ended' })
+    dispatch({ type: 'engine', ev: { type: 'status', text: status } })
+    if (offerSave) queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
   }
   const askedTranslate = useRef<Set<string>>(new Set())
   const inflightTranslate = useRef<string | null>(null)
@@ -1373,7 +1416,11 @@ export default function App() {
             return
           }
           if (sessionListening({ capture: s.capture })) {
-            stopListen()
+            if (s.workspaceMode === 'meeting') {
+              endMeetingListeningRef.current('Recording stopped · writing report', false)
+            } else {
+              stopListen()
+            }
           }
           return
         }
@@ -1407,13 +1454,15 @@ export default function App() {
         window.api.send({ type: 'resume_listen' })
       },
       onStop: () => {
-        stopListen()
-        if (stateRef.current.workspaceMode === 'meeting') {
-          dispatch({ type: 'meeting_ended' })
-          if (watchStopShouldOpenPhoneSave()) {
-            queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
-          }
+        const s = stateRef.current
+        if (s.workspaceMode === 'meeting') {
+          endMeetingListeningRef.current(
+            'Listening stopped · writing notes',
+            watchStopShouldOpenPhoneSave(),
+          )
+          return
         }
+        stopListen()
       },
       onSave: (sessionId) => {
         saveFromWatchRef.current(sessionId)
@@ -2624,12 +2673,7 @@ export default function App() {
     }
     if (s.workspaceMode === 'meeting') {
       if (live) {
-        autoReport.current = true
-        recordHeard.current = true
-        stopListen()
-        dispatch({ type: 'meeting_ended' })
-        dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped · writing notes' } })
-        queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
+        endMeetingListeningRef.current('Listening stopped · writing notes', true)
         return
       }
       startOrResumeMeeting(s)
@@ -2656,12 +2700,7 @@ export default function App() {
       return
     }
     if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
-      autoReport.current = true
-      recordHeard.current = true
-      if (stopShouldReleaseListener(s.capture)) stopListen()
-      dispatch({ type: 'meeting_ended' })
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped · writing notes' } })
-      queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
+      endMeetingListeningRef.current('Listening stopped · writing notes', true)
     }
   }, [handlePrimary])
 
@@ -2673,21 +2712,11 @@ export default function App() {
     }
     if (s.workspaceMode !== 'meeting') return
     if (s.capture === 'paused') {
-      autoReport.current = true
-      recordHeard.current = true
-      stopListen()
-      dispatch({ type: 'meeting_ended' })
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'Recording stopped · writing report' } })
-      queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
+      endMeetingListeningRef.current('Recording stopped · writing report', true)
       return
     }
     if (sessionListening({ capture: s.capture })) {
-      autoReport.current = true
-      recordHeard.current = true
-      stopListen()
-      dispatch({ type: 'meeting_ended' })
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'Recording stopped · writing report' } })
-      queueMicrotask(() => offerSaveAfterMeetingStopRef.current())
+      endMeetingListeningRef.current('Recording stopped · writing report', true)
       return
     }
     autoReport.current = true
@@ -2974,6 +3003,12 @@ export default function App() {
   generateNotesRef.current = generateNotes
 
   useEffect(() => {
+    if (state.listenFlushWait.status !== 'pending') return
+    const timer = window.setTimeout(() => dispatch({ type: 'listen_flush_timeout' }), 10000)
+    return () => window.clearTimeout(timer)
+  }, [state.listenFlushWait.status])
+
+  useEffect(() => {
     const fromWatch = isNativeApp() && watchAutoNotes.current
     const flagged = fromWatch || autoReport.current
     if (flagged && (state.capture !== 'off' || state.engine !== 'idle')) {
@@ -2987,6 +3022,7 @@ export default function App() {
       workspaceMode: state.workspaceMode,
       busy: state.busy,
       lineCount: state.meetingLines.length,
+      listenFlush: state.listenFlushWait.status,
     })
     if (next === 'wait') return
     watchAutoNotes.current = false
@@ -3005,7 +3041,7 @@ export default function App() {
     if (!snap) return
     markWatchReport()
     writeWatchReportSnapshot(snap)
-  }, [state.busy, state.meetingLines.length, state.capture, state.engine, state.workspaceMode])
+  }, [state.busy, state.meetingLines, state.capture, state.engine, state.workspaceMode, state.listenFlushWait.status])
 
   useEffect(() => {
     if (!isNativeApp() || !readWatchReport()) return

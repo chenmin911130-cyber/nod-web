@@ -2,6 +2,12 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-11 · #187 审查：Watch End 没 arm flush，回执没绑本次 End
+- 我以为：手机 Stop 上 `expect_listen_flush`、每次等待清空 `listenFlushId`，下一条 `listen_flush` 就能放行笔记。
+- 实际：Watch Stop / Record-while-listening 只 `stopListen()`，从未 pending，自动笔记会永远 wait。清空旧 id 后，上一轮迟到回执会完成当前 End。
+- 规则：每次 Meeting End（含 Watch）必须带本场 nonce；`listen_flush` 必须回显并匹配该 nonce，禁止靠「下一条 flush」或清空旧 id 消歧义。
+- 涉及：`endMeetingListeningRef` · `ListenFlushWait.waitId` · `stop_listen.flush_id`
+
 ## 2026-09-11 · 把仍 OPEN 的 #33 写成尚未实现
 - 我以为：#33 仍 OPEN，本地 `meeting_lines.decide` 仍是 12s／480 字／80 词，所以第三轮断句还没做，列为「按 #33 原文全量实现」。
 - 实际：PR #34 已于 2026-09-06 合并（`ba38eb9`）。OPEN 是验收未关 + 本次 PDF 补漏（日期／序数续接、提前 `closed`）。`_open_line` 已写入 History，不能在 close 时再保存整行。
