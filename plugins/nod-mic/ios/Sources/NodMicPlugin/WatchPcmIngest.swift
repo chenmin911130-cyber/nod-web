@@ -8,6 +8,7 @@ extension Notification.Name {
     static let nodWatchPcmAck = Notification.Name("nod.watch.pcm.ack")
     static let nodWatchPcmDiscard = Notification.Name("nod.watch.pcm.discard")
     static let nodWatchPcmHeld = Notification.Name("nod.watch.pcm.held")
+    static let nodWatchPcmIntent = Notification.Name("nod.watch.pcm.intent")
 }
 
 /// Phone ingest of Watch PCM. Persist the contiguous prefix first, then stream
@@ -99,6 +100,15 @@ final class WatchPcmIngest {
         ) { [weak self] note in
             let capture = note.userInfo?["captureId"] as? String ?? ""
             self?.discard(captureId: capture)
+        })
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .nodWatchPcmIntent,
+            object: nil,
+            queue: nil
+        ) { [weak self] note in
+            let capture = note.userInfo?["captureId"] as? String ?? ""
+            let intent = note.userInfo?["intent"] as? String ?? ""
+            self?.markIntent(intent, captureId: capture)
         })
         observers.append(NotificationCenter.default.addObserver(
             forName: Notification.Name("nod.uplink.consumed"),
@@ -222,6 +232,13 @@ final class WatchPcmIngest {
         var n = 0
         queue.sync { n = self.store.deleteCapture(id) }
         return n
+    }
+
+    func markIntent(_ intent: String, captureId: String) {
+        queue.sync {
+            let id = captureId.isEmpty ? self.captureId : captureId
+            self.store.markIntent(intent, captureId: id)
+        }
     }
 
     private func fillAck(_ reply: NSMutableDictionary) {

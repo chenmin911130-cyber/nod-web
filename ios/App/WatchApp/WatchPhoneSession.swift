@@ -487,7 +487,13 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             return
         }
         if save == "local" {
-            if !saving, !savedAck {
+            if saving {
+                saveWaitWork?.cancel()
+                saveWaitWork = nil
+                saving = false
+                saveFailed = false
+                hint = WatchCopy.savedLocal
+            } else if !savedAck {
                 hint = WatchCopy.savedLocal
             }
             return

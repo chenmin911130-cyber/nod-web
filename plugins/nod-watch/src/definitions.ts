@@ -29,4 +29,5 @@ export interface NodWatchPlugin {
   }): Promise<void>
   playSpeech(opts: { data: string; dest?: 'phone' | 'watch' }): Promise<void>
   stopSpeech(): Promise<void>
+  storeAccount(opts: { token: string; origin: string }): Promise<void>
 }

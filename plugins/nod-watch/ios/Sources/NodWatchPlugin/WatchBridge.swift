@@ -23,6 +23,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastLangPair = ""
     private var lastSave = "none"
     private var lastSessionId = ""
+    private static let accountTokenKey = "nod.watch.accountToken"
+    private static let accountOriginKey = "nod.watch.accountOrigin"
     private var lastPcmAckByte = 0
     private var lastPcmCaptureId = ""
     private var lastPcmAckSessionId = ""
@@ -478,6 +480,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
                 userInfo: ["captureId": captureId.isEmpty ? lastPcmCaptureId : captureId]
             )
         }
+        if action == "save" {
+            lastSave = nativeWatchSave(sessionId: sessionId)
+        }
         if action == "drain" {
             NotificationCenter.default.post(
                 name: Notification.Name("nod.watch.pcm.drain"),
@@ -498,6 +503,74 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         } else {
             pending.append((action, at, live, mode, sessionId))
         }
+    }
+
+    func storeAccount(token: String, origin: String) {
+        if token.isEmpty {
+            UserDefaults.standard.removeObject(forKey: Self.accountTokenKey)
+        } else {
+            UserDefaults.standard.set(token, forKey: Self.accountTokenKey)
+        }
+        if !origin.isEmpty {
+            UserDefaults.standard.set(origin, forKey: Self.accountOriginKey)
+        }
+    }
+
+    /// Watch Save must not wait for WKWebView. Persist the keep intent, reply
+    /// `local` immediately, then POST History from native if a token exists.
+    private func nativeWatchSave(sessionId: String) -> String {
+        NotificationCenter.default.post(
+            name: Notification.Name("nod.watch.pcm.intent"),
+            object: nil,
+            userInfo: [
+                "intent": "keep",
+                "captureId": lastPcmCaptureId,
+                "sessionId": sessionId,
+            ]
+        )
+        if sessionId.isEmpty { return "failed" }
+        lastSessionId = sessionId
+        startNativeKeep(sessionId)
+        return "local"
+    }
+
+    private func startNativeKeep(_ sessionId: String) {
+        #if PCM_REPLAY_TESTING
+        return
+        #else
+        let token = UserDefaults.standard.string(forKey: Self.accountTokenKey) ?? ""
+        var origin = UserDefaults.standard.string(forKey: Self.accountOriginKey) ?? ""
+        if origin.isEmpty { origin = "https://nodpilot.com" }
+        let root = origin.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !token.isEmpty, let url = URL(string: "\(root)/api/account/history/\(sessionId)/keep") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: req) { [weak self] _, resp, _ in
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200 ..< 300).contains(code) else { return }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.lastSessionId = sessionId
+                self.lastSave = "saved"
+                self.pushSaveToWatch()
+            }
+        }.resume()
+        #endif
+    }
+
+    private func pushSaveToWatch() {
+        #if PCM_REPLAY_TESTING
+        return
+        #else
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+        guard session.activationState == .activated, session.isReachable else { return }
+        var msg: [String: Any] = ["ok": true, "save": lastSave]
+        if !lastSessionId.isEmpty { msg["sessionId"] = lastSessionId }
+        session.sendMessage(msg, replyHandler: nil, errorHandler: nil)
+        #endif
     }
 
     func stopSpeechPlayback() {

@@ -2,6 +2,12 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-10 · 手表 Save 等手机网页 keep_history，App 没打开就卡在正在保存
+- 我以为：End 已由手机原生落盘，Save 再走现有 JS `keep_history` 即可；锁屏/杀进程时 WCSession 会把命令交给网页。
+- 实际：`WatchBridge` 在 `jsReady==false` 时把 `save` 排进 pending。Capacitor WKWebView 没起来就没有控制 WS，手表 `reply.save` 仍是旧状态，界面停在「正在保存…」。
+- 规则：Watch Save 必须由 iPhone 原生处理（落 keep 意图 + HTTP keep）；不得等 WKWebView。未完成 History 只能回 `save=local`，禁止报 Saved to History。
+- 涉及：`WatchBridge.handle save` · `WatchPhoneSession.applySaveStatus` · `/api/account/history/{id}/keep`
+
 ## 2026-09-09 · #165 复查：移交倒序、Retry 从零重发、join 超时仍取走缓冲
 - 我以为：队列先出、缓冲后拼；Retry 清零 `nextByte` 才能避开 duplicate；`join(2.0)` 后取走缓冲即可。
 - 实际：`_pcm_buf` 是已出队的较早音频，`_q` 是后续；先队列会倒序。手机从 0 重灌，服务端裸 PCM 无偏移，已送 STT 的前段会重复转写和计量。`ws.send()` 仍阻塞时未发帧在 sender 局部变量里，超时取走会漏。

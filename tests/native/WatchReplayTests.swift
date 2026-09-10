@@ -136,6 +136,10 @@ func waitSend() {
     check(endWatch.offeringSave, "wrong-session History ack does not claim Saved to History")
     deliver(endWatch, ["sessionId": "live-end"])
     endWatch.confirmSave()
+    check(endWatch.saving, "Save waits for a matching phone ack")
+    deliver(endWatch, ["ok": true, "save": "local", "sessionId": "live-end"])
+    check(!endWatch.saving && endWatch.offeringSave, "local persist ack ends Saving without History")
+    check(endWatch.hint == WatchCopy.savedLocal, "local persist is Saved on iPhone, not History")
     deliver(endWatch, ["save": "saved", "sessionId": "live-end"])
     check(endWatch.savedAck && !endWatch.offeringSave, "matching history_kept is Saved to History")
 
@@ -149,6 +153,15 @@ func waitSend() {
         userInfo: ["sessionId": "native-session", "captureId": cap])
     waitSend()
     check(ingest.isReady(captureId: cap), "start bind creates the phone file before Recording")
+    var saveReply: [String: Any] = [:]
+    bridge.session(WCSession.default, didReceiveMessage: ["action": "save", "sessionId": "native-session"]) { saveReply = $0 }
+    waitSend()
+    check((saveReply["save"] as? String) == "local", "Save without WKWebView replies local, not History")
+    check(ingest.listCaptures().contains(where: { $0.captureId == cap && $0.intent == "keep" }), "native Save marks phone keep intent")
+    var emptySave: [String: Any] = [:]
+    bridge.session(WCSession.default, didReceiveMessage: ["action": "save"]) { emptySave = $0 }
+    waitSend()
+    check((emptySave["save"] as? String) == "failed", "Save with empty sessionId is failed, not the current phone session")
     eq(ingest.ingestLive(data: Data(repeating: 4, count: 32000), captureId: cap, sessionId: "native-session", offset: 0), "accept")
     check(ingest.currentAck() == 32000, "Watch ack is persist held, not uplink consume")
     RunLoop.main.run(until: Date().addingTimeInterval(1.15))

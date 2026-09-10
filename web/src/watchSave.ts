@@ -100,7 +100,7 @@ export function watchApplySavePayload(opts: {
   saving: boolean
   requestId: string
   payload: { ok?: unknown; save?: string; sessionId?: string }
-}): { requestId: string; ack: 'ignore' | 'saved' | 'failed' } {
+}): { requestId: string; ack: 'ignore' | 'saved' | 'failed' | 'local' } {
   const incomingSessionId = opts.payload.sessionId || ''
   return {
     requestId: opts.requestId,
@@ -136,12 +136,12 @@ export function watchSaveAckApplies(opts: {
   requestedId: string
   incomingSave: string
   incomingSessionId: string
-}): 'ignore' | 'saved' | 'failed' {
+}): 'ignore' | 'saved' | 'failed' | 'local' {
   if (!opts.requestedId || !opts.incomingSessionId) return 'ignore'
   if (opts.requestedId !== opts.incomingSessionId) return 'ignore'
   if (opts.incomingSave === 'saved') return 'saved'
   if (opts.incomingSave === 'failed') return 'failed'
-  if (opts.incomingSave === 'local') return 'ignore'
+  if (opts.incomingSave === 'local') return 'local'
   return 'ignore'
 }
 

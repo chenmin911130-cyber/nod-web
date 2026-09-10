@@ -62,6 +62,8 @@ eq(watchSaveAckApplies({ requestedId: 'live-a', incomingSave: 'saved', incomingS
 eq(watchSaveAckApplies({ requestedId: 'live-a', incomingSave: 'saved', incomingSessionId: '' }), 'ignore', 'empty sessionId is not a wildcard')
 eq(watchSaveAckApplies({ requestedId: '', incomingSave: 'saved', incomingSessionId: 'live-a' }), 'ignore', 'empty request id is not a wildcard')
 eq(watchSaveAckApplies({ requestedId: 'live-a', incomingSave: 'failed', incomingSessionId: 'live-a' }), 'failed', 'matching failed is Couldn\'t save')
+eq(watchSaveAckApplies({ requestedId: 'live-a', incomingSave: 'local', incomingSessionId: 'live-a' }), 'local', 'phone persist while saving is local, not History')
+eq(watchSaveAckApplies({ requestedId: 'live-a', incomingSave: 'local', incomingSessionId: 'live-b' }), 'ignore', 'local for another session is ignored')
 eq(watchSaveRepeatAction({ kept: false, status: 'undecided' }), 'start', 'first Watch Save starts keep_history')
 eq(watchSaveRepeatAction({ kept: false, status: 'saving' }), 'ignore', 'saving Watch Save is not sent twice')
 eq(watchSaveRepeatAction({ kept: true, status: 'saved' }), 'echoSaved', 'already kept session echoes saved')
@@ -143,8 +145,8 @@ eq(watchKeepNotesWait(false, 'ask-1'), true, 'phone Save with Notes in flight st
   eq(watchApplySavePayload({
     saving: true,
     requestId: 'live-a',
-    payload: { ok: true, save: face.save, sessionId: face.sessionId },
-  }).ack, 'saved', 'WatchBridge ok-reply still applies matching saved')
+    payload: { ok: true, save: 'local', sessionId: 'live-a' },
+  }).ack, 'local', 'WatchBridge ok-reply applies matching local without WKWebView')
 }
 
 {
