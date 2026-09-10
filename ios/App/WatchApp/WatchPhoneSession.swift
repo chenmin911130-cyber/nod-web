@@ -26,6 +26,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var saving = false
     @Published var saveFailed = false
     @Published var savedAck = false
+    @Published var pendingSync = false
     @Published var langPair = "Auto → CH"
     @Published var mode = "meeting"
     @Published var draining = false
@@ -164,9 +165,10 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         listening: Bool,
         paused: Bool,
         offeringSave: Bool,
-        saved: Bool
+        saved: Bool,
+        pendingSync: Bool
     ) -> String {
-        if offeringSave || saved { return "" }
+        if offeringSave || saved || pendingSync { return "" }
         if key == "crown" {
             return (listening || paused) ? "stop" : "start"
         }
@@ -182,7 +184,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             listening: listening,
             paused: paused,
             offeringSave: offeringSave,
-            saved: savedAck
+            saved: savedAck,
+            pendingSync: pendingSync
         ) {
         case "start": startSession()
         case "stop": finish()
@@ -324,6 +327,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         elapsedMs = 0
         WatchGlanceStore.clear()
         offeringSave = false
+        pendingSync = false
         savedAck = false
         saving = false
         saveFailed = false
@@ -363,6 +367,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         saveWaitWork?.cancel()
         savedAckWork?.cancel()
         offeringSave = true
+        pendingSync = false
         savedAck = false
         saving = true
         saveFailed = false
@@ -377,12 +382,24 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         saveWaitWork?.cancel()
         saveWaitWork = nil
         offeringSave = false
+        pendingSync = false
         savedAck = false
         saving = false
         saveFailed = false
         saveRequestId = ""
         hint = WatchCopy.ready
         send(action: "discard")
+    }
+
+    func finishPendingSave() {
+        saveWaitWork?.cancel()
+        saveWaitWork = nil
+        offeringSave = false
+        pendingSync = false
+        saving = false
+        saveFailed = false
+        savedAck = false
+        hint = WatchCopy.ready
     }
 
     func startSession() {
@@ -411,6 +428,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         previous = ""
         elapsedMs = 0
         offeringSave = false
+        pendingSync = false
         savedAck = false
         saving = false
         saveFailed = false
@@ -479,6 +497,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             saveWaitWork?.cancel()
             saveWaitWork = nil
             offeringSave = false
+            pendingSync = false
             saving = false
             saveFailed = false
             savedAck = true
@@ -487,22 +506,23 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             return
         }
         if save == "local" {
-            if saving {
-                saveWaitWork?.cancel()
-                saveWaitWork = nil
-                saving = false
-                saveFailed = false
-                hint = WatchCopy.savedLocal
-            } else if !savedAck {
-                hint = WatchCopy.savedLocal
-            }
+            saveWaitWork?.cancel()
+            saveWaitWork = nil
+            saving = false
+            saveFailed = false
+            offeringSave = false
+            pendingSync = true
+            hint = WatchCopy.pendingSync
             return
         }
         if save == "failed" {
+            if savedAck { return }
             saveWaitWork?.cancel()
             saveWaitWork = nil
             saving = false
             saveFailed = true
+            pendingSync = false
+            offeringSave = true
             hint = WatchCopy.saveFailed
         }
     }
@@ -665,7 +685,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 localWatchMic = false
                 flushUnsent()
                 resetPcmBuffer()
-                if !offeringSave, !savedAck {
+                if !offeringSave, !savedAck, !pendingSync {
                     hint = WatchCopy.ready
                 }
             }
@@ -887,6 +907,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         draining = false
         drainFailed = false
         offeringSave = false
+        pendingSync = false
         pendingSaveOffer = false
         saveAfterDrain = false
         hint = WatchCopy.ready
@@ -1074,7 +1095,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                     ?? "Recording incomplete — audio may be missing"
                 pcmStalled = true
                 pcmStallText = message
-                if !message.isEmpty, !offeringSave, !savedAck, !saving, !saveFailed, !starting {
+                if !message.isEmpty, !offeringSave, !savedAck, !saving, !saveFailed, !pendingSync, !starting {
                     hint = message
                 }
             }
@@ -1116,7 +1137,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let capture = payload["capture"] as? String, !pcmRejected, !storageFailed {
             syncFromCapture(capture)
         }
-        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck, !saving, !saveFailed, !starting, !localWatchMic, !draining, !drainFailed, !pcmStalled {
+        if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck, !saving, !saveFailed, !pendingSync, !starting, !localWatchMic, !draining, !drainFailed, !pcmStalled {
             self.hint = hint
         }
         if let original = payload["original"] as? String {

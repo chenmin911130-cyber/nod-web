@@ -138,10 +138,14 @@ func waitSend() {
     endWatch.confirmSave()
     check(endWatch.saving, "Save waits for a matching phone ack")
     deliver(endWatch, ["ok": true, "save": "local", "sessionId": "live-end"])
-    check(!endWatch.saving && endWatch.offeringSave, "local persist ack ends Saving without History")
-    check(endWatch.hint == WatchCopy.savedLocal, "local persist is Saved on iPhone, not History")
+    check(!endWatch.saving && endWatch.pendingSync && !endWatch.offeringSave, "local persist ack leaves Save/Don't save")
+    check(endWatch.hint == WatchCopy.pendingSync, "local persist is waiting to sync, not History")
+    endWatch.finishPendingSave()
+    check(!endWatch.pendingSync && endWatch.hint == WatchCopy.ready, "Done leaves waiting-to-sync without discard")
     deliver(endWatch, ["save": "saved", "sessionId": "live-end"])
     check(endWatch.savedAck && !endWatch.offeringSave, "matching history_kept is Saved to History")
+    deliver(endWatch, ["save": "failed", "sessionId": "live-end"])
+    check(endWatch.savedAck, "late failed must not roll back Saved to History")
 
     let ingest = WatchPcmIngest.shared
     let uplink = AudioUplink.shared
@@ -177,6 +181,72 @@ func waitSend() {
     let listed = ingest.listCaptures()
     check(listed.contains(where: { $0.captureId == cap && $0.bytes >= 32000 }), "rejected cloud session keeps the phone original")
     check(ingest.deleteCapture(cap) == 0, "live unsealed capture is not silently deleted")
+
+    func keepBody(_ sid: String, ok: Bool = true, id: String? = nil) -> Data {
+        try! JSONSerialization.data(withJSONObject: ["ok": ok, "id": id ?? sid])
+    }
+    func bindCapture(_ id: String, session: String) {
+        NotificationCenter.default.post(
+            name: Notification.Name("nod.watch.pcm.bind"),
+            object: nil,
+            userInfo: ["sessionId": session, "captureId": id]
+        )
+        waitSend()
+    }
+    func postSave(_ sessionId: String) -> [String: Any] {
+        var out: [String: Any] = [:]
+        bridge.session(WCSession.default, didReceiveMessage: ["action": "save", "sessionId": sessionId]) { out = $0 }
+        waitSend()
+        return out
+    }
+
+    ingest.reset()
+    bindCapture("cap-http-ok", session: "http-ok")
+    WatchBridge.testingKeep = { sid in (200, keepBody(sid)) }
+    let httpOk = postSave("http-ok")
+    eq(httpOk["save"] as? String ?? "", "saved")
+    check((httpOk["sessionId"] as? String) == "http-ok", "HTTP 200 ok+id replies History saved for that session")
+
+    bindCapture("cap-http-405", session: "http-405")
+    WatchBridge.testingKeep = { _ in (405, nil) }
+    eq(postSave("http-405")["save"] as? String ?? "", "failed")
+
+    bindCapture("cap-http-401", session: "http-401")
+    WatchBridge.testingKeep = { _ in (401, nil) }
+    eq(postSave("http-401")["save"] as? String ?? "", "failed")
+
+    bindCapture("cap-http-badid", session: "http-badid")
+    WatchBridge.testingKeep = { sid in (200, keepBody(sid, id: "other")) }
+    eq(postSave("http-badid")["save"] as? String ?? "", "failed")
+
+    WatchBridge.testingKeep = nil
+    bindCapture("cap-ended", session: "ended-1")
+    eq(ingest.ingestLive(data: Data(repeating: 7, count: 1600), captureId: "cap-ended", sessionId: "ended-1", offset: 0), "accept")
+    bridge.session(WCSession.default, didReceiveMessage: ["action": "stop"]) { _ in }
+    waitSend()
+    let afterStop = postSave("ended-1")
+    eq(afterStop["save"] as? String ?? "", "local")
+    check(ingest.listCaptures().contains(where: { $0.captureId == "cap-ended" && $0.intent == "keep" }), "Save after End/reset still marks keep on the ended capture")
+
+    eq(postSave("ghost-missing")["save"] as? String ?? "", "failed")
+    check(!ingest.listCaptures().contains(where: { $0.sessionId == "ghost-missing" && $0.intent == "keep" }), "missing capture does not fake a keep intent")
+
+    WatchBridge.testingKeep = { sid in
+        if sid == "sess-a" { return (200, keepBody(sid)) }
+        return (401, nil)
+    }
+    bindCapture("cap-iso-a", session: "sess-a")
+    eq(postSave("sess-a")["save"] as? String ?? "", "saved")
+    bindCapture("cap-iso-b", session: "sess-b")
+    eq(postSave("sess-b")["save"] as? String ?? "", "failed")
+    let jobs = bridge.listSaves()
+    check(jobs.contains(where: { $0["sessionId"] == "sess-a" && $0["save"] == "saved" }), "session A History success is stored")
+    check(jobs.contains(where: { $0["sessionId"] == "sess-b" && $0["save"] == "failed" }), "session B failure is stored separately")
+    WatchBridge.testingKeep = { _ in (500, nil) }
+    eq(postSave("sess-a")["save"] as? String ?? "", "saved")
+    check(bridge.listSaves().contains(where: { $0["sessionId"] == "sess-a" && $0["save"] == "saved" }), "late 500 does not roll back A")
+    WatchBridge.testingKeep = nil
+
     _ = bridge
     print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake and Save tests passed")
  }

@@ -33,8 +33,10 @@ type WatchPlugin = {
   playSpeech(opts: { data: string; dest?: 'phone' | 'watch' }): Promise<void>
   stopSpeech(): Promise<void>
   storeAccount(opts: { token: string; origin: string }): Promise<void>
+  listSaves(): Promise<{ saves: Array<{ sessionId: string; captureId: string; save: string }> }>
   addListener(event: 'command', cb: (ev: WatchCommand) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'pcm', cb: (ev: WatchPcm) => void): Promise<{ remove: () => Promise<void> }>
+  addListener(event: 'saveResult', cb: (ev: { save?: string; sessionId?: string }) => void): Promise<{ remove: () => Promise<void> }>
 }
 
 const NodWatch = registerPlugin<WatchPlugin>('NodWatch')
@@ -133,9 +135,9 @@ export type WatchHardwareKey = 'crown' | 'side'
 /** Crown is Start/Stop. Side is Pause/Resume. Never bind the crown to toggle(). */
 export function watchHardwareAction(
   key: WatchHardwareKey,
-  state: { listening: boolean; paused: boolean; offeringSave: boolean; saved: boolean },
+  state: { listening: boolean; paused: boolean; offeringSave: boolean; saved: boolean; pendingSync?: boolean },
 ): 'start' | 'stop' | 'pause' | 'resume' | '' {
-  if (state.offeringSave || state.saved) return ''
+  if (state.offeringSave || state.saved || state.pendingSync) return ''
   if (key === 'crown') {
     if (state.listening || state.paused) return 'stop'
     return 'start'
@@ -263,6 +265,7 @@ export function installWatchRemote(handlers: {
   onResume: () => void
   onSpeak: () => void
   onSave: (sessionId: string) => void
+  onSaveResult: (ev: { save: string; sessionId: string }) => void
   onDiscard: () => void
   onTtsLive: () => void
   onTtsTap: () => void
@@ -271,9 +274,28 @@ export function installWatchRemote(handlers: {
   if (!isNativeApp()) return () => undefined
   let gone = false
   const handles: Array<{ remove: () => Promise<void> }> = []
+  let onVis: (() => void) | null = null
   void (async () => {
     await NodWatch.ready()
     storeWatchAccount()
+    const replaySaves = async () => {
+      const listed = await NodWatch.listSaves().catch(() => ({ saves: [] as Array<{ sessionId: string; save: string }> }))
+      if (gone) return
+      for (const row of listed.saves || []) {
+        handlers.onSaveResult({ save: row.save || '', sessionId: row.sessionId || '' })
+      }
+    }
+    await replaySaves()
+    if (gone) return
+    onVis = () => {
+      if (document.visibilityState === 'visible') void replaySaves()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    const saveResult = await NodWatch.addListener('saveResult', (ev) => {
+      if (gone) return
+      handlers.onSaveResult({ save: ev.save || '', sessionId: ev.sessionId || '' })
+    })
+    handles.push(saveResult)
     const command = await NodWatch.addListener('command', (ev) => {
       if (gone) return
       const { action, sessionId } = watchCommandFromBridge(ev)
@@ -311,6 +333,7 @@ export function installWatchRemote(handlers: {
   })().catch(() => undefined)
   return () => {
     gone = true
+    if (onVis) document.removeEventListener('visibilitychange', onVis)
     handles.forEach((h) => {
       void h.remove()
     })

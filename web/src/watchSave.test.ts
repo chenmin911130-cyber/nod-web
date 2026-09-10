@@ -14,6 +14,11 @@ import {
   watchSavePinnedId,
   watchSaveRepeatAction,
   watchSaveShouldWaitForNotes,
+  watchSaveShouldSendKeepHistory,
+  watchJsFailMayApply,
+  watchPhoneStatusMayPush,
+  watchKeepHttpFace,
+  watchNativeSaveReduce,
   watchSaveStatusPayload,
   watchSaveWireMessage,
   watchSavedAckMs,
@@ -51,6 +56,51 @@ if ('keepRecording' in watchSaveCommand('live-a')) {
   throw new Error('Watch Save must not send a Keep recording checkbox')
 }
 eq(watchSaveShouldWaitForNotes(), false, 'Watch Save does not wait for Notes')
+eq(watchSaveShouldSendKeepHistory(), false, 'Watch Save does not send JS keep_history')
+eq(watchJsFailMayApply('saved'), false, 'JS timeout must not fail a native History success')
+eq(watchJsFailMayApply('local'), false, 'JS timeout must not fail a native local persist')
+eq(watchJsFailMayApply('failed'), true, 'JS may surface a native failure')
+eq(watchJsFailMayApply(''), true, 'JS may fail when native has no result')
+eq(
+  watchPhoneStatusMayPush({
+    nativeSave: 'saved',
+    incomingSave: 'failed',
+    nativeSessionId: 'live-a',
+    incomingSessionId: 'live-a',
+  }),
+  false,
+  'phone Retry save must not push failed over native saved',
+)
+eq(
+  watchPhoneStatusMayPush({
+    nativeSave: 'saved',
+    incomingSave: 'failed',
+    nativeSessionId: 'live-a',
+    incomingSessionId: 'live-b',
+  }),
+  true,
+  'session B may still show failed',
+)
+eq(
+  watchPhoneStatusMayPush({
+    nativeSave: 'local',
+    incomingSave: 'failed',
+    nativeSessionId: 'live-a',
+    incomingSessionId: 'live-a',
+  }),
+  false,
+  'JS timeout must not push failed over native local persist',
+)
+eq(watchKeepHttpFace({ status: 200, body: { ok: true, id: 'live-a' }, sessionId: 'live-a' }), 'saved', 'HTTP 200 ok+id is History')
+eq(watchKeepHttpFace({ status: 200, body: { ok: true, id: 'live-b' }, sessionId: 'live-a' }), 'failed', 'HTTP 200 with the wrong id is not saved')
+eq(watchKeepHttpFace({ status: 200, body: { ok: false, id: 'live-a' }, sessionId: 'live-a' }), 'failed', 'HTTP 200 ok=false is failed')
+eq(watchKeepHttpFace({ status: 405, body: { ok: true, id: 'live-a' }, sessionId: 'live-a' }), 'failed', '405 is failed')
+eq(watchKeepHttpFace({ status: 401, body: null, sessionId: 'live-a' }), 'failed', '401 is failed')
+eq(watchKeepHttpFace({ status: 404, body: null, sessionId: 'live-a' }), 'failed', '404 is failed')
+eq(watchKeepHttpFace({ status: 500, body: null, sessionId: 'live-a' }), 'failed', '500 is failed')
+eq(watchNativeSaveReduce({ current: 'saved', incoming: 'failed' }), 'saved', 'saved does not roll back to failed')
+eq(watchNativeSaveReduce({ current: 'saved', incoming: 'local' }), 'saved', 'saved does not roll back to local')
+eq(watchNativeSaveReduce({ current: 'local', incoming: 'saved' }), 'saved', 'local upgrades to saved')
 eq(watchSaveTimeoutMs(), 15_000, 'Watch Save times out at 15s')
 eq(watchSaveStatusPayload({ status: 'undecided', liveId: 'live-a' }).save, 'none', 'undecided is not a Watch save face')
 eq(watchSaveStatusPayload({ status: 'undecided', liveId: 'live-a', localHeld: true }).save, 'local', 'phone persist is local, not History')

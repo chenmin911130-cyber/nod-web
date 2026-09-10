@@ -25,6 +25,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastSessionId = ""
     private static let accountTokenKey = "nod.watch.accountToken"
     private static let accountOriginKey = "nod.watch.accountOrigin"
+    private var saves: [String: (captureId: String, save: String)] = [:]
+    #if PCM_REPLAY_TESTING
+    static var testingKeep: ((String) -> (Int, Data?))?
+    #endif
     private var lastPcmAckByte = 0
     private var lastPcmCaptureId = ""
     private var lastPcmAckSessionId = ""
@@ -321,7 +325,14 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             lastLangPair = langPair
         }
         if !save.isEmpty {
-            lastSave = save
+            let sid = sessionId.isEmpty ? lastSessionId : sessionId
+            if let job = saves[sid], job.save == "saved", save != "saved" {
+                /* Native History success is terminal for this session. */
+            } else if let job = saves[sid], job.save == "local", save == "failed" {
+                /* JS timeout must not roll local persist back to failed. */
+            } else {
+                lastSave = save
+            }
         }
         if !sessionId.isEmpty {
             lastSessionId = sessionId
@@ -481,7 +492,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             )
         }
         if action == "save" {
-            lastSave = nativeWatchSave(sessionId: sessionId)
+            _ = nativeWatchSave(sessionId: sessionId, captureId: captureId)
         }
         if action == "drain" {
             NotificationCenter.default.post(
@@ -499,8 +510,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             NotificationCenter.default.post(name: Notification.Name("nod.watch.pcm.reset"), object: nil)
         }
         if jsReady {
-            emit(action, mode: mode, sessionId: sessionId)
-        } else {
+            if action != "save" {
+                emit(action, mode: mode, sessionId: sessionId)
+            }
+        } else if action != "save" {
             pending.append((action, at, live, mode, sessionId))
         }
     }
@@ -514,63 +527,160 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         if !origin.isEmpty {
             UserDefaults.standard.set(origin, forKey: Self.accountOriginKey)
         }
+        if !token.isEmpty {
+            restorePendingKeeps()
+        }
     }
 
     /// Watch Save must not wait for WKWebView. Persist the keep intent, reply
-    /// `local` immediately, then POST History from native if a token exists.
-    private func nativeWatchSave(sessionId: String) -> String {
+    /// immediately, then POST History from native if a token exists.
+    private func nativeWatchSave(sessionId: String, captureId: String) -> String {
+        if sessionId.isEmpty { return "failed" }
+        if let existing = saves[sessionId], existing.save == "saved" {
+            publishSave(sessionId: sessionId, save: "saved")
+            return "saved"
+        }
+        let cap = captureForSave(sessionId: sessionId, captureId: captureId)
+        let reply = NSMutableDictionary()
         NotificationCenter.default.post(
             name: Notification.Name("nod.watch.pcm.intent"),
             object: nil,
             userInfo: [
                 "intent": "keep",
-                "captureId": lastPcmCaptureId,
+                "captureId": cap,
                 "sessionId": sessionId,
+                "reply": reply,
             ]
         )
-        if sessionId.isEmpty { return "failed" }
-        lastSessionId = sessionId
-        startNativeKeep(sessionId)
+        guard (reply["ok"] as? Bool) == true else {
+            saves[sessionId] = (captureId: cap, save: "failed")
+            publishSave(sessionId: sessionId, save: "failed")
+            return "failed"
+        }
+        let resolved = (reply["captureId"] as? String) ?? cap
+        saves[sessionId] = (captureId: resolved, save: "local")
+        startNativeKeep(sessionId, captureId: resolved)
+        if saves[sessionId]?.save == "saved" {
+            lastSave = "saved"
+            lastSessionId = sessionId
+            return "saved"
+        }
+        publishSave(sessionId: sessionId, save: "local")
         return "local"
     }
 
-    private func startNativeKeep(_ sessionId: String) {
+    private func captureForSave(sessionId: String, captureId: String) -> String {
+        if !captureId.isEmpty { return captureId }
+        if let cap = saves[sessionId]?.captureId, !cap.isEmpty { return cap }
+        if lastSessionId == sessionId { return lastPcmCaptureId }
+        return ""
+    }
+
+    private func restorePendingKeeps() {
+        let reply = NSMutableDictionary()
+        NotificationCenter.default.post(
+            name: Notification.Name("nod.watch.pcm.pendingKeeps"),
+            object: nil,
+            userInfo: ["reply": reply]
+        )
+        let rows = reply["rows"] as? [[String: String]] ?? []
+        for row in rows {
+            let sid = row["sessionId"] ?? ""
+            let cap = row["captureId"] ?? ""
+            guard !sid.isEmpty else { continue }
+            if saves[sid]?.save == "saved" { continue }
+            if saves[sid] == nil {
+                saves[sid] = (captureId: cap, save: "local")
+            }
+            startNativeKeep(sid, captureId: cap)
+        }
+    }
+
+    private func startNativeKeep(_ sessionId: String, captureId: String) {
         #if PCM_REPLAY_TESTING
+        if let hook = Self.testingKeep {
+            let (code, body) = hook(sessionId)
+            applyKeepHttp(sessionId: sessionId, code: code, body: body)
+        }
         return
         #else
         let token = UserDefaults.standard.string(forKey: Self.accountTokenKey) ?? ""
         var origin = UserDefaults.standard.string(forKey: Self.accountOriginKey) ?? ""
         if origin.isEmpty { origin = "https://nodpilot.com" }
         let root = origin.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard !token.isEmpty, let url = URL(string: "\(root)/api/account/history/\(sessionId)/keep") else { return }
+        guard !token.isEmpty, let url = URL(string: "\(root)/api/account/history/\(sessionId)/keep") else {
+            applyKeepHttp(sessionId: sessionId, code: token.isEmpty ? 401 : 0, body: nil)
+            return
+        }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        URLSession.shared.dataTask(with: req) { [weak self] _, resp, _ in
+        URLSession.shared.dataTask(with: req) { [weak self] data, resp, _ in
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            guard (200 ..< 300).contains(code) else { return }
             DispatchQueue.main.async {
-                guard let self else { return }
-                self.lastSessionId = sessionId
-                self.lastSave = "saved"
-                self.pushSaveToWatch()
+                self?.applyKeepHttp(sessionId: sessionId, code: code, body: data)
             }
         }.resume()
         #endif
     }
 
-    private func pushSaveToWatch() {
+    private func applyKeepHttp(sessionId: String, code: Int, body: Data?) {
+        var face = "failed"
+        if (200 ..< 300).contains(code), let body,
+           let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+           obj["ok"] as? Bool == true {
+            let id = obj["id"] as? String ?? ""
+            if id.isEmpty || id == sessionId {
+                face = "saved"
+            }
+        }
+        NSLog("nod.watch.keep session=%@ status=%d face=%@", sessionId, code, face)
+        if let job = saves[sessionId], job.save == "saved" { return }
+        if var job = saves[sessionId] {
+            job.save = face
+            saves[sessionId] = job
+        } else {
+            saves[sessionId] = (captureId: lastPcmCaptureId, save: face)
+        }
+        publishSave(sessionId: sessionId, save: face)
+    }
+
+    private func publishSave(sessionId: String, save: String) {
+        if lastSessionId.isEmpty || lastSessionId == sessionId {
+            lastSave = save
+            lastSessionId = sessionId
+        }
+        plugin?.notifyListeners("saveResult", data: ["save": save, "sessionId": sessionId])
+        pushSaveToWatch(sessionId: sessionId, save: save)
+    }
+
+    func listSaves() -> [[String: String]] {
+        saves.map { key, job in
+            ["sessionId": key, "captureId": job.captureId, "save": job.save]
+        }
+    }
+
+    private func pushSaveToWatch(sessionId: String, save: String) {
         #if PCM_REPLAY_TESTING
         return
         #else
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
-        guard session.activationState == .activated, session.isReachable else { return }
-        var msg: [String: Any] = ["ok": true, "save": lastSave]
-        if !lastSessionId.isEmpty { msg["sessionId"] = lastSessionId }
-        session.sendMessage(msg, replyHandler: nil, errorHandler: nil)
+        guard session.activationState == .activated else { return }
+        var msg: [String: Any] = ["ok": true, "save": save, "sessionId": sessionId]
+        if session.isReachable {
+            session.sendMessage(msg, replyHandler: nil, errorHandler: { _ in
+                try? session.updateApplicationContext(msg)
+            })
+        } else {
+            try? session.updateApplicationContext(msg)
+        }
         #endif
+    }
+
+    private func pushSaveToWatch() {
+        pushSaveToWatch(sessionId: lastSessionId, save: lastSave)
     }
 
     func stopSpeechPlayback() {
@@ -782,7 +892,15 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             reply["langPair"] = lastLangPair
         }
         reply["save"] = lastSave
-        if !lastSessionId.isEmpty {
+        if (message["action"] as? String) == "save" {
+            let sid = message["sessionId"] as? String ?? ""
+            if sid.isEmpty {
+                reply["save"] = "failed"
+            } else {
+                reply["sessionId"] = sid
+                reply["save"] = saves[sid]?.save ?? "failed"
+            }
+        } else if !lastSessionId.isEmpty {
             reply["sessionId"] = lastSessionId
         }
         reply["pcmAckByte"] = String(lastPcmAckByte)

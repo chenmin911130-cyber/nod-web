@@ -198,11 +198,26 @@ final class PhonePcmStore {
         return true
     }
 
-    func markIntent(_ value: String, captureId: String) {
+    func markIntent(_ value: String, captureId: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard captureId == self.captureId else { return }
-        intent = value
-        writeManifestLocked()
+        let id = captureId.isEmpty ? self.captureId : captureId
+        guard !id.isEmpty else { return false }
+        let dir = captureDir(id)
+        guard fm.fileExists(atPath: dir.path) else { return false }
+        if id == self.captureId {
+            intent = value
+            return writeManifestLocked()
+        }
+        var meta = readManifest(id)
+        meta["intent"] = value
+        if meta["captureId"] == nil { meta["captureId"] = id }
+        guard let data = try? JSONSerialization.data(withJSONObject: meta) else { return false }
+        do {
+            try data.write(to: dir.appendingPathComponent("manifest.json"), options: .atomic)
+            return true
+        } catch {
+            return false
+        }
     }
 
     func read(from offset: Int, maxBytes: Int) -> Data? {
@@ -392,8 +407,9 @@ final class PhonePcmStore {
         }
     }
 
-    private func writeManifestLocked() {
-        guard !captureId.isEmpty else { return }
+    @discardableResult
+    private func writeManifestLocked() -> Bool {
+        guard !captureId.isEmpty else { return false }
         let body: [String: Any] = [
             "captureId": captureId,
             "sessionId": sessionId,
@@ -402,8 +418,13 @@ final class PhonePcmStore {
             "sealed": sealed,
             "intent": intent,
         ]
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
-        try? data.write(to: captureDir(captureId).appendingPathComponent("manifest.json"), options: .atomic)
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return false }
+        do {
+            try data.write(to: captureDir(captureId).appendingPathComponent("manifest.json"), options: .atomic)
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func readManifest(_ id: String) -> [String: Any] {

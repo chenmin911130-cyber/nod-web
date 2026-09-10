@@ -464,7 +464,7 @@ def keep_history_http(session_id: str, user: User = Depends(workspace_user)):
         raise HTTPException(400, "Missing session")
     with db_session() as db:
         row = db.get(UsageSession, session_id)
-        if not row or row.user_id != user.id:
+        if not row or row.user_id != user.id or row.discarded_at is not None:
             raise HTTPException(404, "Session not found")
     keep_usage_session(user.id, session_id, keep_content=True, keep_audio=True)
     return {"ok": True, "id": session_id}

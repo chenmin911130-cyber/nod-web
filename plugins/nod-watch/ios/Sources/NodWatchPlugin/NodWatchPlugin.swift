@@ -15,6 +15,7 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "playSpeech", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSpeech", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "storeAccount", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "listSaves", returnType: CAPPluginReturnPromise),
     ]
 
     override public func load() {
@@ -330,6 +331,10 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
             origin: call.getString("origin") ?? ""
         )
         call.resolve()
+    }
+
+    @objc func listSaves(_ call: CAPPluginCall) {
+        call.resolve(["saves": WatchBridge.shared.listSaves()])
     }
 }
 
