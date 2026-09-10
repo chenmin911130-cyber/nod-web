@@ -725,5 +725,232 @@ class SentenceEndSplitTests(unittest.TestCase):
         self.assertNotIn("closed", sess._open_line, "merged line stays open")
 
 
+class DateContinuationTests(unittest.TestCase):
+    """#33 increment: month + ordinal/year continuation, including after closed."""
+
+    def _drive_hold(self, sess: Session, text, lang=None, speaker=None, meta=None):
+        sess._hold_or_emit_meeting(text, lang, speaker, meta or {})
+
+    def _september_prev(self, **extra):
+        prev = {
+            "id": "q1",
+            "text": "we'll see you guys on September.",
+            "speaker": "A",
+            "opened_at": 0.0,
+            "last_final_at": 0.0,
+            "last_word_ms": 10000,
+            "n_words": 6,
+            "rev": 0,
+        }
+        prev.update(extra)
+        return prev
+
+    def _sixth_nxt(self, **extra):
+        nxt = {
+            "text": "6th, live at 1 PM Eastern.",
+            "speaker": "A",
+            "first_word_ms": 10200,
+            "last_word_ms": 15000,
+            "n_words": 6,
+        }
+        nxt.update(extra)
+        return nxt
+
+    def test_decide_september_sixth_and_year(self):
+        prev = self._september_prev()
+        self.assertEqual(decide_full(prev, self._sixth_nxt(), 0.0), ("extend", "date_continuation"))
+        year = self._sixth_nxt(text="2026 we go live.")
+        self.assertEqual(decide_full(prev, year, 0.0), ("extend", "date_continuation"))
+
+    def test_decide_closed_september_still_continues(self):
+        prev = self._september_prev(closed=True)
+        self.assertEqual(decide_full(prev, self._sixth_nxt(), 0.0), ("extend", "date_continuation"))
+
+    def test_join_strips_month_period_keeps_ordinal_case(self):
+        self.assertEqual(
+            join_meeting_text("we'll see you guys on September.", "6th, live at 1 PM Eastern.", gap_ms=200.0),
+            "we'll see you guys on September 6th, live at 1 PM Eastern.",
+        )
+        self.assertEqual(
+            join_meeting_text("we'll see you guys on September.", "2026 we go live.", gap_ms=200.0),
+            "we'll see you guys on September 2026 we go live.",
+        )
+
+    def test_reject_true_sentence_plus_number(self):
+        ended = {
+            "id": "q1",
+            "text": "The meeting ended.",
+            "speaker": "A",
+            "opened_at": 0.0,
+            "last_final_at": 0.0,
+            "last_word_ms": 10000,
+            "n_words": 3,
+            "rev": 0,
+        }
+        self.assertEqual(
+            decide_full(ended, {"text": "2026 will be different.", "speaker": "A",
+                                "first_word_ms": 10200, "last_word_ms": 14000, "n_words": 4}, 0.0),
+            ("new", "ends_sentence"),
+        )
+        done = {
+            "id": "q2",
+            "text": "We are done.",
+            "speaker": "A",
+            "opened_at": 0.0,
+            "last_final_at": 0.0,
+            "last_word_ms": 10000,
+            "n_words": 3,
+            "rev": 0,
+        }
+        self.assertEqual(
+            decide_full(done, {"text": "6th on the list comes next.", "speaker": "A",
+                               "first_word_ms": 10200, "last_word_ms": 14000, "n_words": 6}, 0.0),
+            ("new", "ends_sentence"),
+        )
+
+    def test_reject_speaker_long_gap_and_missing_meta(self):
+        prev = self._september_prev()
+        other = self._sixth_nxt(speaker="B")
+        self.assertEqual(decide_full(prev, other, 0.0)[0], "new")
+        far = self._sixth_nxt(first_word_ms=10800)
+        self.assertEqual(decide_full(prev, far, 0.0)[0], "new")
+        no_times = dict(prev)
+        no_times.pop("last_word_ms")
+        self.assertEqual(decide_full(no_times, self._sixth_nxt(), 0.0)[0], "new")
+
+    def test_meeting_skips_trailing_false_period_translate_does_not(self):
+        text = "We finished that part. changing me into."
+        default_at = last_sentence_index(text)
+        meeting_at = last_sentence_index(text, skip_false_period=True)
+        self.assertEqual(default_at, len(text))
+        self.assertIsNotNone(meeting_at)
+        self.assertLess(meeting_at, len(text))
+        self.assertTrue(text[:meeting_at].endswith("part."))
+
+    def test_new_line_september_then_sixth_updates_same_id(self):
+        sess = _session(user_id="u1", usage_session_id="sess-a")
+        clk = _Clock()
+        with mock.patch("server.meter.save_history") as save, mock.patch("server.meter.update_history_text") as upd:
+            with mock.patch("server.app.time.time", clk):
+                self._drive_hold(
+                    sess,
+                    "we'll see you guys on September.",
+                    speaker="A",
+                    meta={"first_word_ms": 1000, "last_word_ms": 10000, "n_words": 6},
+                )
+                clk.advance(10)
+                self._drive_hold(
+                    sess,
+                    "6th, live at 1 PM Eastern.",
+                    speaker="A",
+                    meta={"first_word_ms": 10200, "last_word_ms": 15000, "n_words": 6},
+                )
+        qs = _events(sess, "question")
+        ups = _events(sess, "line_update")
+        self.assertEqual(len(qs), 1)
+        self.assertEqual(len(ups), 1)
+        self.assertEqual(qs[0]["id"], ups[0]["id"])
+        self.assertEqual(ups[0]["rev"], 1)
+        self.assertEqual(ups[0]["text"], "we'll see you guys on September 6th, live at 1 PM Eastern.")
+        self.assertNotIn("September.", ups[0]["text"])
+        self.assertTrue(save.called)
+        self.assertTrue(upd.called)
+        self.assertEqual(upd.call_args.args[2], qs[0]["id"])
+        self.assertEqual(upd.call_args.args[3], ups[0]["text"])
+
+    def test_extend_closed_september_then_sixth(self):
+        sess = _session()
+        clk = _Clock()
+        with mock.patch("server.app.time.time", clk):
+            self._drive_hold(
+                sess,
+                "we'll see you guys on",
+                speaker="A",
+                meta={"first_word_ms": 1000, "last_word_ms": 9000, "n_words": 5},
+            )
+            clk.advance(10)
+            self._drive_hold(
+                sess,
+                "September.",
+                speaker="A",
+                meta={"first_word_ms": 9200, "last_word_ms": 10000, "n_words": 1},
+            )
+            self.assertTrue(sess._open_line.get("closed"))
+            self.assertEqual(sess._open_line["last_word_ms"], 10000)
+            clk.advance(10)
+            self._drive_hold(
+                sess,
+                "6th, live at 1 PM Eastern.",
+                speaker="A",
+                meta={"first_word_ms": 10200, "last_word_ms": 15000, "n_words": 6},
+            )
+        qs = _events(sess, "question")
+        ups = _events(sess, "line_update")
+        self.assertEqual(len(qs), 1)
+        self.assertEqual(len(ups), 2)
+        self.assertEqual(ups[-1]["id"], qs[0]["id"])
+        self.assertEqual(ups[-1]["text"], "we'll see you guys on September 6th, live at 1 PM Eastern.")
+        self.assertEqual(ups[0]["id"], ups[-1]["id"])
+        self.assertGreater(ups[-1]["rev"], ups[0]["rev"])
+
+    def test_three_turn_internal_sentence_trailing_false_period(self):
+        sess = _session()
+        clk = _Clock()
+        with mock.patch("server.app.time.time", clk):
+            self._drive_hold(
+                sess,
+                "First thought here without a stop",
+                speaker="A",
+                meta={"first_word_ms": 1000, "last_word_ms": 9000, "n_words": 6},
+            )
+            clk.advance(10)
+            self._drive_hold(
+                sess,
+                "We finished that part. changing me into.",
+                speaker="A",
+                meta={"first_word_ms": 9200, "last_word_ms": 19000, "n_words": 8},
+            )
+            self.assertEqual(sess._open_line["text"], "changing me into.")
+            self.assertNotIn("closed", sess._open_line)
+            clk.advance(10)
+            self._drive_hold(
+                sess,
+                "A Western cowboy.",
+                speaker="A",
+                meta={"first_word_ms": 19200, "last_word_ms": 24000, "n_words": 3},
+            )
+        qs = _events(sess, "question")
+        ups = _events(sess, "line_update")
+        self.assertEqual(len(qs), 2)
+        self.assertEqual(qs[0]["text"], "First thought here without a stop")
+        self.assertTrue(ups[0]["text"].endswith("We finished that part."))
+        self.assertEqual(qs[1]["text"], "changing me into.")
+        self.assertEqual(sess._open_line["text"], "changing me into a Western cowboy.")
+        self.assertTrue(any(u["text"] == "changing me into a Western cowboy." for u in ups))
+
+    def test_pause_clears_open_line_so_sixth_is_new(self):
+        sess = _session()
+        clk = _Clock()
+        with mock.patch("server.app.time.time", clk):
+            self._drive_hold(
+                sess,
+                "we'll see you guys on September.",
+                speaker="A",
+                meta={"first_word_ms": 1000, "last_word_ms": 10000, "n_words": 6},
+            )
+            sess._close_open_line()
+            clk.advance(10)
+            self._drive_hold(
+                sess,
+                "6th, live at 1 PM Eastern.",
+                speaker="A",
+                meta={"first_word_ms": 10200, "last_word_ms": 15000, "n_words": 6},
+            )
+        qs = _events(sess, "question")
+        self.assertEqual(len(qs), 2)
+        self.assertEqual(qs[1]["text"], "6th, live at 1 PM Eastern.")
+        self.assertEqual(len(_events(sess, "line_update")), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

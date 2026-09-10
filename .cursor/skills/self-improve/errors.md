@@ -2,6 +2,12 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-11 · 把仍 OPEN 的 #33 写成尚未实现
+- 我以为：#33 仍 OPEN，本地 `meeting_lines.decide` 仍是 12s／480 字／80 词，所以第三轮断句还没做，列为「按 #33 原文全量实现」。
+- 实际：PR #34 已于 2026-09-06 合并（`ba38eb9`）。OPEN 是验收未关 + 本次 PDF 补漏（日期／序数续接、提前 `closed`）。`_open_line` 已写入 History，不能在 close 时再保存整行。
+- 规则：判断某单是否已落地，看 `origin/main` 代码和 issue 的合并评论，不看 OPEN，不看脏工作区。补漏单只写增量，不把已合并正文当未实现。
+- 涉及：#33 · PR #34 · `server/meeting_lines.py` · `_open_line` / `save_history`
+
 ## 2026-09-10 · #185 审查：跨场 keep、旧 saved 吞新失败、status 触发无界重试
 - 我以为：按 session 查文件、inbound 上记 native saved、每次 storeAccount 扫 keep 再 POST，手表 local/savedAck 就能收口。
 - 实际：延迟 Save 会把当前 B 标 keep 却 keep(A)；failKeep 用另一场 inbound.saved 吞掉 B 的失败；每次 pushWatchStatus 都 restorePendingKeeps；saved 只在内存，重启当 pending；手表 savedAck 两秒后迟到 failed/local 会重开页面；缺 token 先 failed 再 publish local。

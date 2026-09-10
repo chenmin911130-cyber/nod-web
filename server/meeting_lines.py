@@ -91,18 +91,25 @@ def _is_real_sentence_end(text: str, match: re.Match) -> bool:
     return True
 
 
-def last_sentence_index(text: str) -> int | None:
+def last_sentence_index(text: str, *, skip_false_period: bool = False) -> int | None:
     """Index just after the LAST real sentence end in ``text``, or ``None``.
 
     Round-3 split (#33 §1.1): extend absorbs only up to this point and the
     remainder opens a new line. Also used by the limit fallback (§1.2) to decide
     whether a line can still be closed cleanly at a sentence boundary.
+
+    ``skip_false_period`` is Meeting-only. Translate (#105) keeps the default so
+    a trailing function-word '.' still counts as the last end; Meeting skips it
+    so that period cannot close the line early.
     """
     t = text or ""
     best: int | None = None
     for m in _SENTENCE_END_RE.finditer(t):
-        if _is_real_sentence_end(t, m):
-            best = m.end()
+        if not _is_real_sentence_end(t, m):
+            continue
+        if skip_false_period and false_period(t[: m.end()]):
+            continue
+        best = m.end()
     return best
 
 
@@ -125,6 +132,69 @@ def false_period(text: str) -> bool:
     if not t.endswith("."):
         return False
     return _last_word(t) in _FALSE_PERIOD_WORDS
+
+
+_MONTH_WORDS = frozenset({
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+})
+_AMBIGUOUS_MONTHS = frozenset({"may", "march", "august"})
+_DATE_PREP = frozenset({"on", "in", "of", "this", "next", "last"})
+_DATE_START_RE = re.compile(
+    r"^\s*(?:the\s+)?(?:\d{1,2}(?:st|nd|rd|th)|(?:19|20)\d{2})\b",
+    re.IGNORECASE,
+)
+
+
+def _last_word_raw(text: str) -> str:
+    m = re.search(r"([A-Za-z']+)[.!?…。！？]*$", (text or "").strip())
+    return m.group(1) if m else ""
+
+
+def _prev_word(text: str) -> str:
+    m = re.search(r"([A-Za-z']+)\s+[A-Za-z']+[.!?…。！？]*$", (text or "").strip())
+    return m.group(1).casefold() if m else ""
+
+
+def completable_date_end(text: str) -> bool:
+    """True when ``text`` ends with a month that the next turn can complete.
+
+    Months that are also English words (May / March / August) need a capital or
+    a date preposition so ``I may.`` is not treated as a date.
+    """
+    t = (text or "").strip()
+    if not t.endswith("."):
+        return False
+    raw = _last_word_raw(t)
+    word = raw.casefold()
+    if word not in _MONTH_WORDS:
+        return False
+    if word in _AMBIGUOUS_MONTHS:
+        return raw[:1].isupper() or _prev_word(t) in _DATE_PREP
+    return True
+
+
+def date_continuation_start(text: str) -> bool:
+    """True when ``text`` starts with an ordinal, calendar day, or year."""
+    return bool(_DATE_START_RE.match(text or ""))
+
+
+def _date_continuation(prev_open: dict[str, Any], nxt: dict[str, Any], now: float) -> bool:
+    """Same speaker, word-level gap 0–500ms, month period + ordinal/year start."""
+    p = prev_open.get("speaker")
+    n = nxt.get("speaker")
+    if not p or not n or p != n:
+        return False
+    gap = gap_ms(prev_open, nxt, now)
+    if gap is None:
+        return False
+    gap_ms_val, src = gap
+    if src != "word" or gap_ms_val < 0 or gap_ms_val > 500:
+        return False
+    ptxt = prev_open.get("text", "") or ""
+    ntxt = nxt.get("text", "") or ""
+    return completable_date_end(ptxt) and date_continuation_start(ntxt)
 
 
 def _pure_latin(word: str) -> bool:
@@ -205,7 +275,11 @@ def join_meeting_text(left: str, right: str, gap_ms: float | None = None) -> str
             if not b:
                 return a
     # §1.3 false period: strip the bogus '.' and re-case the continuation.
-    if false_period(a):
+    # Date continuation (#33 increment): strip the month's cut '.' without
+    # recasing the ordinal / year ("September." + "6th" → "September 6th").
+    if completable_date_end(a) and date_continuation_start(b):
+        a = a[:-1].rstrip()
+    elif false_period(a):
         a = a[:-1].rstrip()
         b = _lower_first_char(b)
     if _CJK_RE.search(a) and _CJK_RE.search(b):
@@ -244,13 +318,15 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
     """``("extend"|"new", reason)``.
 
     ``reason`` names the rule that made the call (#33 §1.5): ``ends_sentence``,
-    ``false_period``, ``gap``, ``speaker``, ``open_age``, ``chars``, ``words``,
-    ``split`` (the next turn carries a sentence end to close on), or ``no_open`` /
-    ``closed`` for the trivial new cases, else ``ok``. The caller logs ``split_at``
-    / ``tail_len`` separately when §1.1 actually splits.
+    ``false_period``, ``date_continuation``, ``gap``, ``speaker``, ``open_age``,
+    ``chars``, ``words``, ``split`` (the next turn carries a sentence end to close
+    on), or ``no_open`` / ``closed`` for the trivial new cases, else ``ok``. The
+    caller logs ``split_at`` / ``tail_len`` separately when §1.1 actually splits.
     """
     if not prev_open:
         return "new", "no_open"
+    if _date_continuation(prev_open, nxt, now):
+        return "extend", "date_continuation"
     if prev_open.get("closed"):
         return "new", "closed"
     ptxt = prev_open.get("text", "") or ""
