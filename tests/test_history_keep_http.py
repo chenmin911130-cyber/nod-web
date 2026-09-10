@@ -60,3 +60,28 @@ class HistoryKeepHttpTests(unittest.TestCase):
         self.assertEqual(stolen.status_code, 404)
         with db_session() as db:
             self.assertFalse(db.get(UsageSession, sid).kept)
+
+    def test_keep_rejects_discarded_session(self):
+        from server.app import app
+        from server.db import UsageSession, User, db_session
+        from server.meter import discard_usage_session
+        from server.security import issue_jwt, new_id
+
+        uid = new_id()
+        sid = new_id()
+        email = f"{uid}@test.local"
+        with db_session() as db:
+            db.add(User(id=uid, email=email, password_hash=""))
+            db.add(UsageSession(id=sid, user_id=uid, mode="meeting", kept=False))
+        discard_usage_session(uid, sid)
+        token = issue_jwt(uid, email)
+        client = TestClient(app)
+        kept = client.post(
+            f"/api/account/history/{sid}/keep",
+            headers={"Host": "nodpilot.com", "Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(kept.status_code, 404, kept.text)
+        with db_session() as db:
+            row = db.get(UsageSession, sid)
+            self.assertFalse(row.kept)
+            self.assertIsNotNone(row.discarded_at)

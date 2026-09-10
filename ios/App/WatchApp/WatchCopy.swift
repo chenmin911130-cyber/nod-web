@@ -137,6 +137,19 @@ enum WatchCopy {
         ])
     }
 
+    static var pendingSync: String {
+        pick([
+            "zh": "已存到手机，待同步",
+            "en": "Saved on iPhone, waiting to sync",
+            "it": "Salvato su iPhone, in attesa di sync",
+            "es": "Guardado en iPhone, esperando sync",
+            "fr": "Sauvé sur iPhone, sync en attente",
+            "de": "Auf iPhone, Sync ausstehend",
+            "pt": "Salvo no iPhone, aguardando sync",
+            "ja": "iPhoneに保存、同期待ち",
+        ])
+    }
+
     static var savedHistory: String {
         pick([
             "zh": "已保存到 History",

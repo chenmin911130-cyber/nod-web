@@ -9,6 +9,7 @@ extension Notification.Name {
     static let nodWatchPcmDiscard = Notification.Name("nod.watch.pcm.discard")
     static let nodWatchPcmHeld = Notification.Name("nod.watch.pcm.held")
     static let nodWatchPcmIntent = Notification.Name("nod.watch.pcm.intent")
+    static let nodWatchPcmPendingKeeps = Notification.Name("nod.watch.pcm.pendingKeeps")
 }
 
 /// Phone ingest of Watch PCM. Persist the contiguous prefix first, then stream
@@ -107,8 +108,27 @@ final class WatchPcmIngest {
             queue: nil
         ) { [weak self] note in
             let capture = note.userInfo?["captureId"] as? String ?? ""
+            let session = note.userInfo?["sessionId"] as? String ?? ""
             let intent = note.userInfo?["intent"] as? String ?? ""
-            self?.markIntent(intent, captureId: capture)
+            let ok = self?.markIntent(intent, captureId: capture, sessionId: session) ?? false
+            if let reply = note.userInfo?["reply"] as? NSMutableDictionary {
+                reply["ok"] = ok
+                if let cap = self?.resolvedCaptureId(captureId: capture, sessionId: session) {
+                    reply["captureId"] = cap
+                }
+            }
+        })
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .nodWatchPcmPendingKeeps,
+            object: nil,
+            queue: nil
+        ) { [weak self] note in
+            guard let reply = note.userInfo?["reply"] as? NSMutableDictionary else { return }
+            let rows = self?.listCaptures().compactMap { info -> [String: String]? in
+                guard info.intent == "keep", !info.sessionId.isEmpty else { return nil }
+                return ["sessionId": info.sessionId, "captureId": info.captureId]
+            } ?? []
+            reply["rows"] = rows
         })
         observers.append(NotificationCenter.default.addObserver(
             forName: Notification.Name("nod.uplink.consumed"),
@@ -184,7 +204,7 @@ final class WatchPcmIngest {
     func discard(captureId: String) {
         queue.sync {
             guard !captureId.isEmpty else { return }
-            self.store.markIntent("discard", captureId: captureId)
+            _ = self.store.markIntent("discard", captureId: captureId)
             _ = self.store.deleteCapture(captureId)
             if captureId == self.captureId {
                 self.rejected = false
@@ -234,11 +254,38 @@ final class WatchPcmIngest {
         return n
     }
 
-    func markIntent(_ intent: String, captureId: String) {
+    func markIntent(_ intent: String, captureId: String, sessionId: String = "") -> Bool {
+        var ok = false
         queue.sync {
-            let id = captureId.isEmpty ? self.captureId : captureId
-            self.store.markIntent(intent, captureId: id)
+            let id = self.resolveCaptureLocked(captureId: captureId, sessionId: sessionId)
+            guard !id.isEmpty else { return }
+            ok = self.store.markIntent(intent, captureId: id)
         }
+        return ok
+    }
+
+    func resolvedCaptureId(captureId: String, sessionId: String) -> String {
+        var id = ""
+        queue.sync {
+            id = self.resolveCaptureLocked(captureId: captureId, sessionId: sessionId)
+        }
+        return id
+    }
+
+    /// Save must name a capture or uniquely match a session. Never fall back to the live capture.
+    private func resolveCaptureLocked(captureId: String, sessionId: String) -> String {
+        let rows = self.store.listCaptures()
+        if !captureId.isEmpty {
+            guard let found = rows.first(where: { $0.captureId == captureId }) else { return "" }
+            if !sessionId.isEmpty, !found.sessionId.isEmpty, found.sessionId != sessionId {
+                return ""
+            }
+            return captureId
+        }
+        if sessionId.isEmpty { return "" }
+        let matches = rows.filter { $0.sessionId == sessionId }
+        if matches.count == 1 { return matches[0].captureId }
+        return ""
     }
 
     private func fillAck(_ reply: NSMutableDictionary) {

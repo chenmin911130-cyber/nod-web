@@ -7,7 +7,7 @@ import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
 import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
-import { flushPendingKeepMessage, keepHistoryMessage, watchDiscardCommand, watchKeepNotesWait, watchSaveCommand, watchSaveKeepTarget, watchSaveRepeatAction, watchSaveStatusPayload, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave } from './watchSave'
+import { flushPendingKeepMessage, keepHistoryMessage, watchDiscardCommand, watchFailKeepNativeFace, watchJsFailMayApply, watchKeepNotesWait, watchNativeSaveReduce, watchPhoneStatusMayPush, watchSaveCommand, watchSaveKeepTarget, watchSaveRepeatAction, watchSaveShouldSendKeepHistory, watchSaveStatusPayload, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave, type NativeWatchSaveFace } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
 import { meetingRailIsPaused } from './meetingPause'
@@ -1035,6 +1035,9 @@ export default function App() {
   const watchInboundSaveRef = useRef(watchInboundSave)
   watchInboundSaveRef.current = watchInboundSave
   const watchInboundTimerRef = useRef(0)
+  const nativeWatchSavesRef = useRef<Record<string, NativeWatchSaveFace>>({})
+  const [historyTick, setHistoryTick] = useState(0)
+  const applyNativeWatchSaveRef = useRef<(ev: { save: string; sessionId: string }) => void>(() => undefined)
   const clearWatchInboundTimer = () => {
     if (watchInboundTimerRef.current) {
       window.clearTimeout(watchInboundTimerRef.current)
@@ -1415,6 +1418,9 @@ export default function App() {
       onSave: (sessionId) => {
         saveFromWatchRef.current(sessionId)
       },
+      onSaveResult: (ev) => {
+        applyNativeWatchSaveRef.current(ev)
+      },
       onDiscard: () => {
         window.api.send(watchDiscardCommand())
         markHistoryKept(false)
@@ -1462,6 +1468,27 @@ export default function App() {
       turns: state.turns,
     })
     const timer = window.setTimeout(() => {
+      const inbound = watchInboundSave
+      const liveId = inbound?.id || saveBook.liveId || ''
+      const jsPayload = watchSaveStatusPayload(
+        inbound && (!saveBook.liveId || inbound.id === saveBook.liveId)
+          ? { status: inbound.status, liveId: inbound.id }
+          : { status: saveBook.status, liveId: saveBook.liveId },
+      )
+      const nativeSave = (jsPayload.sessionId && nativeWatchSavesRef.current[jsPayload.sessionId]) || ''
+      let payload = nativeSave === 'saved'
+        ? { save: 'saved' as const, sessionId: jsPayload.sessionId || liveId }
+        : nativeSave === 'local' && jsPayload.save === 'failed'
+          ? { save: 'local' as const, sessionId: jsPayload.sessionId }
+          : jsPayload
+      if (!watchPhoneStatusMayPush({
+        nativeSave,
+        incomingSave: payload.save,
+        nativeSessionId: payload.sessionId,
+        incomingSessionId: payload.sessionId,
+      })) {
+        payload = { save: 'saved', sessionId: payload.sessionId }
+      }
       pushWatchStatus({
         capture: state.capture,
         hint: face.hint,
@@ -1471,11 +1498,7 @@ export default function App() {
         history: face.history,
         mode: watchStatusMode(state.workspaceMode, state.listenScene),
         langPair: watchLangPair(state.workspaceMode === 'translate' ? state.translateTo : state.notesTranslateTo),
-        ...watchSaveStatusPayload(
-          watchInboundSave
-            ? { status: watchInboundSave.status, liveId: watchInboundSave.id }
-            : { status: saveBook.status, liveId: saveBook.liveId },
-        ),
+        ...payload,
       })
     }, 180)
     return () => window.clearTimeout(timer)
@@ -1817,6 +1840,15 @@ export default function App() {
   }
 
   const failKeep = (reason: 'timeout' | 'error' | 'disconnect') => {
+    const liveId = saveBookRef.current.liveId
+    const native = watchFailKeepNativeFace({
+      failingSessionId: liveId || '',
+      nativeSaves: nativeWatchSavesRef.current,
+    })
+    if (!watchJsFailMayApply(native || '')) {
+      clearWatchInboundTimer()
+      return
+    }
     const next = applyKeepFailed(saveBookRef.current, reason)
     if (next === saveBookRef.current) return
     commitBook(next)
@@ -1900,6 +1932,26 @@ export default function App() {
         liveId: saveBookRef.current.liveId,
       })
       if (!target.keepId) return
+      if (!watchSaveShouldSendKeepHistory()) {
+        const native = nativeWatchSavesRef.current[target.keepId]
+        if (native === 'saved') {
+          setWatchInboundSave({ id: target.keepId, status: 'saved' })
+          clearWatchInboundTimer()
+          if (target.adopt || saveBookRef.current.liveId === target.keepId) {
+            commitBook({ ...saveBookRef.current, liveId: target.keepId, status: 'saved' })
+            markHistoryKept(true)
+            setSaveBannerOpen(false)
+            clearKeepTimer()
+          }
+          return
+        }
+        setWatchInboundSave({
+          id: target.keepId,
+          status: native === 'failed' ? 'failed' : 'saving',
+        })
+        clearWatchInboundTimer()
+        return
+      }
       if (!target.adopt) {
         setWatchInboundSave({ id: target.keepId, status: 'saving' })
         window.api.send(keepHistoryMessage({ content: true, audio: true, id: target.keepId }))
@@ -1962,6 +2014,55 @@ export default function App() {
     sendKeepNow({ content, audio })
   }
 
+  applyNativeWatchSaveRef.current = (ev) => {
+    const id = ev.sessionId || ''
+    if (!id) return
+    if (ev.save !== 'saved' && ev.save !== 'failed' && ev.save !== 'local') return
+    const incoming = ev.save
+    const next = watchNativeSaveReduce({ current: nativeWatchSavesRef.current[id] || '', incoming })
+    nativeWatchSavesRef.current[id] = next
+    setHistoryTick((n) => n + 1)
+    const liveId = saveBookRef.current.liveId
+    const inboundId = watchInboundSaveRef.current?.id
+    const onFace = !liveId || liveId === id || inboundId === id
+    if (next === 'saved') {
+      if (onFace) {
+        setWatchInboundSave({ id, status: 'saved' })
+        clearWatchInboundTimer()
+      }
+      const book = saveBookRef.current
+      if (book.liveId === id) {
+        const started = book.status === 'saving' ? book : beginSave(book, id)
+        const { book: nextBook } = applyKeepAck(started, id, id, started.generation)
+        if (nextBook.status === 'saved') {
+          markHistoryKept(true)
+          commitBook(nextBook)
+          clearKeepTimer()
+          pendingKeepRef.current = null
+          keepAfterNotes.current = null
+          keepEpochRef.current = null
+          setSaveBannerOpen(false)
+        }
+      }
+      return
+    }
+    if (next === 'local') {
+      clearWatchInboundTimer()
+      if (onFace) {
+        setWatchInboundSave((prev) => (prev?.id === id && prev.status === 'saved' ? prev : { id, status: 'saving' }))
+      }
+      const book = saveBookRef.current
+      if (book.liveId === id && book.status === 'failed') {
+        commitBook({ ...book, status: 'saving' })
+        setSaveBannerOpen(false)
+      }
+      return
+    }
+    if (onFace) setWatchInboundSave({ id, status: 'failed' })
+    const book = saveBookRef.current
+    if (book.liveId === id && book.status === 'saving') failKeep('error')
+  }
+
   saveFromWatchRef.current = (sessionId) => {
     saveLiveSession({ fromWatch: true, sessionId })
   }
@@ -2000,6 +2101,18 @@ export default function App() {
     }
     if (e.type === 'history_keep_failed') {
       const inbound = watchInboundSaveRef.current
+      const failingId = e.id || saveBookRef.current.liveId || ''
+      const native = watchFailKeepNativeFace({
+        failingSessionId: failingId,
+        nativeSaves: nativeWatchSavesRef.current,
+      })
+      if (!watchJsFailMayApply(native || '')) {
+        if (inbound && e.id === inbound.id && native === 'saved') {
+          setWatchInboundSave({ id: inbound.id, status: 'saved' })
+          clearWatchInboundTimer()
+        }
+        return
+      }
       if (inbound && e.id === inbound.id) {
         setWatchInboundSave({ id: inbound.id, status: 'failed' })
         clearWatchInboundTimer()
@@ -3446,7 +3559,7 @@ export default function App() {
         }
       />
       <UplinkStatusBanner text={state.status} />
-      <HistoryPane open={historyOpen} onClose={() => setHistoryOpen(false)} onRestore={restoreHistory} />
+      <HistoryPane open={historyOpen} refreshAt={historyTick} onClose={() => setHistoryOpen(false)} onRestore={restoreHistory} />
       <AccountPane
         open={accountOpen}
         onClose={() => {

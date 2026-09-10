@@ -29,4 +29,16 @@ export class NodWatchWeb extends WebPlugin implements NodWatchPlugin {
   async storeAccount(): Promise<void> {
     return
   }
+
+  async listSaves(): Promise<{ saves: [] }> {
+    return { saves: [] }
+  }
+
+  async retrySave(): Promise<void> {
+    return
+  }
+
+  async resumeKeeps(): Promise<void> {
+    return
+  }
 }

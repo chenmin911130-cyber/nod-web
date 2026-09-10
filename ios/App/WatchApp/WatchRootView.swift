@@ -44,7 +44,7 @@ struct WatchRootView: View {
                         stallWarning
                     }
                 }
-            } else if session.offeringSave || session.savedAck || (!session.listening && !session.paused) {
+            } else if session.offeringSave || session.pendingSync || session.savedAck || (!session.listening && !session.paused) {
                 Color.black
             } else if session.paused {
                 VStack(spacing: 6) {
@@ -118,7 +118,7 @@ struct WatchRootView: View {
                     .padding(.horizontal, 6)
             }
             Group {
-                if session.offeringSave {
+                if session.offeringSave || session.pendingSync {
                     savePrompt
                 } else if session.savedAck {
                     savedAck
@@ -426,19 +426,41 @@ struct WatchRootView: View {
 
     private var savePrompt: some View {
         VStack(spacing: 8) {
-            Text(session.saveFailed ? WatchCopy.saveFailed : session.saving ? WatchCopy.saving : WatchCopy.savedLocal)
-                .font(.caption)
-                .foregroundStyle(muted)
-                .multilineTextAlignment(.center)
-            Button(WatchCopy.dontSave) { session.declineSave() }
-                .buttonStyle(.borderedProminent)
-                .tint(slate)
-                .foregroundStyle(Color.black)
-                .disabled(session.saving)
-            Button(session.saveFailed ? WatchCopy.retry : session.saving ? WatchCopy.saving : WatchCopy.save) { session.confirmSave() }
-                .buttonStyle(.borderedProminent)
-                .tint(cyan)
-                .disabled(session.saving)
+            if session.pendingSync && !session.saving && !session.saveFailed {
+                Text(WatchCopy.pendingSync)
+                    .font(.caption)
+                    .foregroundStyle(muted)
+                    .multilineTextAlignment(.center)
+                Button(WatchCopy.done) { session.finishPendingSave() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(cyan)
+            } else if session.saveFailed {
+                Text(WatchCopy.saveFailed)
+                    .font(.caption)
+                    .foregroundStyle(muted)
+                    .multilineTextAlignment(.center)
+                Button(WatchCopy.done) { session.finishPendingSave() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(slate)
+                    .foregroundStyle(Color.black)
+                Button(WatchCopy.retry) { session.confirmSave() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(cyan)
+            } else {
+                Text(session.saving ? WatchCopy.saving : WatchCopy.saveAsk)
+                    .font(.caption)
+                    .foregroundStyle(muted)
+                    .multilineTextAlignment(.center)
+                Button(WatchCopy.dontSave) { session.declineSave() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(slate)
+                    .foregroundStyle(Color.black)
+                    .disabled(session.saving)
+                Button(session.saving ? WatchCopy.saving : WatchCopy.save) { session.confirmSave() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(cyan)
+                    .disabled(session.saving)
+            }
         }
     }
 

@@ -57,8 +57,12 @@ export function watchSavePinnedId(opts: { pinnedId: string; phoneSessionId: stri
 }
 
 /** WatchConnectivity Save body. Missing id must not go on the wire. */
-export function watchSaveWireMessage(sessionId: string): { action: 'save'; sessionId: string } | null {
+export function watchSaveWireMessage(
+  sessionId: string,
+  captureId?: string,
+): { action: 'save'; sessionId: string; captureId?: string } | null {
   if (!sessionId) return null
+  if (captureId) return { action: 'save', sessionId, captureId }
   return { action: 'save', sessionId }
 }
 
@@ -143,6 +147,62 @@ export function watchSaveAckApplies(opts: {
   if (opts.incomingSave === 'failed') return 'failed'
   if (opts.incomingSave === 'local') return 'local'
   return 'ignore'
+}
+
+/** Watch Save is native HTTP. The phone JS must not send keep_history for it. */
+export function watchSaveShouldSendKeepHistory(): boolean {
+  return false
+}
+
+export type NativeWatchSaveFace = 'local' | 'saved' | 'failed'
+
+/** Phone timeout/disconnect/failed only consults native face for that session. */
+export function watchFailKeepNativeFace(opts: {
+  failingSessionId: string
+  nativeSaves: Record<string, NativeWatchSaveFace>
+}): NativeWatchSaveFace | '' {
+  if (!opts.failingSessionId) return ''
+  return opts.nativeSaves[opts.failingSessionId] || ''
+}
+
+/** JS timeout/disconnect/failed must not regress a native local or saved result. */
+export function watchJsFailMayApply(nativeSave: NativeWatchSaveFace | ''): boolean {
+  return nativeSave !== 'saved' && nativeSave !== 'local'
+}
+
+/** Phone status chain must not push failed over a native History success or local persist. */
+export function watchPhoneStatusMayPush(opts: {
+  nativeSave: NativeWatchSaveFace | ''
+  incomingSave: string
+  nativeSessionId: string
+  incomingSessionId: string
+}): boolean {
+  if (!opts.nativeSessionId || opts.nativeSessionId !== opts.incomingSessionId) return true
+  if (opts.nativeSave === 'saved' && opts.incomingSave !== 'saved') return false
+  if (opts.nativeSave === 'local' && opts.incomingSave === 'failed') return false
+  return true
+}
+
+/** HTTP 200 with ok and matching id is History saved. Wrong id or ok=false is failed. */
+export function watchKeepHttpFace(opts: {
+  status: number
+  body: { ok?: unknown; id?: string } | null
+  sessionId: string
+}): NativeWatchSaveFace {
+  if (opts.status < 200 || opts.status >= 300) return 'failed'
+  if (!opts.body || opts.body.ok !== true) return 'failed'
+  const id = typeof opts.body.id === 'string' ? opts.body.id : ''
+  if (!id || id !== opts.sessionId) return 'failed'
+  return 'saved'
+}
+
+/** Saved is terminal. A late local/failed for the same id does not roll it back. */
+export function watchNativeSaveReduce(opts: {
+  current: NativeWatchSaveFace | ''
+  incoming: NativeWatchSaveFace
+}): NativeWatchSaveFace {
+  if (opts.current === 'saved') return 'saved'
+  return opts.incoming
 }
 
 /** Repeat Save on the same live session must not start a second keep. */
