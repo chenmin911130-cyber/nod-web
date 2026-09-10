@@ -1,4 +1,6 @@
 /** After a Record session stops, wait until capture is off and the engine is idle. */
+export type ListenFlush = 'idle' | 'pending' | 'complete' | 'timeout'
+
 export function shouldGenerateAutoReport(input: {
   flagged: boolean
   heardListen: boolean
@@ -7,6 +9,7 @@ export function shouldGenerateAutoReport(input: {
   workspaceMode: string
   busy: boolean
   lineCount: number
+  listenFlush?: ListenFlush
 }): 'wait' | 'skip' | 'generate' {
   if (!input.flagged) return 'skip'
   if (input.capture !== 'off' || input.engine !== 'idle') return 'wait'
@@ -14,6 +17,11 @@ export function shouldGenerateAutoReport(input: {
   if (input.workspaceMode === 'translate') return 'skip'
   if (input.busy) return 'wait'
   if (input.lineCount === 0) return 'skip'
+  const needsFlush = input.workspaceMode === 'meeting'
+  if (needsFlush) {
+    const flush = input.listenFlush ?? 'idle'
+    if (flush === 'pending' || flush === 'idle') return 'wait'
+  }
   return 'generate'
 }
 

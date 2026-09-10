@@ -104,4 +104,93 @@ test.describe('Meeting translation continuation', () => {
     await expect(page.locator('.listen-line.live')).toHaveCount(0)
     await expect(page.locator('.listen-line .listen-orig').first()).toHaveText('So one of the significant features')
   })
+
+  test('End waits for listen_flush before notes, including a same-row line_update', async ({ page }) => {
+    let ws: WebSocketRoute | undefined
+    const notesAsks: string[] = []
+    await page.routeWebSocket(/\/ws$/, (route) => {
+      ws = route
+      route.onMessage((message) => {
+        let m: { type?: string; mode?: string; text?: string } | null = null
+        try { m = JSON.parse(String(message)) } catch { return }
+        if (m?.type === 'ask' && m.mode === 'notes' && m.text) notesAsks.push(m.text)
+      })
+    })
+
+    await page.goto('/app')
+    await expect.poll(() => ws !== undefined, { timeout: 5000 }).toBe(true)
+    expect(ws).toBeTruthy()
+    const send = (msg: Record<string, unknown>) => ws!.send(JSON.stringify(msg))
+
+    await page.getByLabel('Notes language').click()
+    await page.getByRole('option', { name: /english/i }).click()
+
+    send({ type: 'phase', capture: 'listening', engine: 'idle' })
+    send({ type: 'question', id: 'm1', text: "So throughout this presentation, instead of asking you to drop a yes in the chat like I normally do, I'm" })
+    await expect(page.locator('.listen-line')).toHaveCount(1)
+    await page.getByRole('button', { name: 'Stop', exact: true }).click()
+
+    send({ type: 'phase', capture: 'off', engine: 'idle' })
+    send({
+      type: 'line_update',
+      id: 'm1',
+      rev: 1,
+      text: "So throughout this presentation, instead of asking you to drop a yes in the chat like I normally do, I'm going to look to that reaction button. Let's get into it.",
+    })
+    await expect(page.locator('.listen-line')).toHaveCount(1)
+    await expect.poll(() => notesAsks.length).toBe(0)
+
+    send({ type: 'listen_flush', id: '1', ok: true })
+    await expect.poll(() => notesAsks.length, { timeout: 3000 }).toBe(1)
+    expect(notesAsks[0]).toContain("Let's get into it")
+    expect(notesAsks.length).toBe(1)
+  })
+
+  test('empty transcript after End does not ask for notes', async ({ page }) => {
+    let ws: WebSocketRoute | undefined
+    const notesAsks: string[] = []
+    await page.routeWebSocket(/\/ws$/, (route) => {
+      ws = route
+      route.onMessage((message) => {
+        let m: { type?: string; mode?: string } | null = null
+        try { m = JSON.parse(String(message)) } catch { return }
+        if (m?.type === 'ask' && m.mode === 'notes') notesAsks.push('notes')
+      })
+    })
+
+    await page.goto('/app')
+    await expect.poll(() => ws !== undefined, { timeout: 5000 }).toBe(true)
+    const send = (msg: Record<string, unknown>) => ws!.send(JSON.stringify(msg))
+    send({ type: 'phase', capture: 'listening', engine: 'idle' })
+    await page.getByRole('button', { name: 'Stop', exact: true }).click()
+    send({ type: 'phase', capture: 'off', engine: 'idle' })
+    send({ type: 'listen_flush', id: '1', ok: true })
+    await page.waitForTimeout(400)
+    expect(notesAsks).toEqual([])
+  })
+
+  test('stale listen_flush after a new session does not generate notes', async ({ page }) => {
+    let ws: WebSocketRoute | undefined
+    const notesAsks: string[] = []
+    await page.routeWebSocket(/\/ws$/, (route) => {
+      ws = route
+      route.onMessage((message) => {
+        let m: { type?: string; mode?: string; text?: string } | null = null
+        try { m = JSON.parse(String(message)) } catch { return }
+        if (m?.type === 'ask' && m.mode === 'notes' && m.text) notesAsks.push(m.text)
+      })
+    })
+
+    await page.goto('/app')
+    await expect.poll(() => ws !== undefined, { timeout: 5000 }).toBe(true)
+    const send = (msg: Record<string, unknown>) => ws!.send(JSON.stringify(msg))
+    send({ type: 'phase', capture: 'listening', engine: 'idle' })
+    send({ type: 'question', id: 'm1', text: "I'm" })
+    await expect(page.locator('.listen-line')).toHaveCount(1)
+    await page.getByRole('button', { name: 'Stop', exact: true }).click()
+    send({ type: 'phase', capture: 'listening', engine: 'idle' })
+    send({ type: 'listen_flush', id: '1', ok: true })
+    await page.waitForTimeout(400)
+    expect(notesAsks).toEqual([])
+  })
 })

@@ -246,6 +246,8 @@ const initial: AppState = {
   speakerDecided: {},
   partialSpeaker: '',
   quota: null as { stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; ok: boolean; sessions: number; session_limit: number; daily_cost_usd: number; daily_cost_limit: number; daily_stt_seconds: number; daily_stt_limit: number; quota_disabled?: boolean } | null,
+  listenFlush: 'idle' as const,
+  listenFlushId: '',
 }
 
 type Action =
@@ -287,6 +289,8 @@ type Action =
   | { type: 'expect_catch'; title?: string; kind?: 'catch' | 'ask'; question?: string }
   | { type: 'retry_ask'; noteId: string }
   | { type: 'expect_notes' }
+  | { type: 'expect_listen_flush' }
+  | { type: 'listen_flush_timeout' }
   | { type: 'rename_speaker'; id: string; name: string }
   | { type: 'dismiss_speaker_suggestion'; id: string }
   | {
@@ -394,10 +398,13 @@ function reducer(state: AppState, action: Action): AppState {
           let autoOn = state.autoOn
           let view = state.view
           let meetingStartedAt = state.meetingStartedAt
+          let listenFlush = state.listenFlush
+          let listenFlushId = state.listenFlushId
           if (capture === 'listening' || capture === 'recording') {
             if (!isWeb && state.workspaceMode === 'interview' && !autoOn && view === 'workspace') view = 'focus'
             autoOn = true
             if (state.workspaceMode === 'meeting' && meetingStartedAt == null) meetingStartedAt = Date.now()
+            listenFlush = 'idle'
           } else if (capture === 'off') {
             autoOn = false
             if (view !== 'workspace') view = 'workspace'
@@ -407,7 +414,7 @@ function reducer(state: AppState, action: Action): AppState {
           let busy = state.busy
           if (engine === 'generating' || engine === 'transcribing') busy = true
           else if (engine === 'idle' && !generating && !interviewAsking) busy = false
-          return { ...state, capture, engine, autoOn, view, busy, meetingStartedAt }
+          return { ...state, capture, engine, autoOn, view, busy, meetingStartedAt, listenFlush, listenFlushId }
         }
         case 'listen_taken': {
           // Stolen STT must leave Listening. Do not clear Interview / Ask busy.
@@ -672,6 +679,14 @@ function reducer(state: AppState, action: Action): AppState {
           return state
         case 'pcm_drained':
           return state
+        case 'listen_flush': {
+          if (state.listenFlush !== 'pending') return state
+          const incoming = ev.id || ''
+          const prev = state.listenFlushId
+          if (prev && incoming && Number(incoming) <= Number(prev)) return state
+          const next = ev.timeout || ev.ok === false ? 'timeout' : 'complete'
+          return { ...state, listenFlush: next, listenFlushId: incoming || prev }
+        }
         default:
           return state
       }
@@ -720,6 +735,8 @@ function reducer(state: AppState, action: Action): AppState {
         catchAskId: '',
         notesRaw: '',
         notesAskId: '',
+        listenFlush: 'idle',
+        listenFlushId: '',
       }
     case 'workspace':
       return { ...state, workspaceMode: action.mode, view: 'workspace' }
@@ -793,6 +810,7 @@ function reducer(state: AppState, action: Action): AppState {
         meetingElapsedMs: 0,
         translateAskId: '',
         translateBindId: '',
+        listenFlush: 'idle',
       }
     case 'meeting_resume':
       return applyMeetingResume(state)
@@ -838,6 +856,11 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case 'expect_notes':
       return { ...state, notesAskId: '__pending__', notesRaw: '', busy: true, status: 'Writing notes…', translateBindId: '', translateAskId: '' }
+    case 'expect_listen_flush':
+      return { ...state, listenFlush: 'pending', listenFlushId: '' }
+    case 'listen_flush_timeout':
+      if (state.listenFlush !== 'pending') return state
+      return { ...state, listenFlush: 'timeout' }
     case 'translate_from':
       return { ...state, translateFrom: action.lang }
     case 'translate_to':
@@ -2626,6 +2649,7 @@ export default function App() {
       if (live) {
         autoReport.current = true
         recordHeard.current = true
+        dispatch({ type: 'expect_listen_flush' })
         stopListen()
         dispatch({ type: 'meeting_ended' })
         dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped · writing notes' } })
@@ -2658,6 +2682,7 @@ export default function App() {
     if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
       autoReport.current = true
       recordHeard.current = true
+      dispatch({ type: 'expect_listen_flush' })
       if (stopShouldReleaseListener(s.capture)) stopListen()
       dispatch({ type: 'meeting_ended' })
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening stopped · writing notes' } })
@@ -2675,6 +2700,7 @@ export default function App() {
     if (s.capture === 'paused') {
       autoReport.current = true
       recordHeard.current = true
+      dispatch({ type: 'expect_listen_flush' })
       stopListen()
       dispatch({ type: 'meeting_ended' })
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Recording stopped · writing report' } })
@@ -2684,6 +2710,7 @@ export default function App() {
     if (sessionListening({ capture: s.capture })) {
       autoReport.current = true
       recordHeard.current = true
+      dispatch({ type: 'expect_listen_flush' })
       stopListen()
       dispatch({ type: 'meeting_ended' })
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Recording stopped · writing report' } })
@@ -2974,6 +3001,12 @@ export default function App() {
   generateNotesRef.current = generateNotes
 
   useEffect(() => {
+    if (state.listenFlush !== 'pending') return
+    const timer = window.setTimeout(() => dispatch({ type: 'listen_flush_timeout' }), 10000)
+    return () => window.clearTimeout(timer)
+  }, [state.listenFlush])
+
+  useEffect(() => {
     const fromWatch = isNativeApp() && watchAutoNotes.current
     const flagged = fromWatch || autoReport.current
     if (flagged && (state.capture !== 'off' || state.engine !== 'idle')) {
@@ -2987,6 +3020,7 @@ export default function App() {
       workspaceMode: state.workspaceMode,
       busy: state.busy,
       lineCount: state.meetingLines.length,
+      listenFlush: state.listenFlush,
     })
     if (next === 'wait') return
     watchAutoNotes.current = false
@@ -3005,7 +3039,7 @@ export default function App() {
     if (!snap) return
     markWatchReport()
     writeWatchReportSnapshot(snap)
-  }, [state.busy, state.meetingLines.length, state.capture, state.engine, state.workspaceMode])
+  }, [state.busy, state.meetingLines, state.capture, state.engine, state.workspaceMode, state.listenFlush])
 
   useEffect(() => {
     if (!isNativeApp() || !readWatchReport()) return

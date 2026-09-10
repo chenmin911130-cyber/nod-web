@@ -132,6 +132,8 @@ export interface AppState {
     daily_cost_limit: number
     quota_disabled?: boolean
   } | null
+  listenFlush: 'idle' | 'pending' | 'complete' | 'timeout'
+  listenFlushId: string
 }
 
 // 引擎 → 前端
@@ -157,6 +159,7 @@ export type EngineEvent =
   | { type: 'disconnected' }
   | { type: 'attached'; usage_session_id?: string }
   | { type: 'pcm_drained'; id: string; capture_id: string; byte_offset: number }
+  | { type: 'listen_flush'; id?: string; ok: boolean; timeout?: boolean }
 
 // 前端 → 引擎
 export type EngineMsg =
