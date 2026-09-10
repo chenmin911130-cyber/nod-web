@@ -108,11 +108,13 @@ test.describe('Meeting translation continuation', () => {
   test('End waits for listen_flush before notes, including a same-row line_update', async ({ page }) => {
     let ws: WebSocketRoute | undefined
     const notesAsks: string[] = []
+    let stopFlushId = ''
     await page.routeWebSocket(/\/ws$/, (route) => {
       ws = route
       route.onMessage((message) => {
-        let m: { type?: string; mode?: string; text?: string } | null = null
+        let m: { type?: string; mode?: string; text?: string; flush_id?: string } | null = null
         try { m = JSON.parse(String(message)) } catch { return }
+        if (m?.type === 'stop_listen' && m.flush_id) stopFlushId = m.flush_id
         if (m?.type === 'ask' && m.mode === 'notes' && m.text) notesAsks.push(m.text)
       })
     })
@@ -129,6 +131,7 @@ test.describe('Meeting translation continuation', () => {
     send({ type: 'question', id: 'm1', text: "So throughout this presentation, instead of asking you to drop a yes in the chat like I normally do, I'm" })
     await expect(page.locator('.listen-line')).toHaveCount(1)
     await page.getByRole('button', { name: 'Stop', exact: true }).click()
+    await expect.poll(() => stopFlushId).not.toBe('')
 
     send({ type: 'phase', capture: 'off', engine: 'idle' })
     send({
@@ -138,9 +141,10 @@ test.describe('Meeting translation continuation', () => {
       text: "So throughout this presentation, instead of asking you to drop a yes in the chat like I normally do, I'm going to look to that reaction button. Let's get into it.",
     })
     await expect(page.locator('.listen-line')).toHaveCount(1)
+    send({ type: 'listen_flush', id: '1', flush_id: 'f-old', ok: true })
     await expect.poll(() => notesAsks.length).toBe(0)
 
-    send({ type: 'listen_flush', id: '1', ok: true })
+    send({ type: 'listen_flush', id: '2', flush_id: stopFlushId, ok: true })
     await expect.poll(() => notesAsks.length, { timeout: 3000 }).toBe(1)
     expect(notesAsks[0]).toContain("Let's get into it")
     expect(notesAsks.length).toBe(1)

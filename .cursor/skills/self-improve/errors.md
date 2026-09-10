@@ -2,6 +2,12 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-11 · #187 审查：Watch End 没 arm flush，回执没绑本次 End
+- 我以为：手机 Stop 上 `expect_listen_flush`、每次等待清空 `listenFlushId`，下一条 `listen_flush` 就能放行笔记。
+- 实际：Watch Stop / Record-while-listening 只 `stopListen()`，从未 pending，自动笔记会永远 wait。清空旧 id 后，上一轮迟到回执会完成当前 End。
+- 规则：每次 Meeting End（含 Watch）必须带本场 nonce；`listen_flush` 必须回显并匹配该 nonce，禁止靠「下一条 flush」或清空旧 id 消歧义。
+- 涉及：`endMeetingListeningRef` · `ListenFlushWait.waitId` · `stop_listen.flush_id`
+
 ## 2026-09-10 · #185 审查：跨场 keep、旧 saved 吞新失败、status 触发无界重试
 - 我以为：按 session 查文件、inbound 上记 native saved、每次 storeAccount 扫 keep 再 POST，手表 local/savedAck 就能收口。
 - 实际：延迟 Save 会把当前 B 标 keep 却 keep(A)；failKeep 用另一场 inbound.saved 吞掉 B 的失败；每次 pushWatchStatus 都 restorePendingKeeps；saved 只在内存，重启当 pending；手表 savedAck 两秒后迟到 failed/local 会重开页面；缺 token 先 failed 再 publish local。

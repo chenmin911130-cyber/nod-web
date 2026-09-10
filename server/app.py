@@ -2498,6 +2498,7 @@ class Session:
         self._listen_flush_done = False
         self._listen_flush_seq = 0
         self._listen_flush_history_ok = True
+        self._listen_flush_client_id: str | None = None
         self._last_pcm_at = 0.0
         self._last_voice_at = 0.0
         self._idle_check_at = 0.0
@@ -2936,7 +2937,7 @@ class Session:
         elif mtype == "pcm_end":
             self.pcm_end(msg.get("id"), msg.get("byte_offset"), msg.get("capture_id") or msg.get("captureId"))
         elif mtype == "stop_listen":
-            self.stop_listen()
+            self.stop_listen(flush_id=msg.get("flush_id"))
         elif mtype == "pause_listen":
             self.pause_listen()
         elif mtype == "resume_listen":
@@ -4016,7 +4017,9 @@ class Session:
             return
         self._start_listening()
 
-    def stop_listen(self) -> None:
+    def stop_listen(self, flush_id: Any = None) -> None:
+        raw = str(flush_id or "").strip()
+        self._listen_flush_client_id = raw or None
         if getattr(self, "_stop_flushing", False):
             return
         self._paused = False
@@ -4535,19 +4538,29 @@ class Session:
 
     def _emit_listen_flush(self, *, ok: bool, timeout: bool) -> None:
         self._listen_flush_seq = getattr(self, "_listen_flush_seq", 0) + 1
+        client_id = getattr(self, "_listen_flush_client_id", None)
+        self._listen_flush_client_id = None
+        session_id = getattr(self, "usage_session_id", None) or ""
         logging.getLogger("nod").info(
-            "listen_flush ok=%s timeout=%s seq=%s history_ok=%s",
+            "listen_flush ok=%s timeout=%s seq=%s history_ok=%s flush_id=%s session=%s",
             ok,
             timeout,
             self._listen_flush_seq,
             getattr(self, "_listen_flush_history_ok", True),
+            client_id or "",
+            session_id,
         )
-        self.emit({
+        ev: dict[str, Any] = {
             "type": "listen_flush",
             "id": str(self._listen_flush_seq),
             "ok": ok,
             "timeout": timeout,
-        })
+        }
+        if client_id:
+            ev["flush_id"] = client_id
+        if session_id:
+            ev["session_id"] = session_id
+        self.emit(ev)
 
     def _drain_meeting_after_stop(self) -> bool:
         deadline = time.monotonic() + MEETING_STOP_DRAIN_SEC

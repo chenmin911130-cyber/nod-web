@@ -1,3 +1,5 @@
+import type { ListenFlushWait } from './recordReport'
+
 export type CaptureState = 'off' | 'listening' | 'recording' | 'paused'
 export type EngineState = 'idle' | 'transcribing' | 'generating'
 export type Turn = { id: string; q: string; a: string }
@@ -132,8 +134,7 @@ export interface AppState {
     daily_cost_limit: number
     quota_disabled?: boolean
   } | null
-  listenFlush: 'idle' | 'pending' | 'complete' | 'timeout'
-  listenFlushId: string
+  listenFlushWait: ListenFlushWait
 }
 
 // 引擎 → 前端
@@ -159,14 +160,14 @@ export type EngineEvent =
   | { type: 'disconnected' }
   | { type: 'attached'; usage_session_id?: string }
   | { type: 'pcm_drained'; id: string; capture_id: string; byte_offset: number }
-  | { type: 'listen_flush'; id?: string; ok: boolean; timeout?: boolean }
+  | { type: 'listen_flush'; id?: string; flush_id?: string; session_id?: string; ok: boolean; timeout?: boolean }
 
 // 前端 → 引擎
 export type EngineMsg =
   | { type: 'manual' }
   | { type: 'toggle_listen' }
   | { type: 'start_listen'; mic?: 'watch' | 'phone' }
-  | { type: 'stop_listen' }
+  | { type: 'stop_listen'; flush_id?: string }
   | { type: 'pause_listen' }
   | { type: 'resume_listen' }
   | { type: 'keep_history'; content?: boolean; audio?: boolean; id?: string }

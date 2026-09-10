@@ -105,6 +105,8 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
       return {
         type: 'listen_flush',
         id: asText(o.id) || undefined,
+        flush_id: asText(o.flush_id) || undefined,
+        session_id: asText(o.session_id) || undefined,
         ok: o.ok !== false,
         timeout: o.timeout === true,
       }

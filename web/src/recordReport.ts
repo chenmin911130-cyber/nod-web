@@ -1,6 +1,77 @@
 /** After a Record session stops, wait until capture is off and the engine is idle. */
 export type ListenFlush = 'idle' | 'pending' | 'complete' | 'timeout'
 
+export type ListenFlushEvent = {
+  id?: string
+  flushId?: string
+  sessionId?: string
+  ok: boolean
+  timeout?: boolean
+}
+
+/** One End's flush wait: nonce + session, plus the last accepted seq so a late
+ * receipt from the previous End cannot complete the current notes. */
+export type ListenFlushWait = {
+  status: ListenFlush
+  waitId: string
+  waitSession: string
+  lastId: string
+  held: ListenFlushEvent | null
+}
+
+export function idleListenFlushWait(): ListenFlushWait {
+  return { status: 'idle', waitId: '', waitSession: '', lastId: '', held: null }
+}
+
+export function listenFlushEventMatchesWait(wait: ListenFlushWait, ev: ListenFlushEvent): boolean {
+  if (wait.status !== 'pending') return false
+  if (wait.waitId) {
+    return Boolean(ev.flushId) && ev.flushId === wait.waitId
+  }
+  if (wait.waitSession && ev.sessionId && wait.waitSession !== ev.sessionId) return false
+  if (wait.lastId && ev.id && Number(ev.id) <= Number(wait.lastId)) return false
+  return true
+}
+
+function completeListenFlush(wait: ListenFlushWait, ev: ListenFlushEvent): ListenFlushWait {
+  return {
+    ...wait,
+    status: ev.timeout || ev.ok === false ? 'timeout' : 'complete',
+    waitId: '',
+    lastId: ev.id || wait.lastId,
+    held: ev,
+  }
+}
+
+export function beginListenFlushWait(prev: ListenFlushWait, waitId: string, sessionId: string): ListenFlushWait {
+  const next: ListenFlushWait = {
+    ...prev,
+    status: 'pending',
+    waitId,
+    waitSession: sessionId,
+  }
+  if (next.held && listenFlushEventMatchesWait(next, next.held)) {
+    return completeListenFlush(next, next.held)
+  }
+  return next
+}
+
+export function applyListenFlushEvent(prev: ListenFlushWait, ev: ListenFlushEvent): ListenFlushWait {
+  if (!listenFlushEventMatchesWait(prev, ev)) {
+    return { ...prev, held: ev }
+  }
+  return completeListenFlush(prev, ev)
+}
+
+export function timeoutListenFlushWait(prev: ListenFlushWait): ListenFlushWait {
+  if (prev.status !== 'pending') return prev
+  return { ...prev, status: 'timeout', waitId: '' }
+}
+
+export function idleKeepLastListenFlush(prev: ListenFlushWait): ListenFlushWait {
+  return { ...prev, status: 'idle', waitId: '', waitSession: '' }
+}
+
 export function shouldGenerateAutoReport(input: {
   flagged: boolean
   heardListen: boolean

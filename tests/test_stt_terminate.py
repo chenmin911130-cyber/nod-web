@@ -465,6 +465,7 @@ class MeetingStopFlushTests(unittest.TestCase):
         sess._listen_flush_history_ok = True
         sess._listen_flush_seq = 0
         sess._listen_flush_done = False
+        sess._listen_flush_client_id = None
         sess._listen_ended = False
         sess._follow_lang = None
         sess.pipeline = mock.Mock()
@@ -545,6 +546,20 @@ class MeetingStopFlushTests(unittest.TestCase):
         sess.stop_listen()
         flushes = [c.args[0] for c in sess.emit.call_args_list if c.args[0].get("type") == "listen_flush"]
         self.assertEqual(len(flushes), 1)
+
+    def test_stop_listen_echoes_flush_id_and_session(self):
+        sess = self._meeting()
+        sess.usage_session_id = "sess-b"
+        lst = mock.Mock()
+        lst.stop = mock.Mock()
+        lst.uncovered_tail = mock.Mock(return_value=None)
+        sess._listener = lst
+        sess.stop_listen(flush_id="f2")
+        flush = next(c.args[0] for c in sess.emit.call_args_list if c.args[0].get("type") == "listen_flush")
+        self.assertEqual(flush.get("flush_id"), "f2")
+        self.assertEqual(flush.get("session_id"), "sess-b")
+        self.assertTrue(flush.get("ok"))
+        self.assertIsNone(sess._listen_flush_client_id)
 
     def test_slow_worker_flush_waits_past_one_second_join(self):
         sess = self._meeting()
