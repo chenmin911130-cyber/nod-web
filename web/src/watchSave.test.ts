@@ -53,6 +53,8 @@ if ('keepRecording' in watchSaveCommand('live-a')) {
 eq(watchSaveShouldWaitForNotes(), false, 'Watch Save does not wait for Notes')
 eq(watchSaveTimeoutMs(), 15_000, 'Watch Save times out at 15s')
 eq(watchSaveStatusPayload({ status: 'undecided', liveId: 'live-a' }).save, 'none', 'undecided is not a Watch save face')
+eq(watchSaveStatusPayload({ status: 'undecided', liveId: 'live-a', localHeld: true }).save, 'local', 'phone persist is local, not History')
+eq(watchSaveStatusPayload({ status: 'saved', liveId: 'live-a', localHeld: true }).save, 'saved', 'matching history_kept is History')
 eq(watchSaveStatusPayload({ status: 'saving', liveId: 'live-a' }).save, 'saving', 'saving is pushed to the Watch')
 eq(watchSaveStatusPayload({ status: 'saving', liveId: 'live-a' }).sessionId, 'live-a', 'sessionId rides with save')
 eq(watchSaveAckApplies({ requestedId: 'live-a', incomingSave: 'saved', incomingSessionId: 'live-a' }), 'saved', 'matching ack is saved')

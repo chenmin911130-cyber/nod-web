@@ -199,6 +199,34 @@ export function mergePendingHistory<T extends { id: string; started_at?: string 
     .map((item) => item.row)
 }
 
+export type LocalPhoneCapture = {
+  captureId: string
+  sessionId: string
+  bytes: number
+  sealed: boolean
+  intent: string
+  modifiedAt: string
+}
+
+export function localCaptureHistoryId(row: Pick<LocalPhoneCapture, 'captureId' | 'sessionId'>): string {
+  return row.sessionId || `local:${row.captureId}`
+}
+
+/** Phone-held Watch captures that are not already a History row. Reuses Unsaved. */
+export function mergeLocalCaptures<T extends { id: string; started_at?: string | null }>(
+  sessions: T[],
+  local: LocalPhoneCapture[],
+  toRow: (row: LocalPhoneCapture) => T,
+): T[] {
+  const ids = new Set(sessions.map((s) => s.id))
+  const extra = local
+    .filter((row) => row.intent !== 'discard' && row.bytes > 0)
+    .filter((row) => !ids.has(localCaptureHistoryId(row)))
+    .map(toRow)
+  if (!extra.length) return sessions
+  return mergePendingHistory(sessions, extra)
+}
+
 export function rememberRestoreDismissed(ids: readonly string[], id: string): string[] {
   if (!id || ids.includes(id)) return [...ids]
   return [...ids, id]

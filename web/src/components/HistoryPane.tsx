@@ -6,6 +6,7 @@ import {
   historyRowWhen,
   historySessionMatches,
   mergePendingHistory,
+  mergeLocalCaptures,
   sceneOf,
   sessionHasAudio,
   sessionIsUnsaved,
@@ -139,9 +140,21 @@ export default function HistoryPane({
     void Promise.all([
       api<{ sessions: HistorySession[] }>('/api/account/history'),
       api<{ sessions: HistorySession[] }>('/api/account/history?pending=1').catch(() => ({ sessions: [] as HistorySession[] })),
+      native
+        ? import('nod-mic').then(({ NodMic }) => NodMic.listPendingCaptures()).catch(() => ({ captures: [] }))
+        : Promise.resolve({ captures: [] as Array<{ captureId: string; sessionId: string; bytes: number; sealed: boolean; intent: string; modifiedAt: string }> }),
     ])
-      .then(([saved, pending]) => {
-        setSessions(mergePendingHistory(saved.sessions || [], pending.sessions || []))
+      .then(([saved, pending, local]) => {
+        const cloud = mergePendingHistory(saved.sessions || [], pending.sessions || [])
+        setSessions(mergeLocalCaptures(cloud, local.captures || [], (row) => ({
+          id: row.sessionId || `local:${row.captureId}`,
+          mode: 'meeting',
+          title: IPHONE_COPY.saveRestoreTitle,
+          started_at: row.modifiedAt || null,
+          stt_seconds: Math.max(0, Math.round(row.bytes / 32000)),
+          items: [],
+          kept: false,
+        })))
       })
       .catch((ex: Error) => setErr(ex.message))
       .finally(() => setLoading(false))
@@ -175,7 +188,12 @@ export default function HistoryPane({
     setBusyId(session.id)
     setErr('')
     try {
-      await api(`/api/account/history/${session.id}`, { method: 'DELETE' })
+      if (session.id.startsWith('local:')) {
+        const { NodMic } = await import('nod-mic')
+        await NodMic.deletePendingCapture({ captureId: session.id.slice('local:'.length) })
+      } else {
+        await api(`/api/account/history/${session.id}`, { method: 'DELETE' })
+      }
       setSessions((rows) => rows.filter((row) => row.id !== session.id))
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Could not delete session')

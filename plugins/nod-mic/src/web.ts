@@ -33,4 +33,12 @@ export class NodMicWeb extends WebPlugin implements NodMicPlugin {
   async stopUplink(): Promise<void> {
     return
   }
+
+  async listPendingCaptures(): Promise<{ captures: [] }> {
+    return { captures: [] }
+  }
+
+  async deletePendingCapture(_options: { captureId: string }): Promise<{ freed: number }> {
+    return { freed: 0 }
+  }
 }

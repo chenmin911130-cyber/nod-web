@@ -1,9 +1,9 @@
 import AVFoundation
 import Foundation
 
-/// 16 kHz mono PCM16 from the Watch microphone. Prefers a live engine tap;
-/// if watchOS refuses the engine, falls back to a WAV recorder and streams
-/// new bytes. Leftover bytes are handed back on stop for a file transfer.
+/// 16 kHz mono PCM16 from the Watch microphone via AVAudioEngine.
+/// There is no WAV / file-recorder fallback: a new capture must not write a
+/// recording file on the Watch. Startup failure is visible to the caller.
 final class WatchRecorder {
     static let shared = WatchRecorder()
 
@@ -11,14 +11,9 @@ final class WatchRecorder {
 
     private var engine: AVAudioEngine?
     private var converter: AVAudioConverter?
-    private var fileRecorder: AVAudioRecorder?
-    private var fileURL: URL?
-    private var fileOffset = 0
-    private var pump: DispatchSourceTimer?
     private var running = false
+    private var captureGen = 0
     private let targetSampleRate: Double = 16_000
-    private let queue = DispatchQueue(label: "nod.watch.recorder")
-    private let wavHeaderBytes = 44
 
     var isRunning: Bool { running }
 
@@ -39,14 +34,8 @@ final class WatchRecorder {
             DispatchQueue.main.async {
                 do {
                     try self.prepareSession()
-                    do {
-                        try self.beginEngine()
-                        Self.persist("engine-ok")
-                    } catch {
-                        self.teardownEngine()
-                        try self.beginFileRecorder()
-                        Self.persist("file-recorder-ok")
-                    }
+                    try self.beginEngine()
+                    Self.persist("engine-ok")
                     completion(nil)
                 } catch {
                     self.teardown()
@@ -122,65 +111,16 @@ final class WatchRecorder {
         engine.connect(input, to: engine.mainMixerNode, format: format)
         engine.mainMixerNode.outputVolume = 0
 
+        captureGen += 1
+        let gen = captureGen
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            self?.emit(buffer, outputFormat: outputFormat)
+            guard let self, gen == self.captureGen else { return }
+            self.emit(buffer, outputFormat: outputFormat)
         }
         engine.prepare()
         try engine.start()
         running = true
-    }
-
-    private func beginFileRecorder() throws {
-        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nod-watch-live.wav")
-        try? FileManager.default.removeItem(at: url)
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatLinearPCM),
-            AVSampleRateKey: targetSampleRate,
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsNonInterleaved: false,
-        ]
-        let rec = try AVAudioRecorder(url: url, settings: settings)
-        rec.prepareToRecord()
-        guard rec.record() else {
-            throw Self.fail(4, "Watch microphone would not start")
-        }
-        fileRecorder = rec
-        fileURL = url
-        fileOffset = wavHeaderBytes
-        running = true
-        startPump()
-    }
-
-    private func startPump() {
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + 0.3, repeating: 0.2)
-        timer.setEventHandler { [weak self] in
-            self?.pumpFile()
-        }
-        timer.resume()
-        pump = timer
-    }
-
-    private func pumpFile() {
-        guard running, let fileURL else { return }
-        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return }
-        defer { try? handle.close() }
-        let size = Int((try? handle.seekToEnd()) ?? 0)
-        guard size > fileOffset else { return }
-        do {
-            try handle.seek(toOffset: UInt64(fileOffset))
-            let data = handle.readData(ofLength: size - fileOffset)
-            fileOffset += data.count
-            if !data.isEmpty {
-                onPcm?(data)
-            }
-        } catch {
-            return
-        }
     }
 
     private func emit(_ buffer: AVAudioPCMBuffer, outputFormat: AVAudioFormat) {
@@ -209,6 +149,7 @@ final class WatchRecorder {
     }
 
     private func teardownEngine() {
+        captureGen += 1
         if let engine {
             engine.inputNode.removeTap(onBus: 0)
             if engine.isRunning {
@@ -220,18 +161,7 @@ final class WatchRecorder {
     }
 
     private func teardown() {
-        // pumpFile() guards on `running`. Flush leftover WAV bytes first or
-        // the last pump period (~200ms) never reaches onPcm / transferFile.
-        if fileRecorder?.isRecording == true {
-            queue.sync { self.pumpFile() }
-            fileRecorder?.stop()
-        }
         running = false
-        pump?.cancel()
-        pump = nil
-        fileRecorder = nil
-        fileURL = nil
-        fileOffset = 0
         teardownEngine()
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }

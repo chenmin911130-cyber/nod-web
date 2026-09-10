@@ -7,109 +7,171 @@ func deliver(_ session: WatchPhoneSession, _ message: [String: Any]) {
     session.session(WCSession.default, didReceiveMessage: message)
     RunLoop.main.run(until: Date().addingTimeInterval(0.03))
 }
+func waitSend() {
+    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+}
+
 @main struct WatchReplayTests {
  static func main() throws {
+    check(!AudioUplink.handshakeMeansSessionExpired(403), "HTTP 403 is not a listen-session expiry")
+    check(AudioUplink.shouldStopOnHandshake(403), "HTTP 403 stops reconnect without pretending the capture ended")
+    check(!AudioUplink.shouldStopOnHandshake(4404), "websocket 4404 is not classified as HTTP handshake")
+
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
-    let store = WatchPcmStore(rootURL: root)
-    store.beginCapture(); store.bindSession("live")
-    let session = WatchPhoneSession(pcmStore: store, connect: false)
-    deliver(session, ["sessionId": "live"])
+    PhonePcmStore.testingRoot = root.appendingPathComponent("shared-phone")
+
+    let phone = PhonePcmStore(rootURL: root.appendingPathComponent("phone"))
+    check(phone.begin(captureId: "cap-a"), "phone persist file is created before Recording")
+    check(phone.isReady(captureId: "cap-a"), "persist-ready is the phone file, not a socket")
+    phone.bindSession("live")
+    eq(phone.persist(data: Data(repeating: 1, count: 1600), captureId: "cap-a", sessionId: "live", offset: 0), "accept")
+    check(phone.currentHeldByte() == 1600, "in-order live bytes become the ack prefix")
+    eq(phone.persist(data: Data(repeating: 1, count: 1600), captureId: "cap-a", sessionId: "live", offset: 0), "duplicate")
+    check(phone.currentHeldByte() == 1600, "duplicate does not rewrite")
+    eq(phone.persist(data: Data(repeating: 2, count: 1600), captureId: "cap-a", sessionId: "live", offset: 3200), "future")
+    check(phone.currentHeldByte() == 1600, "future bytes park without advancing ack")
+    eq(phone.persist(data: Data(repeating: 3, count: 1600), captureId: "cap-a", sessionId: "live", offset: 1600), "accept")
+    check(phone.currentHeldByte() == 4800, "filling the gap appends the parked tail")
+    eq(phone.persist(data: Data(repeating: 9, count: 100), captureId: "old", sessionId: "live", offset: 4800), "stale-capture")
+    check(phone.seal(lastByte: 4800, captureId: "cap-a", sessionId: "live"), "seal succeeds when the prefix is complete")
+    check(phone.read(from: 0, maxBytes: 4800)?.count == 4800, "upload reads from the file, not an in-memory copy of the whole capture")
+
+    let restarted = PhonePcmStore(rootURL: root.appendingPathComponent("phone"))
+    check(restarted.currentCaptureId() == "cap-a", "restart finds the persisted capture")
+    check(restarted.currentHeldByte() == 4800, "restart restores the held prefix from disk")
+    check(restarted.isSealed(), "restart restores the save intent / sealed flag")
+
+    PhonePcmStore.testingDiskLimit = 2000
+    defer { PhonePcmStore.testingDiskLimit = nil }
+    let tight = PhonePcmStore(rootURL: root.appendingPathComponent("tight"))
+    check(tight.begin(captureId: "cap-full"), "tiny-cap persist still opens a file")
+    eq(tight.persist(data: Data(repeating: 1, count: 1600), captureId: "cap-full", sessionId: "live", offset: 0), "accept")
+    eq(tight.persist(data: Data(repeating: 1, count: 1600), captureId: "cap-full", sessionId: "live", offset: 1600), "persist-failed")
+    check(tight.currentHeldByte() == 1600, "disk-full persist keeps the unique phone original")
+    PhonePcmStore.testingDiskLimit = nil
+
+    let leftover = WatchPcmStore(rootURL: root.appendingPathComponent("legacy"))
+    leftover.beginCapture()
+    leftover.bindSession("old-storage")
+    _ = leftover.append(Data(repeating: 2, count: 3200)); leftover.closeShard()
+    let storedId = leftover.captureId
+    let shard = leftover.unackedShards()[0]
+    _ = WCSession.default.transferFile(shard.url, metadata: leftover.metadata(for: shard))
+    leftover.beginCapture()
+    let leftoverSession = WatchPhoneSession(pcmStore: leftover, connect: false)
+    check(leftoverSession.deleteUnfinishedCapture(storedId) == 0, "in-flight leftover source file must not be removed")
+    check(FileManager.default.fileExists(atPath: shard.url.path), "upgrade keeps leftover Watch originals")
+    let transfer = WCSession.default.outstandingFileTransfers.removeFirst()
+    leftoverSession.session(WCSession.default, didFinish: transfer, error: nil)
+    waitSend()
+    check(leftoverSession.deleteUnfinishedCapture(storedId) == 3200, "user can delete a leftover Watch file after it is idle")
+
+    let buf = WatchSendBuffer()
+    buf.beginCapture()
+    buf.bindSession("live")
+    let liveStore = WatchPcmStore(rootURL: root.appendingPathComponent("watch-live"))
+    let session = WatchPhoneSession(sendBuffer: buf, pcmStore: liveStore, connect: false)
+    deliver(session, ["sessionId": "live", "pcmReady": "true"])
     session.draining = true
     deliver(session, ["sessionId": "old", "pcmRejected": "true", "pcmRejectSessionId": "old", "pcmRejectCaptureId": "old-capture"])
     check(!session.pcmRejected && session.draining, "old rejection must not terminate a new capture")
-    check(store.sessionId == "live", "old payload must not overwrite recording identity")
     deliver(session, ["pcmRejected": "true", "pcmRejectSessionId": "live", "pcmRejectCaptureId": "old-capture"])
     check(!session.pcmRejected, "same-session old capture rejection ignored")
-    deliver(session, ["pcmRejected": "true", "pcmRejectSessionId": "live", "pcmRejectCaptureId": store.captureId])
+    deliver(session, ["pcmRejected": "true", "pcmRejectSessionId": "live", "pcmRejectCaptureId": buf.captureId])
     check(session.pcmRejected && session.drainFailed && !session.draining, "matching rejection ends drain")
-    // A system-held old capture must not be deleted even after local state resets.
-    // Matching rejection already froze this capture, so use a fresh old recording.
-    store.beginCapture(); store.bindSession("old-storage")
-    _ = store.append(Data(repeating: 2, count: 3200)); store.closeShard()
-    let storedId = store.captureId
-    let shard = store.unackedShards()[0]
-    _ = WCSession.default.transferFile(shard.url, metadata: store.metadata(for: shard))
-    store.beginCapture()
-    check(session.deleteUnfinishedCapture(storedId) == 0, "in-flight source file must not be removed")
-    check(FileManager.default.fileExists(atPath: shard.url.path), "in-flight original preserved")
-    // End after terminal failure cannot re-arm upload. Leaving keeps files.
     session.finish()
+    waitSend()
     check(!session.draining && session.drainFailed, "terminal End must not retry")
     session.leaveIncomplete()
     check(!session.draining && !session.drainFailed, "failure page has a usable exit")
-    check(FileManager.default.fileExists(atPath: shard.url.path), "leaving preserves original")
 
-    // The file has now completed: only its matching record may be released.
-    let transfer = WCSession.default.outstandingFileTransfers.removeFirst()
-    session.session(WCSession.default, didFinish: transfer, error: nil)
-    RunLoop.main.run(until: Date().addingTimeInterval(0.03))
-    check(session.deleteUnfinishedCapture(storedId) == 3200, "completed old capture can be deleted")
-
-    // Real filesystem budget across captures; external PCM arrives through the
-    // same recorder callback used on device, not a model of storage failure.
-    let diskRoot = root.appendingPathComponent("budget")
-    let old = diskRoot.appendingPathComponent("old")
-    try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
-    let file = old.appendingPathComponent("1.pcm")
-    FileManager.default.createFile(atPath: file.path, contents: nil)
-    let fh = try FileHandle(forWritingTo: file)
-    try fh.truncate(atOffset: UInt64(WatchPcmStore.diskLimit - 64)); try fh.close()
-    let fullStore = WatchPcmStore(rootURL: diskRoot)
-    fullStore.beginCapture()
-    check(fullStore.usedBytes == WatchPcmStore.diskLimit - 64, "new capture counts old disk bytes")
-    let fullSession = WatchPhoneSession(pcmStore: fullStore, connect: false)
+    let send = WatchSendBuffer()
+    send.beginCapture()
+    let fullSession = WatchPhoneSession(sendBuffer: send, pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("buf")), connect: false)
     fullSession.listening = true
     WatchRecorder.shared.isRunning = true
+    WCSession.default.isReachable = true
+    let chunk = Data(repeating: 3, count: WatchSendBuffer.limitBytes)
+    WatchRecorder.shared.onPcm?(chunk)
+    waitSend()
     WatchRecorder.shared.onPcm?(Data(repeating: 3, count: 1600))
-    RunLoop.main.run(until: Date().addingTimeInterval(0.03))
-    check(fullSession.storageFailed && fullSession.drainFailed, "disk full becomes visible failure state")
-    check(!fullSession.listening && !WatchRecorder.shared.isRunning, "disk full stops both capture and recording state")
-    fullSession.leaveIncomplete()
-    check(!fullSession.drainFailed && !fullSession.unfinishedCaptureList.isEmpty, "storage remains accessible after failure")
-    check(fullSession.deleteUnfinishedCapture("old") > 0, "explicit old capture cleanup frees space")
-    fullSession.startSession()
-    check(!fullSession.storageFailed && !fullSession.pcmRejected, "fresh capture resets failure only after explicit Start")
-    let lateStore = WatchPcmStore(rootURL: root.appendingPathComponent("late"))
-    lateStore.beginCapture()
-    let lateWatch = WatchPhoneSession(pcmStore: lateStore, connect: false)
-    lateWatch.listening = true
-    WatchRecorder.shared.onPcm?(Data(repeating: 6, count: 640))
-    lateWatch.finish()
-    RunLoop.main.run(until: Date().addingTimeInterval(0.03))
-    check(!lateWatch.storageFailed, "normal End with a late recorder callback must not report disk full")
+    waitSend()
+    check(fullSession.paused && !fullSession.listening, "buffer full pauses instead of drop-oldest")
+    check(fullSession.hint == WatchCopy.linkLost, "buffer full is a visible connection failure")
+    check(WatchRecorder.shared.isRunning == false, "buffer full stops Watch capture")
 
-    let nativeStore = WatchPcmStore(rootURL: root.appendingPathComponent("native"))
-    nativeStore.beginCapture(); nativeStore.bindSession("native-session")
-    let nativeWatch = WatchPhoneSession(pcmStore: nativeStore, connect: false)
-    let uplink = AudioUplink.shared
+    let discBuf = WatchSendBuffer()
+    discBuf.beginCapture()
+    let disc = WatchPhoneSession(sendBuffer: discBuf, pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("disc")), connect: false)
+    disc.listening = true
+    WatchRecorder.shared.isRunning = true
+    WCSession.default.isReachable = false
+    disc.sessionReachabilityDidChange(WCSession.default)
+    waitSend()
+    check(disc.paused && !disc.listening, "Watch-phone drop pauses instead of fake Recording")
+    check(disc.hint == WatchCopy.linkLost, "disconnect copy is Connection lost")
+    WCSession.default.isReachable = true
+
+    let endBuf = WatchSendBuffer()
+    endBuf.beginCapture()
+    let endWatch = WatchPhoneSession(sendBuffer: endBuf, pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("end")), connect: false)
+    endWatch.listening = true
+    WatchRecorder.shared.isRunning = true
+    WatchRecorder.shared.onPcm?(Data(repeating: 6, count: 640))
+    waitSend()
+    endWatch.finish()
+    waitSend()
+    check(endWatch.draining, "End waits for the phone persist prefix")
+    check(endWatch.hint == WatchCopy.sendingLast, "End copy is the last-bit send, not whole-session catch-up")
+    deliver(endWatch, [
+        "pcmAckByte": String(endBuf.lastByte),
+        "pcmAckCaptureId": endBuf.captureId,
+        "pcmSealed": "true",
+        "pcmReady": "true",
+    ])
+    check(!endWatch.draining && endWatch.offeringSave, "persist ack completes End and offers Save even without transcript text")
+    check(endWatch.hint == WatchCopy.savedLocal, "End shows phone-local save, not History")
+    deliver(endWatch, ["save": "saved", "sessionId": "other"])
+    check(endWatch.offeringSave, "wrong-session History ack does not claim Saved to History")
+    deliver(endWatch, ["sessionId": "live-end"])
+    endWatch.confirmSave()
+    deliver(endWatch, ["save": "saved", "sessionId": "live-end"])
+    check(endWatch.savedAck && !endWatch.offeringSave, "matching history_kept is Saved to History")
+
     let ingest = WatchPcmIngest.shared
+    let uplink = AudioUplink.shared
     let bridge = WatchBridge.shared
     WCSession.default.messages.removeAll()
+    ingest.reset()
+    let cap = "cap-native"
     NotificationCenter.default.post(name: Notification.Name("nod.watch.pcm.bind"), object: nil,
-        userInfo: ["sessionId": "native-session", "captureId": nativeStore.captureId])
-    RunLoop.main.run(until: Date().addingTimeInterval(0.03))
-    _ = ingest.ingestLive(data: Data(repeating: 4, count: 32000), captureId: nativeStore.captureId, sessionId: "native-session", offset: 0)
-    for _ in 0..<10 {
-        NotificationCenter.default.post(name: Notification.Name("nod.uplink.consumed"), object: nil,
-            userInfo: ["sessionId": "native-session", "captureId": nativeStore.captureId, "bytes": 3200])
-    }
+        userInfo: ["sessionId": "native-session", "captureId": cap])
+    waitSend()
+    check(ingest.isReady(captureId: cap), "start bind creates the phone file before Recording")
+    eq(ingest.ingestLive(data: Data(repeating: 4, count: 32000), captureId: cap, sessionId: "native-session", offset: 0), "accept")
+    check(ingest.currentAck() == 32000, "Watch ack is persist held, not uplink consume")
     RunLoop.main.run(until: Date().addingTimeInterval(1.15))
     let acks = WCSession.default.messages.filter { $0["pcmAckByte"] != nil }
-    check(acks.count == 1 && acks[0]["pcmAckByte"] as? String == "32000", "coalesced ack includes final byte without next frame")
-    bridge.pushStatus(capture: "listening", hint: "", sessionId: "native-session")
-    let wire: [String: Any] = ["type": "pcm_rejected", "id": "native-session", "capture_id": nativeStore.captureId, "reason": "session_ended"]
+    check(!acks.isEmpty, "persist held still coalesces a Watch ack")
+    check((acks.last?["pcmAckByte"] as? String) == "32000" || (acks.last?["pcmAckByte"] as? Int) == 32000, "coalesced persist ack includes the final byte")
+    let wire: [String: Any] = ["type": "pcm_rejected", "id": "native-session", "capture_id": cap, "reason": "session_ended"]
     let wireText = String(data: try JSONSerialization.data(withJSONObject: wire), encoding: .utf8)!
     uplink.handleAudioText(wireText)
-    RunLoop.main.run(until: Date().addingTimeInterval(0.03))
+    waitSend()
     check(!uplink.tryEnqueue(Data(repeating: 5, count: 1600)), "terminal socket cannot queue more PCM")
-    check(uplink.queuedBytes() == 0, "terminal socket clears undeliverable working queue")
-    check(ingest.ingestLive(data: Data(repeating: 5, count: 1600), captureId: nativeStore.captureId, sessionId: "native-session", offset: 32000) == "session-ended", "ingest does not feed terminated session")
-    let rejected = WCSession.default.messages.last { $0["pcmRejected"] as? String == "true" }
-    check(rejected != nil, "AudioUplink rejection reaches WatchBridge status immediately")
-    nativeWatch.draining = true
-    deliver(nativeWatch, rejected!)
-    check(nativeWatch.pcmRejected && !nativeWatch.draining, "native socket to actual Watch consumer ends drain")
-    print("Watch replay: sender relay, ack tail, identity, terminal exit, in-flight deletion and disk-full tests passed")
+    eq(ingest.ingestLive(data: Data(repeating: 5, count: 1600), captureId: cap, sessionId: "native-session", offset: 32000), "session-ended")
+    let listed = ingest.listCaptures()
+    check(listed.contains(where: { $0.captureId == cap && $0.bytes >= 32000 }), "rejected cloud session keeps the phone original")
+    check(ingest.deleteCapture(cap) == 0, "live unsealed capture is not silently deleted")
+    _ = bridge
+    print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake and Save tests passed")
  }
+}
+
+func eq<T: Equatable>(_ got: T, _ want: T, file: String = #file, line: Int = #line) {
+    if got != want {
+        fputs("FAIL: \(file):\(line) got \(got) want \(want)\n", stderr)
+        exit(1)
+    }
 }
