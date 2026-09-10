@@ -30,5 +30,7 @@ export interface NodWatchPlugin {
   playSpeech(opts: { data: string; dest?: 'phone' | 'watch' }): Promise<void>
   stopSpeech(): Promise<void>
   storeAccount(opts: { token: string; origin: string }): Promise<void>
-  listSaves(): Promise<{ saves: Array<{ sessionId: string; captureId: string; save: string }> }>
+  listSaves(): Promise<{ saves: Array<{ sessionId: string; captureId: string; save: string; error?: string }> }>
+  retrySave(opts: { sessionId: string }): Promise<void>
+  resumeKeeps(): Promise<void>
 }

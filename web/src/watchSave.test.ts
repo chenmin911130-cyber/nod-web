@@ -16,6 +16,7 @@ import {
   watchSaveShouldWaitForNotes,
   watchSaveShouldSendKeepHistory,
   watchJsFailMayApply,
+  watchFailKeepNativeFace,
   watchPhoneStatusMayPush,
   watchKeepHttpFace,
   watchNativeSaveReduce,
@@ -93,6 +94,8 @@ eq(
 )
 eq(watchKeepHttpFace({ status: 200, body: { ok: true, id: 'live-a' }, sessionId: 'live-a' }), 'saved', 'HTTP 200 ok+id is History')
 eq(watchKeepHttpFace({ status: 200, body: { ok: true, id: 'live-b' }, sessionId: 'live-a' }), 'failed', 'HTTP 200 with the wrong id is not saved')
+eq(watchKeepHttpFace({ status: 200, body: { ok: true }, sessionId: 'live-a' }), 'failed', 'HTTP 200 ok without id is not saved')
+eq(watchKeepHttpFace({ status: 200, body: { ok: true, id: '' }, sessionId: 'live-a' }), 'failed', 'HTTP 200 ok with empty id is not saved')
 eq(watchKeepHttpFace({ status: 200, body: { ok: false, id: 'live-a' }, sessionId: 'live-a' }), 'failed', 'HTTP 200 ok=false is failed')
 eq(watchKeepHttpFace({ status: 405, body: { ok: true, id: 'live-a' }, sessionId: 'live-a' }), 'failed', '405 is failed')
 eq(watchKeepHttpFace({ status: 401, body: null, sessionId: 'live-a' }), 'failed', '401 is failed')
@@ -201,7 +204,16 @@ eq(watchKeepNotesWait(false, 'ask-1'), true, 'phone Save with Notes in flight st
 
 {
   eq(watchSaveWireMessage(''), null, 'Save without sessionId must not go on the wire')
-  eq(watchSaveWireMessage('live-a'), { action: 'save', sessionId: 'live-a' }, 'Save message carries the pinned sessionId')
+  eq(
+  watchSaveWireMessage('live-a'),
+  { action: 'save', sessionId: 'live-a' },
+  'Save message carries the pinned sessionId',
+)
+eq(
+  watchSaveWireMessage('live-a', 'cap-a'),
+  { action: 'save', sessionId: 'live-a', captureId: 'cap-a' },
+  'Save message pins captureId with sessionId',
+)
   eq(watchCommandFromBridge({ action: 'save' }), { action: 'save', sessionId: '' }, 'Bridge command with no sessionId stays empty')
   eq(
     watchCommandFromBridge(watchSaveWireMessage('live-a')!),
@@ -282,6 +294,21 @@ eq(watchKeepNotesWait(false, 'ask-1'), true, 'phone Save with Notes in flight st
   eq(watchSaveRepeatAction({ kept: true, status: book.status }), 'echoSaved', 'already kept session echoes saved')
   eq(watchSaveStatusPayload({ status: 'saved', liveId: book.liveId }), { save: 'saved', sessionId: 'live-a' }, 'echo pushes real saved, not a tap')
   eq(watchSaveStatusPayload({ status: 'undecided', liveId: 'live-a' }).save, 'none', 'historyKept alone must not forge a saved status face')
+}
+
+{
+  const nativeSaves: Record<string, 'local' | 'saved' | 'failed'> = { 'live-a': 'saved' }
+  let book = beginSave(emptySaveBook(), 'live-b')
+  const native = watchFailKeepNativeFace({ failingSessionId: book.liveId || '', nativeSaves })
+  eq(native, '', 'B timeout does not read A native saved')
+  eq(watchJsFailMayApply(native), true, 'B phone Save timeout is not swallowed by A saved')
+  book = applyKeepFailed(book, 'timeout')
+  eq(book.status, 'failed', 'B phone Save timeout surfaces failed')
+  eq(
+    watchFailKeepNativeFace({ failingSessionId: 'live-b', nativeSaves: { 'live-b': 'local' } }),
+    'local',
+    'B failKeep looks up B only',
+  )
 }
 
 console.log('watchSave.test.ts ok')

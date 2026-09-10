@@ -1,4 +1,4 @@
-import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, mergeLocalCaptures, mergePendingHistory, parseRestoreDismissed, rememberRestoreDismissed, restoreAttachedClock, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce, startMeetingKind, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession } from './historyRestore'
+import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, mergeLocalCaptures, overlayNativeSaveJobs, mergePendingHistory, parseRestoreDismissed, rememberRestoreDismissed, restoreAttachedClock, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce, startMeetingKind, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession } from './historyRestore'
 import type { HistorySession } from './components/HistoryPane'
 
 function at(h: number, m: number, s = 0): string {
@@ -282,6 +282,10 @@ if (restoreLaunchSurface({ ...idleRestore, workspaceMode: 'translate' }) !== 'no
     (row) => ({ id: row.sessionId || `local:${row.captureId}`, started_at: row.modifiedAt, kept: false }),
   )
   eq(localMerged.map((row) => row.id).join('|'), 'local:cap-b|cloud-1', 'local phone capture appears once and skips discard / already-listed sessions')
+  const overlaid = overlayNativeSaveJobs(localMerged, [
+    { sessionId: 'cloud-1', captureId: 'cap-a', save: 'local' },
+  ])
+  eq(overlaid.map((row) => `${row.id}:${row.nativeSave || ''}`).join('|'), 'local:cap-b:|cloud-1:local', 'native local keep still shows on a cloud History row')
 }
 if (JSON.stringify(rememberRestoreDismissed([], 'p1')) !== JSON.stringify(['p1'])) throw new Error('first dismiss is recorded')
 if (JSON.stringify(rememberRestoreDismissed(['p1'], 'p1')) !== JSON.stringify(['p1'])) throw new Error('repeat dismiss does not duplicate')

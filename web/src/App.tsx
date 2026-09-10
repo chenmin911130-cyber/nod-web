@@ -7,7 +7,7 @@ import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
 import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
-import { flushPendingKeepMessage, keepHistoryMessage, watchDiscardCommand, watchJsFailMayApply, watchKeepNotesWait, watchNativeSaveReduce, watchPhoneStatusMayPush, watchSaveCommand, watchSaveKeepTarget, watchSaveRepeatAction, watchSaveShouldSendKeepHistory, watchSaveStatusPayload, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave, type NativeWatchSaveFace } from './watchSave'
+import { flushPendingKeepMessage, keepHistoryMessage, watchDiscardCommand, watchFailKeepNativeFace, watchJsFailMayApply, watchKeepNotesWait, watchNativeSaveReduce, watchPhoneStatusMayPush, watchSaveCommand, watchSaveKeepTarget, watchSaveRepeatAction, watchSaveShouldSendKeepHistory, watchSaveStatusPayload, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave, type NativeWatchSaveFace } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
 import { meetingRailIsPaused } from './meetingPause'
@@ -1036,6 +1036,7 @@ export default function App() {
   watchInboundSaveRef.current = watchInboundSave
   const watchInboundTimerRef = useRef(0)
   const nativeWatchSavesRef = useRef<Record<string, NativeWatchSaveFace>>({})
+  const [historyTick, setHistoryTick] = useState(0)
   const applyNativeWatchSaveRef = useRef<(ev: { save: string; sessionId: string }) => void>(() => undefined)
   const clearWatchInboundTimer = () => {
     if (watchInboundTimerRef.current) {
@@ -1840,10 +1841,10 @@ export default function App() {
 
   const failKeep = (reason: 'timeout' | 'error' | 'disconnect') => {
     const liveId = saveBookRef.current.liveId
-    const inbound = watchInboundSaveRef.current
-    const native = (inbound && nativeWatchSavesRef.current[inbound.id])
-      || (liveId && nativeWatchSavesRef.current[liveId])
-      || ''
+    const native = watchFailKeepNativeFace({
+      failingSessionId: liveId || '',
+      nativeSaves: nativeWatchSavesRef.current,
+    })
     if (!watchJsFailMayApply(native || '')) {
       clearWatchInboundTimer()
       return
@@ -2020,6 +2021,7 @@ export default function App() {
     const incoming = ev.save
     const next = watchNativeSaveReduce({ current: nativeWatchSavesRef.current[id] || '', incoming })
     nativeWatchSavesRef.current[id] = next
+    setHistoryTick((n) => n + 1)
     const liveId = saveBookRef.current.liveId
     const inboundId = watchInboundSaveRef.current?.id
     const onFace = !liveId || liveId === id || inboundId === id
@@ -2099,9 +2101,11 @@ export default function App() {
     }
     if (e.type === 'history_keep_failed') {
       const inbound = watchInboundSaveRef.current
-      const native = (e.id && nativeWatchSavesRef.current[e.id])
-        || (inbound && nativeWatchSavesRef.current[inbound.id])
-        || ''
+      const failingId = e.id || saveBookRef.current.liveId || ''
+      const native = watchFailKeepNativeFace({
+        failingSessionId: failingId,
+        nativeSaves: nativeWatchSavesRef.current,
+      })
       if (!watchJsFailMayApply(native || '')) {
         if (inbound && e.id === inbound.id && native === 'saved') {
           setWatchInboundSave({ id: inbound.id, status: 'saved' })
@@ -3555,7 +3559,7 @@ export default function App() {
         }
       />
       <UplinkStatusBanner text={state.status} />
-      <HistoryPane open={historyOpen} onClose={() => setHistoryOpen(false)} onRestore={restoreHistory} />
+      <HistoryPane open={historyOpen} refreshAt={historyTick} onClose={() => setHistoryOpen(false)} onRestore={restoreHistory} />
       <AccountPane
         open={accountOpen}
         onClose={() => {

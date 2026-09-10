@@ -1,6 +1,7 @@
 #if !PCM_REPLAY_TESTING
 import AVFoundation
 import WatchConnectivity
+import UIKit
 #endif
 import Foundation
 
@@ -25,9 +26,17 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastSessionId = ""
     private static let accountTokenKey = "nod.watch.accountToken"
     private static let accountOriginKey = "nod.watch.accountOrigin"
-    private var saves: [String: (captureId: String, save: String)] = [:]
+    private static let jobsKey = "nod.watch.saveJobs"
+    private static let maxKeepAttempts = 8
+    private var jobs: [String: SaveJob] = [:]
+    private var inflight: Set<String> = []
+    private var jobsLoaded = false
     #if PCM_REPLAY_TESTING
     static var testingKeep: ((String) -> (Int, Data?))?
+    static var testingKeepAsync: ((String, @escaping (Int, Data?) -> Void) -> Void)?
+    static var testingNow: (() -> TimeInterval)?
+    static var testingKeepCalls = 0
+    static var testingUserDefaults: UserDefaults?
     #endif
     private var lastPcmAckByte = 0
     private var lastPcmCaptureId = ""
@@ -118,6 +127,15 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             let message = note.userInfo?["text"] as? String ?? ""
             self?.markPcmRejected(sessionId: session, captureId: capture, reason: reason, text: message)
         }
+        #if !PCM_REPLAY_TESTING
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.resumeKeeps()
+        }
+        #endif
     }
 
     /// Coalesce consumed-progress acks to at most one send per second. Ordinary
@@ -271,6 +289,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             previous: lastPrevious,
             history: lastHistory
         )
+        #if !PCM_REPLAY_TESTING
+        resumeKeeps()
+        #endif
     }
 
     func markJsReady() {
@@ -326,9 +347,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         if !save.isEmpty {
             let sid = sessionId.isEmpty ? lastSessionId : sessionId
-            if let job = saves[sid], job.save == "saved", save != "saved" {
+            ensureJobsLoaded()
+            if let job = jobs[sid], job.save == "saved", save != "saved" {
                 /* Native History success is terminal for this session. */
-            } else if let job = saves[sid], job.save == "local", save == "failed" {
+            } else if let job = jobs[sid], job.save == "local", save == "failed" {
                 /* JS timeout must not roll local persist back to failed. */
             } else {
                 lastSave = save
@@ -518,25 +540,131 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
     }
 
+    private struct SaveJob: Codable, Equatable {
+        var sessionId: String
+        var captureId: String
+        var account: String
+        var save: String
+        var error: String
+        var attempts: Int
+        var nextAttemptAt: Double
+    }
+
+    private var defaults: UserDefaults {
+        #if PCM_REPLAY_TESTING
+        return Self.testingUserDefaults ?? UserDefaults(suiteName: "nod.watch.saveJobs.test") ?? .standard
+        #else
+        return .standard
+        #endif
+    }
+
+    private func nowTs() -> TimeInterval {
+        #if PCM_REPLAY_TESTING
+        return Self.testingNow?() ?? Date().timeIntervalSince1970
+        #else
+        return Date().timeIntervalSince1970
+        #endif
+    }
+
+    private func accountToken() -> String {
+        defaults.string(forKey: Self.accountTokenKey) ?? ""
+    }
+
+    static func keepHttpFace(code: Int, body: Data?, sessionId: String) -> (save: String, error: String) {
+        if (200 ..< 300).contains(code), let body,
+           let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+           obj["ok"] as? Bool == true {
+            let id = obj["id"] as? String ?? ""
+            if id == sessionId, !id.isEmpty { return ("saved", "") }
+            return ("failed", "mismatch")
+        }
+        if code == 401 { return ("failed", "auth") }
+        if code == 404 { return ("failed", "gone") }
+        if code == 405 { return ("failed", "mismatch") }
+        return ("local", "retryable")
+    }
+
+    static func keepShouldRetry(save: String, error: String, attempts: Int, now: Double, nextAttemptAt: Double) -> Bool {
+        if save == "saved" { return false }
+        if error == "auth" || error == "gone" || error == "mismatch" { return false }
+        if attempts >= maxKeepAttempts { return false }
+        return now >= nextAttemptAt
+    }
+
     func storeAccount(token: String, origin: String) {
         if token.isEmpty {
-            UserDefaults.standard.removeObject(forKey: Self.accountTokenKey)
+            defaults.removeObject(forKey: Self.accountTokenKey)
         } else {
-            UserDefaults.standard.set(token, forKey: Self.accountTokenKey)
+            defaults.set(token, forKey: Self.accountTokenKey)
         }
         if !origin.isEmpty {
-            UserDefaults.standard.set(origin, forKey: Self.accountOriginKey)
+            defaults.set(origin, forKey: Self.accountOriginKey)
         }
         if !token.isEmpty {
-            restorePendingKeeps()
+            resumeKeeps()
         }
     }
+
+    func resumeKeeps() {
+        ensureJobsLoaded()
+        importKeepIntents()
+        let now = nowTs()
+        let account = accountToken()
+        for job in jobs.values {
+            guard job.account.isEmpty || job.account == account || account.isEmpty else { continue }
+            guard Self.keepShouldRetry(
+                save: job.save,
+                error: job.error,
+                attempts: job.attempts,
+                now: now,
+                nextAttemptAt: job.nextAttemptAt
+            ) else { continue }
+            enqueueKeep(job.sessionId)
+        }
+    }
+
+    func retrySave(sessionId: String) {
+        ensureJobsLoaded()
+        guard !sessionId.isEmpty else { return }
+        if var job = jobs[sessionId] {
+            if job.save == "saved" {
+                publishSave(sessionId: sessionId, save: "saved")
+                return
+            }
+            job.error = ""
+            job.nextAttemptAt = 0
+            job.attempts = 0
+            if job.save != "saved" { job.save = "local" }
+            jobs[sessionId] = job
+            persistJobs()
+            enqueueKeep(sessionId)
+            return
+        }
+        importKeepIntents()
+        enqueueKeep(sessionId)
+    }
+
+    #if PCM_REPLAY_TESTING
+    func testingResetJobs() {
+        jobs = [:]
+        inflight = []
+        jobsLoaded = true
+        defaults.removeObject(forKey: Self.jobsKey)
+    }
+
+    func testingUnloadJobs() {
+        jobs = [:]
+        inflight = []
+        jobsLoaded = false
+    }
+    #endif
 
     /// Watch Save must not wait for WKWebView. Persist the keep intent, reply
     /// immediately, then POST History from native if a token exists.
     private func nativeWatchSave(sessionId: String, captureId: String) -> String {
+        ensureJobsLoaded()
         if sessionId.isEmpty { return "failed" }
-        if let existing = saves[sessionId], existing.save == "saved" {
+        if let existing = jobs[sessionId], existing.save == "saved" {
             publishSave(sessionId: sessionId, save: "saved")
             return "saved"
         }
@@ -553,17 +681,16 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             ]
         )
         guard (reply["ok"] as? Bool) == true else {
-            saves[sessionId] = (captureId: cap, save: "failed")
+            upsertJob(sessionId: sessionId, captureId: cap, save: "failed", error: "gone")
             publishSave(sessionId: sessionId, save: "failed")
             return "failed"
         }
         let resolved = (reply["captureId"] as? String) ?? cap
-        saves[sessionId] = (captureId: resolved, save: "local")
-        startNativeKeep(sessionId, captureId: resolved)
-        if saves[sessionId]?.save == "saved" {
-            lastSave = "saved"
-            lastSessionId = sessionId
-            return "saved"
+        upsertJob(sessionId: sessionId, captureId: resolved, save: "local", error: "")
+        enqueueKeep(sessionId)
+        let face = jobs[sessionId]?.save ?? "failed"
+        if face == "saved" || face == "failed" {
+            return face
         }
         publishSave(sessionId: sessionId, save: "local")
         return "local"
@@ -571,12 +698,11 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
 
     private func captureForSave(sessionId: String, captureId: String) -> String {
         if !captureId.isEmpty { return captureId }
-        if let cap = saves[sessionId]?.captureId, !cap.isEmpty { return cap }
-        if lastSessionId == sessionId { return lastPcmCaptureId }
+        if let cap = jobs[sessionId]?.captureId, !cap.isEmpty { return cap }
         return ""
     }
 
-    private func restorePendingKeeps() {
+    private func importKeepIntents() {
         let reply = NSMutableDictionary()
         NotificationCenter.default.post(
             name: Notification.Name("nod.watch.pcm.pendingKeeps"),
@@ -584,32 +710,71 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             userInfo: ["reply": reply]
         )
         let rows = reply["rows"] as? [[String: String]] ?? []
+        let account = accountToken()
+        var changed = false
         for row in rows {
             let sid = row["sessionId"] ?? ""
             let cap = row["captureId"] ?? ""
             guard !sid.isEmpty else { continue }
-            if saves[sid]?.save == "saved" { continue }
-            if saves[sid] == nil {
-                saves[sid] = (captureId: cap, save: "local")
+            if jobs[sid]?.save == "saved" { continue }
+            if jobs[sid] == nil {
+                jobs[sid] = SaveJob(
+                    sessionId: sid,
+                    captureId: cap,
+                    account: account,
+                    save: "local",
+                    error: "",
+                    attempts: 0,
+                    nextAttemptAt: 0
+                )
+                changed = true
             }
-            startNativeKeep(sid, captureId: cap)
         }
+        if changed { persistJobs() }
+    }
+
+    private func enqueueKeep(_ sessionId: String) {
+        guard let job = jobs[sessionId] else { return }
+        guard !inflight.contains(sessionId) else { return }
+        let now = nowTs()
+        guard Self.keepShouldRetry(
+            save: job.save,
+            error: job.error,
+            attempts: job.attempts,
+            now: now,
+            nextAttemptAt: job.nextAttemptAt
+        ) else { return }
+        inflight.insert(sessionId)
+        startNativeKeep(sessionId, captureId: job.captureId)
     }
 
     private func startNativeKeep(_ sessionId: String, captureId: String) {
         #if PCM_REPLAY_TESTING
+        if let asyncHook = Self.testingKeepAsync {
+            Self.testingKeepCalls += 1
+            asyncHook(sessionId) { [weak self] code, body in
+                self?.applyKeepHttp(sessionId: sessionId, code: code, body: body)
+                self?.inflight.remove(sessionId)
+            }
+            return
+        }
         if let hook = Self.testingKeep {
+            Self.testingKeepCalls += 1
             let (code, body) = hook(sessionId)
             applyKeepHttp(sessionId: sessionId, code: code, body: body)
+            inflight.remove(sessionId)
+            return
         }
+        inflight.remove(sessionId)
         return
         #else
-        let token = UserDefaults.standard.string(forKey: Self.accountTokenKey) ?? ""
-        var origin = UserDefaults.standard.string(forKey: Self.accountOriginKey) ?? ""
+        let token = accountToken()
+        var origin = defaults.string(forKey: Self.accountOriginKey) ?? ""
         if origin.isEmpty { origin = "https://nodpilot.com" }
         let root = origin.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard !token.isEmpty, let url = URL(string: "\(root)/api/account/history/\(sessionId)/keep") else {
             applyKeepHttp(sessionId: sessionId, code: token.isEmpty ? 401 : 0, body: nil)
+            inflight.remove(sessionId)
             return
         }
         var req = URLRequest(url: url)
@@ -620,30 +785,88 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             DispatchQueue.main.async {
                 self?.applyKeepHttp(sessionId: sessionId, code: code, body: data)
+                self?.inflight.remove(sessionId)
             }
         }.resume()
         #endif
     }
 
     private func applyKeepHttp(sessionId: String, code: Int, body: Data?) {
-        var face = "failed"
-        if (200 ..< 300).contains(code), let body,
-           let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
-           obj["ok"] as? Bool == true {
-            let id = obj["id"] as? String ?? ""
-            if id.isEmpty || id == sessionId {
-                face = "saved"
+        let result = Self.keepHttpFace(code: code, body: body, sessionId: sessionId)
+        NSLog("nod.watch.keep session=%@ status=%d face=%@ error=%@", sessionId, code, result.save, result.error)
+        ensureJobsLoaded()
+        if jobs[sessionId]?.save == "saved" { return }
+        var job = jobs[sessionId] ?? SaveJob(
+            sessionId: sessionId,
+            captureId: "",
+            account: accountToken(),
+            save: "local",
+            error: "",
+            attempts: 0,
+            nextAttemptAt: 0
+        )
+        if result.save == "saved" {
+            job.save = "saved"
+            job.error = ""
+        } else if result.error == "retryable" {
+            job.attempts += 1
+            job.error = "retryable"
+            if job.attempts >= Self.maxKeepAttempts {
+                job.save = "failed"
+            } else {
+                job.save = "local"
+                job.nextAttemptAt = nowTs() + min(60, pow(2, Double(job.attempts)))
+            }
+        } else {
+            job.save = "failed"
+            job.error = result.error
+        }
+        jobs[sessionId] = job
+        persistJobs()
+        publishSave(sessionId: sessionId, save: job.save)
+        #if !PCM_REPLAY_TESTING
+        if job.save == "local", job.error == "retryable" {
+            let delay = max(0.5, job.nextAttemptAt - nowTs())
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.enqueueKeep(sessionId)
             }
         }
-        NSLog("nod.watch.keep session=%@ status=%d face=%@", sessionId, code, face)
-        if let job = saves[sessionId], job.save == "saved" { return }
-        if var job = saves[sessionId] {
-            job.save = face
-            saves[sessionId] = job
-        } else {
-            saves[sessionId] = (captureId: lastPcmCaptureId, save: face)
+        #endif
+    }
+
+    private func upsertJob(sessionId: String, captureId: String, save: String, error: String) {
+        var job = jobs[sessionId] ?? SaveJob(
+            sessionId: sessionId,
+            captureId: captureId,
+            account: accountToken(),
+            save: save,
+            error: error,
+            attempts: 0,
+            nextAttemptAt: 0
+        )
+        if job.save != "saved" {
+            job.captureId = captureId.isEmpty ? job.captureId : captureId
+            job.save = save
+            job.error = error
+            job.account = accountToken()
         }
-        publishSave(sessionId: sessionId, save: face)
+        jobs[sessionId] = job
+        persistJobs()
+    }
+
+    private func ensureJobsLoaded() {
+        guard !jobsLoaded else { return }
+        jobsLoaded = true
+        guard let data = defaults.data(forKey: Self.jobsKey),
+              let rows = try? JSONDecoder().decode([SaveJob].self, from: data) else { return }
+        jobs = Dictionary(uniqueKeysWithValues: rows.map { ($0.sessionId, $0) })
+    }
+
+    private func persistJobs() {
+        let rows = Array(jobs.values)
+        if let data = try? JSONEncoder().encode(rows) {
+            defaults.set(data, forKey: Self.jobsKey)
+        }
     }
 
     private func publishSave(sessionId: String, save: String) {
@@ -656,8 +879,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     }
 
     func listSaves() -> [[String: String]] {
-        saves.map { key, job in
-            ["sessionId": key, "captureId": job.captureId, "save": job.save]
+        ensureJobsLoaded()
+        return jobs.map { key, job in
+            ["sessionId": key, "captureId": job.captureId, "save": job.save, "error": job.error]
         }
     }
 
@@ -898,7 +1122,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
                 reply["save"] = "failed"
             } else {
                 reply["sessionId"] = sid
-                reply["save"] = saves[sid]?.save ?? "failed"
+                reply["save"] = jobs[sid]?.save ?? "failed"
             }
         } else if !lastSessionId.isEmpty {
             reply["sessionId"] = lastSessionId

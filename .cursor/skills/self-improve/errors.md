@@ -2,6 +2,12 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-10 · #185 审查：跨场 keep、旧 saved 吞新失败、status 触发无界重试
+- 我以为：按 session 查文件、inbound 上记 native saved、每次 storeAccount 扫 keep 再 POST，手表 local/savedAck 就能收口。
+- 实际：延迟 Save 会把当前 B 标 keep 却 keep(A)；failKeep 用另一场 inbound.saved 吞掉 B 的失败；每次 pushWatchStatus 都 restorePendingKeeps；saved 只在内存，重启当 pending；手表 savedAck 两秒后迟到 failed/local 会重开页面；缺 token 先 failed 再 publish local。
+- 规则：Save 只写已验证的 session/capture 对，失败只查该场；keep 任务必须持久、串行、有界，不得绑 UI status；对象终态与两秒提示/Done 离页分开，鉴权失败不得再发 local。
+- 涉及：`WatchPcmIngest.resolveCaptureLocked` · `failKeep` · `restorePendingKeeps` · `WatchPhoneSession.applySaveStatus`
+
 ## 2026-09-10 · 手表 Save 等手机网页 keep_history，App 没打开就卡在正在保存
 - 我以为：End 已由手机原生落盘，Save 再走现有 JS `keep_history` 即可；锁屏/杀进程时 WCSession 会把命令交给网页。
 - 实际：`WatchBridge` 在 `jsReady==false` 时把 `save` 排进 pending。Capacitor WKWebView 没起来就没有控制 WS，手表 `reply.save` 仍是旧状态，界面停在「正在保存…」。

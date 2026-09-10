@@ -227,6 +227,26 @@ export function mergeLocalCaptures<T extends { id: string; started_at?: string |
   return mergePendingHistory(sessions, extra)
 }
 
+export type NativeSaveJob = {
+  sessionId: string
+  captureId?: string
+  save: string
+  error?: string
+}
+
+/** Native keep status rides on the History row. Does not hide a phone original. */
+export function overlayNativeSaveJobs<T extends { id: string }>(
+  sessions: T[],
+  jobs: NativeSaveJob[],
+): Array<T & { nativeSave?: string; captureId?: string; nativeError?: string }> {
+  const byId = new Map(jobs.filter((j) => j.sessionId).map((j) => [j.sessionId, j]))
+  return sessions.map((s) => {
+    const job = byId.get(s.id)
+    if (!job) return s
+    return { ...s, nativeSave: job.save, captureId: job.captureId, nativeError: job.error }
+  })
+}
+
 export function rememberRestoreDismissed(ids: readonly string[], id: string): string[] {
   if (!id || ids.includes(id)) return [...ids]
   return [...ids, id]

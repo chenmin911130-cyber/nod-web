@@ -101,6 +101,7 @@ export const IPHONE_COPY = {
   saveSaving: 'Saving…',
   saveFailed: "Couldn't save.",
   saveRetry: 'Retry save',
+  saveWaitingSync: 'Waiting to sync',
   saveSavedLine: 'Saved to History',
   saveCancel: 'Cancel',
   keepRecording: 'Keep recording',

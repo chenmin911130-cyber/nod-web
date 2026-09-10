@@ -16,6 +16,8 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "stopSpeech", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "storeAccount", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "listSaves", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "retrySave", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "resumeKeeps", returnType: CAPPluginReturnPromise),
     ]
 
     override public func load() {
@@ -335,6 +337,16 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func listSaves(_ call: CAPPluginCall) {
         call.resolve(["saves": WatchBridge.shared.listSaves()])
+    }
+
+    @objc func retrySave(_ call: CAPPluginCall) {
+        WatchBridge.shared.retrySave(sessionId: call.getString("sessionId") ?? "")
+        call.resolve()
+    }
+
+    @objc func resumeKeeps(_ call: CAPPluginCall) {
+        WatchBridge.shared.resumeKeeps()
+        call.resolve()
     }
 }
 

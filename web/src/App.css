@@ -8727,6 +8727,22 @@ html.nod-web .hist-page .hist-row-more {
   color: #8e8e93;
 }
 
+html.nod-phone .app.iphone-v2 .hist-page .hist-row-side,
+html.nod-web .hist-page .hist-row-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+html.nod-phone .app.iphone-v2 .hist-page .hist-row-retry,
+html.nod-web .hist-page .hist-row-retry {
+  border: 0;
+  background: transparent;
+  color: #7d9ec7;
+  font: 600 13px/1 inherit;
+  padding: 6px 4px;
+}
+
 html.nod-phone .app.iphone-v2 .hist-more-backdrop,
 html.nod-web .hist-more-backdrop {
   position: fixed;

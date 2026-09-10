@@ -142,10 +142,20 @@ func waitSend() {
     check(endWatch.hint == WatchCopy.pendingSync, "local persist is waiting to sync, not History")
     endWatch.finishPendingSave()
     check(!endWatch.pendingSync && endWatch.hint == WatchCopy.ready, "Done leaves waiting-to-sync without discard")
+    deliver(endWatch, ["save": "local", "sessionId": "live-end"])
+    check(!endWatch.pendingSync && !endWatch.offeringSave && endWatch.hint == WatchCopy.ready, "Done ignores a late local")
+    deliver(endWatch, ["save": "failed", "sessionId": "live-end"])
+    check(!endWatch.saveFailed && !endWatch.offeringSave, "Done ignores a late failed")
     deliver(endWatch, ["save": "saved", "sessionId": "live-end"])
     check(endWatch.savedAck && !endWatch.offeringSave, "matching history_kept is Saved to History")
+    deliver(endWatch, ["save": "local", "sessionId": "live-end"])
+    check(!endWatch.pendingSync, "late local must not roll back Saved to History")
     deliver(endWatch, ["save": "failed", "sessionId": "live-end"])
     check(endWatch.savedAck, "late failed must not roll back Saved to History")
+    endWatch.savedAck = false
+    endWatch.hint = WatchCopy.ready
+    deliver(endWatch, ["save": "failed", "sessionId": "live-end"])
+    check(!endWatch.saveFailed && !endWatch.offeringSave, "Saved stays after the 2s Ready flash")
 
     let ingest = WatchPcmIngest.shared
     let uplink = AudioUplink.shared
@@ -193,9 +203,11 @@ func waitSend() {
         )
         waitSend()
     }
-    func postSave(_ sessionId: String) -> [String: Any] {
+    func postSave(_ sessionId: String, captureId: String = "") -> [String: Any] {
         var out: [String: Any] = [:]
-        bridge.session(WCSession.default, didReceiveMessage: ["action": "save", "sessionId": sessionId]) { out = $0 }
+        var msg: [String: Any] = ["action": "save", "sessionId": sessionId]
+        if !captureId.isEmpty { msg["captureId"] = captureId }
+        bridge.session(WCSession.default, didReceiveMessage: msg) { out = $0 }
         waitSend()
         return out
     }
@@ -206,6 +218,14 @@ func waitSend() {
     let httpOk = postSave("http-ok")
     eq(httpOk["save"] as? String ?? "", "saved")
     check((httpOk["sessionId"] as? String) == "http-ok", "HTTP 200 ok+id replies History saved for that session")
+
+    bindCapture("cap-http-noid", session: "http-noid")
+    WatchBridge.testingKeep = { _ in (200, try! JSONSerialization.data(withJSONObject: ["ok": true])) }
+    eq(postSave("http-noid")["save"] as? String ?? "", "failed")
+
+    bindCapture("cap-http-emptyid", session: "http-emptyid")
+    WatchBridge.testingKeep = { sid in (200, keepBody(sid, id: "")) }
+    eq(postSave("http-emptyid")["save"] as? String ?? "", "failed")
 
     bindCapture("cap-http-405", session: "http-405")
     WatchBridge.testingKeep = { _ in (405, nil) }
@@ -246,6 +266,99 @@ func waitSend() {
     eq(postSave("sess-a")["save"] as? String ?? "", "saved")
     check(bridge.listSaves().contains(where: { $0["sessionId"] == "sess-a" && $0["save"] == "saved" }), "late 500 does not roll back A")
     WatchBridge.testingKeep = nil
+
+    ingest.reset()
+    bridge.testingResetJobs()
+    bindCapture("cap-delay-a", session: "sess-delay-a")
+    eq(ingest.ingestLive(data: Data(repeating: 1, count: 1600), captureId: "cap-delay-a", sessionId: "sess-delay-a", offset: 0), "accept")
+    bindCapture("cap-delay-b", session: "sess-delay-b")
+    eq(ingest.ingestLive(data: Data(repeating: 2, count: 1600), captureId: "cap-delay-b", sessionId: "sess-delay-b", offset: 0), "accept")
+    WatchBridge.testingKeep = { sid in (200, keepBody(sid)) }
+    eq(postSave("sess-delay-a")["save"] as? String ?? "", "saved")
+    check(ingest.listCaptures().contains(where: { $0.captureId == "cap-delay-a" && $0.intent == "keep" }), "delayed Save of A marks A after B started")
+    check(!ingest.listCaptures().contains(where: { $0.captureId == "cap-delay-b" && $0.intent == "keep" }), "delayed Save of A must not mark live B keep")
+
+    ingest.reset()
+    bridge.testingResetJobs()
+    bindCapture("cap-mis-a", session: "sess-mis-a")
+    bindCapture("cap-mis-b", session: "sess-mis-b")
+    eq(postSave("sess-mis-a", captureId: "cap-mis-b")["save"] as? String ?? "", "failed")
+    check(!ingest.listCaptures().contains(where: { $0.captureId == "cap-mis-b" && $0.intent == "keep" }), "session A + capture B is a failed pair")
+
+    let missingIdBody = try JSONSerialization.data(withJSONObject: ["ok": true])
+    check(WatchBridge.keepHttpFace(code: 200, body: missingIdBody, sessionId: "x").save == "failed", "native keepHttpFace rejects missing id")
+    check(WatchBridge.keepShouldRetry(save: "saved", error: "", attempts: 0, now: 10, nextAttemptAt: 0) == false, "saved is not retried")
+    check(WatchBridge.keepShouldRetry(save: "failed", error: "auth", attempts: 1, now: 10, nextAttemptAt: 0) == false, "401 is not retried")
+    check(WatchBridge.keepShouldRetry(save: "local", error: "retryable", attempts: 1, now: 10, nextAttemptAt: 5) == true, "retryable keep retries after backoff")
+    check(WatchBridge.keepShouldRetry(save: "local", error: "retryable", attempts: 1, now: 3, nextAttemptAt: 5) == false, "retryable keep waits for nextAttemptAt")
+
+    ingest.reset()
+    bridge.testingResetJobs()
+    WatchBridge.testingKeep = nil
+    var holdCalls = 0
+    var held: ((Int, Data?) -> Void)?
+    WatchBridge.testingKeepAsync = { sid, done in
+      if sid == "sess-hold" {
+        holdCalls += 1
+        held = done
+        return
+      }
+      done(401, nil)
+    }
+    bindCapture("cap-hold", session: "sess-hold")
+    eq(postSave("sess-hold")["save"] as? String ?? "", "local")
+    eq(holdCalls, 1)
+    bridge.resumeKeeps()
+    eq(holdCalls, 1)
+    held?(200, keepBody("sess-hold"))
+    waitSend()
+    check(bridge.listSaves().contains(where: { $0["sessionId"] == "sess-hold" && $0["save"] == "saved" }), "in-flight keep completes once")
+    WatchBridge.testingKeepAsync = nil
+
+    ingest.reset()
+    bridge.testingResetJobs()
+    bindCapture("cap-restart", session: "sess-restart")
+    var posted: [String] = []
+    WatchBridge.testingKeep = { sid in
+      posted.append(sid)
+      if sid == "sess-restart" { return (200, keepBody(sid)) }
+      return (401, nil)
+    }
+    eq(postSave("sess-restart")["save"] as? String ?? "", "saved")
+    posted.removeAll()
+    bridge.testingUnloadJobs()
+    check(bridge.listSaves().contains(where: { $0["sessionId"] == "sess-restart" && $0["save"] == "saved" }), "restart reloads saved keep jobs")
+    bridge.resumeKeeps()
+    check(!posted.contains("sess-restart"), "restart does not POST a saved keep again")
+    WatchBridge.testingKeep = nil
+
+    ingest.reset()
+    bridge.testingResetJobs()
+    bindCapture("cap-500", session: "sess-500")
+    var n500 = 0
+    WatchBridge.testingKeep = { sid in
+      if sid == "sess-500" {
+        n500 += 1
+        return (500, nil)
+      }
+      return (401, nil)
+    }
+    eq(postSave("sess-500")["save"] as? String ?? "", "local")
+    eq(n500, 1)
+    bridge.resumeKeeps()
+    eq(n500, 1)
+    WatchBridge.testingNow = { Date().timeIntervalSince1970 + 120 }
+    bridge.resumeKeeps()
+    eq(n500, 2)
+    WatchBridge.testingNow = nil
+    WatchBridge.testingKeep = nil
+
+    let savedUi = WatchPhoneSession.WatchSaveUi(terminal: "saved", dismissed: false, pendingSync: false, offeringSave: false, saveFailed: false, savedAck: false, saving: false, hint: WatchCopy.ready)
+    check(WatchPhoneSession.reduceSaveStatus(savedUi, save: "local").pendingSync == false, "reduce: saved ignores late local")
+    check(WatchPhoneSession.reduceSaveStatus(savedUi, save: "failed").saveFailed == false, "reduce: saved ignores late failed")
+    let doneUi = WatchPhoneSession.WatchSaveUi(terminal: "local", dismissed: true, pendingSync: false, offeringSave: false, saveFailed: false, savedAck: false, saving: false, hint: WatchCopy.ready)
+    check(WatchPhoneSession.reduceSaveStatus(doneUi, save: "local").pendingSync == false, "reduce: Done ignores late local")
+    check(WatchPhoneSession.reduceSaveStatus(doneUi, save: "failed").saveFailed == false, "reduce: Done ignores late failed")
 
     _ = bridge
     print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake and Save tests passed")

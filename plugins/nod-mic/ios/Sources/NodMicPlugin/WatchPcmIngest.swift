@@ -258,6 +258,7 @@ final class WatchPcmIngest {
         var ok = false
         queue.sync {
             let id = self.resolveCaptureLocked(captureId: captureId, sessionId: sessionId)
+            guard !id.isEmpty else { return }
             ok = self.store.markIntent(intent, captureId: id)
         }
         return ok
@@ -271,12 +272,20 @@ final class WatchPcmIngest {
         return id
     }
 
+    /// Save must name a capture or uniquely match a session. Never fall back to the live capture.
     private func resolveCaptureLocked(captureId: String, sessionId: String) -> String {
-        var id = captureId.isEmpty ? self.captureId : captureId
-        if id.isEmpty, !sessionId.isEmpty {
-            id = self.store.listCaptures().first(where: { $0.sessionId == sessionId })?.captureId ?? ""
+        let rows = self.store.listCaptures()
+        if !captureId.isEmpty {
+            guard let found = rows.first(where: { $0.captureId == captureId }) else { return "" }
+            if !sessionId.isEmpty, !found.sessionId.isEmpty, found.sessionId != sessionId {
+                return ""
+            }
+            return captureId
         }
-        return id
+        if sessionId.isEmpty { return "" }
+        let matches = rows.filter { $0.sessionId == sessionId }
+        if matches.count == 1 { return matches[0].captureId }
+        return ""
     }
 
     private func fillAck(_ reply: NSMutableDictionary) {

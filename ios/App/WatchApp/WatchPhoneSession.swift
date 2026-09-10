@@ -67,6 +67,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     private var savedAckWork: DispatchWorkItem?
     private var saveWaitWork: DispatchWorkItem?
     private var saveRequestId = ""
+    private var saveRequestCaptureId = ""
+    private var saveTerminal = ""
+    private var saveDismissed = false
     private var phoneSessionId = ""
     private var startBeganAt: Date?
     private var startWaitWork: DispatchWorkItem?
@@ -371,7 +374,12 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         savedAck = false
         saving = true
         saveFailed = false
+        saveDismissed = false
+        saveTerminal = ""
         saveRequestId = Self.savePinnedId(pinnedId: saveRequestId, phoneSessionId: phoneSessionId)
+        if saveRequestCaptureId.isEmpty, !sendBuffer.captureId.isEmpty {
+            saveRequestCaptureId = sendBuffer.captureId
+        }
         hint = WatchCopy.saving
         armSaveWait()
         guard Self.saveShouldSend(saveRequestId) else { return }
@@ -387,6 +395,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         saving = false
         saveFailed = false
         saveRequestId = ""
+        saveRequestCaptureId = ""
+        saveTerminal = ""
+        saveDismissed = false
         hint = WatchCopy.ready
         send(action: "discard")
     }
@@ -399,6 +410,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         saving = false
         saveFailed = false
         savedAck = false
+        saveDismissed = true
         hint = WatchCopy.ready
     }
 
@@ -433,6 +445,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         saving = false
         saveFailed = false
         saveRequestId = ""
+        saveRequestCaptureId = ""
+        saveTerminal = ""
+        saveDismissed = false
         localModeHeld = phoneModeSeen
         starting = true
         startBeganAt = Date()
@@ -491,39 +506,76 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)
     }
 
-    private func applySaveStatus(_ save: String, sessionId: String) {
-        guard !saveRequestId.isEmpty, !sessionId.isEmpty, sessionId == saveRequestId else { return }
+    struct WatchSaveUi: Equatable {
+        var terminal: String
+        var dismissed: Bool
+        var pendingSync: Bool
+        var offeringSave: Bool
+        var saveFailed: Bool
+        var savedAck: Bool
+        var saving: Bool
+        var hint: String
+    }
+
+    /// Terminal History/local face stays put. Done (dismissed) ignores late local/failed.
+    static func reduceSaveStatus(_ ui: WatchSaveUi, save: String) -> WatchSaveUi {
+        if ui.terminal == "saved", save != "saved" { return ui }
+        if ui.dismissed, save != "saved" { return ui }
+        var next = ui
+        next.saving = false
         if save == "saved" {
-            saveWaitWork?.cancel()
-            saveWaitWork = nil
-            offeringSave = false
-            pendingSync = false
-            saving = false
-            saveFailed = false
-            savedAck = true
-            hint = WatchCopy.savedHistory
-            scheduleReady()
-            return
+            next.terminal = "saved"
+            next.pendingSync = false
+            next.offeringSave = false
+            next.saveFailed = false
+            next.savedAck = true
+            next.hint = WatchCopy.savedHistory
+            return next
         }
         if save == "local" {
-            saveWaitWork?.cancel()
-            saveWaitWork = nil
-            saving = false
-            saveFailed = false
-            offeringSave = false
-            pendingSync = true
-            hint = WatchCopy.pendingSync
-            return
+            next.terminal = "local"
+            next.pendingSync = true
+            next.offeringSave = false
+            next.saveFailed = false
+            next.hint = WatchCopy.pendingSync
+            return next
         }
         if save == "failed" {
-            if savedAck { return }
-            saveWaitWork?.cancel()
-            saveWaitWork = nil
-            saving = false
-            saveFailed = true
-            pendingSync = false
-            offeringSave = true
-            hint = WatchCopy.saveFailed
+            next.terminal = "failed"
+            next.pendingSync = false
+            next.offeringSave = true
+            next.saveFailed = true
+            next.hint = WatchCopy.saveFailed
+            return next
+        }
+        return ui
+    }
+
+    private func applySaveStatus(_ save: String, sessionId: String) {
+        guard !saveRequestId.isEmpty, !sessionId.isEmpty, sessionId == saveRequestId else { return }
+        let before = WatchSaveUi(
+            terminal: saveTerminal,
+            dismissed: saveDismissed,
+            pendingSync: pendingSync,
+            offeringSave: offeringSave,
+            saveFailed: saveFailed,
+            savedAck: savedAck,
+            saving: saving,
+            hint: hint
+        )
+        let next = Self.reduceSaveStatus(before, save: save)
+        if next == before { return }
+        saveWaitWork?.cancel()
+        saveWaitWork = nil
+        saveTerminal = next.terminal
+        pendingSync = next.pendingSync
+        offeringSave = next.offeringSave
+        saveFailed = next.saveFailed
+        savedAck = next.savedAck
+        saving = next.saving
+        hint = next.hint
+        if next.savedAck, !before.savedAck {
+            scheduleReady()
         }
     }
 
@@ -587,8 +639,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         !pinnedId.isEmpty
     }
 
-    static func saveWireMessage(sessionId: String) -> String? {
-        sessionId.isEmpty ? nil : sessionId
+    static func saveWireMessage(sessionId: String, captureId: String = "") -> (sessionId: String, captureId: String)? {
+        if sessionId.isEmpty { return nil }
+        return (sessionId, captureId)
     }
 
     /// Saving with no pin yet: latch the incoming id and send Save.
@@ -986,8 +1039,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             }
         }
         if action == "save" {
-            guard let wire = Self.saveWireMessage(sessionId: saveRequestId) else { return }
-            payload["sessionId"] = wire
+            guard let wire = Self.saveWireMessage(sessionId: saveRequestId, captureId: saveRequestCaptureId) else { return }
+            payload["sessionId"] = wire.sessionId
+            if !wire.captureId.isEmpty {
+                payload["captureId"] = wire.captureId
+            }
         }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
@@ -1045,6 +1101,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             let pin = Self.savePinIncoming(saving: saving, pinnedId: saveRequestId, incomingSessionId: sessionId)
             if pin.send {
                 saveRequestId = pin.pinnedId
+                if saveRequestCaptureId.isEmpty {
+                    saveRequestCaptureId = sendBuffer.captureId
+                }
                 send(action: "save")
             }
         }

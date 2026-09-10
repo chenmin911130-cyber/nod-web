@@ -7,12 +7,14 @@ import {
   historySessionMatches,
   mergePendingHistory,
   mergeLocalCaptures,
+  overlayNativeSaveJobs,
   sceneOf,
   sessionHasAudio,
   sessionIsUnsaved,
 } from '../historyRestore'
 import { IPHONE_COPY } from '../iphoneCopy'
 import { isNativeApp } from '../native'
+import { listWatchSaves, retryWatchSave } from '../watch'
 
 export type HistoryItem = { kind: string; text: string; at?: string | null; qid?: string; speaker?: string }
 export type HistoryFile = { kind: string; name: string; href: string }
@@ -28,6 +30,9 @@ export type HistorySession = {
   copy_text?: string
   files?: HistoryFile[]
   kept?: boolean
+  nativeSave?: string
+  captureId?: string
+  nativeError?: string
 }
 
 function DocIcon() {
@@ -112,10 +117,12 @@ function TrashIcon() {
 
 export default function HistoryPane({
   open,
+  refreshAt = 0,
   onClose,
   onRestore,
 }: {
   open: boolean
+  refreshAt?: number
   onClose: () => void
   onRestore?: (session: HistorySession) => void
 }) {
@@ -138,15 +145,16 @@ export default function HistoryPane({
     setLoading(true)
     setErr('')
     void Promise.all([
-      api<{ sessions: HistorySession[] }>('/api/account/history'),
+      api<{ sessions: HistorySession[] }>('/api/account/history').catch(() => ({ sessions: [] as HistorySession[] })),
       api<{ sessions: HistorySession[] }>('/api/account/history?pending=1').catch(() => ({ sessions: [] as HistorySession[] })),
       native
         ? import('nod-mic').then(({ NodMic }) => NodMic.listPendingCaptures()).catch(() => ({ captures: [] }))
         : Promise.resolve({ captures: [] as Array<{ captureId: string; sessionId: string; bytes: number; sealed: boolean; intent: string; modifiedAt: string }> }),
+      native ? listWatchSaves() : Promise.resolve({ saves: [] }),
     ])
-      .then(([saved, pending, local]) => {
+      .then(([saved, pending, local, jobs]) => {
         const cloud = mergePendingHistory(saved.sessions || [], pending.sessions || [])
-        setSessions(mergeLocalCaptures(cloud, local.captures || [], (row) => ({
+        const withLocal = mergeLocalCaptures(cloud, local.captures || [], (row) => ({
           id: row.sessionId || `local:${row.captureId}`,
           mode: 'meeting',
           title: IPHONE_COPY.saveRestoreTitle,
@@ -154,11 +162,12 @@ export default function HistoryPane({
           stt_seconds: Math.max(0, Math.round(row.bytes / 32000)),
           items: [],
           kept: false,
-        })))
+        }))
+        setSessions(overlayNativeSaveJobs(withLocal, jobs.saves || []))
       })
       .catch((ex: Error) => setErr(ex.message))
       .finally(() => setLoading(false))
-  }, [open])
+  }, [open, refreshAt, native])
 
   if (!open) return null
 
@@ -245,10 +254,27 @@ export default function HistoryPane({
                       <b>{s.title || 'Session'}</b>
                       <small>
                         {sessionIsUnsaved(s) ? `${IPHONE_COPY.saveRestoreTitle} · ` : ''}
+                        {s.nativeSave === 'failed' ? `${IPHONE_COPY.saveFailed} · ` : ''}
+                        {s.nativeSave === 'local' ? `${IPHONE_COPY.saveWaitingSync} · ` : ''}
                         {historyRowWhen(s.started_at, s.stt_seconds)}
                       </small>
                     </span>
                   </button>
+                  <span className="hist-row-side">
+                  {(s.nativeSave === 'failed' || s.nativeSave === 'local') && (
+                    <button
+                      type="button"
+                      className="hist-row-retry"
+                      disabled={busyId === s.id}
+                      onClick={() => {
+                        setBusyId(s.id)
+                        retryWatchSave(s.id)
+                        window.setTimeout(() => setBusyId(''), 800)
+                      }}
+                    >
+                      {IPHONE_COPY.saveRetry}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="hist-row-more"
@@ -257,6 +283,7 @@ export default function HistoryPane({
                   >
                     <MoreDots />
                   </button>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -271,6 +298,11 @@ export default function HistoryPane({
                   <OpenIcon />
                   {IPHONE_COPY.histOpen}
                 </button>
+                {(menuSession.nativeSave === 'failed' || menuSession.nativeSave === 'local') && (
+                  <button type="button" onClick={() => { setMenuId(''); retryWatchSave(menuSession.id) }}>
+                    {IPHONE_COPY.saveRetry}
+                  </button>
+                )}
                 <button type="button" onClick={() => { setMenuId(''); void copySession(menuSession) }}>
                   <ShareIcon />
                   {copied === menuSession.id ? 'Copied' : IPHONE_COPY.histShare}

@@ -200,7 +200,7 @@ final class PhonePcmStore {
 
     func markIntent(_ value: String, captureId: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        let id = captureId.isEmpty ? self.captureId : captureId
+        let id = captureId
         guard !id.isEmpty else { return false }
         let dir = captureDir(id)
         guard fm.fileExists(atPath: dir.path) else { return false }

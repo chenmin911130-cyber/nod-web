@@ -1,3 +1,4 @@
+import { App } from '@capacitor/app'
 import { registerPlugin } from '@capacitor/core'
 import { getToken } from './auth'
 import { isNativeApp, NATIVE_API_ORIGIN } from './native'
@@ -33,7 +34,9 @@ type WatchPlugin = {
   playSpeech(opts: { data: string; dest?: 'phone' | 'watch' }): Promise<void>
   stopSpeech(): Promise<void>
   storeAccount(opts: { token: string; origin: string }): Promise<void>
-  listSaves(): Promise<{ saves: Array<{ sessionId: string; captureId: string; save: string }> }>
+  listSaves(): Promise<{ saves: Array<{ sessionId: string; captureId: string; save: string; error?: string }> }>
+  retrySave(opts: { sessionId: string }): Promise<void>
+  resumeKeeps(): Promise<void>
   addListener(event: 'command', cb: (ev: WatchCommand) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'pcm', cb: (ev: WatchPcm) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'saveResult', cb: (ev: { save?: string; sessionId?: string }) => void): Promise<{ remove: () => Promise<void> }>
@@ -45,6 +48,23 @@ function storeWatchAccount(): void {
   if (!isNativeApp()) return
   const token = getToken()
   void NodWatch.storeAccount({ token, origin: NATIVE_API_ORIGIN }).catch(() => undefined)
+}
+
+export function retryWatchSave(sessionId: string): void {
+  if (!isNativeApp() || !sessionId) return
+  void NodWatch.retrySave({ sessionId }).catch(() => undefined)
+}
+
+export function resumeWatchKeeps(): void {
+  if (!isNativeApp()) return
+  void NodWatch.resumeKeeps().catch(() => undefined)
+}
+
+export async function listWatchSaves(): Promise<{
+  saves: Array<{ sessionId: string; captureId: string; save: string; error?: string }>
+}> {
+  if (!isNativeApp()) return { saves: [] }
+  return NodWatch.listSaves().catch(() => ({ saves: [] }))
 }
 
 let preferWatchMic = false
@@ -285,17 +305,30 @@ export function installWatchRemote(handlers: {
         handlers.onSaveResult({ save: row.save || '', sessionId: row.sessionId || '' })
       }
     }
-    await replaySaves()
-    if (gone) return
-    onVis = () => {
-      if (document.visibilityState === 'visible') void replaySaves()
-    }
-    document.addEventListener('visibilitychange', onVis)
     const saveResult = await NodWatch.addListener('saveResult', (ev) => {
       if (gone) return
       handlers.onSaveResult({ save: ev.save || '', sessionId: ev.sessionId || '' })
     })
     handles.push(saveResult)
+    await replaySaves()
+    if (gone) return
+    onVis = () => {
+      if (document.visibilityState === 'visible') {
+        void replaySaves()
+        resumeWatchKeeps()
+      }
+    }
+    document.addEventListener('visibilitychange', onVis)
+    try {
+      const appState = await App.addListener('appStateChange', ({ isActive }) => {
+        if (!isActive || gone) return
+        void replaySaves()
+        resumeWatchKeeps()
+      })
+      handles.push(appState)
+    } catch {
+      /* web / missing plugin */
+    }
     const command = await NodWatch.addListener('command', (ev) => {
       if (gone) return
       const { action, sessionId } = watchCommandFromBridge(ev)
@@ -357,7 +390,6 @@ export function pushWatchStatus(face: {
   pcmDrainedByte?: number
 }): void {
   if (!isNativeApp()) return
-  storeWatchAccount()
   void NodWatch.setStatus({
     capture: face.capture,
     hint: (face.hint || '').slice(0, 140),
