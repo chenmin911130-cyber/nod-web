@@ -3801,6 +3801,7 @@ class Session:
         trigger: str,
         version: int,
         gen: int,
+        judged_at: float | None = None,
     ) -> bool:
         """Fix this question + its source fragments, then reuse the answer chain.
 
@@ -3811,12 +3812,21 @@ class Session:
         manual submit (also bumps generation) or new speech (bumps the version) must
         never be answered after the fact, or the answer lands out of turn / in the
         wrong session and folds fragments into a question they do not belong to.
+
+        `judged_at` is the moment the judgement started: ANY activity after it — a
+        final, but also a mere PARTIAL, which does not bump the version — means the
+        speaker resumed, so the verdict describes a moment that has passed.
         """
         cited = list(verdict.get("fragments") or [])
         keys = [str(f["id"]) for f in frags]
         lang = frags[-1].get("lang") if frags else None
         with self._qa_lock():
             if gen != self._qa_gen or version != self._qa_version or not self._qa_buffer:
+                return False
+            # #191 review fix: the activity re-check belongs HERE too, not only in the
+            # worker before this call — a partial arriving after that check must not
+            # let the stale answer through (partials only bump the activity clock).
+            if judged_at is not None and self._qa_activity_at > judged_at:
                 return False
             # Answer context (#191): earlier background + the candidate fragments the
             # model did NOT cite (a lead-in the question stands on). Recent confirmed
@@ -3844,7 +3854,11 @@ class Session:
             "qa_submit trigger=%s frags=%s cited=%s q_chars=%s ctx=%s rest=%s",
             trigger, len(frags), len(cited), len(question or ""), len(context), leftover,
         )
-        self._start_interview_answer(question, lang, context)
+        # #191 review fix: the start point re-validates the generation — a New /
+        # clear / workspace switch landing between the lock release above and the
+        # answer actually starting must not answer for the abandoned session.
+        if not self._start_interview_answer(question, lang, context, gen=gen):
+            return False
         return True
 
     def _qa_drop(self, *, reason: str, trigger: str = "") -> None:
@@ -5433,7 +5447,33 @@ class Session:
             return
         self._qa_note_final(cleaned, lang, meta)
 
-    def _start_interview_answer(self, cleaned: str, lang: str | None, context: str = "") -> None:
+    def _qa_gen_current(self, gen: int) -> bool:
+        """True when the Q&A generation still matches (nothing reset since)."""
+        self._qa_init()
+        with self._qa_lock():
+            return int(gen) == self._qa_gen
+
+    def _start_interview_answer(
+        self,
+        cleaned: str,
+        lang: str | None,
+        context: str = "",
+        *,
+        gen: int | None = None,
+    ) -> bool:
+        """Start the auto answer for a committed candidate. False = stale, no answer.
+
+        #191 review fix: the generation is re-checked at the ACTUAL start point. The
+        commit validated the candidate under its lock, but New / clear / a workspace
+        switch (all of which call `_qa_reset`) can land between releasing that lock
+        and this call — starting then would answer a question the session has
+        already abandoned.
+        """
+        if gen is not None and not self._qa_gen_current(gen):
+            logging.getLogger("nod").info(
+                "qa_drop reason=stale_start gen=%s now_gen=%s", gen, self._qa_gen
+            )
+            return False
         heard = heard_lang_from_text(cleaned, lang)
         self._remember_final(cleaned)
         self._maybe_follow_speech(cleaned, heard)
@@ -5441,10 +5481,26 @@ class Session:
         if not tok:
             self._pending_q.append((cleaned, lang, context))
             self.emit({"type": "status", "text": "Question queued · answering the previous one"})
-            return
-        self._run_interview_answer(cleaned, lang, context)
+            return True
+        self._run_interview_answer(cleaned, lang, context, gen=gen)
+        return True
 
-    def _run_interview_answer(self, cleaned: str, lang: str | None, context: str = "") -> None:
+    def _run_interview_answer(
+        self,
+        cleaned: str,
+        lang: str | None,
+        context: str = "",
+        *,
+        gen: int | None = None,
+    ) -> None:
+        # #191 review fix: the thread can start a moment after the start check; a New
+        # that lands in between must not generate. Returning here still releases the
+        # busy claim through the existing `finally`, so nothing hangs.
+        if gen is not None and not self._qa_gen_current(gen):
+            logging.getLogger("nod").info(
+                "qa_drop reason=stale_run gen=%s now_gen=%s", gen, self._qa_gen
+            )
+            return
         heard = heard_lang_from_text(cleaned, lang)
         tok = self._busy_token
         self.pipeline._cancel.clear()

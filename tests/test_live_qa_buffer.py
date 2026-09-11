@@ -808,6 +808,78 @@ class ReviewFixTests(_QaBase):
         self.assertEqual([f["text"] for f in sess._qa_buffer], ["我们准备做订阅制", "那按年付呢"])
         self.assertEqual(sess._qa_background, [])
 
+    def test_a_partial_during_judgement_discards_the_verdict(self):
+        # A partial bumps neither the version nor the generation — it only proves
+        # the speaker is still going. Without an activity re-check at commit time
+        # the old answer lands while the user is mid-sentence.
+        gate = threading.Event()
+        sess = self._session(judge_stub(qs.VERDICT_READY, question="stale", gate=gate))
+        sess._start_interview_answer = mock.Mock()
+        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        version = sess._qa_version
+        self.assertTrue(self._start_judge(sess))
+        sess._on_partial("that depends on", "en")
+        self.assertEqual(sess._qa_version, version)  # the partial changed no version
+        gate.set()
+        self.assertTrue(self._wait(lambda: not sess._qa_judging))
+        sess._start_interview_answer.assert_not_called()
+        self.assertEqual(len(sess._qa_buffer), 1)  # kept for the next judgement
+
+    def test_a_commit_after_a_partial_is_refused_with_matching_version_and_gen(self):
+        # The exact window: version AND generation still match, but the activity
+        # clock moved. This checks the guard directly, because the worker's own
+        # activity check happens earlier (before it calls the commit).
+        sess = self._session(judge_stub(qs.VERDICT_READY))
+        sess._start_interview_answer = mock.Mock()
+        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        version, gen = sess._qa_version, sess._qa_gen
+        frags = [dict(f) for f in sess._qa_buffer]
+        judged_at = time.time()
+        sess._on_partial("still going", "en")
+        self.assertEqual((sess._qa_version, sess._qa_gen), (version, gen))
+        verdict = {
+            "version": version,
+            "verdict": qs.VERDICT_READY,
+            "question": "how should we price it?",
+            "fragments": [frags[0]["id"]],
+        }
+        self.assertFalse(
+            sess._qa_commit(
+                "how should we price it?",
+                frags,
+                verdict=verdict,
+                trigger="judge",
+                version=version,
+                gen=gen,
+                judged_at=judged_at,
+            )
+        )
+        sess._start_interview_answer.assert_not_called()
+        self.assertEqual(len(sess._qa_buffer), 1)  # not consumed by the stale commit
+
+    def test_an_answer_start_after_a_reset_is_refused(self):
+        # The commit validated the candidate and released its lock; a New that lands
+        # before the answer starts must not start it (the start point re-checks the
+        # generation), and neither may the run itself generate.
+        sess = self._session(judge_stub(qs.VERDICT_READY))
+        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        gen = sess._qa_gen
+        sess._qa_reset("new_session")
+        self.assertFalse(sess._start_interview_answer("how should we price it?", "en", "", gen=gen))
+        sess.pipeline.process_text.assert_not_called()
+        self.assertFalse(sess._busy)
+        sess._run_interview_answer("how should we price it?", "en", "", gen=gen)
+        sess.pipeline.process_text.assert_not_called()
+        self.assertEqual(sess._engine, "idle")
+
+    def test_the_current_generation_still_starts(self):
+        # Guard against over-blocking: with a live generation the answer starts.
+        sess = self._session(judge_stub(qs.VERDICT_READY))
+        sess._qa_init()
+        gen = sess._qa_gen = 7
+        self.assertTrue(sess._start_interview_answer("how should we price it?", "en", "", gen=gen))
+        self.assertTrue(self._wait(lambda: sess.pipeline.process_text.called))
+
     def test_a_stale_background_verdict_does_not_wipe_new_fragments(self):
         # A background verdict computed for an older snapshot must not clear the
         # follow-up that landed while the model was thinking.
