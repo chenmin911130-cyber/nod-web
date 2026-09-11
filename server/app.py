@@ -1893,6 +1893,17 @@ class Pipeline:
         if mode not in ("translate", "notes", "listen_ask"):
             self._qa_history.append({"qid": qid, "q": self._strip_nod_tag(t), "a": answer})
             self._qa_history = self._qa_history[-6:]
+        if think_outcome is not None:
+            # #182 observability: what the model actually cost for this answer,
+            # alongside the gate decision. Still no question text and no key.
+            try:
+                in_tok, out_tok = resolve_llm_usage(stream_usage, t, answer)
+            except Exception:
+                in_tok, out_tok = 0, 0
+            logging.getLogger("nod").info(
+                "think_answer qid=%s gen=%s decision=%s model=%s in=%s out=%s answer_chars=%s",
+                qid, seq, think_decision, model, in_tok, out_tok, len(answer),
+            )
         if self.user_id:
             # The answer already streamed. Accounting must never swallow `done` —
             # the client only releases the translate gate and closes the answer
@@ -2019,7 +2030,10 @@ class Pipeline:
                 sources={**think_search.sources_payload(outcome), "reason": outcome.error or ""},
                 retrieved_at=outcome.retrieved_at,
             )
-            return outcome, f"searched:day={reservation.day_attempts}:total={reservation.total_attempts}"
+            return (
+                outcome,
+                f"searched:attempt={attempt_no}:day={reservation.day_attempts}:total={reservation.total_attempts}",
+            )
 
     def _think_lock(self) -> threading.Lock:
         lock = getattr(self, "_think_mu", None)
