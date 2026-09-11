@@ -3,6 +3,7 @@ import type { CaptureState, EngineState, Turn } from '../types'
 import { AnswerContent, QuestionBlock } from './AnswerContent'
 import { PRODUCT_NAME } from '../brand'
 import { isWeb } from '../platform'
+import { copyFlashText, useCopyFlash } from '../copyFeedback'
 
 interface Props {
   capture: CaptureState
@@ -117,17 +118,17 @@ let lastScrollTop = 0
 
 export default function AutoOverlay(props: Props) {
   const { capture, engine, currentQ, partial, turns, busy, autoOn, fullscreen, draft,
-    pinned, stealth, micMuted, onDraft, onAsk, onCopy, onExpand, onStop,
+    pinned, stealth, micMuted, onDraft, onAsk, onExpand, onStop,
     onViewToggle, onPinned, onStealth, onMicMuted } = props
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const focusedRef = useRef(false)
   const hideTimer = useRef<number | undefined>(undefined)
   const [scrollPinned, setScrollPinned] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const { flash, runCopy } = useCopyFlash()
+  const copyResult = flash?.key === 'copy' ? flash.result : null
   const [inputVisible, setInputVisible] = useState(false)
   const [newQHint, setNewQHint] = useState(false)
-  const copyTimer = useRef<number | undefined>(undefined)
   const prevTurns = useRef(turns.length)
 
   const answer = turns.length > 0 ? turns[turns.length - 1].a : ''
@@ -150,7 +151,6 @@ export default function AutoOverlay(props: Props) {
 
   useEffect(() => {
     const clear = () => {
-      window.clearTimeout(copyTimer.current)
       window.clearTimeout(hideTimer.current)
     }
     window.addEventListener('beforeunload', clear)
@@ -214,12 +214,8 @@ export default function AutoOverlay(props: Props) {
   }
 
   const handleCopy = useCallback(() => {
-    if (!answer.trim()) return
-    onCopy()
-    setCopied(true)
-    window.clearTimeout(copyTimer.current)
-    copyTimer.current = window.setTimeout(() => setCopied(false), 2000)
-  }, [answer, onCopy])
+    runCopy('copy', answer)
+  }, [answer, runCopy])
 
   const submitAsk = () => {
     const text = draft.trim()
@@ -322,11 +318,12 @@ export default function AutoOverlay(props: Props) {
         <div className="ov-section-label ov-answer-label">
           NOD ANSWER
           <button
-            className={`ov-copy-btn${copied ? ' done' : ''}`}
+            className={`ov-copy-btn${copyResult === 'ok' ? ' done' : ''}${copyResult === 'fail' || copyResult === 'empty' ? ' fail' : ''}`}
             onClick={handleCopy}
             disabled={!answer}
+            aria-live="polite"
           >
-            {copied ? '✓ Copied' : 'Copy answer'}
+            {copyResult ? copyFlashText(copyResult) : 'Copy answer'}
           </button>
         </div>
         <div className="ov-answer" ref={scrollRef} onScroll={handleScroll}>

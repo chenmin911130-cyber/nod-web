@@ -8,6 +8,7 @@ import EmptyState from './EmptyState'
 import { ttsAutoShouldConfirm, type TtsMode, type TtsVoice } from '../tts'
 import { usePhoneChrome } from '../phoneChrome'
 import { IPHONE_COPY, translateFromChip, translateSourceName, translateSwapAffordance, translateToChip } from '../iphoneCopy'
+import { CopyBodyHit, CopyIconButton } from './CopyButton'
 
 interface Props {
   pairs: TranslatePair[]
@@ -20,7 +21,6 @@ interface Props {
   onTranslateTo: (lang: PairLang) => void
   onTranslateFrom: (lang: Lang) => void
   onSwap: () => void
-  onCopyField: (pair: TranslatePair, field: 'original' | 'translation') => void
   onRetry: (id: string) => void
   ttsMode: TtsMode
   ttsVoice: TtsVoice
@@ -66,15 +66,6 @@ function BilingualIcon() {
   )
 }
 
-function CopyIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect x="5.2" y="5.2" width="7.4" height="8.2" rx="1.4" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M3.4 10.6V3.8A1.4 1.4 0 0 1 4.8 2.4h5.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  )
-}
-
 function NativeTranslateCard({
   ts,
   source,
@@ -84,8 +75,6 @@ function NativeTranslateCard({
   targetFailed = false,
   spoken,
   speaking,
-  onCopyOriginal,
-  onCopyTranslation,
   onSpeak,
   onStop,
   onRetry,
@@ -98,8 +87,6 @@ function NativeTranslateCard({
   targetFailed?: boolean
   spoken?: string
   speaking?: boolean
-  onCopyOriginal?: () => void
-  onCopyTranslation?: () => void
   onSpeak?: () => void
   onStop?: () => void
   onRetry?: () => void
@@ -110,13 +97,9 @@ function NativeTranslateCard({
     <div className={`tr-pair iphone-tr-card${ts === 'live' ? ' live' : ''}`}>
       <div className="iphone-tr-meta">{meta}</div>
       <div className="iphone-tr-source">
-        {onCopyOriginal ? (
-          <button type="button" className="tr-copy-hit" onClick={onCopyOriginal} title="Copy original">
-            {sourceBody}
-          </button>
-        ) : (
-          sourceBody
-        )}
+        <CopyBodyHit className="tr-copy-hit" text={source} title="Copy original">
+          {sourceBody}
+        </CopyBodyHit>
       </div>
       <div className={`iphone-tr-target${targetPending ? ' pending' : ''}${targetFailed ? ' failed' : ''}`}>
         <span className="tr-text">{target}</span>
@@ -127,16 +110,12 @@ function NativeTranslateCard({
         ) : null}
       </div>
       <div className="iphone-tr-actions">
-        {onCopyTranslation && !targetPending && !targetFailed ? (
-          <button
-            type="button"
+        {!targetPending && !targetFailed && target.trim() ? (
+          <CopyIconButton
             className="iphone-tr-copy"
-            onClick={onCopyTranslation}
+            text={target}
             title={IPHONE_COPY.copyTranslation}
-            aria-label={IPHONE_COPY.copyTranslation}
-          >
-            <CopyIcon />
-          </button>
+          />
         ) : null}
         {spoken ? (
           <button
@@ -245,7 +224,6 @@ export default function TranslatePane({
   onTranslateTo,
   onTranslateFrom,
   onSwap,
-  onCopyField,
   onRetry,
   ttsMode,
   ttsVoice,
@@ -491,8 +469,6 @@ export default function TranslatePane({
                       targetFailed={!!p.failed}
                       spoken={spoken}
                       speaking={speaking}
-                      onCopyOriginal={() => onCopyField(p, 'original')}
-                      onCopyTranslation={p.translation ? () => onCopyField(p, 'translation') : undefined}
                       onSpeak={() => onSpeak(spoken)}
                       onStop={onStopSpeech}
                       onRetry={p.failed ? () => onRetry(p.id) : undefined}
@@ -503,14 +479,13 @@ export default function TranslatePane({
                   <div key={p.id} className="tr-pair">
                     <div className="tr-cell origin">
                       <span className="meet-ts">{p.ts}</span>
-                      <button
-                        type="button"
+                      <CopyBodyHit
                         className="tr-copy-hit"
-                        onClick={() => onCopyField(p, 'original')}
+                        text={p.original}
                         title="Copy original"
                       >
                         <span className="tr-text">{p.original}</span>
-                      </button>
+                      </CopyBodyHit>
                       {p.original.trim() ? (
                         <button
                           type="button"
@@ -524,10 +499,9 @@ export default function TranslatePane({
                       ) : null}
                     </div>
                     <div className={`tr-cell target${p.translation ? '' : ' pending'}${p.failed ? ' failed' : ''}`}>
-                      <button
-                        type="button"
+                      <CopyBodyHit
                         className="tr-copy-hit"
-                        onClick={() => onCopyField(p, 'translation')}
+                        text={p.translation}
                         title={p.translation ? 'Copy translation' : undefined}
                         disabled={!p.translation}
                       >
@@ -536,7 +510,7 @@ export default function TranslatePane({
                         {p.to && p.to !== to && p.translation ? (
                           <span className="tr-lang-chip">{langTag(p.to)}</span>
                         ) : null}
-                      </button>
+                      </CopyBodyHit>
                       {p.translation && !p.failed ? (
                         <button
                           type="button"

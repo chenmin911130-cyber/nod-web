@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { api } from '../auth'
 import { saveSessionToFiles } from '../sessionExport'
 import {
-  copyText,
   historyRowWhen,
   historySessionMatches,
   mergePendingHistory,
@@ -12,6 +11,7 @@ import {
   sessionHasAudio,
   sessionIsUnsaved,
 } from '../historyRestore'
+import { copyFlashText, useCopyFlash } from '../copyFeedback'
 import { IPHONE_COPY } from '../iphoneCopy'
 import { isNativeApp } from '../native'
 import { listWatchSaves, retryWatchSave } from '../watch'
@@ -129,17 +129,18 @@ export default function HistoryPane({
   const [sessions, setSessions] = useState<HistorySession[]>([])
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
-  const [copied, setCopied] = useState('')
   const [busyId, setBusyId] = useState('')
   const [pdfId, setPdfId] = useState('')
   const [query, setQuery] = useState('')
   const [menuId, setMenuId] = useState('')
   const native = isNativeApp()
+  const copyFlash = useCopyFlash()
 
   useEffect(() => {
     if (!open) {
       setQuery('')
       setMenuId('')
+      copyFlash.reset()
       return
     }
     setLoading(true)
@@ -174,10 +175,8 @@ export default function HistoryPane({
   const visible = sessions.filter((s) => historySessionMatches(s, query))
   const menuSession = sessions.find((s) => s.id === menuId) || null
 
-  const copySession = async (session: HistorySession) => {
-    const ok = await copyText(session.copy_text || session.items.map((i) => i.text).join('\n'))
-    setCopied(ok ? session.id : '')
-    window.setTimeout(() => setCopied(''), 1600)
+  const copySession = (session: HistorySession) => {
+    copyFlash.runCopy(session.id, session.copy_text || session.items.map((i) => i.text).join('\n'))
   }
 
   const exportFiles = async (session: HistorySession, kinds: { pdf?: boolean; audio?: boolean } = { pdf: true, audio: true }) => {
@@ -261,6 +260,11 @@ export default function HistoryPane({
                     </span>
                   </button>
                   <span className="hist-row-side">
+                  {copyFlash.flash?.key === s.id ? (
+                    <span className="hist-copy-flash" role="status" aria-live="polite">
+                      {copyFlashText(copyFlash.flash.result)}
+                    </span>
+                  ) : null}
                   {(s.nativeSave === 'failed' || s.nativeSave === 'local') && (
                     <button
                       type="button"
@@ -303,9 +307,9 @@ export default function HistoryPane({
                     {IPHONE_COPY.saveRetry}
                   </button>
                 )}
-                <button type="button" onClick={() => { setMenuId(''); void copySession(menuSession) }}>
+                <button type="button" onClick={() => { setMenuId(''); copySession(menuSession) }}>
                   <ShareIcon />
-                  {copied === menuSession.id ? 'Copied' : IPHONE_COPY.histShare}
+                  {IPHONE_COPY.histShare}
                 </button>
                 <button
                   type="button"

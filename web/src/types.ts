@@ -194,7 +194,7 @@ export interface Api {
   setPinned(b: boolean): void
   setStealth(on: boolean): void
   setView(mode: ViewMode): void
-  copy(text: string): void
+  copy(text: string): Promise<boolean>
   close(): void
   minimize(): void
   getConfig(): Promise<AppConfig>

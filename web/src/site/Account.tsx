@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { api, fetchMe, logout, type Me } from '../auth'
 import { nativeGo, readNativeAppBuild } from '../native'
 import { downloadHistoryPdf } from '../historyPdf'
-import { copyText } from '../historyRestore'
+import { CopyButton } from '../components/CopyButton'
 import './Site.css'
 import { PRODUCT_NAME } from '../brand'
 import NodMark from './NodMark'
@@ -42,14 +42,7 @@ export default function AccountPage() {
   const [msg, setMsg] = useState('')
   const [feedback, setFeedback] = useState('')
   const [openId, setOpenId] = useState<string | null>(null)
-  const [copied, setCopied] = useState('')
   const [appBuild, setAppBuild] = useState('')
-
-  const copySession = async (session: SessionRow, key = session.id) => {
-    const ok = await copyText(session.copy_text || session.items.map((item) => item.text).join('\n'))
-    setCopied(ok ? key : '')
-    window.setTimeout(() => setCopied(''), 1600)
-  }
 
   useEffect(() => {
     document.title = `Account · ${PRODUCT_NAME}`
@@ -225,13 +218,11 @@ export default function AccountPage() {
                   {open && (
                     <div className="history-detail">
                       <p className="history-actions">
-                        <button
-                          type="button"
+                        <CopyButton
                           className="button button-ghost"
-                          onClick={() => void copySession(s)}
-                        >
-                          {copied === s.id ? 'Copied' : 'Copy session'}
-                        </button>
+                          idle="Copy session"
+                          text={s.copy_text || s.items.map((item) => item.text).join('\n')}
+                        />
                         <button
                           type="button"
                           className="button button-ghost"
@@ -269,13 +260,11 @@ export default function AccountPage() {
                       {s.items.map((item, i) => (
                         <p key={`${item.kind}-${i}`}>
                           <small>{item.kind}</small>
-                          <button
-                            type="button"
+                          <CopyButton
                             className="history-copy-one"
-                            onClick={() => void copyText(item.text).then((ok) => ok && setCopied(`${s.id}-${i}`))}
-                          >
-                            {copied === `${s.id}-${i}` ? 'Copied' : 'Copy'}
-                          </button>
+                            idle="Copy"
+                            text={item.text}
+                          />
                           <br />
                           {item.text}
                         </p>

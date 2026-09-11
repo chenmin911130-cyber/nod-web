@@ -294,6 +294,14 @@
   cursor: pointer;
 }
 
+.copy-ok {
+  color: #86efac;
+}
+
+.copy-fail {
+  color: #fca5a5;
+}
+
 .history-open {
   display: block;
   width: 100%;
