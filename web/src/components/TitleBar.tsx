@@ -54,6 +54,8 @@ interface Props {
   onMore?: () => void
   accountInitials?: string
   onAccount?: () => void
+  showNew?: boolean
+  onNew?: () => void
 }
 
 const MODES: Array<{ id: WorkspaceMode; label: string }> = [
@@ -360,6 +362,17 @@ export default function TitleBar(props: Props) {
             aria-label={IPHONE_COPY.more}
           >
             <SessionMoreIcon />
+          </button>
+        ) : null}
+        {phone && props.showNew ? (
+          <button
+            type="button"
+            className="tb-new"
+            onClick={() => props.onNew?.()}
+            title={IPHONE_COPY.moreNew}
+            aria-label={IPHONE_COPY.moreNew}
+          >
+            {IPHONE_COPY.newCompact}
           </button>
         ) : null}
         {phone ? (

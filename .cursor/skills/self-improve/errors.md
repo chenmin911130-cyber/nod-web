@@ -2,6 +2,20 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-11 · #190 Hermes：结束面板标签被 pointer capture 吃掉点击
+- 我以为：把手和标签栏 pointerdown 一律 `setPointerCapture`，再靠 `skipEndedClick` 区分拖动和 click，就能同时支持拖动手势和键盘/点击。
+- 实际：capture 会把后续 `click` 重定向到捕获元素，Live/Transcript/Notes 收不到 click，结束态切不了 tab；拖完留下的 `skipEndedClick` 还会吞下一次标签点击。9px 抖动会落在 tap/drag 缝里把面板展开。
+- 规则：结束面板只在点在非按钮区域、或拖过共享 slop 之后才 capture；禁止在标签按钮 pointerdown 上抢捕获。
+- 涉及：`ListenPane` `onEndedResizeDown` · `skipEndedClick` · `ENDED_TAP_SLOP` · ended sheet tabs
+
+## 2026-09-11 · #190 审查：Continue 用 meetingStartedAt 当 Ask sessionKey
+- 我以为：`meetingStartedAt` 能代表本场，草稿按它隔离即可。
+- 实际：Continue / `meeting_resume` 会把 `meetingStartedAt` 改成 `now - elapsedMs` 让时钟接着走，ListenPane 当成新会话，草稿被清、Ask 被收起。
+- 规则：Ask/Translate 草稿键必须用续录不变的会话标识（`composeSessionId`），禁止用会被 Continue 改写的时钟字段。
+- 涉及：`sessionKey` · `applyMeetingResume` · `composeSessionId` · `ListenPane` Ask draft
+
+## 2026-09-11 · #187 审查：Watch End 没 arm flush，回执没绑本次 End
+
 ## 2026-09-11 · #187 审查：Watch End 没 arm flush，回执没绑本次 End
 - 我以为：手机 Stop 上 `expect_listen_flush`、每次等待清空 `listenFlushId`，下一条 `listen_flush` 就能放行笔记。
 - 实际：Watch Stop / Record-while-listening 只 `stopListen()`，从未 pending，自动笔记会永远 wait。清空旧 id 后，上一轮迟到回执会完成当前 End。

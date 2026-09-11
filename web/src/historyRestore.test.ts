@@ -303,6 +303,7 @@ const resumed = applyMeetingResume({
   meetingEnded: true,
   meetingStartedAt: 1_000,
   meetingElapsedMs: 90_000,
+  composeSessionId: 7,
   meetingLines: [{ id: 'a' }],
   notesRaw: 'notes stay',
   catchNotes: [{ id: 'c' }],
@@ -310,6 +311,7 @@ const resumed = applyMeetingResume({
 if (resumed.meetingEnded) throw new Error('meeting_resume must clear ended')
 if (resumed.meetingElapsedMs !== 90_000) throw new Error('meeting_resume must keep elapsedMs')
 if (resumed.meetingStartedAt !== 110_000) throw new Error('meeting_resume must rewind startedAt so the clock continues')
+if (resumed.composeSessionId !== 7) throw new Error('meeting_resume must keep the Ask compose session')
 if (resumed.meetingLines.length !== 1 || resumed.notesRaw !== 'notes stay' || resumed.catchNotes.length !== 1) {
   throw new Error('meeting_resume must keep lines / notes / catchNotes')
 }

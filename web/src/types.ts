@@ -100,6 +100,7 @@ export interface AppState {
   meetingPausedAt: number | null
   meetingElapsedMs: number
   meetingEnded: boolean
+  composeSessionId: number
   translatePairs: TranslatePair[]
   translateFrom: Lang
   translateTo: PairLang

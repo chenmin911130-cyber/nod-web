@@ -8,7 +8,9 @@ import EmptyState from './EmptyState'
 import { ttsAutoShouldConfirm, type TtsMode, type TtsVoice } from '../tts'
 import { usePhoneChrome } from '../phoneChrome'
 import { IPHONE_COPY, translateFromChip, translateSourceName, translateSwapAffordance, translateToChip } from '../iphoneCopy'
+import { nextComposeDraft, nextComposeFiles } from '../listenChrome'
 import { CopyBodyHit, CopyIconButton } from './CopyButton'
+import AskBubble from './AskBubble'
 
 interface Props {
   pairs: TranslatePair[]
@@ -31,6 +33,7 @@ interface Props {
   onStopSpeech?: () => void
   voiceChrome?: ReactNode
   actions?: ReactNode
+  sessionKey?: string
 }
 
 function langTag(code: PairLang): string {
@@ -234,12 +237,16 @@ export default function TranslatePane({
   onStopSpeech,
   voiceChrome,
   actions,
+  sessionKey,
 }: Props) {
   const native = usePhoneChrome()
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<LocalAttach[]>([])
+  const [composeOpen, setComposeOpen] = useState(false)
   const [autoAsk, setAutoAsk] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const sessionKeyRef = useRef(sessionKey || '')
 
   const requestTtsMode = (mode: TtsMode) => {
     if (ttsAutoShouldConfirm(ttsMode, mode)) {
@@ -253,6 +260,19 @@ export default function TranslatePane({
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'auto' })
   }, [pairs, partial])
+
+  useEffect(() => {
+    const prev = sessionKeyRef.current
+    const next = sessionKey || ''
+    setInput((draft) => nextComposeDraft(prev, next, draft))
+    setFiles((cur) => nextComposeFiles(prev, next, cur))
+    if (prev !== next) setComposeOpen(false)
+    sessionKeyRef.current = next
+  }, [sessionKey])
+
+  useEffect(() => {
+    if (composeOpen) inputRef.current?.focus()
+  }, [composeOpen])
 
   const submit = () => {
     const t = input.trim()
@@ -559,8 +579,10 @@ export default function TranslatePane({
       {native ? (
         <div className="iphone-tr-dock">
           {actions}
+          {composeOpen ? (
           <div className="iphone-tr-prompt">
             <input
+              ref={inputRef}
               className="prompt-input"
               placeholder={IPHONE_COPY.typeToTranslate}
               value={input}
@@ -571,6 +593,14 @@ export default function TranslatePane({
             />
             <button
               type="button"
+              className="iphone-ask-collapse"
+              aria-label={IPHONE_COPY.collapseAsk}
+              onClick={() => setComposeOpen(false)}
+            >
+              ⌄
+            </button>
+            <button
+              type="button"
               className={`iphone-tr-send${input.trim() || files.length ? ' ready' : ''}`}
               onClick={submit}
               disabled={!input.trim() && files.length === 0}
@@ -579,6 +609,11 @@ export default function TranslatePane({
               <SendIcon />
             </button>
           </div>
+          ) : (
+            <div className="iphone-tr-ask-wrap">
+              <AskBubble onClick={() => setComposeOpen(true)} />
+            </div>
+          )}
         </div>
       ) : (
         <PromptAttach files={files} onChange={setFiles}>
