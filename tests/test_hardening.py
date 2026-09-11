@@ -738,7 +738,7 @@ class InterviewSemanticBufferTests(unittest.TestCase):
 
     def test_answer_cleanup_runs_queued_ask(self):
         sess = self._session()
-        sess._pending_asks = [("summarize me", "summary", None, False)]
+        sess._pending_asks = [("summarize me", "summary", None, False, "")]
         sess.ask = mock.Mock()
         sess._on_final("告诉我当下经济啊。", "zh")
         self._settle(sess)
@@ -747,7 +747,7 @@ class InterviewSemanticBufferTests(unittest.TestCase):
                 break
             time.sleep(0.05)
         # #182: a drained ask re-submits with the Think value it was QUEUED with.
-        sess.ask.assert_called_once_with("summarize me", None, "summary", think=False)
+        sess.ask.assert_called_once_with("summarize me", None, "summary", think=False, retry_of="")
 
     def test_meeting_hold_flush_does_not_emit_after_leaving_meeting(self):
         sess = self._session()

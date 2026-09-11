@@ -191,7 +191,7 @@ export type EngineMsg =
   | { type: 'keep_history'; content?: boolean; audio?: boolean; id?: string }
   | { type: 'discard_history'; id?: string }
   | { type: 'auth'; token: string }
-  | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; attach_id?: string; mode?: string; think?: boolean }
+  | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; attach_id?: string; mode?: string; think?: boolean; retry_of?: string }
   | { type: 'set_workspace'; mode: WorkspaceMode; scene?: 'meeting' | 'lecture' | 'interview'; speakers_expected?: number }
   | { type: 'set_llm'; provider: string; model: string }
   | { type: 'set_think'; on: boolean }

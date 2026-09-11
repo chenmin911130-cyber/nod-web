@@ -875,7 +875,7 @@ def _think_outcome_from_snapshot(snap: dict[str, Any], question: str) -> "think_
             if isinstance(r, dict)
         ),
         retrieved_at=float(payload.get("retrieved_at") or snap.get("retrieved_at") or 0.0),
-        error="",
+        error=str(payload.get("reason") or ""),
     )
 
 
@@ -1939,18 +1939,35 @@ class Pipeline:
         3. only then is budget reserved atomically — a refusal sends no request;
         4. the reservation is never released, even when the request fails.
         """
+        def same_session(snap: dict | None) -> bool:
+            """A snapshot is only reusable inside the session that paid for it."""
+            if not snap or not snap.get("sources"):
+                return False
+            owned = str(snap.get("session_id") or "")
+            return not (session_id and owned and owned != session_id)
+
+        def has_results(snap: dict | None) -> bool:
+            """An OK lookup with real results: the only thing worth reusing."""
+            payload = snap.get("sources") if isinstance(snap, dict) else None
+            if not isinstance(payload, dict) or str(payload.get("status") or "") != "ok":
+                return False
+            return bool(payload.get("results"))
+
         if request_id:
+            # The SAME request (a duplicate or concurrent submit) reuses whatever
+            # it already paid for — even a failure — so it can never pay twice.
             snap = think_budget.find_snapshot(request_id)
-            if snap and snap.get("sources"):
+            if same_session(snap):
                 return _think_outcome_from_snapshot(snap, question), "reused_snapshot"
         if retry_of:
+            # An explicit retry only reuses a lookup that actually worked; a
+            # failed or unknown attempt may be retried for real (and counted).
             prev = think_budget.find_snapshot(retry_of)
-            if prev and prev.get("sources"):
+            if same_session(prev) and has_results(prev):
                 return _think_outcome_from_snapshot(prev, question), "reused_retry"
             same = think_budget.find_question_snapshot(session_id, question)
-            if same and same.get("sources"):
+            if same_session(same) and has_results(same):
                 return _think_outcome_from_snapshot(same, question), "reused_retry"
-
         client = getattr(self, "think_client", None)
         if client is None:
             client = build_think_client(self.cfg)
@@ -1968,7 +1985,7 @@ class Pipeline:
         with self._think_lock():
             if request_id:
                 snap = think_budget.find_snapshot(request_id)
-                if snap and snap.get("sources"):
+                if same_session(snap):
                     return _think_outcome_from_snapshot(snap, question), "reused_snapshot"
             reservation = think_budget.reserve(
                 daily_limit=THINK_SEARCH_DAILY_LIMIT, total_limit=THINK_SEARCH_TOTAL_LIMIT
@@ -1997,7 +2014,9 @@ class Pipeline:
                 attempt=attempt_no,
                 parent_request_id=retry_of,
                 status=outcome.status,
-                sources=think_search.sources_payload(outcome),
+                # `reason` is stored for reuse only and is not part of the
+                # payload the client / History receives.
+                sources={**think_search.sources_payload(outcome), "reason": outcome.error or ""},
                 retrieved_at=outcome.retrieved_at,
             )
             return outcome, f"searched:day={reservation.day_attempts}:total={reservation.total_attempts}"
@@ -3255,7 +3274,15 @@ class Session:
             files = msg.get("files")
             if not files:
                 files = take_attach_files(str(msg.get("attach_id") or ""))
-            self.ask(msg.get("text", ""), files, msg.get("mode") or "ask")
+            # #182: a user-initiated retry names the request it retries, so the
+            # gate can reuse an OK snapshot (or count a fresh attempt) instead of
+            # silently paying for the same question twice.
+            self.ask(
+                msg.get("text", ""),
+                files,
+                msg.get("mode") or "ask",
+                retry_of=str(msg.get("retry_of") or ""),
+            )
         elif mtype == "set_workspace":
             self.set_workspace(msg.get("mode") or "interview", msg.get("scene"), msg.get("speakers_expected"))
         elif mtype == "set_llm":
@@ -5603,12 +5630,20 @@ class Session:
         # generation, no matter which path (ask, manual, interview voice)
         # held the busy flag — otherwise they sit until the next question.
         if self._pending_asks:
-            nxt, md, fl, th = self._pending_asks.pop(0)
+            nxt, md, fl, th, ro = self._pending_asks.pop(0)
             # #182: re-submit with the Think value the item was QUEUED with, not
             # whatever the switch says now.
-            self.ask(nxt, fl, md, think=th)
+            self.ask(nxt, fl, md, think=th, retry_of=ro)
 
-    def ask(self, text, files=None, mode="ask", *, think: bool | None = None) -> None:
+    def ask(
+        self,
+        text,
+        files=None,
+        mode="ask",
+        *,
+        think: bool | None = None,
+        retry_of: str = "",
+    ) -> None:
         # #182: snapshot the session's Think value once, at submit. `think` is
         # passed explicitly only when re-submitting a queued item, so a drained
         # question keeps the value it was queued with.
@@ -5649,11 +5684,11 @@ class Session:
         tok = self._claim_busy()
         if not tok:
             if mode == "ask" and self._workspace == "interview":
-                self._pending_asks.append((user_text, mode, files, think_flag))
+                self._pending_asks.append((user_text, mode, files, think_flag, retry_of))
                 self.emit({"type": "status", "text": "Question queued · answering the previous one"})
                 return
             if mode in ("translate", "notes", "listen_ask", "file_ask"):
-                self._pending_asks.append((user_text, mode, files, think_flag))
+                self._pending_asks.append((user_text, mode, files, think_flag, retry_of))
                 return
             self.emit({"type": "status", "text": "Still working, please wait"})
             self.emit({"type": "done", "id": "", "stt": 0, "llm": 0, "ok": False})
@@ -5665,7 +5700,12 @@ class Session:
         def work():
             try:
                 self.pipeline.process_text(
-                    llm_text, mode, images=images, display_text=display, think=think_flag
+                    llm_text,
+                    mode,
+                    images=images,
+                    display_text=display,
+                    think=think_flag,
+                    retry_of=retry_of,
                 )
             finally:
                 if self._busy_token is tok:

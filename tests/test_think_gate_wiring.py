@@ -150,6 +150,53 @@ class ThinkGateWiringTests(unittest.TestCase):
         self.assertEqual(len(calls), 1, "the search is never automatically re-sent")
         self.assertEqual(self._counts(), (1, 1), "the attempt stays consumed")
 
+    def test_a_retry_reuses_a_successful_lookup_instead_of_paying_twice(self):
+        # The user retries the same question in the same session: the order says
+        # an existing result is reused, so the retry must not reserve or search.
+        events: list[dict] = []
+        calls: list[dict] = []
+        pipe = _pipe(events, calls)
+        pipe._new_qid = lambda: "q-first"
+        pipe.process_text("what is new?", "ask", think=True)
+        self.assertEqual(self._counts(), (1, 1))
+
+        pipe._new_qid = lambda: "q-retry"
+        pipe.process_text("what is new?", "ask", think=True, retry_of="q-first")
+
+        self.assertEqual(len(calls), 1, "an OK lookup is reused, never re-bought")
+        self.assertEqual(self._counts(), (1, 1), "and consumes no extra attempt")
+        self.assertEqual(
+            [e for e in events if e.get("type") == "sources"][-1]["status"], "ok"
+        )
+
+    def test_a_retry_after_a_failure_creates_one_counted_attempt_with_its_parent(self):
+        events: list[dict] = []
+        calls: list[dict] = []
+
+        def flaky(request):
+            calls.append(request)
+            if len(calls) == 1:
+                raise TimeoutError("could not tell whether it was received")
+            return PAYLOAD
+
+        pipe = _pipe(events, calls)
+        pipe.think_client = think.SearchClient(flaky, clock=lambda: 1789012800.0)
+        pipe._new_qid = lambda: "q-first"
+        pipe.process_text("what is new?", "ask", think=True)
+        self.assertEqual(self._counts(), (1, 1), "the failed attempt stays consumed")
+
+        pipe._new_qid = lambda: "q-retry"
+        pipe.process_text("what is new?", "ask", think=True, retry_of="q-first")
+
+        self.assertEqual(len(calls), 2, "an unknown/failed lookup may be retried for real")
+        self.assertEqual(self._counts(), (2, 2), "and the retry is counted as its own attempt")
+        from server.think_budget import find_snapshot
+
+        record = find_snapshot("q-retry")
+        self.assertEqual(record["attempt"], 2)
+        self.assertEqual(record["parent_request_id"], "q-first")
+        self.assertEqual(record["status"], "ok")
+
     def test_a_model_retry_never_re_searches(self):
         events: list[dict] = []
         calls: list[dict] = []

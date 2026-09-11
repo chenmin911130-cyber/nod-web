@@ -3244,6 +3244,10 @@ export default function App() {
           type: 'ask',
           text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, notesBilingualOn(s.notesLang, s.translateOn), s.speakerNames, s.notesTranslateTo),
           mode: 'listen_ask',
+          // #182: name the answer being retried, so a Think lookup that already
+          // succeeded is reused instead of paid for twice, and a failed one is
+          // recorded as a new counted attempt.
+          retry_of: noteId,
         })
       } catch (ex) {
         dispatch({
