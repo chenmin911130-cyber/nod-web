@@ -2,6 +2,13 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-11 · 装完 iPhone 就当手表也更新了（表还停在 82）
+
+- 我以为：`devicectl device install app` 把手机装到 84 后，内嵌的 `App.app/Watch/Nod.app` 会和 Xcode Run 一样由 iOS 推到已配对手表。
+- 实际：手机 84 装好并启动，表上仍是 **82**（旧包）。`devicectl device info apps --device <watch-udid>` 能看到表在线、版本 82，但手机安装没有推表。必须单独装：`xcrun devicectl device install app --device <watch-udid> .../App.app/Watch/Nod.app`，装完再查一次版本（84 ✓）并确认能启动。另外表 app 是独立原生 SwiftUI（`otool -L` 只链系统框架，不链 nod-watch/nod-mic pod），`WatchBridge` / `WatchPcmIngest` 这类符号属于**手机**包，不能拿它们当表的验收条件。
+- 规则：一次「手机 + 手表」的安装，两侧都要用 `devicectl device info apps` 核 Bundle Version，手机成功 ≠ 表已更新；表 app 单独装、单独核、单独启动验证。
+- 涉及：#196 / #191 · Bundle 84 · `App.app/Watch/Nod.app` · `xcrun devicectl device install|info apps`
+
 ## 2026-09-11 · #193/#194 只按模式隐藏 Save 入口，没修保存状态归属
 - 我以为：按模式不渲染 More 里的 Save 行、Translate 工作区不渲染 SavePrompt，就算把「Translate 不该有 Save」闭环了。
 - 实际：待保存状态本身没有模式。`server/meter.py:list_pending_history` 只筛 kept/ended/discarded，`restoreLaunchSurface`/`savePromptSurface`/`sessionShouldOfferSave` 只看**当前工作区**，`HistoryPane` 给本地录音行硬编码 `mode:'meeting'`。于是 Translate 会话成了 pending：切回 Meeting 的那一刻工作区条件成立，恢复 + Save 又回来了；本地 Translate 录音还被当成待保存 Meeting（bundle 82 真机复测）。
