@@ -2,6 +2,13 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-11 · #191 复审：拒绝提交不撤销「已判定」，回答线程只在建线程前校验
+
+- 我以为：`judged_at` 已接进 worker、generation 已在 `_start_interview_answer` 和 `_run_interview_answer` 各校验一次，剩下的窗口就算关掉了。
+- 实际：worker 先写 `_qa_judged_version = version` 再调 `_qa_commit`。partial 落在 worker 自检与 commit 复检之间时提交被拒，但「已判定」标记留着 → `_qa_maybe_reschedule` 和之后的 settle 全部跳过，没有新 final 就永远不回答（安静后不恢复，用户看到问题挂着）。另一处：`_run_interview_answer` 的校验在建线程**之前**，线程体 `work()` 仍直接 `process_text`；`_pending_q` 项不带身份，`_qa_reset` 只能清队列、拦不住已 `popleft()` 的旧问题 —— 这一条与同日上一条的「同类第三处」逐字重复，说明上轮只把它写进 errors.md、没写进代码。
+- 规则：写「拒绝/早退」分支时，必须在同一处撤销上一步留下的状态标记（这里 `_qa_judged_version` → `_qa_stale_version`），并补一条**安静后仍会恢复回答**的测试（只测「不抢答、缓冲保留」不算）。校验必须放进真正使用该值的线程体，而不是它的调用方。清空集合 ≠ 阻止已取出的元素：元素要自带可校验身份；两种身份不要混用（`_qa_gen` 是候选纪元、手动提交会推进，`_qa_session_gen` 只在 New/清空/切模式/关闭时推进）。
+- 涉及：#191 · `server/app.py` `_qa_commit` / `_qa_keep_verdict_eligible` / `_qa_session_current` / `_run_interview_answer` · `tests/test_live_qa_buffer.py::ReviewFixTests`
+
 ## 2026-09-11 · #191 Hermes：守卫参数加了却没人传，早退漏掉 busy 释放
 
 - 我以为：`_qa_commit` 新增 `judged_at` 就关掉了「判断期间来了 partial」的窗口；commit message 甚至写着「早退仍会通过既有 `finally` 释放 busy」。
