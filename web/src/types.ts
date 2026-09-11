@@ -2,7 +2,25 @@ import type { ListenFlushWait } from './recordReport'
 
 export type CaptureState = 'off' | 'listening' | 'recording' | 'paused'
 export type EngineState = 'idle' | 'transcribing' | 'generating'
-export type Turn = { id: string; q: string; a: string }
+// #182 Think: the sources a Think answer actually retrieved. `status` is the
+// honest summary the server sent — `ok` only when usable results exist.
+export type AnswerSource = { title: string; url: string; published_at: string | null }
+export type AnswerSources = {
+  status: 'ok' | 'empty' | 'failed'
+  retrieved_at: number
+  retrieved_at_text: string
+  results: AnswerSource[]
+  note: string
+}
+// #182 Think: `think` is the value the question was SUBMITTED with (the server
+// echoes it back), so a Retry can re-ask it the way it originally ran.
+// #182 Think: `think` is the value the question was SUBMITTED with (the server
+// echoes it back) and `submitId` names the original submission payload, so a
+// Retry can rebuild the exact same request instead of guessing from the display
+// text. `live` marks a turn created from a real submission in THIS session — a
+// restored/history (or demo) turn has neither the value nor the payload, so it
+// must not offer a Retry it cannot honour.
+export type Turn = { id: string; q: string; a: string; sources?: AnswerSources; think?: boolean; submitId?: string; live?: boolean }
 export type CatchNote = {
   id: string
   title: string
@@ -81,6 +99,12 @@ export interface AppState {
   turns: Turn[]
   partial: string
   busy: boolean
+  // #182: the session's Think switch. Off on cold start, off again after New /
+  // clear / restoring a saved session; kept while the same session lives.
+  thinkOn: boolean
+  // Bumped every time the socket (re)attaches, so the Think value can be
+  // re-asserted to the server without silently inverting it.
+  wsAttachSeq: number
   opacity: number
   pinned: boolean
   micMuted: boolean
@@ -146,11 +170,15 @@ export type EngineEvent =
   | { type: 'phase'; capture: CaptureState; engine: EngineState }
   | { type: 'status'; text: string }
   | { type: 'partial'; text: string; language?: string; speaker?: string }
-  | { type: 'question'; id: string; text: string; language?: string; speaker?: string }
+  | { type: 'question'; id: string; text: string; language?: string; speaker?: string; think?: boolean; submit_id?: string }
   | { type: 'line_update'; id: string; text: string; language?: string; speaker?: string; rev: number }
   | { type: 'chunk'; id: string; text: string }
+  | ({ type: 'sources'; id?: string } & AnswerSources)
+  // #182: the server's authoritative Think value. Sent when a session reset turns
+  // the switch back to its default, so the client never shows a stale "on".
+  | { type: 'think'; on: boolean }
   | { type: 'done'; id: string; stt: number; llm: number; ok: boolean }
-  | { type: 'error'; text: string }
+  | { type: 'error'; text: string; id?: string }
   | { type: 'listen_taken'; text: string }
   | { type: 'auth_required' }
   | { type: 'quota'; ok: boolean; reason?: string; plan?: string; plan_name?: string; stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; sessions?: number; session_limit?: number; daily_cost_usd?: number; daily_cost_limit?: number; daily_stt_seconds?: number; daily_stt_limit?: number; quota_disabled?: boolean }
@@ -174,9 +202,10 @@ export type EngineMsg =
   | { type: 'keep_history'; content?: boolean; audio?: boolean; id?: string }
   | { type: 'discard_history'; id?: string }
   | { type: 'auth'; token: string }
-  | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; attach_id?: string; mode?: string }
+  | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; attach_id?: string; mode?: string; think?: boolean; retry_of?: string; submit_id?: string }
   | { type: 'set_workspace'; mode: WorkspaceMode; scene?: 'meeting' | 'lecture' | 'interview'; speakers_expected?: number }
   | { type: 'set_llm'; provider: string; model: string }
+  | { type: 'set_think'; on: boolean }
   | { type: 'set_lang'; language: string | null }
   | { type: 'set_source'; source: string }
   | { type: 'set_mic_muted'; muted: boolean }

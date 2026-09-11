@@ -1,3 +1,5 @@
+import type { AnswerSources } from './types'
+import { sourcesAsText } from './qaSources'
 import { pdfDownloadName } from './pdfBrand'
 import type { PdfBlock, PdfTheme } from './pdf'
 import { modeOf, sceneOf } from './historyRestore'
@@ -10,7 +12,15 @@ type PdfSession = {
   title: string
   started_at: string | null
   stt_seconds?: number
-  items: Array<{ kind: string; text: string; at?: string | null; qid?: string; speaker?: string }>
+  items: Array<{
+    kind: string
+    text: string
+    at?: string | null
+    qid?: string
+    speaker?: string
+    // #182: present only on a Think answer; older records simply have none.
+    sources?: AnswerSources | null
+  }>
   files?: Array<{ kind: string; name: string }>
 }
 
@@ -43,6 +53,7 @@ export async function historyPdfArgs(session: PdfSession) {
   const items = session.items || []
   const blocks: PdfBlock[] = [{ kind: 'h1', text: title }]
   const answers = new Map<string, string>()
+  const sourcesByQid = new Map<string, AnswerSources>()
   const questions: Array<{ id: string; text: string }> = []
   const transcriptByQid = new Map<string, string>()
 
@@ -50,7 +61,10 @@ export async function historyPdfArgs(session: PdfSession) {
     const text = (item.text || '').trim()
     if (!text) return
     const id = item.qid || `${session.id}-${idx}`
-    if (item.kind === 'answer' || item.kind === 'listen_ask') answers.set(id, text)
+    if (item.kind === 'answer' || item.kind === 'listen_ask') {
+      answers.set(id, text)
+      if (item.sources) sourcesByQid.set(id, item.sources)
+    }
     if (item.kind === 'question') questions.push({ id, text })
     if (item.kind === 'transcript') transcriptByQid.set(id, text)
   })
@@ -58,6 +72,10 @@ export async function historyPdfArgs(session: PdfSession) {
   questions.forEach((q, idx) => {
     blocks.push({ kind: 'h2', text: q.text })
     blocks.push({ kind: 'p', text: answers.get(q.id) || [...answers.values()][idx] || '—' })
+    // #182: a saved Think answer keeps its real sources and retrieval time in the
+    // exported PDF too (plain answers add nothing).
+    const sourcesText = sourcesAsText(sourcesByQid.get(q.id))
+    if (sourcesText) blocks.push({ kind: 'p', text: sourcesText })
   })
 
   let lastTranscriptText = ''

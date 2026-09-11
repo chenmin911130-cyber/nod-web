@@ -2,6 +2,8 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import type { AttachPayload } from './attach'
 import type { AppConfig, AppState, AudioSource, EngineEvent, Lang, MeetingLine, PairLang, TranslatePair, ViewMode, WorkspaceMode } from './types'
 import { TRANSLATE_LANGS } from './types'
+import { answerCopyText, applySources } from './qaSources'
+import { newSubmitId } from './submitId'
 import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
@@ -208,6 +210,8 @@ const initial: AppState = {
   turns: [],
   partial: '',
   busy: false,
+  thinkOn: false,
+  wsAttachSeq: 0,
   opacity: 83,
   pinned: true,
   micMuted: false,
@@ -282,8 +286,9 @@ type Action =
   | { type: 'retry_translate'; id: string }
   | { type: 'fail_translate'; id: string }
   | { type: 'ask_start' }
-  | { type: 'seed_ask'; text: string }
-  | { type: 'fail_ask'; text: string }
+  | { type: 'seed_ask'; text: string; think?: boolean; submitId?: string }
+  | { type: 'set_think'; on: boolean }
+  | { type: 'fail_ask'; text: string; submitId?: string }
   | { type: 'listen_scene'; scene: ListenScene }
   | { type: 'translate_on'; on: boolean }
   | { type: 'listen_new' }
@@ -545,10 +550,23 @@ function reducer(state: AppState, action: Action): AppState {
             }]
             return { ...state, translatePairs, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
           }
-          const pending = state.turns.findIndex((t) => t.id === '__pending_ask__')
+          // #182: bind the answer to the pending card that carries THIS submit's
+          // identity, not to whichever card happens to be pending — an auto-voice
+          // question committed while an attachment submit is still uploading must
+          // not inherit that submit's attachments.
+          const eventSubmitId = typeof ev.submit_id === 'string' ? ev.submit_id : ''
+          const pending = state.turns.findIndex(
+            (t) => t.id === '__pending_ask__' && (!eventSubmitId || t.submitId === eventSubmitId),
+          )
           const turns = state.turns.slice()
-          if (pending >= 0) turns[pending] = { ...turns[pending], id: qid, q: text }
-          else turns.push({ id: qid, q: text, a: '' })
+          // #182: the server echoes the Think value this question actually runs
+          // with; it belongs to the turn, not to whatever the switch says later.
+          const turnThink = ev.think === true
+          if (pending >= 0) {
+            turns[pending] = { ...turns[pending], id: qid, q: text, think: turnThink, live: true }
+          } else {
+            turns.push({ id: qid, q: text, a: '', think: turnThink, submitId: eventSubmitId, live: true })
+          }
           return { ...state, turns, currentQ: text, currentQId: qid, partial: '', busy: true, heardLang: heard ?? state.heardLang }
         }
         case 'line_update': {
@@ -562,6 +580,16 @@ function reducer(state: AppState, action: Action): AppState {
           const currentQ = state.currentQId === ev.id ? ev.text : state.currentQ
           return { ...state, meetingLines, currentQ, partial: '', partialSpeaker: '' }
         }
+        case 'sources': {
+          // #182: attach the retrieved sources to the answer they belong to. An
+          // event for a turn this session does not have is dropped (a lookup that
+          // finished after New / reconnect must not decorate the next answer).
+          return { ...state, turns: applySources(state.turns, ev) }
+        }
+        case 'think':
+          // #182: the server turned the session switch back to its default
+          // (New / clear / workspace switch). Follow it instead of showing "on".
+          return { ...state, thinkOn: ev.on }
         case 'chunk': {
           let translatePairs = state.translatePairs
           let translateAskId = state.translateAskId
@@ -641,8 +669,13 @@ function reducer(state: AppState, action: Action): AppState {
         }
         case 'error': {
           const msg = ev.text || 'Generation failed'
-          if (state.workspaceMode === 'interview' && state.turns.length) {
-            const i = state.turns.findIndex((t) => !t.a)
+          // #182: a failure that names its question is written to THAT card. A
+          // generic error (transcription lost, missing key, a full buffer) must not
+          // be written into whichever question happens to be waiting for an answer —
+          // an attachment submit still uploading would have collected it.
+          const failedId = typeof ev.id === 'string' ? ev.id : ''
+          if (failedId && state.workspaceMode === 'interview') {
+            const i = state.turns.findIndex((t) => t.id === failedId)
             if (i >= 0) {
               const turns = state.turns.slice()
               turns[i] = { ...turns[i], a: msg }
@@ -677,7 +710,7 @@ function reducer(state: AppState, action: Action): AppState {
         case 'quota_exceeded':
           return { ...state, busy: false, status: quotaLimitText(ev.reason, state.quota as unknown as QuotaFields) }
         case 'attached':
-          return state
+          return { ...state, wsAttachSeq: state.wsAttachSeq + 1 }
         case 'pcm_drained':
           return state
         case 'listen_flush': {
@@ -716,9 +749,17 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, lang: action.lang }
     case 'source':
       return { ...state, source: action.source }
+    case 'set_think':
+      return { ...state, thinkOn: action.on }
     case 'clear':
       return {
         ...state,
+        thinkOn: false,
+        // #182: Clear ends the session, so nothing is pending any more. Without this
+        // the composer stayed `busy` whenever the abandoned work produced no `done`
+        // event: an attachment upload that never became an answer left the input
+        // disabled after New, so the next question could not even be asked.
+        busy: false,
         turns: [],
         currentQ: PLACEHOLDER,
         currentQId: '',
@@ -760,6 +801,9 @@ function reducer(state: AppState, action: Action): AppState {
       const clock = action.live ? restoreAttachedClock(elapsed) : restoreSessionClock(elapsed)
       return {
         ...state,
+        // #182: a restored session is a new session — never inherit Think from an
+        // old answer's tag, and never silently keep it on.
+        thinkOn: false,
         workspaceMode: action.mode,
         listenScene: action.scene,
         meetingLines,
@@ -965,13 +1009,33 @@ function reducer(state: AppState, action: Action): AppState {
     case 'ask_start':
       return { ...state, busy: true, status: 'Asking…' }
     case 'seed_ask': {
-      const turns = [...state.turns, { id: '__pending_ask__', q: action.text, a: '' }]
+      // #182: the pending turn remembers the Think value this submit was made with
+      // and which ORIGINAL submission it belongs to, so the answer card can offer a
+      // Retry that rebuilds the same request instead of guessing from the display
+      // text. The turn keeps both when the server's question frame names its id.
+      const turns = [...state.turns, {
+        id: '__pending_ask__',
+        q: action.text,
+        a: '',
+        think: action.think === true,
+        submitId: action.submitId || '',
+        live: true,
+      }]
       return { ...state, turns, currentQ: action.text, busy: true, status: 'Asking…' }
     }
     case 'fail_ask': {
-      const turns = state.turns.map((t) =>
-        t.id === '__pending_ask__' && !t.a ? { ...t, a: action.text } : t,
+      // #182: only the card this FAILED submit created may carry its error — the
+      // previous shape marked every pending card, including one belonging to a
+      // different submission that was still uploading. And when that card is gone
+      // (the session was cleared, a new question is already running), the failure
+      // must change nothing at all: not the status line, not `busy`.
+      const failedSubmit = action.submitId || ''
+      const failedIndex = state.turns.findIndex(
+        (t) => t.id === '__pending_ask__' && !t.a && (!failedSubmit || t.submitId === failedSubmit),
       )
+      if (failedIndex < 0) return state
+      const turns = state.turns.slice()
+      turns[failedIndex] = { ...turns[failedIndex], a: action.text }
       return { ...state, turns, busy: false, status: action.text }
     }
     case 'fail_translate': {
@@ -1088,6 +1152,11 @@ export default function App() {
   const restoreHistoryRef = useRef<(session: HistorySession) => void>(() => undefined)
   const lastRestoredKeepId = useRef<string | null>(null)
   const offerSaveAfterMeetingStopRef = useRef<() => void>(() => undefined)
+  // #182: the ORIGINAL submission behind each Live Q&A turn — the question the user
+  // actually typed and the exact attachments. Kept in a ref (not in the reducer
+  // state) so a Retry can rebuild the same request while the bytes never reach
+  // History/state, and so it is dropped with the session.
+  const submitsRef = useRef(new Map<string, { text: string; files?: AttachPayload[] }>())
   const doClearRef = useRef<() => void>(() => undefined)
   const performSignOutRef = useRef<() => void>(() => undefined)
   const performDeleteRef = useRef<() => void>(() => undefined)
@@ -1860,7 +1929,10 @@ export default function App() {
     } else if (s.workspaceMode === 'meeting') {
       text = s.meetingLines[s.meetingLines.length - 1]?.text ?? ''
     } else {
-      text = s.turns[s.turns.length - 1]?.a ?? ''
+      // #182: Copy takes the sources and the retrieval time with the answer, exactly
+      // like History export — a copied Think answer used to lose its 出处.
+      const turn = s.turns[s.turns.length - 1]
+      text = answerCopyText(turn?.a ?? '', turn?.sources)
     }
     runLatestCopy('latest', text)
   }, [runLatestCopy])
@@ -2246,6 +2318,7 @@ export default function App() {
   }
 
   const doClear = useCallback(() => {
+    submitsRef.current.clear()
     spokenTranslate.current.clear()
     stopSpeech()
     askedTranslate.current.clear()
@@ -2486,19 +2559,121 @@ export default function App() {
 
   const handleAsk = useCallback((text: string, files?: AttachPayload[]) => {
     const label = text.trim() || (files?.length ? `Please review: ${files.map((f) => f.name).join(', ')}` : '')
-    dispatch({ type: 'seed_ask', text: label })
+    // #182: freeze the submit at the instant the user sends. Reading the switch
+    // after `parkAttaches` awaited meant a toggle flipped during the upload changed
+    // a question that was already submitted; the submit id is generated here for
+    // the same reason (and makes a duplicated submit free on the server).
+    const think = stateRef.current.workspaceMode === 'interview' ? stateRef.current.thinkOn : undefined
+    const submit_id = newSubmitId()
+    // The raw question (possibly empty for an attachment-only submit) and the exact
+    // attachments are what a Retry has to send again; the card's label is display.
+    submitsRef.current.set(submit_id, { text, files })
+    dispatch({ type: 'seed_ask', text: label, think: think === true, submitId: submit_id })
+    // #182: the session this submit belongs to. An attachment upload can outlive a
+    // New / clear / new listen session: the question must then be dropped, not
+    // delivered into the session that replaced it (and it must not search).
+    const sessionKey = composeSessionKey(stateRef.current.workspaceMode, stateRef.current.composeSessionId)
     void (async () => {
       try {
         const attach_id = await parkAttaches(files)
-        window.api.send({ type: 'ask', text, attach_id })
+        if (composeSessionKey(stateRef.current.workspaceMode, stateRef.current.composeSessionId) !== sessionKey) {
+          submitsRef.current.delete(submit_id)
+          return
+        }
+        // #182: only the Live Q&A (interview) path carries Think, and it carries
+        // the value this submit was made with.
+        window.api.send({
+          type: 'ask',
+          text,
+          attach_id,
+          submit_id,
+          ...(think === undefined ? {} : { think }),
+        })
       } catch (ex) {
+        // #182: the failure belongs to the session that submitted it. If a New /
+        // clear landed while the upload was failing, this must change nothing in
+        // the session that replaced it — not a card, not busy, not the status line.
+        if (composeSessionKey(stateRef.current.workspaceMode, stateRef.current.composeSessionId) !== sessionKey) {
+          submitsRef.current.delete(submit_id)
+          return
+        }
         dispatch({
           type: 'fail_ask',
           text: ex instanceof Error ? ex.message : 'Could not send the file',
+          submitId: submit_id,
         })
       }
     })()
   }, [])
+
+  // #182: Retry one Live Q&A answer. It re-asks the SAME question the way it was
+  // originally submitted — the raw text and the same attachments, not the card's
+  // display title (which for an attachment question reads "question (file.csv)" and
+  // would both lose the attachment and change the search term) — with the Think value
+  // that question ran with, and names the answer it retries as `retry_of`. The server
+  // therefore reuses a lookup that already succeeded instead of paying again, and
+  // counts a new, linked attempt when the first one failed.
+  const handleRetryTurn = useCallback((turnId: string) => {
+    const s = stateRef.current
+    const turn = s.turns.find((t) => t.id === turnId)
+    // A restored/history turn carries neither the Think value the question ran with
+    // nor the submission it was made of, so re-asking it would silently change the
+    // question (a Think question would become a plain one, an attachment question
+    // would lose its file). The card does not offer Retry for those.
+    if (!turn || !turn.live || !turn.id || turn.id === '__pending_ask__') return
+    const original = turn.submitId ? submitsRef.current.get(turn.submitId) : undefined
+    // No stored payload: this is a question the SERVER committed from speech, where
+    // the answer's own text IS the question the lookup was made with.
+    const text = original ? original.text : (turn.q || '').trim()
+    const files = original?.files
+    const label = text.trim() || (files?.length ? `Please review: ${files.map((f) => f.name).join(', ')}` : '')
+    if (!label) return
+    const think = turn.think === true
+    const submit_id = newSubmitId()
+    submitsRef.current.set(submit_id, { text, files })
+    dispatch({ type: 'seed_ask', text: label, think, submitId: submit_id })
+    const sessionKey = composeSessionKey(stateRef.current.workspaceMode, stateRef.current.composeSessionId)
+    void (async () => {
+      try {
+        const attach_id = await parkAttaches(files)
+        if (composeSessionKey(stateRef.current.workspaceMode, stateRef.current.composeSessionId) !== sessionKey) {
+          submitsRef.current.delete(submit_id)
+          return
+        }
+        window.api.send({
+          type: 'ask',
+          text,
+          attach_id,
+          mode: 'ask',
+          think,
+          retry_of: turn.id,
+          submit_id,
+        })
+      } catch (ex) {
+        if (composeSessionKey(stateRef.current.workspaceMode, stateRef.current.composeSessionId) !== sessionKey) {
+          submitsRef.current.delete(submit_id)
+          return
+        }
+        dispatch({
+          type: 'fail_ask',
+          text: ex instanceof Error ? ex.message : 'Could not resend the file',
+          submitId: submit_id,
+        })
+      }
+    })()
+  }, [])
+
+  // #182: the switch is session state; the socket sync below pushes it to the
+  // server, so a reconnect can never leave the client saying "on" while the
+  // server answers with Think off.
+  const handleThink = useCallback((on: boolean) => {
+    dispatch({ type: 'set_think', on })
+  }, [])
+
+  useEffect(() => {
+    if (state.workspaceMode !== 'interview') return
+    window.api.send({ type: 'set_think', on: state.thinkOn })
+  }, [state.thinkOn, state.workspaceMode, state.wsAttachSeq])
 
   const handleOpacity = useCallback((n: number) => {
     window.api.setOpacity(n)
@@ -3209,6 +3384,10 @@ export default function App() {
           type: 'ask',
           text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, notesBilingualOn(s.notesLang, s.translateOn), s.speakerNames, s.notesTranslateTo),
           mode: 'listen_ask',
+          // #182: name the answer being retried, so a Think lookup that already
+          // succeeded is reused instead of paid for twice, and a failed one is
+          // recorded as a new counted attempt.
+          retry_of: noteId,
         })
       } catch (ex) {
         dispatch({
@@ -3895,6 +4074,9 @@ export default function App() {
                 listening={listening}
                 onAsk={handleAsk}
                 onCompose={setComposeOpen}
+                onRetryTurn={handleRetryTurn}
+                think={state.thinkOn}
+                onThink={handleThink}
               />
             }
             onScene={(scene) => {

@@ -372,6 +372,8 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
   const lineByQid = new Map<string, number>()
   const matchedTranslations: Array<{ qid: string; text: string }> = []
   const answers = new Map<string, string>()
+  // #182: sources keyed by the same qid as the answer.
+  const sourcesById = new Map<string, NonNullable<Turn['sources']>>()
   const questions: Array<{ id: string; q: string }> = []
   const notes: string[] = []
   const summaries: string[] = []
@@ -389,8 +391,12 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
       originals.push({ id, text, ts: formatItemTs(item, session.started_at, originals.length) })
     } else if (item.kind === 'question') {
       questions.push({ id, q: text })
-    } else if (item.kind === 'answer' || item.kind === 'listen_ask') {
+    } else if (item.kind === 'answer' || item.kind === 'listen_ask' || item.kind === 'file_ask') {
+      // #182: `file_ask` is an answer (an attachment question) — rows written under
+      // that kind used to be saved but never restored at all.
       answers.set(id, text)
+      // #182: the saved sources + retrieval time come back with the answer.
+      if (item.sources) sourcesById.set(id, item.sources)
     } else if (item.kind === 'notes') {
       notes.push(text)
     } else if (item.kind === 'summary') {
@@ -420,6 +426,7 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
     id: q.id,
     q: q.q,
     a: answers.get(q.id) || [...answers.values()][i] || '',
+    sources: sourcesById.get(q.id),
   }))
 
   const pairs: TranslatePair[] = originals.map((row, i) => ({

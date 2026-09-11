@@ -50,3 +50,37 @@ function session(items: Item[]) {
   )
   eq(pTexts(kept.blocks as any), ['好的'], 'same qid + different text -> kept')
 }
+
+// #182: a saved Think answer exports its real sources and the retrieval time; a
+// plain answer adds no source line at all.
+{
+  const { blocks } = await historyPdfArgs({
+    id: 's3',
+    mode: 'interview',
+    scene: 'interview',
+    title: 'qa',
+    started_at: '2026-09-06T00:00:00Z',
+    items: [
+      { kind: 'question', text: 'what is new?', qid: 'q1' },
+      {
+        kind: 'answer',
+        text: 'an answer',
+        qid: 'q1',
+        sources: {
+          status: 'ok',
+          retrieved_at: 1789012800,
+          retrieved_at_text: '2026-09-10 04:00 UTC',
+          results: [{ title: 'Apple', url: 'https://e.com/a', published_at: '2026-09-10' }],
+          note: '',
+        },
+      },
+      { kind: 'question', text: 'plain?', qid: 'q2' },
+      { kind: 'answer', text: 'plain answer', qid: 'q2', sources: null },
+    ],
+  })
+  const texts = pTexts(blocks as any)
+  const source = texts.find((t) => t.includes('https://e.com/a')) || ''
+  if (!source.includes('检索时间：2026-09-10 04:00 UTC')) throw new Error('the PDF must keep the retrieval time')
+  if (!source.includes('[1] Apple')) throw new Error('the PDF must keep the real source title')
+  eq(texts.filter((t) => t.includes('[1]')).length, 1, 'a plain answer adds no source block')
+}

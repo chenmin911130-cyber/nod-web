@@ -24,7 +24,8 @@ def _pipe() -> Pipeline:
     pipe._strip_nod_tag = lambda t: t
     pipe._is_internal = lambda t, mode: False
     pipe._with_images = lambda msgs, images: msgs
-    pipe._build_messages = lambda t, mode: [{"role": "user", "content": t}]
+    # Mirrors Pipeline._build_messages, including the #182 evidence addendum.
+    pipe._build_messages = lambda t, mode, **kw: [{"role": "user", "content": t}]
     pipe._new_qid = lambda: "q1"
     return pipe
 

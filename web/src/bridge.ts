@@ -18,6 +18,13 @@ const EVENT_TYPES = new Set([
   'question',
   'line_update',
   'chunk',
+  // #182: the sources a Think answer used. Dropped silently before this was
+  // listed — the server emitted it and the reducer was never reached.
+  'sources',
+  // #182: the server owns the Think switch; when a session reset turns it back to
+  // its default it says so here, instead of leaving the client showing a value the
+  // next answer will not use.
+  'think',
   'done',
   'error',
   'listen_taken',
@@ -58,8 +65,11 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
     }
     case 'status':
       return { type: 'status', text: asText(o.text) }
-    case 'error':
-      return { type: 'error', text: asText(o.text) }
+    case 'error': {
+      // #182: a question-scoped failure carries the id of the card it belongs to.
+      const id = asText(o.id)
+      return id ? { type: 'error', text: asText(o.text), id } : { type: 'error', text: asText(o.text) }
+    }
     case 'listen_taken':
       return { type: 'listen_taken', text: asText(o.text) }
     case 'partial':
@@ -86,6 +96,29 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
       if (!id) return null
       return { ...o, type: 'done', id } as EngineEvent
     }
+    case 'sources': {
+      const id = asText(o.id)
+      if (!id) return null
+      const status = o.status === 'ok' || o.status === 'empty' ? o.status : 'failed'
+      const results = Array.isArray(o.results) ? o.results : []
+      return {
+        type: 'sources',
+        id,
+        status,
+        retrieved_at: typeof o.retrieved_at === 'number' ? o.retrieved_at : 0,
+        retrieved_at_text: asText(o.retrieved_at_text),
+        results: results
+          .filter((r): r is Record<string, unknown> => Boolean(r) && typeof r === 'object')
+          .map((r) => ({
+            title: asText(r.title),
+            url: asText(r.url),
+            published_at: asText(r.published_at) || null,
+          })),
+        note: asText(o.note),
+      } as EngineEvent
+    }
+    case 'think':
+      return { type: 'think', on: o.on === true }
     case 'history_keep_failed':
       return {
         type: 'history_keep_failed',
