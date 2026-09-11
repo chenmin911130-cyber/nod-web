@@ -18,6 +18,9 @@ const EVENT_TYPES = new Set([
   'question',
   'line_update',
   'chunk',
+  // #182: the sources a Think answer used. Dropped silently before this was
+  // listed — the server emitted it and the reducer was never reached.
+  'sources',
   'done',
   'error',
   'listen_taken',
@@ -85,6 +88,27 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
       const id = asText(o.id)
       if (!id) return null
       return { ...o, type: 'done', id } as EngineEvent
+    }
+    case 'sources': {
+      const id = asText(o.id)
+      if (!id) return null
+      const status = o.status === 'ok' || o.status === 'empty' ? o.status : 'failed'
+      const results = Array.isArray(o.results) ? o.results : []
+      return {
+        type: 'sources',
+        id,
+        status,
+        retrieved_at: typeof o.retrieved_at === 'number' ? o.retrieved_at : 0,
+        retrieved_at_text: asText(o.retrieved_at_text),
+        results: results
+          .filter((r): r is Record<string, unknown> => Boolean(r) && typeof r === 'object')
+          .map((r) => ({
+            title: asText(r.title),
+            url: asText(r.url),
+            published_at: asText(r.published_at) || null,
+          })),
+        note: asText(o.note),
+      } as EngineEvent
     }
     case 'history_keep_failed':
       return {
