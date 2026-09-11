@@ -23,6 +23,7 @@ import {
   nextComposeDraft,
   nextComposeFiles,
   nextComposeSessionId,
+  qaHasContent,
   showListenNew,
   volumeBarHeights,
 } from './listenChrome'
@@ -48,8 +49,14 @@ eq(showListenNew({ ...listen, paused: true, ended: false, hasContent: true }), f
 eq(showListenNew({ ...listen, ended: true, hasContent: false }), false, 'empty End stays Ready and hides New')
 eq(showListenNew({ ...listen, ended: true, hasContent: true }), true, 'ended with content shows New')
 eq(showListenNew({ ...listen, workspace: 'translate', ended: true, hasContent: true }), false, 'Translate never gets New')
-eq(showListenNew({ ...listen, workspace: 'interview', ended: true, hasContent: true }), false, 'Live Q&A never gets New')
+eq(showListenNew({ ...listen, workspace: 'interview', ended: false, hasContent: true }), true, 'Live Q&A shows New once it has answers')
+eq(showListenNew({ ...listen, workspace: 'interview', listening: true, ended: false, hasContent: true }), false, 'Live Q&A hides New while recording')
+eq(showListenNew({ ...listen, workspace: 'interview', paused: true, ended: false, hasContent: true }), false, 'Live Q&A hides New while paused')
+eq(showListenNew({ ...listen, workspace: 'interview', ended: false, hasContent: false }), false, 'empty Live Q&A hides New')
+eq(showListenNew({ phone: false, workspace: 'interview', listening: false, paused: false, ended: false, hasContent: true }), false, 'desktop Live Q&A has no compact New')
 eq(showListenNew({ phone: false, workspace: 'meeting', listening: false, paused: false, ended: true, hasContent: true }), false, 'desktop has no compact New')
+eq(qaHasContent({ turns: 0 }), false, 'no answers is not Q&A content')
+eq(qaHasContent({ turns: 1 }), true, 'an answer is Q&A content')
 
 eq(endedHasContent({ lines: 0, partial: false, catchNotes: 0, notesRaw: '' }), false, 'nothing captured is not content')
 eq(endedHasContent({ lines: 0, partial: false, catchNotes: 0, notesRaw: '   ' }), false, 'whitespace notes are not content')

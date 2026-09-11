@@ -19,7 +19,7 @@ import LeaveSessionSheet from './components/LeaveSessionSheet'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
 import { IPHONE_COPY, canSwitchWorkspace, sameSpokenLine, sessionListening } from './iphoneCopy'
-import { showListenNew, composeSessionKey, nextComposeSessionId, endedHasContent, IDLE_CAPTURE_CLOCK, advanceCaptureClock, captureClockMs, clockCapture } from './listenChrome'
+import { showListenNew, composeSessionKey, nextComposeSessionId, endedHasContent, qaHasContent, IDLE_CAPTURE_CLOCK, advanceCaptureClock, captureClockMs, clockCapture } from './listenChrome'
 import SaveBanner from './components/SaveBanner'
 import {
   KEEP_ACK_TIMEOUT_MS,
@@ -3773,7 +3773,7 @@ export default function App() {
       muted={state.micMuted}
       elapsedMs={state.meetingElapsedMs}
       canSave={canSaveSession}
-      hasContent={meetingHasSaveableContent(state) || state.translatePairs.length > 0}
+      hasContent={meetingHasSaveableContent(state) || state.translatePairs.length > 0 || qaHasContent({ turns: state.turns.length })}
       saved={historyKept && meetingHasSaveableContent(state)}
       ended={state.workspaceMode === 'meeting' && state.meetingEnded}
       variant={state.workspaceMode === 'translate' ? 'translate' : state.workspaceMode === 'interview' ? 'interview' : 'listen'}
@@ -3831,12 +3831,14 @@ export default function App() {
           listening,
           paused: iphonePaused,
           ended: state.workspaceMode === 'meeting' && state.meetingEnded,
-          hasContent: endedHasContent({
-            lines: state.meetingLines.length,
-            partial: Boolean(state.partial),
-            catchNotes: state.catchNotes.length,
-            notesRaw: state.notesRaw,
-          }),
+          hasContent: state.workspaceMode === 'interview'
+            ? qaHasContent({ turns: state.turns.length })
+            : endedHasContent({
+                lines: state.meetingLines.length,
+                partial: Boolean(state.partial),
+                catchNotes: state.catchNotes.length,
+                notesRaw: state.notesRaw,
+              }),
         })}
         onNew={handleNewSession}
         listening={listening}

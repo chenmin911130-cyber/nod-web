@@ -9,6 +9,9 @@ export type BottomBarMode = 'ready' | 'recording' | 'paused' | 'ended'
  * #193 item 1: the top New is for a finished session that actually holds
  * content. Ready (fresh or empty End) never shows it, capture states never
  * show it, and a History restore that is not `ended` does not add it either.
+ *
+ * Live Q&A has no Meeting-style ended sheet, so New appears once there is an
+ * answer and capture is not live/paused. Translate still never gets it.
  */
 export function showListenNew(input: {
   phone: boolean
@@ -19,9 +22,15 @@ export function showListenNew(input: {
   hasContent: boolean
 }): boolean {
   if (!input.phone) return false
-  if (input.workspace !== 'meeting') return false
+  if (input.workspace === 'translate') return false
   if (input.listening || input.paused) return false
+  if (input.workspace === 'interview') return input.hasContent
   return input.ended && input.hasContent
+}
+
+/** Live Q&A content is the answer list, not Meeting lines. */
+export function qaHasContent(input: { turns: number }): boolean {
+  return input.turns > 0
 }
 
 /**

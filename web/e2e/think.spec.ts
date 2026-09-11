@@ -516,6 +516,8 @@ test.describe('Think on a phone viewport', () => {
     await expect(toggle).toBeVisible()
     await expect(toggle).toHaveAttribute('aria-checked', 'false')
     await expect(toggle.locator('svg.think-icon')).toBeVisible()
+    // Recording hides the compact New; More still offers it once there is an answer.
+    await expect(page.getByRole('button', { name: 'New session' })).toHaveCount(0)
 
     const toggleBox = await toggle.boundingBox()
     const promptBox = await page.locator('.interview-qa .prompt-block').boundingBox()
@@ -529,5 +531,15 @@ test.describe('Think on a phone viewport', () => {
     await toggle.click()
     await expect(toggle).toHaveAttribute('aria-checked', 'true')
     await shot(page, 'phone-think-on')
+  })
+
+  test('offers New session once Live Q&A has an answer', async ({ page }) => {
+    await mockWs(page)
+    const neu = page.getByRole('button', { name: 'New session' })
+    await expect(neu).toBeVisible()
+    await neu.click()
+    await page.getByRole('button', { name: 'Discard and start new' }).click()
+    await expect(page.getByText('How many people live in New Zealand?')).toHaveCount(0)
+    await expect(neu).toHaveCount(0)
   })
 })
