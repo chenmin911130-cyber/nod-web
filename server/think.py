@@ -192,6 +192,16 @@ def format_evidence(outcome: SearchOutcome, *, max_chars: int = MAX_EVIDENCE_CHA
     return "\n".join(lines)[:max_chars]
 
 
+# The gate's reasons get their own honest wording: "no budget left" and "not
+# configured" are not the same story as "the search failed".
+_REASON_NOTES = {
+    "DailyLimit": "今天的联网检索额度已用完",
+    "TotalLimit": "试用期联网检索额度已用完",
+    "BudgetStoreUnavailable": "检索预算暂不可用，已跳过联网检索",
+    "NotConfigured": "未配置联网检索",
+}
+
+
 def retrieval_note(outcome: SearchOutcome) -> str:
     """The explicit user-facing status for a lookup that produced nothing.
 
@@ -200,6 +210,9 @@ def retrieval_note(outcome: SearchOutcome) -> str:
     """
     stamp = format_retrieved_at(outcome.retrieved_at)
     if outcome.status == STATUS_FAILED:
+        known = _REASON_NOTES.get(outcome.error or "")
+        if known:
+            return f"{known}，本次回答未使用最新检索资料。" + (f"检索时间：{stamp}。" if stamp else "")
         why = outcome.error or "unknown"
         return f"联网检索失败（{why}），本次回答未使用最新检索资料。" + (f"检索时间：{stamp}。" if stamp else "")
     if outcome.status == STATUS_EMPTY:

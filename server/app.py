@@ -64,6 +64,7 @@ from server.meeting_lines import (
     tail_meta as meeting_tail_meta,
 )
 from server import qa_semantic
+from server import think_budget
 # #182 retrieval seam. Aliased because `process_text` has a local `think` flag:
 # the module does the lookup, the flag says whether to run one.
 from server import think as think_search
@@ -100,8 +101,12 @@ from server.settings import (
     QA_SETTLE_SECONDS,
     QUOTA_DISABLED,
     THINK_REASONING_EFFORT,
+    THINK_MAX_OUTPUT_TOKENS,
+    THINK_SEARCH_DAILY_LIMIT,
+    THINK_SEARCH_MAX_CHARS_TOTAL,
     THINK_SEARCH_MAX_RESULTS,
     THINK_SEARCH_TIMEOUT_SECONDS,
+    THINK_SEARCH_TOTAL_LIMIT,
 )
 from server.ratelimit import MAX_WS_FRAME, WS_FRAMES_PER_SEC, allow, ws_client_ip, ws_connect, ws_disconnect
 from server.security import current_user, is_local_scope, user_from_token
@@ -161,6 +166,9 @@ STATUS_GENERATE = "Generating answer…"
 # #182: Think runs a real lookup before the answer, in the existing status
 # position — no new panel, no new button.
 STATUS_THINK_SEARCH = "Checking the latest sources…"
+# #182: reaching a search budget cap is stated in the SAME status position — the
+# answer continues, but it is never presented as a live lookup.
+STATUS_THINK_LIMIT = "Search quota reached · answering without the latest sources"
 STATUS_ANSWER_READY = "Answer ready"
 STATUS_WAIT_MORE = "I caught part of a question. Keep listening…"
 STATUS_EMPTY = "No speech detected, please try again"
@@ -848,6 +856,27 @@ def _friendly_gen_error(err: BaseException) -> str:
 # compiled into the client bundle. A missing key is reported as `NotConfigured`
 # on the answer instead of silently pretending a lookup happened.
 PARALLEL_KEY_ENV = "PARALLEL_API_KEY"
+
+
+def _think_outcome_from_snapshot(snap: dict[str, Any], question: str) -> "think_search.SearchOutcome":
+    """Rebuild the search outcome from a stored snapshot (no new spend)."""
+    payload = snap.get("sources") if isinstance(snap.get("sources"), dict) else {}
+    results = payload.get("results") if isinstance(payload.get("results"), list) else []
+    return think_search.SearchOutcome(
+        status=str(payload.get("status") or snap.get("status") or think_search.STATUS_FAILED),
+        query=think_search.build_query(question),
+        results=tuple(
+            think_search.SearchResult(
+                title=str(r.get("title") or r.get("url") or ""),
+                url=str(r.get("url") or ""),
+                published_at=(str(r["published_at"]) if r.get("published_at") else None),
+            )
+            for r in results
+            if isinstance(r, dict)
+        ),
+        retrieved_at=float(payload.get("retrieved_at") or snap.get("retrieved_at") or 0.0),
+        error="",
+    )
 
 
 def build_think_client(cfg: dict[str, Any] | None = None) -> "think_search.SearchClient | None":
@@ -1676,6 +1705,7 @@ class Pipeline:
         display_text: str | None = None,
         *,
         think: bool = False,
+        retry_of: str = "",
     ) -> None:
         t = (question or "").strip()
         self._heard_lang = _normalize_stt_lang(heard_lang)
@@ -1719,6 +1749,10 @@ class Pipeline:
         max_tokens = int(llm.get("max_tokens") or 800)
         if mode in ("ask", "file_ask"):
             max_tokens = max(max_tokens, 1600)
+        if think:
+            # #182: a bounded output/thinking budget for one Think answer. The
+            # model retry inside this method never re-runs the search.
+            max_tokens = max(max_tokens, THINK_MAX_OUTPUT_TOKENS)
         elif mode in ("notes", "listen_ask"):
             max_tokens = max(max_tokens, 1600)
         elif mode == "translate":
@@ -1734,11 +1768,20 @@ class Pipeline:
         if think and mode in ("ask", "file_ask"):
             self.emit({"type": "status", "text": STATUS_THINK_SEARCH})
             started_lookup = time.time()
-            think_outcome = self._think_lookup(t)
+            think_outcome, think_decision = self._think_lookup(
+                t,
+                request_id=qid,
+                session_id=getattr(self, "usage_session_id", "") or "",
+                retry_of=retry_of or "",
+            )
             evidence = think_search.format_evidence(think_outcome)
+            if think_decision.startswith("denied:"):
+                # The existing status position says why; the answer still goes out,
+                # but it is never dressed up as a fresh lookup.
+                self.emit({"type": "status", "text": STATUS_THINK_LIMIT})
             logging.getLogger("nod").info(
-                "think_search qid=%s gen=%s flag=1 status=%s sources=%s ms=%s err=%s",
-                qid, seq, think_outcome.status, len(think_outcome.results),
+                "think_search qid=%s gen=%s flag=1 decision=%s status=%s sources=%s ms=%s err=%s",
+                qid, seq, think_decision, think_outcome.status, len(think_outcome.results),
                 int((time.time() - started_lookup) * 1000), think_outcome.error or "-",
             )
         messages = self._with_images(self._build_messages(t, mode, evidence=evidence), images)
@@ -1874,22 +1917,97 @@ class Pipeline:
             self.emit({"type": "sources", "id": qid, **think_search.sources_payload(think_outcome)})
         self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": True})
 
-    def _think_lookup(self, question: str) -> think_search.SearchOutcome:
-        """One live lookup for this question, or an explicit failure.
+    def _think_lookup(
+        self,
+        question: str,
+        *,
+        request_id: str = "",
+        session_id: str = "",
+        retry_of: str = "",
+    ) -> tuple[think_search.SearchOutcome, str]:
+        """One PAID lookup per request, behind the budget gate.
 
-        A missing configuration is reported as a FAILURE, never as a silent
-        fallback: the answer has to be able to say "the lookup did not run"
-        instead of implying that it did.
+        Returns ``(outcome, decision)`` where the decision names what the gate did
+        (`reused_snapshot`, `reused_retry`, `searched`, `denied_*`, `not_configured`)
+        so it can be logged without ever logging the question.
+
+        Order of operations, all required by the order:
+        1. an existing snapshot for this exact request is reused (a duplicate or
+           concurrent submit must never pay twice);
+        2. an explicit retry of the same session+question reuses an OK snapshot,
+           while a previous failure may create a NEW attempt (counted);
+        3. only then is budget reserved atomically — a refusal sends no request;
+        4. the reservation is never released, even when the request fails.
         """
+        if request_id:
+            snap = think_budget.find_snapshot(request_id)
+            if snap and snap.get("sources"):
+                return _think_outcome_from_snapshot(snap, question), "reused_snapshot"
+        if retry_of:
+            prev = think_budget.find_snapshot(retry_of)
+            if prev and prev.get("sources"):
+                return _think_outcome_from_snapshot(prev, question), "reused_retry"
+            same = think_budget.find_question_snapshot(session_id, question)
+            if same and same.get("sources"):
+                return _think_outcome_from_snapshot(same, question), "reused_retry"
+
         client = getattr(self, "think_client", None)
         if client is None:
             client = build_think_client(self.cfg)
         if client is None:
-            logging.getLogger("nod").warning("think_search skip=not_configured")
-            return think_search.SearchOutcome(
-                status=think_search.STATUS_FAILED, query="", retrieved_at=time.time(), error="NotConfigured"
+            logging.getLogger("nod").warning("think_search decision=not_configured")
+            return (
+                think_search.SearchOutcome(
+                    status=think_search.STATUS_FAILED, query="", retrieved_at=time.time(), error="NotConfigured"
+                ),
+                "not_configured",
             )
-        return client.search(question)
+
+        # One search at a time in this process, and the snapshot is re-checked
+        # under the lock: two threads racing on the same request pay once.
+        with self._think_lock():
+            if request_id:
+                snap = think_budget.find_snapshot(request_id)
+                if snap and snap.get("sources"):
+                    return _think_outcome_from_snapshot(snap, question), "reused_snapshot"
+            reservation = think_budget.reserve(
+                daily_limit=THINK_SEARCH_DAILY_LIMIT, total_limit=THINK_SEARCH_TOTAL_LIMIT
+            )
+            if not reservation.allowed:
+                logging.getLogger("nod").warning(
+                    "think_search decision=denied reason=%s day=%s total=%s",
+                    reservation.reason, reservation.day_attempts, reservation.total_attempts,
+                )
+                return (
+                    think_search.SearchOutcome(
+                        status=think_search.STATUS_FAILED,
+                        query="",
+                        retrieved_at=time.time(),
+                        error=reservation.reason,
+                    ),
+                    f"denied:{reservation.reason}",
+                )
+            outcome = client.search(question)
+            prev = think_budget.find_snapshot(retry_of) if retry_of else None
+            attempt_no = int((prev or {}).get("attempt") or 0) + 1 if retry_of else 1
+            think_budget.record_attempt(
+                request_id or f"adhoc-{int(time.time() * 1000)}",
+                question=question,
+                session_id=session_id,
+                attempt=attempt_no,
+                parent_request_id=retry_of,
+                status=outcome.status,
+                sources=think_search.sources_payload(outcome),
+                retrieved_at=outcome.retrieved_at,
+            )
+            return outcome, f"searched:day={reservation.day_attempts}:total={reservation.total_attempts}"
+
+    def _think_lock(self) -> threading.Lock:
+        lock = getattr(self, "_think_mu", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._think_mu = lock
+        return lock
 
     def _record_usage(
         self,

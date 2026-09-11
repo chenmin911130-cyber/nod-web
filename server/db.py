@@ -97,6 +97,57 @@ class HistoryItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ThinkSearchDay(Base):
+    """#182: search attempts issued per fixed UTC day, project-wide.
+
+    One row per day; the gate increments it with a guarded UPDATE, so concurrent
+    workers cannot overshoot the daily cap and a restart cannot reset it.
+    """
+
+    __tablename__ = "think_search_days"
+
+    day: Mapped[str] = mapped_column(String(10), primary_key=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ThinkSearchState(Base):
+    """#182: the trial-wide cumulative attempt counter (a single row: id='total').
+
+    Deliberately NOT reset by month, deploy, New or restart: it is the application
+    budget for the trial, not a billing-period counter.
+    """
+
+    __tablename__ = "think_search_state"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ThinkSearchRecord(Base):
+    """#182: one row per search request id — the dedupe / snapshot record.
+
+    Concurrency and duplicate submits of the SAME request reuse this instead of
+    searching again; a user-initiated retry of the same question may create a new
+    attempt (counted) with `parent_request_id` pointing at the previous one. Only a
+    hash of the question is stored, never the question itself.
+    """
+
+    __tablename__ = "think_search_records"
+
+    request_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    session_gen: Mapped[int] = mapped_column(Integer, default=0)
+    question_hash: Mapped[str] = mapped_column(String(64), index=True, default="")
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    parent_request_id: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(16), default="")
+    sources: Mapped[str] = mapped_column(Text, default="")
+    retrieved_at: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class UsageDay(Base):
     __tablename__ = "usage_days"
     __table_args__ = (UniqueConstraint("user_id", "day", name="uq_user_day"),)

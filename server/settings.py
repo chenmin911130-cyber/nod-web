@@ -191,6 +191,14 @@ THINK_SEARCH_MAX_CHARS_TOTAL = max(
 # Thinking-mode effort for a Think answer (DeepSeek maps unknown values to its own
 # scale). Only applied when the answer actually runs in thinking mode.
 THINK_REASONING_EFFORT = (os.environ.get("THINK_REASONING_EFFORT") or "high").strip() or "high"
+# Hard anti-waste gates for the #182 trial (server-only config, no UI). The daily
+# cap is project-wide across workers; the trial cap is cumulative and is NOT reset
+# by month, deploy, New or restart.
+THINK_SEARCH_DAILY_LIMIT = max(1, int(float(os.environ.get("THINK_SEARCH_DAILY_LIMIT") or "100")))
+THINK_SEARCH_TOTAL_LIMIT = max(1, int(float(os.environ.get("THINK_SEARCH_TOTAL_LIMIT") or "3000")))
+# Bounded output/thinking budget for one Think answer (the model retry inside
+# process_text never re-runs the search).
+THINK_MAX_OUTPUT_TOKENS = max(256, int(float(os.environ.get("THINK_MAX_OUTPUT_TOKENS") or "1600")))
 # How many answered fragment identities to remember for the dedupe window.
 QA_ANSWERED_MAX = max(4, int(float(os.environ.get("QA_ANSWERED_MAX") or "32")))
 
