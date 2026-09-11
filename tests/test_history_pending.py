@@ -5,6 +5,7 @@ recoverable: on close it is kept around (kept=False, ended_at set, not
 discarded) so the next connect can re-offer "Save this session to History?".
 """
 
+import collections
 from datetime import timedelta
 from unittest import mock
 
@@ -188,6 +189,7 @@ def _session(**overrides):
     sess.pipeline = mock.Mock()
     sess.pipeline.usage_session_id = "sess-1"
     sess._workspace = "meeting"
+    sess._pending_q = collections.deque(maxlen=8)  # _qa_reset drops queued answers
     sess.emit = mock.Mock()
     sess._flush_cloud_archive = mock.Mock()
     sess._stop_listening = mock.Mock()
