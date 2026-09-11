@@ -52,5 +52,25 @@ export function useStickToBottom(
     // Caller owns the dependency list (lines.length / partial / pane visibility).
   }, deps)
 
+  // A keyboard/layout change shrinks the viewport without adding content: if the
+  // list was following the bottom, keep it there, otherwise the last line (and
+  // the shortcuts that sit under it) end up below the fold.
+  useEffect(() => {
+    if (!active) return
+    const el = ref.current
+    if (!el) return
+    const stick = () => {
+      if (stuckRef.current) el.scrollTop = el.scrollHeight
+    }
+    window.addEventListener('resize', stick)
+    window.visualViewport?.addEventListener('resize', stick)
+    window.visualViewport?.addEventListener('scroll', stick)
+    return () => {
+      window.removeEventListener('resize', stick)
+      window.visualViewport?.removeEventListener('resize', stick)
+      window.visualViewport?.removeEventListener('scroll', stick)
+    }
+  }, [ref, active])
+
   return { stuck, hasNew, scrollToBottom }
 }

@@ -92,8 +92,12 @@ export default function AskBubble({
       y: e.clientY,
       dx: offset.dx,
       dy: offset.dy,
-      baseX: rect.left,
-      baseY: rect.top,
+      // `rect` already carries the current translate, so the anchor for this
+      // gesture is the UNtranslated position — adding the accumulated offset
+      // again would double-count it and make the clamp fire early (a second
+      // drag towards the edge then could not even be pulled back).
+      baseX: rect.left - offset.dx,
+      baseY: rect.top - offset.dy,
       bounds: boundsFor(rect.width || BUBBLE_SIZE),
       moved: false,
     }

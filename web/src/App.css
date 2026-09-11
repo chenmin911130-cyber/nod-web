@@ -7727,6 +7727,10 @@ html.nod-phone .app.iphone-v2 .iphone-ask-chips {
   display: flex;
   gap: 8px;
   overflow-x: auto;
+  /* #193 review: never let a shrinking feed crush the shortcuts to a sliver —
+     their own height must survive the keyboard-open layout. */
+  flex: 0 0 auto;
+  min-height: 44px;
   padding: 0 max(var(--iphone-gutter), env(safe-area-inset-right)) 8px max(var(--iphone-gutter), env(safe-area-inset-left));
 }
 
@@ -8572,6 +8576,14 @@ html.nod-phone .app.iphone-v2 .translate-main .empty-sub {
   color: #8e8e93;
   font-size: 14px;
   margin-top: 6px;
+}
+
+/* #193 item 7: while the keyboard is open the input row IS the Ask control, so
+   the bubble does not also take 52px out of an already-short body area (that is
+   what crushed the shortcuts). The input's own close button collapses it and the
+   bubble comes back when the keyboard closes. */
+html.nod-native.kb-open .app.iphone-v2 .iphone-ask-bubble {
+  display: none;
 }
 
 /* #193 item 7: with the keyboard open the keyboard owns the bottom edge, so the

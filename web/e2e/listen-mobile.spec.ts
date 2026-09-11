@@ -188,6 +188,58 @@ test.describe('Listen mobile Ask bubble (#193 item 3)', () => {
     expect(after.x + after.width).toBeLessThanOrEqual(390)
     expect(after.y + after.height).toBeLessThanOrEqual(844)
   })
+
+  test('consecutive drags do not double-count the offset, and a cancelled drag still taps', async ({ page }) => {
+    const ws = await mockListenWs(page)
+    await ws.gotoListening()
+    const bubble = page.getByRole('button', { name: 'Ask' })
+    const input = page.locator('.listen-prompt input')
+    const dragBy = async (dx: number, dy: number) => {
+      const b = (await bubble.boundingBox())!
+      await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2)
+      await page.mouse.down()
+      await page.mouse.move(b.x + b.width / 2 + dx, b.y + b.height / 2 + dy, { steps: 12 })
+      await page.mouse.up()
+    }
+
+    // Two in-bounds drags: each must track the pointer exactly (the cumulative
+    // bug stays invisible while the clamp does not bind — hence the third step).
+    const start = (await bubble.boundingBox())!
+    await dragBy(-60, -100)
+    const first = (await bubble.boundingBox())!
+    expect(Math.abs(first.x - start.x + 60)).toBeLessThanOrEqual(3)
+    expect(Math.abs(first.y - start.y + 100)).toBeLessThanOrEqual(3)
+    await dragBy(-60, -100)
+    const second = (await bubble.boundingBox())!
+    expect(Math.abs(second.x - first.x + 60)).toBeLessThanOrEqual(3)
+    expect(Math.abs(second.y - first.y + 100)).toBeLessThanOrEqual(3)
+
+    // Now drag back towards the edge with the pointer STAYING inside the
+    // viewport. The old math clamped a position displaced by an extra offset,
+    // so the bubble sailed past its own right limit (346 vs 326 here) and could
+    // leave the screen; the fixed math pins it at the limit.
+    await dragBy(140, 60)
+    const clamped = (await bubble.boundingBox())!
+    const limitX = 390 - clamped.width - 12
+    expect(clamped.x).toBeLessThanOrEqual(limitX + 1)
+    expect(clamped.x + clamped.width).toBeLessThanOrEqual(390)
+    expect(clamped.y + clamped.height).toBeLessThanOrEqual(844)
+
+    // and a drag back out of that clamped position still works
+    await dragBy(-120, -140)
+    const back = (await bubble.boundingBox())!
+    expect(back.x).toBeLessThan(clamped.x - 40)
+    expect(back.y).toBeLessThan(clamped.y - 60)
+
+    // none of that was a tap: the input stayed closed
+    await expect(input).toHaveCount(0)
+
+    // a cancelled gesture must not eat the next tap
+    await bubble.dispatchEvent('pointercancel', { pointerId: 9, clientX: 10, clientY: 10 })
+    await bubble.click()
+    await expect(input).toBeVisible()
+    await expect(input).toBeFocused()
+  })
 })
 
 test.describe('Listen mobile recording chrome', () => {
@@ -315,6 +367,17 @@ test.describe('Listen mobile recording chrome', () => {
     // indicator — that dead space is what pushed the controls out of the viewport
     const padding = await page.locator('.iphone-live-bar').evaluate((el) => getComputedStyle(el).paddingBottom)
     expect(padding).toBe('10px')
+    // and the shortcuts must survive the shrunken feed instead of being crushed
+    const chips = await page.locator('.iphone-ask-chips').evaluate((el) => {
+      const r = el.getBoundingClientRect()
+      return { h: r.height, bottom: r.bottom, clientH: el.clientHeight, scrollH: el.scrollHeight }
+    })
+    expect(chips.h).toBeGreaterThanOrEqual(40)
+    expect(chips.scrollH).toBeLessThanOrEqual(chips.clientH + 1)
+    expect(chips.bottom).toBeLessThanOrEqual(boxes.viewport)
+    // while the keyboard is up the input row is the Ask control, so the bubble
+    // steps aside (it returns on blur)
+    await expect(page.getByRole('button', { name: 'Ask' })).toBeHidden()
     await page.screenshot({ path: `${EVIDENCE}/listen-ask-kb-390.png` })
   })
 })
@@ -433,6 +496,31 @@ test.describe('Translate mobile chrome (#193 item 5)', () => {
     await page.getByRole('button', { name: 'Start voice translation' }).click()
     ws.send({ type: 'phase', capture: 'listening', engine: 'idle' })
     await expect(page.locator('.iphone-live-bar .iphone-clock')).toHaveText('00:00')
+  })
+
+  test('Pause then Stop really ends a Translate session, and the next one can start', async ({ page }) => {
+    const ws = await mockListenWs(page, '/app?demo=meeting')
+    await countSends(page)
+    await page.getByRole('tab', { name: /translate/i }).click()
+    await page.getByRole('button', { name: 'Start voice translation' }).click()
+    ws.send({ type: 'phase', capture: 'listening', engine: 'idle' })
+    await expect(page.getByRole('button', { name: 'Stop' })).toBeVisible()
+    await page.getByRole('button', { name: 'Pause' }).click()
+    ws.send({ type: 'phase', capture: 'paused', engine: 'idle' })
+    await expect(page.getByRole('button', { name: 'Resume' })).toBeVisible()
+
+    await page.getByRole('button', { name: 'Stop' }).click()
+    await expect.poll(() => sendsOf(page, 'stop_listen')).toBe(1)
+
+    ws.send({ type: 'phase', capture: 'off', engine: 'idle' })
+    await expect(page.getByRole('button', { name: 'Start voice translation' })).toBeVisible()
+    // no Save anywhere on this path either
+    await expect(page.getByRole('button', { name: /^Save/ })).toHaveCount(0)
+
+    // the next session starts cleanly
+    await page.getByRole('button', { name: 'Start voice translation' }).click()
+    ws.send({ type: 'phase', capture: 'listening', engine: 'idle' })
+    await expect(page.getByRole('button', { name: 'Stop' })).toBeVisible()
   })
 
   test('Translate offers no Save anywhere (#193 item 8)', async ({ page }) => {
