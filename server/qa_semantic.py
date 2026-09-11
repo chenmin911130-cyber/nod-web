@@ -266,7 +266,9 @@ def build_judge_messages(
 
 
 def _extract_json(raw: str) -> Any:
-    txt = _JSON_FENCE.sub("", (raw or "").strip())
+    if not isinstance(raw, str):
+        return None
+    txt = _JSON_FENCE.sub("", raw.strip())
     if not txt:
         return None
     try:

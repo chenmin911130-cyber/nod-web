@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import time
 import unittest
@@ -34,6 +35,29 @@ from server.app import (
     split_code_switched,
 )
 from server.settings import DAILY_STT_SECONDS
+
+
+def judge_reply(verdict: str = "ready", question=None):
+    """Deterministic ``Pipeline.judge_qa`` reply grounded in the real prompt ids (#191)."""
+
+    def judge(messages, timeout=None):
+        import re
+
+        frags = [
+            (m.group(1), m.group(2).strip())
+            for m in re.finditer(r"^\[([^\]]+)\]\s(.*)$", messages[-1]["content"], re.M)
+        ]
+        q = question if question is not None else (frags[-1][1] if frags else "")
+        return json.dumps(
+            {
+                "verdict": verdict,
+                "question": q or "",
+                "fragments": [f[0] for f in frags],
+                "reason": "stub",
+            }
+        )
+
+    return judge
 
 
 class OriginLockTests(unittest.TestCase):
@@ -532,8 +556,20 @@ class InterviewQuestionGuardTests(unittest.TestCase):
         self.assertEqual(why, "hallucination")
 
 
-class InterviewWaitFlushTests(unittest.TestCase):
-    def _session(self) -> Session:
+class InterviewSemanticBufferTests(unittest.TestCase):
+    """Live Q&A voice input after issue #191.
+
+    The interview path no longer judges completeness with the keyword/unit
+    heuristic, and no longer glues two finals only when they arrive within 2s:
+    consecutive finals accumulate by STT turn identity and the MODEL decides
+    (ready / wait / background). These tests drive the Session with a
+    deterministic judge stub — the heuristic is now only a junk prefilter.
+    """
+
+    def _judge(self, verdict="ready", question=None):
+        return judge_reply(verdict, question)
+
+    def _session(self, verdict="ready", question=None) -> Session:
         sess = Session.__new__(Session)
         sess.cfg = {"stt": {}, "ui": {}, "llm": {}}
         sess._workspace = "interview"
@@ -551,7 +587,6 @@ class InterviewWaitFlushTests(unittest.TestCase):
         sess._follow_switch_lang = None
         sess._follow_switch_hits = 0
         sess._last_voice_at = 0.0
-        sess._interview_wait_timer = None
         sess._meeting_flush_timer = None
         sess._meeting_lock = __import__("threading").Lock()
         sess._interview_lock = __import__("threading").Lock()
@@ -562,11 +597,25 @@ class InterviewWaitFlushTests(unittest.TestCase):
         sess.pipeline._last_answer = ""
         sess.pipeline._cancel = __import__("threading").Event()
         sess.pipeline.process_text = mock.Mock()
+        sess.pipeline.judge_qa = mock.Mock(side_effect=self._judge(verdict, question))
+        # Deterministic: the settle fire is driven by the test, not a timer.
+        sess._qa_schedule_judge = mock.Mock()
         return sess
+
+    def _settle(self, sess) -> None:
+        sess._qa_activity_at = time.time() - 1000
+        sess._qa_timer = None
+        sess._qa_last_judge_at = 0.0
+        sess._qa_settle_fire()
+        for _ in range(200):
+            if not sess._qa_judging:
+                break
+            time.sleep(0.01)
 
     def test_chinese_question_starts_answer(self):
         sess = self._session()
         sess._on_final("告诉我当下经济啊。", "zh")
+        self._settle(sess)
         for _ in range(40):
             if sess.pipeline.process_text.called:
                 break
@@ -580,6 +629,8 @@ class InterviewWaitFlushTests(unittest.TestCase):
         sess._on_final("嗯，不行。", "zh")
         sess.emit.assert_any_call({"type": "partial", "text": ""})
         sess.pipeline.process_text.assert_not_called()
+        # The heuristic is only a junk prefilter now — it must not reach the model.
+        sess.pipeline.judge_qa.assert_not_called()
 
     def test_social_filler_clears_partial_before_guard(self):
         sess = self._session()
@@ -588,132 +639,85 @@ class InterviewWaitFlushTests(unittest.TestCase):
         sess.pipeline.process_text.assert_not_called()
 
     def test_wait_keeps_partial_so_mic_is_visible(self):
-        sess = self._session()
+        sess = self._session(verdict="wait")
         sess._on_final("当下经济", "zh")
         sess.emit.assert_any_call({"type": "partial", "text": "当下经济"})
         sess.pipeline.process_text.assert_not_called()
 
-    def test_wait_join_does_not_insert_space_between_chinese(self):
-        sess = self._session()
-        sess._pending_wait = ("当下", time.time(), "zh")
-        sess._on_final("经济情况", "zh")
-        self.assertEqual(sess._pending_wait[0], "当下经济情况")
+    def test_candidate_joins_chinese_without_a_space(self):
+        # #191 moved the join into server/qa_semantic; the running candidate must
+        # still read as one CJK run, not "如果我们把价格 从每月…".
+        sess = self._session(verdict="wait")
+        sess._on_final("如果我们把价格", "zh", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("从每月十块提高到十五块", "zh", None, {"stt_turn": 2, "listener_id": 1})
+        from server import qa_semantic
 
-    def test_wait_flush_starts_answer(self):
+        self.assertEqual(
+            qa_semantic.candidate_text(sess._qa_buffer), "如果我们把价格从每月十块提高到十五块"
+        )
+
+    def test_lead_in_and_question_are_joined_in_one_candidate(self):
+        # #3 semantics under the #191 buffer: the model receives ONE candidate
+        # holding both fragments.
         sess = self._session()
-        sess._pending_wait = ("当下经济情况", time.time(), "zh")
-        sess._flush_interview_wait()
-        self.assertEqual(sess._pending_wait, (None, 0.0, None))
-        for _ in range(40):
+        sess._on_final("For PostgreSQL,", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess.pipeline.process_text.assert_not_called()
+        sess._on_final("how do I configure backups?", "en", None, {"stt_turn": 2, "listener_id": 1})
+        self._settle(sess)
+        for _ in range(60):
             if sess.pipeline.process_text.called:
                 break
-            time.sleep(0.05)
+            time.sleep(0.02)
         sess.pipeline.process_text.assert_called_once()
+        prompt = sess.pipeline.judge_qa.call_args.args[0][-1]["content"]
+        self.assertIn("PostgreSQL", prompt)
+        self.assertIn("backups", prompt)
         args, _kwargs = sess.pipeline.process_text.call_args
-        self.assertEqual(args[0], "当下经济情况")
         self.assertEqual(args[1], "ask")
 
-    def test_lead_in_then_question_is_joined(self):
-        # #3: a lead-in fragment ("For PostgreSQL,") is held; the following
-        # question joins it so the model gets the whole thing, not a dropped
-        # non-question plus a separate question.
-        sess = self._session()
-        sess._on_final("For PostgreSQL,", "en")
-        sess.pipeline.process_text.assert_not_called()
-        sess._on_final("how do I configure backups?", "en")
-        for _ in range(60):
-            if sess.pipeline.process_text.called:
-                break
-            time.sleep(0.02)
-        sess.pipeline.process_text.assert_called_once()
-        args, _kwargs = sess.pipeline.process_text.call_args
-        text = args[0]
-        self.assertIn("PostgreSQL", text)
-        self.assertIn("backups", text)
-
-    def test_long_lead_in_then_complete_question_keeps_lead_in(self):
-        sess = self._session()
-        sess._on_final("When we deploy the new service to production,", "en")
-        sess.pipeline.process_text.assert_not_called()
-        sess._on_final("how should we roll back?", "en")
-        for _ in range(60):
-            if sess.pipeline.process_text.called:
-                break
-            time.sleep(0.02)
-        args, _kwargs = sess.pipeline.process_text.call_args
-        self.assertTrue(args[0].startswith("When we deploy"), args[0])
-
-    def test_two_unrelated_sentences_are_not_joined(self):
-        # Whether the two fragments merge into one question or are answered
-        # separately, neither may be lost. Both English + <2s => they join
-        # here; the assertion is that both appear in what the model receives.
-        sess = self._session()
-        sess._on_final("When we deploy the new service,", "en")
-        sess._on_final("what is Kubernetes?", "en")
-        for _ in range(60):
-            if sess.pipeline.process_text.called:
-                break
-            time.sleep(0.02)
-        args, _kwargs = sess.pipeline.process_text.call_args
-        text = args[0]
-        self.assertIn("When we deploy the new service", text)
-        self.assertIn("what is Kubernetes", text)
-
-    def test_lead_in_alone_flushes_nothing_after_timer(self):
-        # A held lead-in ("For PostgreSQL,") that never gets its continuation is
-        # NOT sent as an answer: it carries no question word, so the flush
-        # re-runs guard and drops it instead of billing a token on a fragment.
-        sess = self._session()
-        sess._on_final("For PostgreSQL,", "en")
-        time.sleep(1.5)
+    def test_a_dropped_sentence_start_is_not_answered_alone(self):
+        # The MODEL says background ("For PostgreSQL," never became a question),
+        # so no token is billed on the fragment.
+        sess = self._session(verdict="background")
+        sess._on_final("For PostgreSQL,", "en", None, {"stt_turn": 1, "listener_id": 1})
+        self._settle(sess)
         for _ in range(40):
-            if sess.pipeline.process_text.called:
-                break
             time.sleep(0.02)
         sess.pipeline.process_text.assert_not_called()
-        self.assertEqual(sess._pending_wait, (None, 0.0, None))
-        emits = [c.args[0] for c in sess.emit.call_args_list if c.args]
-        self.assertEqual(emits[-1]["type"], "partial")
-        self.assertEqual(emits[-1]["text"], "")
+        self.assertEqual(sess._qa_buffer, [])
+        self.assertEqual(sess._qa_background, ["For PostgreSQL,"])
 
-    def test_truncated_question_alone_still_flushes(self):
-        # A truncated question that DOES carry a question word ("how do I roll
-        # back a") is still answered when the wait window closes — only a
-        # dropped sentence start is suppressed; wait-but-question is kept.
+    def test_only_one_answer_for_a_whole_candidate(self):
         sess = self._session()
-        sess._on_final("how do I roll back a", "en")
-        time.sleep(1.5)
-        for _ in range(40):
+        sess._on_final("When we deploy the new service,", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("how should we roll back?", "en", None, {"stt_turn": 2, "listener_id": 1})
+        self._settle(sess)
+        for _ in range(80):
             if sess.pipeline.process_text.called:
                 break
             time.sleep(0.02)
-        sess.pipeline.process_text.assert_called_once()
-
-    def test_flush_and_final_do_not_double_start(self):
-        # #7: a continuation that merges with the held fragment produces one
-        # answer. An already-fired flush, finding the fragment consumed by the
-        # merge, must not start a second generation for it.
-        sess = self._session()
-        sess._pending_wait = ("When we deploy the new service,", time.time(), "en")
-        sess._on_final("how should we roll back the change?", "en")
-        threading = __import__("threading")
-        t = threading.Thread(target=sess._flush_interview_wait)
-        t.start()
-        t.join()
-        for _ in range(60):
-            if sess.pipeline.process_text.called:
-                break
+        for _ in range(20):
             time.sleep(0.02)
         self.assertEqual(sess.pipeline.process_text.call_count, 1)
-        args, _kwargs = sess.pipeline.process_text.call_args
-        self.assertIn("When we deploy the new service", args[0])
-        self.assertIn("how should we roll back", args[0])
+
+    def test_judgement_does_not_bill_a_model_call_per_fragment(self):
+        sess = self._session()
+        sess._on_final("When we deploy the new service,", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("what is Kubernetes?", "en", None, {"stt_turn": 2, "listener_id": 1})
+        self.assertEqual(sess.pipeline.judge_qa.call_count, 0)
+        self._settle(sess)
+        for _ in range(40):
+            if sess.pipeline.process_text.called:
+                break
+            time.sleep(0.02)
+        self.assertEqual(sess.pipeline.judge_qa.call_count, 1)
 
     def test_answer_cleanup_releases_busy_and_emits_phase(self):
         # The finally block in work() is the only thing that unsticks the UI.
         # If it raises on its first line, busy stays held and no phase ships.
         sess = self._session()
         sess._on_final("告诉我当下经济啊。", "zh")
+        self._settle(sess)
         for _ in range(60):
             if not sess._busy and sess.emit.call_args_list:
                 break
@@ -731,6 +735,7 @@ class InterviewWaitFlushTests(unittest.TestCase):
         sess._pending_asks = [("summarize me", "summary", None)]
         sess.ask = mock.Mock()
         sess._on_final("告诉我当下经济啊。", "zh")
+        self._settle(sess)
         for _ in range(60):
             if sess.ask.called:
                 break
@@ -949,7 +954,6 @@ class ClearResetTests(unittest.TestCase):
         sess._follow_switch_lang = None
         sess._follow_switch_hits = 0
         sess._last_voice_at = 0.0
-        sess._interview_wait_timer = None
         sess._meeting_flush_timer = None
         sess._meeting_lock = __import__("threading").Lock()
         sess._interview_lock = __import__("threading").Lock()
@@ -960,6 +964,8 @@ class ClearResetTests(unittest.TestCase):
         sess.pipeline._last_answer = ""
         sess.pipeline._cancel = __import__("threading").Event()
         sess.pipeline.process_text = mock.Mock()
+        # #191: the interview path now asks the model before answering.
+        sess.pipeline.judge_qa = mock.Mock(side_effect=judge_reply("ready", "What is CAP theorem?"))
         return sess
 
     def test_clear_resets_qa_history_and_recent_finals(self):
@@ -972,14 +978,31 @@ class ClearResetTests(unittest.TestCase):
         self.assertEqual(sess.pipeline._last_answer, "")
         self.assertEqual(sess._recent_finals, [])
 
-    def test_clear_cancels_pending_wait_timer(self):
+    def test_clear_drops_the_pending_candidate_and_cancels_its_timer(self):
+        # #191: clear must cancel the settle timer, drop the buffer, and bump the
+        # QA generation so an in-flight judgement cannot answer into the new session.
         sess = self._session()
-        sess._pending_wait = ("half a question", time.time(), None)
-        sess._schedule_interview_wait_flush()
+        sess._qa_buffer = [
+            {
+                "id": "t1:1",
+                "text": "half a question",
+                "lang": None,
+                "at": time.time(),
+                "turn": 1,
+                "revision": False,
+            }
+        ]
+        sess._qa_version = 3
+        sess._qa_gen = 2
+        sess._qa_schedule_judge()
+        self.assertIsNotNone(sess._qa_timer)
         sess.dispatch({"type": "clear"})
-        time.sleep(1.5)
+        time.sleep(0.3)
         sess.pipeline.process_text.assert_not_called()
-        self.assertIsNone(sess._interview_wait_timer)
+        sess.pipeline.judge_qa.assert_not_called()
+        self.assertIsNone(sess._qa_timer)
+        self.assertEqual(sess._qa_buffer, [])
+        self.assertGreater(sess._qa_gen, 2)
 
     def test_same_question_after_clear_is_not_rejected_as_duplicate(self):
         sess = self._session()
@@ -987,6 +1010,12 @@ class ClearResetTests(unittest.TestCase):
         sess.dispatch({"type": "clear"})
         sess._start_interview_answer = mock.Mock()
         sess._on_final("What is CAP theorem?")
+        # #191: completeness now comes from the (stubbed) model after the settle
+        # window, so wait for the answer instead of assuming a synchronous start.
+        for _ in range(300):
+            if sess._start_interview_answer.called:
+                break
+            time.sleep(0.02)
         sess._start_interview_answer.assert_called_once()
 
 
