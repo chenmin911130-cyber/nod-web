@@ -680,5 +680,154 @@ class LifecycleTests(_QaBase):
         self.assertNotIn("SECRET", "\n".join(drops))
 
 
+class ReviewFixTests(_QaBase):
+    """Blockers from the #191 review: the input prefilter and the post-hoc commit."""
+
+    def _start_judge(self, sess) -> bool:
+        """Fire the settle path and return once the judge worker is in flight."""
+        sess._qa_activity_at = time.time() - (qs.DEFAULT_BUFFER_MAX_SECONDS + 1)
+        sess._qa_timer = None
+        sess._qa_last_judge_at = 0.0
+        sess._qa_settle_fire()
+        return self._wait(lambda: sess._qa_judging)
+
+    def test_short_follow_up_reaches_the_model_instead_of_the_prefilter(self):
+        # `guard_question` rejected "按年付" BEFORE the buffer (6 units, no question
+        # word → its 4..7 fallback is "reject"), so a legitimate short follow-up was
+        # never judged at all. The prefilter is gone: identity is the only dedupe.
+        from server.app import guard_question
+
+        self.assertEqual(guard_question("按年付", [], None), "reject")
+
+        sess = self._session(judge_stub(qs.VERDICT_WAIT))
+        sess._on_final("订阅怎么定价比较好？", "zh", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("按年付", "zh", None, {"stt_turn": 2, "listener_id": 1})
+        self.assertEqual([f["text"] for f in sess._qa_buffer], ["订阅怎么定价比较好？", "按年付"])
+        self._settle(sess)
+        prompt = sess.pipeline.judge_qa.call_args.args[0][-1]["content"]
+        self.assertIn("按年付", prompt)
+        self.assertEqual(sess.pipeline.judge_qa.call_count, 1)
+
+    def test_answer_echo_is_no_longer_dropped_before_the_model(self):
+        # An echo of the previous answer was another `guard_question` reject path
+        # ("_is_answer_echo"): the user restating the answer as a lead-in is a turn.
+        sess = self._session(judge_stub(qs.VERDICT_WAIT))
+        sess.pipeline._last_answer = "订阅制就是按月付费"
+        sess._on_final("订阅制就是按月付费", "zh", None, {"stt_turn": 1, "listener_id": 1})
+        self.assertEqual(len(sess._qa_buffer), 1)
+
+    def test_the_same_question_twice_is_a_new_turn_not_a_similarity_drop(self):
+        # The text-ratio reject (>0.9 against a recent question) swallowed a question
+        # the user asked twice; dedupe must be by turn identity, not by text.
+        from server.app import guard_question
+
+        self.assertEqual(guard_question("订阅怎么定价比较好？", ["订阅怎么定价比较好？"], None), "reject")
+
+        sess = self._session(judge_stub(qs.VERDICT_READY, question="订阅怎么定价比较好？"))
+        sess._on_final("订阅怎么定价比较好？", "zh", None, {"stt_turn": 1, "listener_id": 1})
+        self._settle(sess)
+        self.assertTrue(self._wait(lambda: sess.pipeline.process_text.called))
+        sess._on_final("订阅怎么定价比较好？", "zh", None, {"stt_turn": 2, "listener_id": 1})
+        self.assertEqual([f["text"] for f in sess._qa_buffer], ["订阅怎么定价比较好？"])
+        self._settle(sess)
+        self.assertTrue(self._wait(lambda: sess.pipeline.process_text.call_count == 2))
+        self.assertEqual(sess.pipeline.judge_qa.call_count, 2)
+
+    def test_manual_submit_during_judgement_never_answers_the_old_candidate(self):
+        gate = threading.Event()
+        sess = self._session(judge_stub(qs.VERDICT_READY, question="stale", gate=gate))
+        sess._start_interview_answer = mock.Mock()
+        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        self.assertTrue(self._start_judge(sess))
+        sess._qa_on_manual_submit()  # the user typed/recorded while the model thought
+        gate.set()
+        self.assertTrue(self._wait(lambda: not sess._qa_judging))
+        sess._start_interview_answer.assert_not_called()
+        self.assertEqual(sess._qa_buffer, [])
+        self.assertEqual(sess.pipeline.process_text.call_count, 0)
+
+    def test_new_session_during_judgement_never_answers_the_old_candidate(self):
+        gate = threading.Event()
+        sess = self._session(judge_stub(qs.VERDICT_READY, question="from the old session", gate=gate))
+        sess._start_interview_answer = mock.Mock()
+        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        self.assertTrue(self._start_judge(sess))
+        sess._qa_reset("new_session")  # New / clear / workspace switch
+        gate.set()
+        self.assertTrue(self._wait(lambda: not sess._qa_judging))
+        sess._start_interview_answer.assert_not_called()
+        self.assertEqual(sess._qa_buffer, [])
+
+    def test_a_commit_for_a_superseded_candidate_is_refused(self):
+        # The narrow window the review called out: the worker validated the version,
+        # released the lock, and only THEN committed. A manual submit / New / a new
+        # fragment landing in that window must make the commit a no-op.
+        sess = self._session(judge_stub(qs.VERDICT_READY))
+        sess._start_interview_answer = mock.Mock()
+        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        version, gen = sess._qa_version, sess._qa_gen
+        frags = [dict(f) for f in sess._qa_buffer]
+        verdict = {
+            "version": version,
+            "verdict": qs.VERDICT_READY,
+            "question": "how should we price it?",
+            "fragments": [frags[0]["id"]],
+        }
+        # (a) a manual submit moved the candidate on (generation + version bumped)
+        sess._qa_on_manual_submit()
+        self.assertFalse(
+            sess._qa_commit("stale", frags, verdict=verdict, trigger="judge", version=version, gen=gen)
+        )
+        sess._start_interview_answer.assert_not_called()
+        self.assertEqual(sess._qa_buffer, [])
+        # (b) same generation, but the buffer moved on (a new fragment)
+        sess2 = self._session(judge_stub(qs.VERDICT_READY))
+        sess2._start_interview_answer = mock.Mock()
+        sess2._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        v2, g2 = sess2._qa_version, sess2._qa_gen
+        frags2 = [dict(f) for f in sess2._qa_buffer]
+        sess2._on_final("那按年付呢", "zh", None, {"stt_turn": 2, "listener_id": 1})
+        self.assertFalse(
+            sess2._qa_commit("stale", frags2, verdict=verdict, trigger="judge", version=v2, gen=g2)
+        )
+        sess2._start_interview_answer.assert_not_called()
+        # the follow-up that arrived while the verdict was in flight survives
+        self.assertEqual([f["text"] for f in sess2._qa_buffer], ["how should we price it?", "那按年付呢"])
+
+    def test_a_demote_for_a_superseded_candidate_keeps_the_new_fragments(self):
+        sess = self._session(judge_stub(qs.VERDICT_BACKGROUND))
+        sess._on_final("我们准备做订阅制", "zh", None, {"stt_turn": 1, "listener_id": 1})
+        version, gen = sess._qa_version, sess._qa_gen
+        frags = [dict(f) for f in sess._qa_buffer]
+        sess._on_final("那按年付呢", "zh", None, {"stt_turn": 2, "listener_id": 1})
+        self.assertFalse(
+            sess._qa_demote_to_background(
+                frags, {"verdict": qs.VERDICT_BACKGROUND}, version=version, gen=gen
+            )
+        )
+        self.assertEqual([f["text"] for f in sess._qa_buffer], ["我们准备做订阅制", "那按年付呢"])
+        self.assertEqual(sess._qa_background, [])
+
+    def test_a_stale_background_verdict_does_not_wipe_new_fragments(self):
+        # A background verdict computed for an older snapshot must not clear the
+        # follow-up that landed while the model was thinking.
+        gate = threading.Event()
+        sess = self._session(judge_stub(qs.VERDICT_BACKGROUND, gate=gate))
+        sess._on_final("我们准备做订阅制", "zh", None, {"stt_turn": 1, "listener_id": 1})
+        self.assertTrue(self._start_judge(sess))
+        sess._on_final("那按年付呢", "zh", None, {"stt_turn": 2, "listener_id": 1})
+        gate.set()
+        self.assertTrue(self._wait(lambda: not sess._qa_judging))
+        self.assertEqual([f["text"] for f in sess._qa_buffer], ["我们准备做订阅制", "那按年付呢"])
+        self.assertEqual(sess._qa_background, [])
+
+    def test_the_current_background_verdict_still_demotes(self):
+        sess = self._session(judge_stub(qs.VERDICT_BACKGROUND))
+        sess._on_final("我们准备做订阅制", "zh", None, {"stt_turn": 1, "listener_id": 1})
+        self._settle(sess)
+        self.assertEqual(sess._qa_buffer, [])
+        self.assertEqual(sess._qa_background, ["我们准备做订阅制"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -624,13 +624,18 @@ class InterviewSemanticBufferTests(unittest.TestCase):
         args, _kwargs = sess.pipeline.process_text.call_args
         self.assertEqual(args[0], "告诉我当下经济啊。")
 
-    def test_reject_clears_partial_so_ui_does_not_stick(self):
+    def test_a_short_filler_like_turn_is_buffered_not_dropped(self):
+        # #191 review fix: the guard prefilter is gone, so a short turn like
+        # "嗯，不行。" is no longer rejected before the buffer (the model decides
+        # complete / background / not-a-question after the settle window). Only
+        # genuinely empty input or a pure social phrase ("嗯") still clears.
         sess = self._session()
         sess._on_final("嗯，不行。", "zh")
-        sess.emit.assert_any_call({"type": "partial", "text": ""})
+        sess.emit.assert_any_call({"type": "partial", "text": "嗯，不行。"})
         sess.pipeline.process_text.assert_not_called()
-        # The heuristic is only a junk prefilter now — it must not reach the model.
+        # No model call per fragment — the settle window owns that.
         sess.pipeline.judge_qa.assert_not_called()
+        self.assertEqual([f["text"] for f in sess._qa_buffer], ["嗯，不行。"])
 
     def test_social_filler_clears_partial_before_guard(self):
         sess = self._session()

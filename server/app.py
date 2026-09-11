@@ -3599,8 +3599,13 @@ class Session:
         any verdict that was computed for the earlier buffer.
         """
         self._qa_init()
-        self._qa_activity_at = time.time()
-        self._qa_verdict = None
+        now = time.time()
+        with self._qa_lock():
+            self._qa_activity_at = now
+            # #191 review fix: the parked verdict is cleared under the same lock the
+            # judge worker re-validates against, so a verdict can never be read as
+            # "current" after activity invalidated it.
+            self._qa_verdict = None
         if getattr(self, "_qa_buffer", None):
             self._qa_schedule_judge()
 
@@ -3721,22 +3726,57 @@ class Session:
             return
         kind = verdict["verdict"]
         if kind == qa_semantic.VERDICT_READY:
-            self._qa_verdict = {"version": version, **verdict}
-            self._qa_commit(verdict["question"], frags, verdict=verdict, trigger="judge")
+            # #191 review fix: the commit re-validates generation + version under the
+            # SAME lock hold it mutates the candidate with, so a New / manual submit /
+            # continuation that landed while the model was thinking can no longer be
+            # answered after the fact (the verdict used to be parked here and the
+            # commit decided without re-checking).
+            if not self._qa_commit(
+                verdict["question"],
+                frags,
+                verdict=verdict,
+                trigger="judge",
+                version=version,
+                gen=gen,
+            ):
+                logging.getLogger("nod").info(
+                    "qa_drop reason=stale_commit cand=%s gen=%s ver=%s now_gen=%s now_ver=%s",
+                    cand, gen, version, self._qa_gen, self._qa_version,
+                )
+                self._qa_maybe_reschedule()
             return
         if kind == qa_semantic.VERDICT_WAIT:
             # Still mid-thought: keep listening. Deliberately NOT an answer, and
             # deliberately no re-judge until new fragments arrive.
             self.emit({"type": "status", "text": STATUS_WAIT_MORE})
             return
-        self._qa_demote_to_background(frags, verdict)
+        if not self._qa_demote_to_background(frags, verdict, version=version, gen=gen):
+            # A background verdict for a buffer the speaker already moved past must
+            # not clear the NEW fragments (that is how a follow-up disappeared).
+            logging.getLogger("nod").info(
+                "qa_drop reason=stale_background cand=%s gen=%s ver=%s now_gen=%s now_ver=%s",
+                cand, gen, version, self._qa_gen, self._qa_version,
+            )
+            self._qa_maybe_reschedule()
 
     def _qa_demote_to_background(
-        self, frags: list[dict[str, Any]], verdict: dict[str, Any]
-    ) -> None:
-        """Statements/opinions/facts: no answer, but keep them as context."""
+        self,
+        frags: list[dict[str, Any]],
+        verdict: dict[str, Any],
+        *,
+        version: int,
+        gen: int,
+    ) -> bool:
+        """Statements/opinions/facts: no answer, but keep them as context.
+
+        Returns False without touching the candidate when speech / a manual submit /
+        a New moved on while the verdict was being computed — clearing the buffer
+        then would throw away fragments that arrived after the judged snapshot.
+        """
         texts = [str(f.get("text") or "") for f in frags]
         with self._qa_lock():
+            if gen != self._qa_gen or version != self._qa_version or not self._qa_buffer:
+                return False
             self._qa_background = qa_semantic.background_after(
                 self._qa_background, texts, max_frags=QA_BACKGROUND_MAX_FRAGS
             )
@@ -3750,6 +3790,7 @@ class Session:
             len(frags), str(verdict.get("reason") or "")[:60], n_kept,
         )
         self.emit({"type": "partial", "text": ""})
+        return True
 
     def _qa_commit(
         self,
@@ -3758,19 +3799,32 @@ class Session:
         *,
         verdict: dict[str, Any],
         trigger: str,
-    ) -> None:
-        """Fix this question + its source fragments, then reuse the answer chain."""
+        version: int,
+        gen: int,
+    ) -> bool:
+        """Fix this question + its source fragments, then reuse the answer chain.
+
+        The whole decision — "is this verdict still for the current candidate?" and
+        the buffer bookkeeping — happens under ONE lock hold, then the answer starts
+        outside it. Returns False (and answers NOTHING) when the candidate moved on
+        while the model was thinking: a New / clear (reset bumps generation), a
+        manual submit (also bumps generation) or new speech (bumps the version) must
+        never be answered after the fact, or the answer lands out of turn / in the
+        wrong session and folds fragments into a question they do not belong to.
+        """
         cited = list(verdict.get("fragments") or [])
         keys = [str(f["id"]) for f in frags]
         lang = frags[-1].get("lang") if frags else None
-        # Answer context (#191): earlier background + the candidate fragments the
-        # model did NOT cite (a lead-in the question stands on). Recent confirmed
-        # Q&A already reaches the prompt via _qa_history, so it is not repeated.
-        context = qa_semantic.context_block(
-            list(self._qa_background) + qa_semantic.referenced_texts(frags, cited),
-            max_chars=QA_CONTEXT_MAX_CHARS,
-        )
         with self._qa_lock():
+            if gen != self._qa_gen or version != self._qa_version or not self._qa_buffer:
+                return False
+            # Answer context (#191): earlier background + the candidate fragments the
+            # model did NOT cite (a lead-in the question stands on). Recent confirmed
+            # Q&A already reaches the prompt via _qa_history, so it is not repeated.
+            context = qa_semantic.context_block(
+                list(self._qa_background) + qa_semantic.referenced_texts(frags, cited),
+                max_chars=QA_CONTEXT_MAX_CHARS,
+            )
             rest = list(self._qa_buffer)
             i = 0
             while i < len(rest) and i < len(keys) and str(rest[i]["id"]) == keys[i]:
@@ -3785,11 +3839,13 @@ class Session:
                 self._qa_answered[k] = None
             while len(self._qa_answered) > QA_ANSWERED_MAX:
                 self._qa_answered.pop(next(iter(self._qa_answered)))
+            leftover = len(self._qa_buffer)
         logging.getLogger("nod").info(
             "qa_submit trigger=%s frags=%s cited=%s q_chars=%s ctx=%s rest=%s",
-            trigger, len(frags), len(cited), len(question or ""), len(context), len(self._qa_buffer),
+            trigger, len(frags), len(cited), len(question or ""), len(context), leftover,
         )
         self._start_interview_answer(question, lang, context)
+        return True
 
     def _qa_drop(self, *, reason: str, trigger: str = "") -> None:
         """Discard the pending candidate WITHOUT answering it."""
@@ -3836,10 +3892,22 @@ class Session:
         with self._qa_lock():
             verdict = self._qa_verdict
             version = self._qa_version
+            gen = self._qa_gen
             frags = [dict(f) for f in self._qa_buffer]
             self._qa_verdict = None
         if verdict and verdict.get("version") == version and frags:
-            self._qa_commit(verdict["question"], frags, verdict=verdict, trigger="stop")
+            if self._qa_commit(
+                verdict["question"],
+                frags,
+                verdict=verdict,
+                trigger="stop",
+                version=version,
+                gen=gen,
+            ):
+                return
+            # Something cleared/replaced the candidate between the check and the
+            # commit — the candidate is gone either way, so record the drop.
+            self._qa_drop(reason="stop_commit_raced", trigger="stop")
             return
         self._qa_drop(reason="stop_no_ready_verdict", trigger="stop")
 
@@ -5350,10 +5418,17 @@ class Session:
         if self._workspace == "meeting":
             self._enqueue_meeting_final(cleaned, lang, speaker, meta)
             return
-        recent_qs = [h["q"] for h in self.pipeline._qa_history]
-        # Junk prefilter only (social filler / too short / echo / duplicate). The
-        # COMPLETENESS decision is the model's — see _qa_note_final (#191).
-        if guard_question(cleaned, recent_qs, self.pipeline._last_answer) == "reject":
+        # #191 review fix: NO length / similarity / echo prefilter on the automatic
+        # Live Q&A path. `guard_question` rejected a fragment BEFORE the buffer when
+        # it was short (units < 4, or < 8 with no question word), was social filler,
+        # echoed the last answer, or read >90% like one of the last two questions —
+        # so a legitimate short follow-up ("按年付", "再讲讲学生") or the same
+        # question asked twice never reached the model at all, and the dedupe it
+        # implied was TEXT-based instead of turn-based. Dedupe is now by TURN
+        # IDENTITY only (`_qa_answered` / `qa_semantic.fragment_identity` inside
+        # `_qa_note_final`), and complete / background / not-a-question is the
+        # model's call. `guard_question` is kept for the manual/legacy callers.
+        if not (cleaned or "").strip():
             self.emit({"type": "partial", "text": ""})
             return
         self._qa_note_final(cleaned, lang, meta)
