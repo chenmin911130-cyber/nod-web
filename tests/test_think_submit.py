@@ -260,7 +260,7 @@ class SubmitSnapshotTests(unittest.TestCase):
         sess.set_think(True)
         sess._manual = False
         sess._qa_on_manual_submit = mock.Mock()
-        sess._polish_manual_text = mock.Mock(side_effect=lambda text: text)
+        sess._polish_manual_text = mock.Mock(side_effect=lambda text, **_: text)
         sess._speech_allowed = mock.Mock(return_value=True)
         sess._set_engine = mock.Mock()
         sess._emit_phase = mock.Mock()
@@ -287,7 +287,7 @@ class SubmitSnapshotTests(unittest.TestCase):
         sess._workspace = "translate"  # the mode moved on while transcribing
         sess._on_final = mock.Mock()
         sess._transcribe_manual_pcm = mock.Mock(return_value=("some words", "en"))
-        sess._polish_manual_text = mock.Mock(side_effect=lambda text: text)
+        sess._polish_manual_text = mock.Mock(side_effect=lambda text, **_: text)
         sess._set_engine = mock.Mock()
         sess._emit_phase = mock.Mock()
 
@@ -327,6 +327,56 @@ class SubmitSnapshotTests(unittest.TestCase):
         # Only the initial "transcribing" was set; the failure must not force idle.
         self.assertEqual([c.args for c in sess._set_engine.call_args_list], [("transcribing",)])
         sess._emit_phase.assert_not_called()
+
+    def test_a_recording_cleared_while_polishing_never_reaches_the_new_session(self):
+        # #182 review: `_polish_manual_text` is not local — with earlier context it
+        # makes an 8s model request — and ownership was never re-checked after it, so a
+        # recording could still be dispatched (and search) after a clear / mode switch.
+        sess = self._session()
+        sess._qa_init()
+        stale_gen = sess._qa_session_gen
+        sess.usage_session_id = "sess-old"
+        sess._workspace = "interview"
+        sess._on_final = mock.Mock()
+        sess._set_engine = mock.Mock()
+        sess._emit_phase = mock.Mock()
+        sess._transcribe_manual_pcm = mock.Mock(return_value=("how should we price it?", "en"))
+        started = threading.Event()
+        release = threading.Event()
+        seen: dict = {}
+
+        def slow_polish(text, *, session_id=None):
+            started.set()
+            release.wait(3.0)
+            seen["passed"] = session_id
+            seen["current_at_return"] = sess.usage_session_id
+            return text
+
+        sess._polish_manual_text = slow_polish
+        worker = threading.Thread(
+            target=sess._finish_manual,
+            args=(b"\x00" * 8000,),
+            kwargs={"think": True, "submit_ref": "m1", "submit_session_gen": stale_gen},
+            daemon=True,
+        )
+        worker.start()
+        self.assertTrue(started.wait(3.0), "the polish must have started")
+
+        # While the polish is in flight: New / mode switch, and a new usage session.
+        sess._qa_reset("turn_reset")
+        sess._workspace = "translate"
+        sess.usage_session_id = "sess-new"
+        release.set()
+        worker.join(3.0)
+
+        sess._on_final.assert_not_called()
+        sess.pipeline.process_text.assert_not_called()
+        sess._emit_phase.assert_not_called()
+        self.assertEqual(
+            [e.args[0] for e in sess.emit.call_args_list if e.args[0].get("type") == "status"], []
+        )
+        self.assertEqual(seen["passed"], "sess-old", "the polish is booked to its own session")
+        self.assertEqual(seen["current_at_return"], "sess-new", "even though the current one moved on")
 
     def test_a_question_failure_names_the_question_it_belongs_to(self):
         # #182 review: an error frame carried no id, so the client wrote it into
@@ -441,7 +491,7 @@ class SubmitSnapshotTests(unittest.TestCase):
         sess._set_engine = mock.Mock()
         sess._qa_on_manual_submit = mock.Mock()
         sess._speech_allowed = mock.Mock(return_value=True)
-        sess._polish_manual_text = mock.Mock(side_effect=lambda text: text)
+        sess._polish_manual_text = mock.Mock(side_effect=lambda text, **_: text)
         sess._transcribe_manual_pcm = mock.Mock(return_value=("how should we price it?", "en"))
         sess._set_engine = mock.Mock()
         sess.usage_session_id = "sess-manual"
@@ -509,6 +559,51 @@ class SubmitSnapshotTests(unittest.TestCase):
                 return True
             time.sleep(0.01)
         return pred()
+
+
+class CaptionPolishBillingTests(unittest.TestCase):
+    """The polish request books its usage to the session it was made for."""
+
+    def _response(self, content: str):
+        message = mock.Mock()
+        message.content = content
+        choice = mock.Mock()
+        choice.message = message
+        resp = mock.Mock()
+        resp.choices = [choice]
+        return resp
+
+    def test_the_polish_usage_is_booked_to_the_given_session(self):
+        events: list[dict] = []
+        pipe = _pipe(events)
+        pipe.user_id = "u1"
+        pipe.usage_session_id = "sess-new"
+        pipe.client.with_options.return_value.chat.completions.create.return_value = self._response(
+            "how should we price it?"
+        )
+        with mock.patch("server.meter.check_can_generate", return_value=(True, {})), mock.patch(
+            "server.meter.consume_llm"
+        ) as consume:
+            out = pipe.repair_caption(
+                "how should we price it?", ["previous line"], session_id="sess-old"
+            )
+        self.assertEqual(out, "how should we price it?")
+        consume.assert_called_once()
+        self.assertEqual(consume.call_args.args[1], "sess-old")
+
+    def test_a_caller_without_a_session_keeps_the_previous_behaviour(self):
+        events: list[dict] = []
+        pipe = _pipe(events)
+        pipe.user_id = "u1"
+        pipe.usage_session_id = "sess-current"
+        pipe.client.with_options.return_value.chat.completions.create.return_value = self._response(
+            "how should we price it?"
+        )
+        with mock.patch("server.meter.check_can_generate", return_value=(True, {})), mock.patch(
+            "server.meter.consume_llm"
+        ) as consume:
+            pipe.repair_caption("how should we price it?", ["previous line"])
+        self.assertEqual(consume.call_args.args[1], "sess-current")
 
 
 class ThinkAnswerPathTests(unittest.TestCase):

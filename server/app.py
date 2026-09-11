@@ -1410,9 +1410,16 @@ class Pipeline:
         model = VISION_MODEL if (images and self._provider == "deepseek") else self._model
         return self.client, model, False
 
-    def repair_caption(self, text: str, recent: list[str]) -> str:
-        """Light STT polish. Skip when there is no context, and keep the original if the model rewrites too much."""
+    def repair_caption(self, text: str, recent: list[str], *, session_id: str | None = None) -> str:
+        """Light STT polish. Skip when there is no context, and keep the original if the model rewrites too much.
+
+        `session_id` is the session this polish was made FOR. The request can take up
+        to 8s, so a caller that may outlive its session passes the original id: the
+        usage is then booked there instead of to whichever session happens to be
+        current when the model answers.
+        """
         src = (text or "").strip()
+        billing_session = self.usage_session_id if session_id is None else session_id
         ctx_lines = [t.strip() for t in recent if (t or "").strip()]
         if not src or len(src) < 8 or not ctx_lines:
             return src
@@ -1458,7 +1465,7 @@ class Pipeline:
 
                 consume_llm(
                     self.user_id,
-                    self.usage_session_id,
+                    billing_session,
                     max(1, len(src) // 4),
                     max(1, len(out or src) // 4),
                 )
@@ -5817,12 +5824,12 @@ class Session:
             dur = len(pcm) / float(SR * 2)
             return assemblyai_transcribe_pcm(key, pcm, cfg, timeout=min(90.0, max(24.0, dur * 2 + 12)))
 
-    def _polish_manual_text(self, text: str) -> str:
+    def _polish_manual_text(self, text: str, *, session_id: str | None = None) -> str:
         src = (text or "").strip()
         if self._manual:
             return src
         recent = [t for t, _ in self._recent_finals[-4:]]
-        return self.pipeline.repair_caption(src, recent)
+        return self.pipeline.repair_caption(src, recent, session_id=session_id)
 
     def _finish_manual_chunk(self, pcm: bytes) -> None:
         try:
@@ -5921,7 +5928,15 @@ class Session:
         if self._manual_session_stale(submit_session_gen):
             logging.getLogger("nod").info("qa_drop reason=stale_manual stage=transcribed")
             return
-        text = self._polish_manual_text(text)
+        # The polish is not local: with earlier context it makes a bounded model
+        # request (8s). Its usage must be booked to the session this recording came
+        # from, and ownership is re-checked the moment it returns — before the empty
+        # status, the mode dispatch, the answer slot or a paid search.
+        origin_session_id = getattr(self, "usage_session_id", None)
+        text = self._polish_manual_text(text, session_id=origin_session_id)
+        if self._manual_session_stale(submit_session_gen):
+            logging.getLogger("nod").info("qa_drop reason=stale_manual stage=polished")
+            return
         if not (text or "").strip():
             self.emit({"type": "status", "text": STATUS_EMPTY})
             self._set_engine("idle")
