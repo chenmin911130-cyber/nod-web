@@ -34,7 +34,7 @@ import {
   speakerSuggestText,
   spokenSettingsValue,
 } from '../iphoneCopy'
-import { ENDED_TAP_SLOP, endedDockFromPointer, endedSheetAvailable, listenAskPlacement, nextComposeDraft } from '../listenChrome'
+import { ENDED_TAP_SLOP, bottomBarMode, endedDockFromPointer, endedHasContent, endedSheetAvailable, listenAskPlacement, nextComposeDraft } from '../listenChrome'
 import { usePhoneChrome } from '../phoneChrome'
 import { askOutcome, groupTranscript, iphoneSummaryHeading, isCatchAskCurrent, liveFeed, liveStageMode, summaryPlainText, transcriptPlainText, type LiveFeedItem } from '../liveView'
 import { useStickToBottom } from '../useStickToBottom'
@@ -82,6 +82,7 @@ interface Props {
   catchAskId?: string
   elapsedMs?: number
   sessionKey?: string
+  onStart?: () => void
   onPause?: () => void
   onResume?: () => void
   onStop?: () => void
@@ -796,6 +797,7 @@ function IphoneLiveFeed({
   onRename,
   onRetry,
   suggest,
+  footer,
 }: {
   items: LiveFeedItem[]
   draft: { speaker: string; text: string } | null
@@ -806,6 +808,7 @@ function IphoneLiveFeed({
   onRename: (id: string, name: string) => void
   onRetry?: (noteId: string) => void
   suggest?: ReactNode
+  footer?: ReactNode
 }) {
   const listRef = useRef<HTMLDivElement>(null)
   const stick = useStickToBottom(listRef, [items, draft?.text, draft?.speaker, listening, paused])
@@ -854,6 +857,7 @@ function IphoneLiveFeed({
           {IPHONE_COPY.backToLatest}
         </button>
       ) : null}
+      {footer}
     </div>
   )
 }
@@ -1122,13 +1126,25 @@ export default function ListenPane(props: Props) {
   const settingsLockedUi = phone && (props.listening || paused)
   const settingsEndedUi = phone && props.ended && !props.listening && !paused
   const settingsEditable = ready || settingsEndedUi
+  const hasContent = endedHasContent({
+    lines: props.lines.length,
+    partial: Boolean(props.partial),
+    catchNotes: props.catchNotes.length,
+    notesRaw: props.notesRaw,
+  })
   const endedSheetUi = endedSheetAvailable({
     phone,
     qa: Boolean(props.qa),
     listening: props.listening,
     paused,
     ended: props.ended,
-    hasContent: props.lines.length > 0 || Boolean(props.partial) || props.catchNotes.length > 0 || Boolean(props.notesRaw.trim()),
+    hasContent,
+  })
+  const barMode = bottomBarMode({
+    listening: props.listening,
+    paused,
+    ended: props.ended,
+    hasContent,
   })
   const askPlacement = listenAskPlacement({
     phone,
@@ -1137,8 +1153,17 @@ export default function ListenPane(props: Props) {
     listening: props.listening,
     paused,
     ended: props.ended,
-    hasContent: props.lines.length > 0 || Boolean(props.partial) || props.catchNotes.length > 0,
+    hasContent,
   })
+
+  const closeAsk = () => {
+    setAskOpen(false)
+    inputRef.current?.blur()
+  }
+  const toggleAsk = () => {
+    if (askOpen) closeAsk()
+    else setAskOpen(true)
+  }
 
   useEffect(() => {
     const prev = sessionKeyRef.current
@@ -1283,7 +1308,31 @@ export default function ListenPane(props: Props) {
     busy: props.busy,
     catchAskId: props.catchAskId,
   })
-  const showQuickChips = phone && askOpen && mobilePane !== 'transcript' && !props.qa && props.scene !== 'interview' && (props.listening || paused) && props.lines.length > 0 && !props.busy
+  const showQuickChips = phone && mobilePane !== 'transcript' && !props.qa && props.scene !== 'interview' && (props.listening || paused || (props.ended && hasContent)) && props.lines.length > 0
+  // #193 item 2: the shortcuts live in the content area (the design puts them
+  // under the last line) and no longer depend on the Ask input being open.
+  const quickChips = showQuickChips ? (
+    <div className="iphone-ask-chips" role="group" aria-label="Quick questions">
+      <button
+        type="button"
+        className="iphone-ask-chip"
+        disabled={props.busy}
+        onClick={() => props.onSummary()}
+      >
+        <span aria-hidden="true">✦</span>
+        {IPHONE_COPY.quickSummarize}
+      </button>
+      <button
+        type="button"
+        className="iphone-ask-chip"
+        disabled={props.busy}
+        onClick={() => props.onAsk(lecture ? IPHONE_COPY.quickKeyConcepts : IPHONE_COPY.quickActionItems)}
+      >
+        <span aria-hidden="true">☰</span>
+        {lecture ? IPHONE_COPY.quickKeyConceptsChip : IPHONE_COPY.quickActionItemsChip}
+      </button>
+    </div>
+  ) : null
   const trGroups = useMemo(
     () => groupTranscript(
       props.lines,
@@ -1586,6 +1635,15 @@ export default function ListenPane(props: Props) {
           {settingsList()}
           {props.saveBanner}
           {props.actions}
+          {!props.qa && props.onStart ? (
+            <ListenRecordBar
+              mode="ready"
+              elapsedMs={0}
+              startLabel={IPHONE_COPY.startListening}
+              stopLabel={IPHONE_COPY.stop}
+              onStart={props.onStart}
+            />
+          ) : null}
         </div>
       ) : phone ? (
         <div className="iphone-stack">
@@ -1604,9 +1662,6 @@ export default function ListenPane(props: Props) {
                 onClick={onEndedHandleClick}
               />
               <span className="iphone-ended-clock">{IPHONE_COPY.endedStatus} · {listenClock(props.elapsedMs || 0)}</span>
-              <button type="button" className="iphone-btn primary iphone-continue" onClick={() => props.onContinue?.()}>
-                {IPHONE_COPY.continueRecording}
-              </button>
             </div>
           ) : null}
           {endedSheetUi ? (
@@ -1652,6 +1707,7 @@ export default function ListenPane(props: Props) {
           onRename={props.onRenameSpeaker}
           onRetry={props.onRetryAsk}
           suggest={speakerSuggestRow}
+          footer={quickChips}
         />
       ) : ready ? null : showStage && !props.qa ? (
         <IphoneMicStage listening={props.listening} />
@@ -1932,41 +1988,16 @@ export default function ListenPane(props: Props) {
 
           <div className={`listen-ask-dock${askPlacement === 'fab' ? ' ask-fab-dock' : ''}${askPlacement === 'bar' ? ' ask-bar-dock' : ''}`}>
           {props.saveBanner}
-          {askPlacement === 'bar' && props.onPause && props.onResume && props.onStop ? (
-            <ListenRecordBar
-              paused={paused}
-              elapsedMs={props.elapsedMs || 0}
-              askOpen={askOpen}
-              onPause={props.onPause}
-              onResume={props.onResume}
-              onStop={props.onStop}
-              onAskToggle={() => setAskOpen((open) => !open)}
-            />
-          ) : null}
-          {askPlacement !== 'field' && askPlacement !== 'hidden' && askPlacement !== 'bar' && !askOpen ? (
+          {askPlacement !== 'field' && askPlacement !== 'hidden' ? (
             <AskBubble
               className={askPlacement === 'fab' ? 'iphone-ask-fab' : 'iphone-ask-dock-btn'}
-              onClick={() => setAskOpen(true)}
+              draggable
+              expanded={askOpen}
+              onClick={toggleAsk}
             />
           ) : null}
           {(askPlacement === 'field' || (askOpen && askPlacement !== 'hidden')) ? (
             <>
-          {showQuickChips ? (
-            <div className="iphone-ask-chips" role="group" aria-label="Quick questions">
-              <button type="button" className="iphone-ask-chip" onClick={() => props.onSummary()}>
-                <span aria-hidden="true">✦</span>
-                {IPHONE_COPY.quickSummarize}
-              </button>
-              <button
-                type="button"
-                className="iphone-ask-chip"
-                onClick={() => props.onAsk(lecture ? IPHONE_COPY.quickKeyConcepts : IPHONE_COPY.quickActionItems)}
-              >
-                <span aria-hidden="true">☰</span>
-                {lecture ? IPHONE_COPY.quickKeyConceptsChip : IPHONE_COPY.quickActionItemsChip}
-              </button>
-            </div>
-          ) : null}
           <div className="listen-prompt">
             {phone ? (
               <span className="iphone-ask-spark" aria-hidden="true">
@@ -1992,7 +2023,7 @@ export default function ListenPane(props: Props) {
                 type="button"
                 className="iphone-ask-collapse"
                 aria-label={IPHONE_COPY.collapseAsk}
-                onClick={() => setAskOpen(false)}
+                onClick={closeAsk}
               >
                 ⌄
               </button>
@@ -2010,6 +2041,20 @@ export default function ListenPane(props: Props) {
             </button>
           </div>
             </>
+          ) : null}
+          {phone && !props.qa && props.onStart ? (
+            <ListenRecordBar
+              mode={barMode}
+              elapsedMs={props.elapsedMs || 0}
+              startLabel={IPHONE_COPY.startListening}
+              stopLabel={IPHONE_COPY.stop}
+              continueLabel={IPHONE_COPY.continueRecording}
+              onStart={props.onStart}
+              onPause={props.onPause}
+              onResume={props.onResume}
+              onStop={props.onStop}
+              onContinue={props.onContinue}
+            />
           ) : null}
           </div>
         </>

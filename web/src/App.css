@@ -7727,6 +7727,10 @@ html.nod-phone .app.iphone-v2 .iphone-ask-chips {
   display: flex;
   gap: 8px;
   overflow-x: auto;
+  /* #193 review: never let a shrinking feed crush the shortcuts to a sliver —
+     their own height must survive the keyboard-open layout. */
+  flex: 0 0 auto;
+  min-height: 44px;
   padding: 0 max(var(--iphone-gutter), env(safe-area-inset-right)) 8px max(var(--iphone-gutter), env(safe-area-inset-left));
 }
 
@@ -7744,6 +7748,10 @@ html.nod-phone .app.iphone-v2 .iphone-ask-chip {
   font-size: 13px;
   font-weight: 650;
   white-space: nowrap;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-ask-chip:disabled {
+  opacity: 0.5;
 }
 
 html.nod-phone .app.iphone-v2 .iphone-ask-chip span {
@@ -8568,6 +8576,28 @@ html.nod-phone .app.iphone-v2 .translate-main .empty-sub {
   color: #8e8e93;
   font-size: 14px;
   margin-top: 6px;
+}
+
+/* #193 item 7 + review: while the keyboard is open the bubble MUST stay
+   reachable (tapping it is what closes the input and the keyboard), so the
+   crowding is solved by space instead of hiding it — the bubble loses its
+   bottom gap, the input row tightens, and the body (which scrolls) gives up the
+   rest. The shortcuts keep their own height below. */
+html.nod-native.kb-open .app.iphone-v2 .listen-ask-dock .iphone-ask-bubble,
+html.nod-native.kb-open .app.iphone-v2 .iphone-tr-dock .iphone-ask-bubble {
+  margin-bottom: 2px;
+}
+
+html.nod-native.kb-open .app.iphone-v2 .listen-prompt {
+  min-height: 48px;
+  margin-top: 0;
+}
+
+/* #193 item 7: with the keyboard open the keyboard owns the bottom edge, so the
+   bar must not also pad for the home indicator — that dead space pushed the
+   controls up inside an already-short visual viewport. */
+html.nod-native.kb-open .app.iphone-v2 .iphone-live-bar {
+  padding-bottom: 10px;
 }
 
 html.nod-phone .app.iphone-v2 .iphone-tr-dock {
@@ -9696,71 +9726,128 @@ html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-continue {
   font-weight: 700;
 }
 
-html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-live-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 60px;
-  padding: 8px max(var(--iphone-gutter), env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(var(--iphone-gutter), env(safe-area-inset-left));
-}
-
-html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-live-meter {
+/* #193 items 4/5: one bottom bar for the phone Listen AND Translate workspaces
+   (the Listen variant name in the selector would hide it from Translate). */
+html.nod-phone .app.iphone-v2 .iphone-live-bar {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 62px;
+  border-top: 1px solid #2c2c2e;
+  padding: 8px max(var(--iphone-gutter), env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(var(--iphone-gutter), env(safe-area-inset-left));
+}
+
+html.nod-phone .app.iphone-v2 .iphone-bar-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 54px;
+  border: 0;
+  border-radius: 14px;
+  background: #00d2ff;
+  color: #050607;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-meter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
   flex: 1 1 auto;
 }
 
-html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-vol {
+/* #193 item 6: the recording indicator and the meter are this round's
+   "dynamic" objects — ~20% larger, everything else on the bar stays put. */
+html.nod-phone .app.iphone-v2 .iphone-live-bar .iphone-dot {
+  width: 12px;
+  height: 12px;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-bar .iphone-clock {
+  font-size: 15px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-vol {
   display: inline-flex;
   align-items: flex-end;
   gap: 2px;
-  height: 18px;
+  height: 22px;
 }
 
-html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-vol i {
+html.nod-phone .app.iphone-v2 .iphone-vol i {
   display: block;
-  width: 3px;
-  border-radius: 1px;
+  width: 3.5px;
+  border-radius: 1.5px;
   background: #00d2ff;
 }
 
-html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-live-meter.paused .iphone-vol i {
+html.nod-phone .app.iphone-v2 .iphone-live-meter.paused .iphone-vol i {
   background: #636366;
 }
 
-html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-live-ctrl {
+html.nod-phone .app.iphone-v2 .iphone-live-ctrl {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
   min-width: 44px;
   min-height: 44px;
-  padding: 0 10px;
+  padding: 0;
   border: 0;
-  border-radius: 12px;
+  border-radius: 999px;
   background: #1c1c1e;
   color: #f4f8fc;
   font-size: 13px;
   font-weight: 650;
 }
 
-html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-live-end {
+html.nod-phone .app.iphone-v2 .iphone-live-resume {
+  width: auto;
+  min-width: 44px;
+  padding: 0 14px;
+  border-radius: 12px;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-sep {
+  flex: 0 0 1px;
+  align-self: center;
+  width: 1px;
+  height: 28px;
+  background: #2c2c2e;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-end {
+  width: auto;
+  padding: 0 14px;
+  border-radius: 12px;
   color: #ff453a;
 }
 
 html.nod-phone .app.iphone-v2 .iphone-ask-bubble {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: 52px;
+  height: 52px;
   min-width: 44px;
   min-height: 44px;
   border: 0;
-  border-radius: 14px;
+  border-radius: 999px;
   background: #00d2ff;
   color: #050607;
+}
+
+/* #193 item 3: the bubble is the one Ask entry — draggable, never a duplicate. */
+html.nod-phone .app.iphone-v2 .iphone-ask-bubble.draggable {
+  position: relative;
+  z-index: 4;
+  touch-action: none;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
 }
 
 html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-ask-fab,
@@ -9772,6 +9859,16 @@ html.nod-phone .app.iphone-v2 .iphone-tr-ask-wrap {
   display: flex;
   justify-content: flex-end;
   padding: 0 max(var(--iphone-gutter), env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(var(--iphone-gutter), env(safe-area-inset-left));
+}
+
+/* #193: with the bar below, the Ask entry and the input no longer own the
+   bottom safe area — the bar does. Avoids deducting the inset twice. */
+html.nod-phone .app.iphone-v2 .iphone-tr-dock .iphone-tr-ask-wrap {
+  padding-bottom: 8px;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-tr-dock .iphone-tr-prompt {
+  margin-bottom: 8px;
 }
 
 html.nod-phone .app.iphone-v2 .iphone-ask-collapse {

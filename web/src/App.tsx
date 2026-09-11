@@ -17,7 +17,7 @@ import LeaveSessionSheet from './components/LeaveSessionSheet'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
 import { IPHONE_COPY, canSwitchWorkspace, sameSpokenLine, sessionListening } from './iphoneCopy'
-import { showListenNew, composeSessionKey, nextComposeSessionId } from './listenChrome'
+import { showListenNew, composeSessionKey, nextComposeSessionId, endedHasContent, IDLE_CAPTURE_CLOCK, advanceCaptureClock, captureClockMs, clockCapture } from './listenChrome'
 import SaveBanner from './components/SaveBanner'
 import {
   KEEP_ACK_TIMEOUT_MS,
@@ -2692,6 +2692,16 @@ export default function App() {
     }
     if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
       endMeetingListeningRef.current('Listening stopped · writing notes', true)
+      return
+    }
+    // #193: Translate has no notes/save machine, so a PAUSED Translate session
+    // must still Stop — handlePrimary only resumes it, so Pause → Stop used to
+    // leave the listener attached and blocked the next session. This mirrors the
+    // bare stopListen() the translate branch of handlePrimary already uses from
+    // the listening state. Scoped to translate: Live Q&A keeps its old handling.
+    if (s.capture === 'paused' && s.workspaceMode === 'translate') {
+      stopListen()
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'Stopped' } })
     }
   }, [handlePrimary])
 
@@ -3416,6 +3426,27 @@ export default function App() {
     return () => window.clearInterval(id)
   }, [state.workspaceMode, state.meetingStartedAt, clockRunning])
 
+  // Translate capture clock (#193 item 5). Its own source of truth: capture
+  // only, per workspace, so it can never show a Meeting session's length. The
+  // service keeps a separate meetingElapsedMs; nothing is shared here.
+  const [translateElapsedMs, setTranslateElapsedMs] = useState(0)
+  const translateClockRef = useRef(IDLE_CAPTURE_CLOCK)
+  const translateCapture = clockCapture(state.workspaceMode, 'translate', state.capture)
+  useEffect(() => {
+    translateClockRef.current = advanceCaptureClock(translateClockRef.current, {
+      capture: translateCapture,
+      now: Date.now(),
+    })
+    setTranslateElapsedMs(captureClockMs(translateClockRef.current, Date.now()))
+  }, [translateCapture, state.workspaceMode])
+  useEffect(() => {
+    if (translateCapture !== 'listening' && translateCapture !== 'recording') return
+    const id = window.setInterval(() => {
+      setTranslateElapsedMs(captureClockMs(translateClockRef.current, Date.now()))
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [translateCapture])
+
   if (!state.keys.hasLlm || !state.keys.hasStt) {
     return <KeySetup hasLlm={state.keys.hasLlm} hasStt={state.keys.hasStt} />
   }
@@ -3532,6 +3563,9 @@ export default function App() {
       onCloseMore={() => setMoreOpen(false)}
       onExportPdf={() => { void handleExportPdf() }}
       onSave={() => {
+        // #193 item 8: Translate has no Save. The More row is gone for that
+        // mode; this keeps any other caller from opening a save for it.
+        if (stateRef.current.workspaceMode === 'translate') return
         if (historyKept) {
           setHistoryOpen(true)
           return
@@ -3573,6 +3607,13 @@ export default function App() {
           workspace: state.workspaceMode === 'translate' ? 'translate' : state.workspaceMode === 'interview' ? 'interview' : 'meeting',
           listening,
           paused: iphonePaused,
+          ended: state.workspaceMode === 'meeting' && state.meetingEnded,
+          hasContent: endedHasContent({
+            lines: state.meetingLines.length,
+            partial: Boolean(state.partial),
+            catchNotes: state.catchNotes.length,
+            notesRaw: state.notesRaw,
+          }),
         })}
         onNew={handleNewSession}
         listening={listening}
@@ -3630,7 +3671,7 @@ export default function App() {
         />
       ) : null}
       <SavePrompt
-        open={savePrompt}
+        open={savePrompt && state.workspaceMode !== 'translate'}
         secondary={savePromptMode}
         onKeep={(opts) => {
           setSavePrompt(false)
@@ -3753,6 +3794,12 @@ export default function App() {
             )}
             actions={phoneActions}
             sessionKey={composeSessionKey(state.workspaceMode, state.composeSessionId)}
+            capture={state.capture}
+            elapsedMs={translateElapsedMs}
+            onStart={handlePrimary}
+            onPause={handlePause}
+            onResume={handleResume}
+            onStop={handleStop}
             speaking={speaking}
             onStopSpeech={stopSpeech}
             onSpeak={(text) => {
@@ -3837,6 +3884,7 @@ export default function App() {
             catchAskId={state.catchAskId}
             elapsedMs={state.meetingElapsedMs}
             sessionKey={composeSessionKey(state.workspaceMode, state.composeSessionId)}
+            onStart={handlePrimary}
             onPause={handlePause}
             onResume={handleResume}
             onStop={handleStop}

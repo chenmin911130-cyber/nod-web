@@ -352,7 +352,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             self.flushUnackedLocked()
             let last = self.sendBuffer.lastByte
             DispatchQueue.main.async {
-                self.pendingSaveOffer = last > 0
+                // #193 item 8: Translate has no Save concept, so a Translate
+                // session must not offer Save on the wrist either — same rule
+                // the phone's More sheet now applies. Meeting / Lecture /
+                // Interview keep the existing offer.
+                self.pendingSaveOffer = last > 0 && self.mode != "translate"
                 self.armDrainWait()
                 self.send(action: "drain")
                 self.maybeCompleteDrain()
@@ -931,7 +935,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         draining = false
         drainFailed = false
         send(action: "stop")
-        let offer = pendingSaveOffer
+        let offer = pendingSaveOffer && mode != "translate"
         pendingSaveOffer = false
         if saveAfterDrain {
             saveAfterDrain = false
