@@ -532,12 +532,24 @@ def list_history(user_id: str, limit: int = 40) -> list[dict]:
     return out
 
 
+# #196: modes whose sessions have no Save concept must never become a pending
+# "unsaved" restore target. Translate records audio + translation but never keeps
+# a History session, so returning one here made the client show it as Unsaved in
+# History and offer Save for it once the user switched back to Meeting. Every
+# other mode (meeting / lecture / interview, plus legacy NULL) stays eligible, so
+# a newer Translate session can no longer mask an older recoverable Meeting.
+NOT_PENDING_MODES = ("translate",)
+
+
 def list_pending_history(user_id: str) -> list[dict]:
     """Recoverable, never-saved sessions with content: kept=False + ended + not discarded.
 
     A meeting session that produced HistoryItems and closed without a Save is
     offered once on the next connect. Only the newest such session is returned
     (max 1 per user). Same shape as list_history so the client reuses its row.
+
+    The mode filter runs BEFORE the limit: a session in a mode that cannot be
+    saved is skipped, not returned (see NOT_PENDING_MODES).
     """
     if not user_id:
         return []
@@ -549,6 +561,7 @@ def list_pending_history(user_id: str) -> list[dict]:
                 UsageSession.kept.is_(False),
                 UsageSession.ended_at.isnot(None),
                 UsageSession.discarded_at.is_(None),
+                func.coalesce(UsageSession.mode, "").notin_(NOT_PENDING_MODES),
             )
             .order_by(UsageSession.started_at.desc())
             .limit(1)

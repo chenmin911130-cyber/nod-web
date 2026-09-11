@@ -29,6 +29,8 @@ def _add_unsaved_meeting(
     kept=False,
     started_at=None,
     with_item=True,
+    mode: str = "meeting",
+    scene: str | None = None,
 ) -> None:
     with session() as db:
         if db.get(User, user_id) is None:
@@ -37,8 +39,8 @@ def _add_unsaved_meeting(
             UsageSession(
                 id=sid,
                 user_id=user_id,
-                mode="meeting",
-                scene="meeting",
+                mode=mode,
+                scene=scene if scene is not None else mode,
                 title=sid,
                 started_at=started_at or utcnow(),
                 ended_at=ended_at,
@@ -106,6 +108,48 @@ def test_pending_older_than_24h_is_purged(meter_env):
     with meter_env() as db:
         assert db.get(UsageSession, "old").discarded_at is not None
         assert db.get(UsageSession, "fresh").discarded_at is None
+
+
+def test_pending_excludes_translate(meter_env):
+    """#196: a Translate session has no Save concept, so it is never a pending target."""
+    from server.meter import list_pending_history
+
+    _add_unsaved_meeting(meter_env, "tr", mode="translate", ended_at=utcnow())
+    assert list_pending_history("u1") == []
+
+
+def test_newer_translate_does_not_mask_older_meeting(meter_env):
+    """The mode filter must run inside the query, before limit(1) — not after it."""
+    from server.meter import list_pending_history
+
+    now = utcnow()
+    _add_unsaved_meeting(meter_env, "tr", mode="translate", started_at=now, ended_at=now)
+    _add_unsaved_meeting(
+        meter_env,
+        "m",
+        mode="meeting",
+        started_at=now - timedelta(minutes=60),
+        ended_at=now - timedelta(minutes=30),
+    )
+    assert [row["id"] for row in list_pending_history("u1")] == ["m"]
+    assert list_pending_history("u1")[0]["mode"] == "meeting"
+
+
+def test_pending_keeps_legacy_row_without_mode(meter_env):
+    """A legacy row with no mode must keep its recovery entry (never hide a real meeting)."""
+    from server.meter import list_pending_history
+
+    _add_unsaved_meeting(meter_env, "legacy", mode="", ended_at=utcnow())
+    assert [row["id"] for row in list_pending_history("u1")] == ["legacy"]
+
+
+def test_kept_translate_still_listed_in_history(meter_env):
+    """Filtering the pending side must not change the saved list."""
+    from server.meter import list_history, list_pending_history
+
+    _add_unsaved_meeting(meter_env, "tr", mode="translate", ended_at=utcnow(), kept=True)
+    assert [row["id"] for row in list_history("u1")] == ["tr"]
+    assert list_pending_history("u1") == []
 
 
 def test_save_history_with_speaker_roundtrips(meter_env):
