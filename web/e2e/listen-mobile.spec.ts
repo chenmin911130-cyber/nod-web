@@ -395,7 +395,13 @@ test.describe('Listen mobile recording chrome', () => {
     await expect(page.locator('.listen-prompt input')).toBeVisible()
     await bubble.click()
     await expect(page.locator('.listen-prompt input')).toHaveCount(0)
-    await page.screenshot({ path: `${EVIDENCE}/listen-ask-kb-390.png` })
+    // The evidence image for this layout (`after/listen-ask-kb-390.png`) is
+    // produced by e2e/chrome-shots.spec.ts (`listen-ask-kb`), which captures it
+    // with the input row OPEN — the state this file documents. It used to be
+    // written here as well, AFTER the toggle click had already collapsed the
+    // input, so whichever spec ran last won: a listen-mobile-only run silently
+    // replaced the evidence with a shot that shows no input row and therefore no
+    // crowding at all. One writer per artifact.
   })
 })
 
