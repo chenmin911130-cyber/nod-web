@@ -92,6 +92,15 @@ class SecurityHeadersTests(unittest.TestCase):
         self.assertIn("wss://clerk.nodpilot.com", csp)
         self.assertIn("clerk.nodpilot.com", content_security_policy())
 
+    def test_csp_allows_cloudflare_insights_and_google_gsi_style(self):
+        csp = content_security_policy()
+        script = csp.split("script-src", 1)[1].split(";", 1)[0]
+        style = csp.split("style-src", 1)[1].split(";", 1)[0]
+        connect = csp.split("connect-src", 1)[1].split(";", 1)[0]
+        self.assertIn("https://static.cloudflareinsights.com", script)
+        self.assertIn("https://accounts.google.com", style)
+        self.assertIn("https://cloudflareinsights.com", connect)
+
 
 if __name__ == "__main__":
     unittest.main()
