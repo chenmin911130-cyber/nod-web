@@ -25,6 +25,7 @@ import {
   bilingualButtonTitle,
   isListenReadyView,
   listenChipParts,
+  listenClock,
   nativeListenChipOrder,
   notesChipParts,
   notesPageTitle,
@@ -33,11 +34,14 @@ import {
   speakerSuggestText,
   spokenSettingsValue,
 } from '../iphoneCopy'
+import { endedSheetAvailable, endedSheetGesture, listenAskPlacement, nextComposeDraft } from '../listenChrome'
 import { usePhoneChrome } from '../phoneChrome'
 import { askOutcome, groupTranscript, iphoneSummaryHeading, isCatchAskCurrent, liveFeed, liveStageMode, summaryPlainText, transcriptPlainText, type LiveFeedItem } from '../liveView'
 import { useStickToBottom } from '../useStickToBottom'
 import { AnswerContent } from './AnswerContent'
 import { CopyButton, ShareOrCopyButton } from './CopyButton'
+import AskBubble from './AskBubble'
+import ListenRecordBar from './ListenRecordBar'
 import PhoneSheet from './PhoneSheet'
 import SpeakerAvatar from './SpeakerAvatar'
 
@@ -77,6 +81,11 @@ interface Props {
   onRetryAsk?: (noteId: string) => void
   catchAskId?: string
   elapsedMs?: number
+  sessionKey?: string
+  onPause?: () => void
+  onResume?: () => void
+  onStop?: () => void
+  onContinue?: () => void
   onExportPdf?: () => void
   actions?: ReactNode
   saveBanner?: ReactNode
@@ -801,6 +810,7 @@ function IphoneLiveFeed({
   const listRef = useRef<HTMLDivElement>(null)
   const stick = useStickToBottom(listRef, [items, draft?.text, draft?.speaker, listening, paused])
   const showDraft = Boolean(draft) && !ended
+  const liveNowId = showDraft ? null : [...items].reverse().find((item) => item.type !== 'ask')?.id
   return (
     <div className="iphone-live-feed-wrap">
       {suggest}
@@ -809,7 +819,7 @@ function IphoneLiveFeed({
           item.type === 'ask' ? (
             <IphoneLiveAsk key={item.id} item={item} onRetry={onRetry} />
           ) : (
-            <div className="iphone-live-item" key={item.id}>
+            <div className={`iphone-live-item${item.id === liveNowId ? ' iphone-live-now' : ' iphone-live-past'}`} key={item.id}>
               {item.speaker ? <SpeakerAvatar speaker={item.speaker} /> : null}
               <div className="iphone-live-item-main">
                 <div className="iphone-live-item-meta">
@@ -828,7 +838,7 @@ function IphoneLiveFeed({
           )
         ))}
         {showDraft && draft ? (
-          <div className="iphone-live-draft">
+          <div className="iphone-live-draft iphone-live-now">
             <i className={`iphone-dot ${listening && !paused ? 'recording' : 'paused'}`} aria-hidden="true" />
             <div className="iphone-live-draft-main">
               <span className="iphone-live-draft-status">
@@ -987,7 +997,18 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
   const showFailed = p.translateFailed && p.translateOn
   if (p.actions) {
     return (
-      <div className={`listen-line iphone-tr-line${p.compact ? ' iphone-tr-compact' : ''}${p.live ? ' live' : ''}`} onClick={p.onOpen}>
+      <div className={`listen-line iphone-tr-line${p.compact ? ' iphone-tr-compact iphone-tr-card' : ''}${p.live ? ' live' : ''}`} onClick={p.onOpen}>
+        {p.compact ? (
+          <div className="iphone-tr-body">
+            {p.ts ? <div className="listen-ts">{p.ts}</div> : null}
+            <div className="listen-orig">{p.text}</div>
+            {showTr && (
+              <div className="listen-tr">{p.translation || (p.busy ? '…' : '')}</div>
+            )}
+            {showFailed && <div className="listen-tr failed">Translation failed</div>}
+          </div>
+        ) : (
+          <>
         {p.compact ? null : (
           <>
             <div className="listen-ts">{p.ts}</div>
@@ -1005,6 +1026,8 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
           {showFailed && <div className="listen-tr failed">Translation failed</div>}
           {p.compact && !p.showCopy ? null : <IphoneLineActions text={p.text} />}
         </div>
+          </>
+        )}
       </div>
     )
   }
@@ -1030,6 +1053,11 @@ export default function ListenPane(props: Props) {
   const biOn = notesBilingualOn(props.notesLang, props.translateOn)
   const biLocked = bilingualDisabled(props.notesLang, props.translateOn, props.notesTranslateTo)
   const [input, setInput] = useState('')
+  const [askOpen, setAskOpen] = useState(false)
+  const [endedDock, setEndedDock] = useState<'default' | 'expanded'>('default')
+  const inputRef = useRef<HTMLInputElement>(null)
+  const sessionKeyRef = useRef(props.sessionKey || '')
+  const endedSheetDrag = useRef<{ y: number } | null>(null)
   const [notesOpen, setNotesOpen] = useState(Boolean(props.notesDefaultOpen))
   const [mobilePane, setMobilePane] = useState<'live' | 'transcript' | 'notes'>(props.notesDefaultOpen ? 'notes' : 'live')
   const [notesW, setNotesW] = useState(() => readNotesW(props.scene))
@@ -1093,6 +1121,39 @@ export default function ListenPane(props: Props) {
   const settingsLockedUi = phone && (props.listening || paused)
   const settingsEndedUi = phone && props.ended && !props.listening && !paused
   const settingsEditable = ready || settingsEndedUi
+  const endedSheetUi = endedSheetAvailable({
+    phone,
+    qa: Boolean(props.qa),
+    listening: props.listening,
+    paused,
+    ended: props.ended,
+    hasContent: props.lines.length > 0 || Boolean(props.partial) || props.catchNotes.length > 0 || Boolean(props.notesRaw.trim()),
+  })
+  const askPlacement = listenAskPlacement({
+    phone,
+    qa: Boolean(props.qa),
+    ready,
+    listening: props.listening,
+    paused,
+    ended: props.ended,
+    hasContent: props.lines.length > 0 || Boolean(props.partial) || props.catchNotes.length > 0,
+  })
+
+  useEffect(() => {
+    const prev = sessionKeyRef.current
+    const next = props.sessionKey || ''
+    setInput((draft) => nextComposeDraft(prev, next, draft))
+    if (prev !== next) setAskOpen(false)
+    sessionKeyRef.current = next
+  }, [props.sessionKey])
+
+  useEffect(() => {
+    if (askOpen) inputRef.current?.focus()
+  }, [askOpen])
+
+  useEffect(() => {
+    if (!endedSheetUi) setEndedDock('default')
+  }, [endedSheetUi])
 
   useEffect(() => {
     if (props.listening || paused) setSheet(null)
@@ -1138,6 +1199,7 @@ export default function ListenPane(props: Props) {
   const openNotes = () => {
     setNotesOpen(true)
     setMobilePane('notes')
+    if (endedSheetUi) setEndedDock('expanded')
   }
 
   const runSummary = () => {
@@ -1168,7 +1230,7 @@ export default function ListenPane(props: Props) {
     busy: props.busy,
     catchAskId: props.catchAskId,
   })
-  const showQuickChips = phone && mobilePane !== 'transcript' && !props.qa && props.scene !== 'interview' && (props.listening || paused) && props.lines.length > 0 && !props.busy
+  const showQuickChips = phone && askOpen && mobilePane !== 'transcript' && !props.qa && props.scene !== 'interview' && (props.listening || paused) && props.lines.length > 0 && !props.busy
   const trGroups = useMemo(
     () => groupTranscript(
       props.lines,
@@ -1256,13 +1318,32 @@ export default function ListenPane(props: Props) {
   )
 
   const tabs = !props.qa ? (
-        <div className="listen-mobile-tabs" role="tablist" aria-label={phone ? 'Live, transcript, or notes' : 'Live or notes'}>
+        <div
+          className="listen-mobile-tabs"
+          role="tablist"
+          aria-label={phone ? 'Live, transcript, or notes' : 'Live or notes'}
+          onPointerDown={endedSheetUi ? (e) => {
+            if (endedSheetGesture('tabs') !== 'resize') return
+            endedSheetDrag.current = { y: e.clientY }
+          } : undefined}
+          onPointerUp={endedSheetUi ? (e) => {
+            const start = endedSheetDrag.current
+            endedSheetDrag.current = null
+            if (!start) return
+            const dy = start.y - e.clientY
+            if (Math.abs(dy) < 24) return
+            setEndedDock(dy > 0 ? 'expanded' : 'default')
+          } : undefined}
+        >
           <button
             type="button"
             role="tab"
             aria-selected={phone ? mobilePane === 'live' : stackedPane === 'live'}
             className={(phone ? mobilePane === 'live' : stackedPane === 'live') ? 'on' : ''}
-            onClick={() => setMobilePane('live')}
+            onClick={() => {
+              setMobilePane('live')
+              if (endedSheetUi) setEndedDock('expanded')
+            }}
           >
             {phone ? IPHONE_COPY.liveTab : 'Live'}
           </button>
@@ -1275,6 +1356,7 @@ export default function ListenPane(props: Props) {
               onClick={() => {
                 setNotesOpen(false)
                 setMobilePane('transcript')
+                if (endedSheetUi) setEndedDock('expanded')
               }}
             >
               {IPHONE_COPY.transcriptTab}
@@ -1440,7 +1522,7 @@ export default function ListenPane(props: Props) {
   )
 
   return (
-    <div className={`listen-main scene-${props.scene}${biOn ? ' tr-on' : ' tr-off'}${props.ended ? ' ended' : ''}${props.qa ? ' qa' : ''}${ready ? ' iphone-ready' : ''}`}>
+    <div className={`listen-main scene-${props.scene}${biOn ? ' tr-on' : ' tr-off'}${props.ended ? ' ended' : ''}${props.qa ? ' qa' : ''}${ready ? ' iphone-ready' : ''}${endedSheetUi ? ` ended-dock-${endedDock}` : ''}${askPlacement === 'bar' ? ' live-bar' : ''}`}>
       {ready ? (
         <div className="iphone-stack iphone-ready">
           <div className="iphone-stage">
@@ -1455,7 +1537,36 @@ export default function ListenPane(props: Props) {
       ) : phone ? (
         <div className="iphone-stack">
           {props.actions}
-          {settingsLockedUi ? (
+          {endedSheetUi ? (
+            <div className="iphone-ended-compact">
+              <button
+                type="button"
+                className="iphone-ended-handle"
+                aria-expanded={endedDock === 'expanded'}
+                aria-label={endedDock === 'expanded' ? IPHONE_COPY.collapseResults : IPHONE_COPY.expandResults}
+                onPointerDown={(e) => {
+                  if (endedSheetGesture('handle') !== 'resize') return
+                  endedSheetDrag.current = { y: e.clientY }
+                }}
+                onPointerUp={(e) => {
+                  const start = endedSheetDrag.current
+                  endedSheetDrag.current = null
+                  if (!start) return
+                  const dy = start.y - e.clientY
+                  if (Math.abs(dy) < 10) {
+                    setEndedDock((d) => (d === 'expanded' ? 'default' : 'expanded'))
+                    return
+                  }
+                  setEndedDock(dy > 0 ? 'expanded' : 'default')
+                }}
+              />
+              <span className="iphone-ended-clock">{IPHONE_COPY.endedStatus} · {listenClock(props.elapsedMs || 0)}</span>
+              <button type="button" className="iphone-btn primary iphone-continue" onClick={() => props.onContinue?.()}>
+                {IPHONE_COPY.continueRecording}
+              </button>
+            </div>
+          ) : null}
+          {endedSheetUi && endedDock === 'expanded' ? null : settingsLockedUi ? (
             <p className="iphone-meta" aria-label={IPHONE_COPY.settingsReadonlyAria}>
               {listenMetaLine({
                 scene: props.scene,
@@ -1467,7 +1578,7 @@ export default function ListenPane(props: Props) {
             </p>
           ) : settingsEndedUi ? (
             settingsList(IPHONE_COPY.appliesToNextRecording)
-          ) : (
+          ) : askPlacement === 'bar' ? null : (
             controls
           )}
           {props.showSavedLine ? (
@@ -1476,7 +1587,7 @@ export default function ListenPane(props: Props) {
               {IPHONE_COPY.saveSavedLine}
             </div>
           ) : null}
-          {tabs}
+          {endedSheetUi && endedDock === 'default' ? null : tabs}
         </div>
       ) : (
         <>
@@ -1518,10 +1629,6 @@ export default function ListenPane(props: Props) {
             <section className="listen-pane">
               {phone ? (
                 <div className="iphone-tr-head">
-                  <div>
-                    <div className="iphone-tr-head-title">{IPHONE_COPY.fullTranscript}</div>
-                    <div className="iphone-tr-head-sub">{IPHONE_COPY.allCapturedSpeech}</div>
-                  </div>
                   <CopyButton
                     className="iphone-tr-copy-all"
                     leadingIcon
@@ -1561,10 +1668,6 @@ export default function ListenPane(props: Props) {
                   <>
                   {speakerSuggestRow}
                   {trGroups.map((group, gi) => {
-                    const groupText = [
-                      ...group.lines.map((line) => line.text),
-                      group.draft?.text || '',
-                    ].filter(Boolean).join('\n')
                     const lastGroup = gi === trGroups.length - 1
                     return (
                       <div className="iphone-tr-group" key={`${group.speaker || 'none'}-${group.startTs || 'draft'}-${gi}`}>
@@ -1575,14 +1678,6 @@ export default function ListenPane(props: Props) {
                               speakerId={group.speaker}
                               label={resolveSpeakerName(props.speakerNames, group.speaker)}
                               onRename={props.onRenameSpeaker}
-                            />
-                          ) : null}
-                          {group.startTs ? <span className="iphone-tr-group-ts">{group.startTs}</span> : null}
-                          {groupText ? (
-                            <CopyButton
-                              className="iphone-tr-group-copy"
-                              idle={IPHONE_COPY.copyLine}
-                              text={groupText}
                             />
                           ) : null}
                         </div>
@@ -1790,8 +1885,27 @@ export default function ListenPane(props: Props) {
           </div>
           )}
 
-          <div className="listen-ask-dock">
+          <div className={`listen-ask-dock${askPlacement === 'fab' ? ' ask-fab-dock' : ''}${askPlacement === 'bar' ? ' ask-bar-dock' : ''}`}>
           {props.saveBanner}
+          {askPlacement === 'bar' && props.onPause && props.onResume && props.onStop ? (
+            <ListenRecordBar
+              paused={paused}
+              elapsedMs={props.elapsedMs || 0}
+              askOpen={askOpen}
+              onPause={props.onPause}
+              onResume={props.onResume}
+              onStop={props.onStop}
+              onAskToggle={() => setAskOpen((open) => !open)}
+            />
+          ) : null}
+          {askPlacement !== 'field' && askPlacement !== 'hidden' && askPlacement !== 'bar' && !askOpen ? (
+            <AskBubble
+              className={askPlacement === 'fab' ? 'iphone-ask-fab' : 'iphone-ask-dock-btn'}
+              onClick={() => setAskOpen(true)}
+            />
+          ) : null}
+          {(askPlacement === 'field' || (askOpen && askPlacement !== 'hidden')) ? (
+            <>
           {showQuickChips ? (
             <div className="iphone-ask-chips" role="group" aria-label="Quick questions">
               <button type="button" className="iphone-ask-chip" onClick={() => props.onSummary()}>
@@ -1817,6 +1931,7 @@ export default function ListenPane(props: Props) {
               </span>
             ) : null}
             <input
+              ref={inputRef}
               value={input}
               disabled={phone && props.busy}
               placeholder={phone ? (hadAskAnswer ? IPHONE_COPY.askFollowUp : IPHONE_COPY.askConversation) : 'Ask anything — the answer shows in Notes'}
@@ -1827,6 +1942,16 @@ export default function ListenPane(props: Props) {
                 if (e.key === 'Enter') submit()
               }}
             />
+            {phone && askPlacement !== 'field' ? (
+              <button
+                type="button"
+                className="iphone-ask-collapse"
+                aria-label={IPHONE_COPY.collapseAsk}
+                onClick={() => setAskOpen(false)}
+              >
+                ⌄
+              </button>
+            ) : null}
             <button type="button" className="listen-go" disabled={props.busy || !input.trim()} onClick={submit}>
               {phone && props.busy ? (
                 <span className="iphone-ask-spin" aria-hidden="true" />
@@ -1839,6 +1964,8 @@ export default function ListenPane(props: Props) {
               )}
             </button>
           </div>
+            </>
+          ) : null}
           </div>
         </>
       )}

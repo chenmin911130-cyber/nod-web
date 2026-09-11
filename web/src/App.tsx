@@ -17,6 +17,7 @@ import LeaveSessionSheet from './components/LeaveSessionSheet'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
 import { IPHONE_COPY, canSwitchWorkspace, sameSpokenLine, sessionListening } from './iphoneCopy'
+import { showListenNew } from './listenChrome'
 import SaveBanner from './components/SaveBanner'
 import {
   KEEP_ACK_TIMEOUT_MS,
@@ -3563,6 +3564,13 @@ export default function App() {
         onMore={() => setMoreOpen(true)}
         accountInitials={accountInitials(me?.name || '', me?.email || '')}
         onAccount={() => setAccountOpen(true)}
+        showNew={showListenNew({
+          phone,
+          workspace: state.workspaceMode === 'translate' ? 'translate' : state.workspaceMode === 'interview' ? 'interview' : 'meeting',
+          listening,
+          paused: iphonePaused,
+        })}
+        onNew={handleNewSession}
         listening={listening}
         elapsedMs={
           state.workspaceMode === 'meeting' && state.meetingStartedAt != null
@@ -3740,6 +3748,7 @@ export default function App() {
               />
             )}
             actions={phoneActions}
+            sessionKey={String(state.meetingStartedAt ?? 'idle')}
             speaking={speaking}
             onStopSpeech={stopSpeech}
             onSpeak={(text) => {
@@ -3823,6 +3832,11 @@ export default function App() {
             onRetryAsk={handleRetryAsk}
             catchAskId={state.catchAskId}
             elapsedMs={state.meetingElapsedMs}
+            sessionKey={String(state.meetingStartedAt ?? 'idle')}
+            onPause={handlePause}
+            onResume={handleResume}
+            onStop={handleStop}
+            onContinue={handlePrimary}
             onExportPdf={() => { void handleExportPdf() }}
             actions={phoneActions}
             showSavedLine={phone && state.workspaceMode === 'meeting' && historyKept && meetingHasSaveableContent(state)}

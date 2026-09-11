@@ -9597,3 +9597,218 @@ html.nod-phone .app.iphone-v2 .leave-sheet-discard-help {
 .account-retry:disabled {
   opacity: 0.45;
 }
+
+/* #190 phone Listen / Translate compose — scoped, no other surfaces. */
+html.nod-phone .app.iphone-v2 .tb-new {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: #f4f8fc;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa).ended-dock-default .listen-split,
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa).ended-dock-default .iphone-live-feed-wrap,
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa).ended-dock-default .iphone-stage {
+  display: none;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-ended-compact {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  margin: 0 0 8px;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-ended-handle {
+  flex: 0 0 44px;
+  width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  position: relative;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-ended-handle::before {
+  content: '';
+  display: block;
+  width: 36px;
+  height: 5px;
+  margin: 0 auto;
+  border-radius: 99px;
+  background: #3a3a3c;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-ended-clock {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #f4f8fc;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-continue {
+  flex: 0 0 auto;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 12px;
+  background: #00d2ff;
+  color: #050607;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-live-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 60px;
+  padding: 8px max(var(--iphone-gutter), env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(var(--iphone-gutter), env(safe-area-inset-left));
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-live-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-vol {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 18px;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-vol i {
+  display: block;
+  width: 3px;
+  border-radius: 1px;
+  background: #00d2ff;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-live-meter.paused .iphone-vol i {
+  background: #636366;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-live-ctrl {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 12px;
+  background: #1c1c1e;
+  color: #f4f8fc;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-live-end {
+  color: #ff453a;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-ask-bubble {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 14px;
+  background: #00d2ff;
+  color: #050607;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-ask-fab,
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-ask-dock-btn {
+  margin: 0 12px 10px auto;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-tr-ask-wrap {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 max(var(--iphone-gutter), env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(var(--iphone-gutter), env(safe-area-inset-left));
+}
+
+html.nod-phone .app.iphone-v2 .iphone-ask-collapse {
+  display: grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: #8e8e93;
+  font-size: 18px;
+  line-height: 1;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-tr-line.iphone-tr-card {
+  display: block;
+  grid-template-columns: none;
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #2c2c2e;
+  box-shadow: none;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-tr-line.iphone-tr-card .listen-ts {
+  margin: 0 0 4px;
+  color: #8e8e93;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-tr-line.iphone-tr-card .listen-orig,
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-tr-line.iphone-tr-card .listen-tr {
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-live-item.iphone-live-past {
+  border-bottom: 0;
+  padding: 8px 0;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-live-item.iphone-live-now,
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-live-draft.iphone-live-now {
+  background: #2c2c2e;
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 4px 0;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-live-item-text,
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-sum-block p,
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-sum-block li,
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .lec-block li {
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .listen-scroll {
+  padding-left: max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-dot.recording {
+    animation: none;
+  }
+}

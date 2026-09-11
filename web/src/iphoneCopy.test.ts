@@ -63,6 +63,8 @@ eq(IPHONE_COPY.saveFailed, "Couldn't save.", 'keep failed copy')
 eq(IPHONE_COPY.saveRetry, 'Retry save', 'failed banner retry')
 eq(IPHONE_COPY.saveWaitingSync, 'Waiting to sync', 'native local keep on History')
 eq(IPHONE_COPY.saveSavedLine, 'Saved to History', 'ack-only saved line')
+eq(IPHONE_COPY.newCompact, '+ New', 'compact Listen New')
+eq(IPHONE_COPY.continueRecording, 'Continue', 'ended sheet Continue')
 eq(IPHONE_COPY.saveCancel, 'Cancel', 'non-native collect cancel')
 eq(IPHONE_COPY.keepRecording, 'Keep recording', 'Save can keep the WAV')
 eq(
