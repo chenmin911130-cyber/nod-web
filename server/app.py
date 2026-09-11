@@ -25,7 +25,6 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
@@ -33,7 +32,7 @@ from starlette.concurrency import run_in_threadpool
 
 from server.admin import router as admin_router
 from server.commerce import router as commerce_router
-from server.cors import cors_origins
+from server.cors import OriginLockedCORSMiddleware, cors_origins
 from server.db import User, init_db
 from server.headers import ApexRedirectMiddleware, CloudflareOriginMiddleware, HostLockMiddleware, SecurityHeadersMiddleware
 from server.lang import (
@@ -82,6 +81,7 @@ from server.logging_setup import backup_now, setup_logging
 from server.settings import (
     AUTH_DISABLED,
     CLERK_PUBLISHABLE_KEY,
+    CONTACT_EMAIL,
     COOKIE_NAME,
     LISTEN_IDLE_SECONDS,
     LISTEN_MAX_SECONDS,
@@ -6406,7 +6406,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Nodpilot", lifespan=lifespan)
 app.add_middleware(
-    CORSMiddleware,
+    OriginLockedCORSMiddleware,
     allow_origins=cors_origins(PUBLIC_URL),
     allow_credentials=True,
     allow_methods=["*"],
@@ -6775,6 +6775,28 @@ class ImmutableStaticFiles(StaticFiles):
         if getattr(response, "status_code", 0) == 200:
             response.headers["Cache-Control"] = ASSET_CACHE
         return response
+
+
+@app.get("/.well-known/security.txt")
+def security_txt():
+    from datetime import datetime, timedelta, timezone
+
+    expires = (datetime.now(timezone.utc) + timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    base = PUBLIC_URL.rstrip("/")
+    body = "\n".join(
+        [
+            f"Contact: mailto:{CONTACT_EMAIL}",
+            f"Expires: {expires}",
+            "Preferred-Languages: en, zh-Hans",
+            f"Canonical: {base}/.well-known/security.txt",
+            "",
+        ]
+    )
+    return Response(
+        content=body,
+        media_type="text/plain; charset=utf-8",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.get("/robots.txt")

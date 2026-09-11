@@ -122,6 +122,22 @@ class OtpApiTests(unittest.TestCase):
         self.assertIn("Disallow: /api/", text)
         self.assertIn("Allow: /", text)
 
+    def test_otp_request_is_rate_limited(self):
+        from server import ratelimit
+
+        ratelimit._hits.clear()
+        self.addCleanup(ratelimit._hits.clear)
+        email = _email()
+        codes = [
+            self.client.post(
+                "/api/auth/otp/request",
+                json={"email": email, "intent": "signup", "name": "Ada", "consent": True},
+            ).status_code
+            for _ in range(6)
+        ]
+        self.assertIn(429, codes, f"otp request was never throttled: {codes}")
+        self.assertEqual(codes[0], 200)
+
     def test_sitemap_lists_legal_pages_not_auth(self):
         res = self.client.get("/sitemap.xml")
         self.assertEqual(res.status_code, 200)

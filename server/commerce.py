@@ -16,6 +16,8 @@ from server.mailer import send_otp_email, send_reset_email
 from server.otp import OTP_OK, consume_otp, issue_otp
 from server.meter import delete_history_session, delete_user_data, list_history, list_pending_history, plan_of, session_file_key, session_file_url, usage_snapshot
 from server.security import (
+    clear_cookie_kwargs,
+    cookie_is_secure,
     cookie_kwargs,
     current_user,
     hash_password,
@@ -110,8 +112,7 @@ def _public_user(user: User) -> dict[str, Any]:
 
 def _set_session(response: Response, request: Request, user: User) -> str:
     token = issue_jwt(user.id, user.email)
-    https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
-    response.set_cookie(value=token, **cookie_kwargs(https))
+    response.set_cookie(value=token, **cookie_kwargs(cookie_is_secure(request)))
     return token
 
 
@@ -302,8 +303,8 @@ def login(
 
 
 @router.post("/api/auth/logout")
-def logout(response: Response):
-    response.delete_cookie(key="nod_session", path="/")
+def logout(request: Request, response: Response):
+    response.delete_cookie(**clear_cookie_kwargs(cookie_is_secure(request)))
     return {"ok": True}
 
 
@@ -511,10 +512,10 @@ def download_session_file(
 
 
 @router.delete("/api/account")
-def delete_account(user: User = Depends(current_user), response: Response = None):
+def delete_account(request: Request, user: User = Depends(current_user), response: Response = None):
     delete_user_data(user.id)
     if response is not None:
-        response.delete_cookie(key="nod_session", path="/")
+        response.delete_cookie(**clear_cookie_kwargs(cookie_is_secure(request)))
     log.info("deleted account user=%s", user.id)
     return {"ok": True}
 

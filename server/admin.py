@@ -17,7 +17,7 @@ from server.meter import (
     delete_user_data,
 )
 from server import settings
-from server.security import require_admin
+from server.security import clear_cookie_kwargs, cookie_is_secure, cookie_kwargs, require_admin
 from server.settings import ADMIN_COOKIE, QUOTA_DISABLED
 
 router = APIRouter()
@@ -36,22 +36,16 @@ def login(body: AdminLoginIn, request: Request, response: Response):
     offered = (body.token or "").strip()
     if not hmac.compare_digest(offered, admin_token):
         raise HTTPException(401, "Wrong admin token")
-    https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
     response.set_cookie(
-        key=ADMIN_COOKIE,
         value=admin_token,
-        httponly=True,
-        samesite="lax",
-        secure=https,
-        max_age=14 * 86400,
-        path="/",
+        **cookie_kwargs(cookie_is_secure(request), key=ADMIN_COOKIE),
     )
     return {"ok": True, "quota_disabled": QUOTA_DISABLED}
 
 
 @router.post("/api/admin/logout")
-def logout(response: Response):
-    response.delete_cookie(key=ADMIN_COOKIE, path="/")
+def logout(request: Request, response: Response):
+    response.delete_cookie(**clear_cookie_kwargs(cookie_is_secure(request), key=ADMIN_COOKIE))
     return {"ok": True}
 
 

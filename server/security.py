@@ -54,14 +54,31 @@ def valid_email(email: str) -> bool:
     return bool(EMAIL_RE.match((email or "").strip().lower()))
 
 
-def cookie_kwargs(https: bool) -> dict:
+def cookie_is_secure(request: Request) -> bool:
+    if request.url.scheme == "https":
+        return True
+    proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    return proto == "https"
+
+
+def cookie_kwargs(https: bool, *, key: str | None = None, max_age: int | None = None) -> dict:
     return {
-        "key": COOKIE_NAME,
+        "key": key or COOKIE_NAME,
         "httponly": True,
         "samesite": "lax",
         "secure": https,
-        "max_age": TOKEN_DAYS * 86400,
+        "max_age": TOKEN_DAYS * 86400 if max_age is None else max_age,
         "path": "/",
+    }
+
+
+def clear_cookie_kwargs(https: bool, *, key: str | None = None) -> dict:
+    return {
+        "key": key or COOKIE_NAME,
+        "path": "/",
+        "httponly": True,
+        "samesite": "lax",
+        "secure": https,
     }
 
 
