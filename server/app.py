@@ -5333,6 +5333,16 @@ HTML_NO_CACHE = {
     "Expires": "0",
 }
 
+ASSET_CACHE = "public, max-age=31536000, immutable"
+
+
+class ImmutableStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if getattr(response, "status_code", 0) == 200:
+            response.headers["Cache-Control"] = ASSET_CACHE
+        return response
+
 
 @app.get("/robots.txt")
 def robots():
@@ -5389,7 +5399,7 @@ if WEB_DIST.exists():
     # A half-written dist (mid-rebuild, or a build that failed after emptying
     # the folder) must not take the whole app down at import time.
     if (WEB_DIST / "assets").is_dir():
-        app.mount("/assets", StaticFiles(directory=str(WEB_DIST / "assets")), name="assets")
+        app.mount("/assets", ImmutableStaticFiles(directory=str(WEB_DIST / "assets")), name="assets")
 
     def _icon_file(name: str, media_type: str) -> FileResponse:
         for path in (WEB_DIST / name, ROOT / "web" / "public" / name):

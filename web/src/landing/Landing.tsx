@@ -96,6 +96,9 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
 
   return (
     <div className="nod-landing">
+      <a className="skip-link" href="#main">
+        {t.skipMain}
+      </a>
       <header className={`site-header${navOpen ? ' nav-open' : ''}`}>
         <div className="shell header-inner">
           <a className="brand" href={home} onClick={closeNav}>
@@ -142,7 +145,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
         </div>
       </header>
 
-      <main id="top">
+      <main id="main">
         {accountDeletedNotice(typeof location === 'undefined' ? '' : location.search) ? (
           <p className="landing-deleted">{deleteAccountCopy.notice}</p>
         ) : null}
