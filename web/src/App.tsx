@@ -17,7 +17,7 @@ import LeaveSessionSheet from './components/LeaveSessionSheet'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
 import { IPHONE_COPY, canSwitchWorkspace, sameSpokenLine, sessionListening } from './iphoneCopy'
-import { showListenNew } from './listenChrome'
+import { showListenNew, composeSessionKey, nextComposeSessionId } from './listenChrome'
 import SaveBanner from './components/SaveBanner'
 import {
   KEEP_ACK_TIMEOUT_MS,
@@ -227,6 +227,7 @@ const initial: AppState = {
   meetingPausedAt: null,
   meetingElapsedMs: 0,
   meetingEnded: false,
+  composeSessionId: 0,
   translatePairs: [],
   translateFrom: storedPair?.from ?? 'auto',
   translateTo: storedPair?.to ?? 'en',
@@ -740,6 +741,7 @@ function reducer(state: AppState, action: Action): AppState {
         notesRaw: '',
         notesAskId: '',
         listenFlushWait: idleListenFlushWait(),
+        composeSessionId: nextComposeSessionId('clear', state.composeSessionId),
       }
     case 'workspace':
       return { ...state, workspaceMode: action.mode, view: 'workspace' }
@@ -769,6 +771,7 @@ function reducer(state: AppState, action: Action): AppState {
         speakerDecided: {},
         ...clock,
         meetingStartedAt: action.live && state.meetingStartedAt != null ? state.meetingStartedAt : clock.meetingStartedAt,
+        composeSessionId: nextComposeSessionId(action.live ? 'continue' : 'restore', state.composeSessionId),
         view: 'workspace',
       }
     }
@@ -814,6 +817,7 @@ function reducer(state: AppState, action: Action): AppState {
         translateAskId: '',
         translateBindId: '',
         listenFlushWait: idleListenFlushWait(),
+        composeSessionId: nextComposeSessionId('listen_new', state.composeSessionId),
       }
     case 'meeting_resume':
       return applyMeetingResume(state)
@@ -3748,7 +3752,7 @@ export default function App() {
               />
             )}
             actions={phoneActions}
-            sessionKey={String(state.meetingStartedAt ?? 'idle')}
+            sessionKey={composeSessionKey(state.workspaceMode, state.composeSessionId)}
             speaking={speaking}
             onStopSpeech={stopSpeech}
             onSpeak={(text) => {
@@ -3832,7 +3836,7 @@ export default function App() {
             onRetryAsk={handleRetryAsk}
             catchAskId={state.catchAskId}
             elapsedMs={state.meetingElapsedMs}
-            sessionKey={String(state.meetingStartedAt ?? 'idle')}
+            sessionKey={composeSessionKey(state.workspaceMode, state.composeSessionId)}
             onPause={handlePause}
             onResume={handleResume}
             onStop={handleStop}

@@ -41,28 +41,155 @@ test.describe('Listen mobile chrome', () => {
   })
 })
 
+const EVIDENCE = '../docs/design/listen-mobile-2026-09-11/evidence'
+
+async function mockListenWs(page: import('@playwright/test').Page) {
+  let ws: WebSocketRoute | undefined
+  await page.routeWebSocket(/\/ws$/, (route) => {
+    ws = route
+  })
+  const send = (msg: Record<string, unknown>) => {
+    if (!ws) throw new Error('websocket not connected')
+    ws.send(JSON.stringify(msg))
+  }
+  return {
+    send,
+    async gotoListening() {
+      await page.goto('/app?demo=meeting')
+      await expect.poll(() => ws !== undefined, { timeout: 5000 }).toBe(true)
+      send({ type: 'phase', capture: 'listening', engine: 'idle' })
+      await expect(page.locator('.iphone-live-bar')).toBeVisible()
+    },
+    async endSession() {
+      await page.getByRole('button', { name: 'End' }).click()
+      send({ type: 'phase', capture: 'off', engine: 'idle' })
+      await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible()
+    },
+  }
+}
+
 test.describe('Listen mobile recording chrome', () => {
   test.use({ viewport: { width: 390, height: 844 } })
 
   test('listening hides New and uses the bottom rec bar, not the top row', async ({ page }) => {
-    let ws: WebSocketRoute | undefined
-    await page.routeWebSocket(/\/ws$/, (route) => {
-      ws = route
-    })
-    await page.goto('/app?demo=meeting')
-    await expect.poll(() => ws !== undefined, { timeout: 5000 }).toBe(true)
-    await expect(page.getByRole('button', { name: 'New session' })).toBeVisible()
-    ws!.send(JSON.stringify({ type: 'phase', capture: 'listening', engine: 'idle' }))
+    const ws = await mockListenWs(page)
+    await ws.gotoListening()
     await expect(page.getByRole('button', { name: 'New session' })).toHaveCount(0)
-    await expect(page.locator('.iphone-live-bar')).toBeVisible()
     await expect(page.locator('.iphone-actions.live')).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Ask' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'End' })).toBeVisible()
-    await page.screenshot({ path: '../docs/design/listen-mobile-2026-09-11/evidence/recording-bar-390.png' })
+    await page.screenshot({ path: `${EVIDENCE}/recording-bar-390.png` })
     await page.getByRole('button', { name: 'Ask' }).click()
     await expect(page.getByPlaceholder(/Ask about this conversation|Ask a follow-up/)).toBeVisible()
     await expect(page.locator('.iphone-live-bar')).toBeVisible()
-    await page.screenshot({ path: '../docs/design/listen-mobile-2026-09-11/evidence/recording-ask-390.png' })
+    await page.screenshot({ path: `${EVIDENCE}/recording-ask-390.png` })
+  })
+
+  test('pause hides New, keeps the rec bar, and shows Resume', async ({ page }) => {
+    const ws = await mockListenWs(page)
+    await ws.gotoListening()
+    ws.send({ type: 'phase', capture: 'paused', engine: 'idle' })
+    await expect(page.getByRole('button', { name: 'New session' })).toHaveCount(0)
+    await expect(page.locator('.iphone-live-bar')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Resume' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'End' })).toBeVisible()
+    await page.screenshot({ path: `${EVIDENCE}/recording-paused-390.png` })
+  })
+
+  test('ended sheet peeks results by default and the handle click expands it', async ({ page }) => {
+    const ws = await mockListenWs(page)
+    await ws.gotoListening()
+    await ws.endSession()
+    await expect(page.getByRole('button', { name: 'New session' })).toBeVisible()
+    await expect(page.getByRole('tab', { name: 'Live' })).toBeVisible()
+    await expect(page.getByText('Applies to next recording')).toBeVisible()
+    const peek = page.locator('.iphone-live-feed-wrap')
+    await expect(peek).toBeVisible()
+    await expect(peek).toContainText('launch window')
+    const peekBox = await peek.evaluate((el) => {
+      const style = getComputedStyle(el)
+      return { display: style.display, maxHeight: style.maxHeight, height: el.getBoundingClientRect().height }
+    })
+    expect(peekBox.display).not.toBe('none')
+    expect(peekBox.height).toBeGreaterThanOrEqual(88)
+    expect(peekBox.height).toBeLessThanOrEqual(180)
+    await page.screenshot({ path: `${EVIDENCE}/ended-sheet-default-390.png` })
+    await page.getByRole('button', { name: 'Show transcript' }).click()
+    await expect(page.getByRole('button', { name: 'Show settings' })).toHaveAttribute('aria-expanded', 'true')
+    await expect(page.getByText('Applies to next recording')).not.toBeVisible()
+    const expanded = await peek.evaluate((el) => el.getBoundingClientRect().height)
+    expect(expanded).toBeGreaterThan(peekBox.height)
+    await page.screenshot({ path: `${EVIDENCE}/ended-sheet-expanded-390.png` })
+  })
+
+  test('Continue keeps the same-session Ask draft', async ({ page }) => {
+    const ws = await mockListenWs(page)
+    await ws.gotoListening()
+    await page.getByRole('button', { name: 'Ask' }).click()
+    const ask = page.getByPlaceholder(/Ask about this conversation|Ask a follow-up/)
+    await expect(ask).toBeVisible()
+    await ask.fill('keep through continue')
+    await ws.endSession()
+    await page.getByRole('button', { name: 'Continue' }).click()
+    ws.send({ type: 'phase', capture: 'listening', engine: 'idle' })
+    await expect(page.locator('.iphone-live-bar')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'New session' })).toHaveCount(0)
+    await expect(page.getByPlaceholder(/Ask about this conversation|Ask a follow-up/)).toHaveValue('keep through continue')
+  })
+
+  test('save failure on the ended sheet shows Retry', async ({ page }) => {
+    const ws = await mockListenWs(page)
+    await ws.gotoListening()
+    await ws.endSession()
+    await expect(page.getByText('Save this session?')).toBeVisible()
+    await page.locator('.save-banner-save').click()
+    await expect(page.getByRole('dialog', { name: 'Save to History?' })).toBeVisible()
+    await page.getByRole('dialog', { name: 'Save to History?' }).getByRole('button', { name: 'Save' }).click()
+    await expect(page.getByText('Saving…')).toBeVisible()
+    ws.send({ type: 'history_keep_failed' })
+    await expect(page.getByText("Couldn't save.")).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Retry save' })).toBeVisible()
+    await page.screenshot({ path: `${EVIDENCE}/ended-save-failed-390.png` })
+  })
+
+  test('kb-open layout keeps the rec bar and Ask field in the visual viewport', async ({ page }) => {
+    const ws = await mockListenWs(page)
+    await ws.gotoListening()
+    await page.getByRole('button', { name: 'Ask' }).click()
+    const ask = page.getByPlaceholder(/Ask about this conversation|Ask a follow-up/)
+    await expect(ask).toBeVisible()
+    // Playwright cannot show the iOS keyboard. Native WKWebView resizes to the
+    // visual viewport; keyboardInset then sets these same classes/vars.
+    await page.evaluate(() => {
+      const root = document.documentElement
+      root.classList.add('nod-native', 'kb-open')
+      root.style.setProperty('--vv-height', '520px')
+      root.style.setProperty('--vv-shift', '0px')
+      root.style.setProperty('--kb-inset', '324px')
+    })
+    await page.setViewportSize({ width: 390, height: 520 })
+    const rec = page.locator('.iphone-live-bar')
+    await expect(rec).toBeVisible()
+    await expect(ask).toBeVisible()
+    const boxes = await page.evaluate(() => {
+      const recBar = document.querySelector('.iphone-live-bar')
+      const field = document.querySelector('.listen-prompt input')
+      const feed = document.querySelector('.iphone-live-feed-wrap, .listen-split')
+      const recBox = recBar?.getBoundingClientRect()
+      const fieldBox = field?.getBoundingClientRect()
+      return {
+        recBottom: recBox?.bottom ?? -1,
+        fieldBottom: fieldBox?.bottom ?? -1,
+        viewport: window.innerHeight,
+        feedOverflow: feed ? getComputedStyle(feed).overflow : '',
+      }
+    })
+    expect(boxes.recBottom).toBeGreaterThan(0)
+    expect(boxes.recBottom).toBeLessThanOrEqual(boxes.viewport)
+    expect(boxes.fieldBottom).toBeGreaterThan(0)
+    expect(boxes.fieldBottom).toBeLessThanOrEqual(boxes.viewport)
+    expect(boxes.feedOverflow).toMatch(/auto|scroll/)
+    await page.screenshot({ path: `${EVIDENCE}/recording-ask-kb-layout-390.png` })
   })
 })
 

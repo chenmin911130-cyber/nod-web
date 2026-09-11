@@ -6202,6 +6202,12 @@ html.nod-web.nod-phone .app {
   max-height: 100dvh;
 }
 
+/* Keyboard inset already shrinks #root to --vv-height. Do not keep 100dvh or chrome sits under the keyboard. */
+html.nod-native.kb-open .app.iphone-v2 {
+  height: 100%;
+  max-height: 100%;
+}
+
 html.nod-web.nod-phone input,
 html.nod-web.nod-phone textarea,
 html.nod-web.nod-phone select {
@@ -9613,9 +9619,30 @@ html.nod-phone .app.iphone-v2 .tb-new {
 }
 
 html.nod-phone .app.iphone-v2 .listen-main:not(.qa).ended-dock-default .listen-split,
-html.nod-phone .app.iphone-v2 .listen-main:not(.qa).ended-dock-default .iphone-live-feed-wrap,
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa).ended-dock-default .iphone-live-feed-wrap {
+  flex: 0 0 auto;
+  max-height: 168px;
+  min-height: 88px;
+  overflow: auto;
+}
+
 html.nod-phone .app.iphone-v2 .listen-main:not(.qa).ended-dock-default .iphone-stage {
   display: none;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa).ended-dock-expanded .iphone-settings {
+  display: none;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa).ended-dock-expanded .listen-split,
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa).ended-dock-expanded .iphone-live-feed-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa).ended-dock-default .listen-mobile-tabs {
+  touch-action: none;
 }
 
 html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-ended-compact {
@@ -9633,6 +9660,8 @@ html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-ended-handle {
   border: 0;
   background: transparent;
   position: relative;
+  touch-action: none;
+  cursor: pointer;
 }
 
 html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-ended-handle::before {

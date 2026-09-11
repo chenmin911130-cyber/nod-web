@@ -63,6 +63,30 @@ export function endedSheetGesture(target: 'handle' | 'tabs' | 'body'): 'resize' 
   return target === 'body' ? 'scroll' : 'resize'
 }
 
+export function composeSessionKey(workspace: string, composeSessionId: number): string {
+  return `${workspace}:${composeSessionId}`
+}
+
+export function nextComposeSessionId(
+  action: 'listen_new' | 'clear' | 'restore' | 'meeting_resume' | 'meeting_clock' | 'continue',
+  prev: number,
+): number {
+  if (action === 'listen_new' || action === 'clear' || action === 'restore') return prev + 1
+  return prev
+}
+
+export function endedDockFromPointer(input: {
+  startY: number
+  endY: number
+  moved: boolean
+  tapSlop?: number
+}): 'toggle' | EndedSheetDock {
+  const slop = input.tapSlop ?? 10
+  const dy = input.startY - input.endY
+  if (!input.moved && Math.abs(dy) < slop) return 'toggle'
+  return dy > 0 ? 'expanded' : 'default'
+}
+
 export function nextComposeDraft(prevKey: string, nextKey: string, draft: string): string {
   return prevKey && prevKey === nextKey ? draft : ''
 }

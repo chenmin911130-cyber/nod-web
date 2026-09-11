@@ -8,6 +8,9 @@ import {
   listenAskPlacement,
   nextComposeDraft,
   nextComposeFiles,
+  nextComposeSessionId,
+  composeSessionKey,
+  endedDockFromPointer,
   showListenNew,
   volumeBarHeights,
 } from './listenChrome'
@@ -56,6 +59,18 @@ eq(historyRestoreHidesAsk({ ended: false, hasContent: false }), true, 'empty res
 eq(endedSheetGesture('handle'), 'resize', 'handle resizes the ended sheet')
 eq(endedSheetGesture('tabs'), 'resize', 'tab bar may resize the ended sheet')
 eq(endedSheetGesture('body'), 'scroll', 'body swipe only scrolls')
+
+eq(composeSessionKey('meeting', 3), 'meeting:3', 'compose key is workspace + session id')
+eq(nextComposeSessionId('continue', 4), 4, 'Continue keeps the compose session')
+eq(nextComposeSessionId('meeting_resume', 4), 4, 'meeting_resume does not bump the compose session')
+eq(nextComposeSessionId('meeting_clock', 4), 4, 'clock rewind does not bump the compose session')
+eq(nextComposeSessionId('listen_new', 4), 5, 'New session bumps the compose session')
+eq(nextComposeSessionId('clear', 4), 5, 'Clear bumps the compose session')
+eq(nextComposeSessionId('restore', 4), 5, 'History restore bumps the compose session')
+
+eq(endedDockFromPointer({ startY: 200, endY: 198, moved: false }), 'toggle', 'a tap on the handle toggles')
+eq(endedDockFromPointer({ startY: 200, endY: 140, moved: true }), 'expanded', 'drag up expands')
+eq(endedDockFromPointer({ startY: 200, endY: 260, moved: true }), 'default', 'drag down docks default')
 
 eq(nextComposeDraft('a', 'a', 'hello'), 'hello', 'same session keeps the Ask draft')
 eq(nextComposeDraft('a', 'b', 'hello'), '', 'new session does not inherit the draft')

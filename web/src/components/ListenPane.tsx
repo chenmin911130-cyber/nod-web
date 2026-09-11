@@ -34,7 +34,7 @@ import {
   speakerSuggestText,
   spokenSettingsValue,
 } from '../iphoneCopy'
-import { endedSheetAvailable, endedSheetGesture, listenAskPlacement, nextComposeDraft } from '../listenChrome'
+import { endedDockFromPointer, endedSheetAvailable, listenAskPlacement, nextComposeDraft } from '../listenChrome'
 import { usePhoneChrome } from '../phoneChrome'
 import { askOutcome, groupTranscript, iphoneSummaryHeading, isCatchAskCurrent, liveFeed, liveStageMode, summaryPlainText, transcriptPlainText, type LiveFeedItem } from '../liveView'
 import { useStickToBottom } from '../useStickToBottom'
@@ -1057,7 +1057,8 @@ export default function ListenPane(props: Props) {
   const [endedDock, setEndedDock] = useState<'default' | 'expanded'>('default')
   const inputRef = useRef<HTMLInputElement>(null)
   const sessionKeyRef = useRef(props.sessionKey || '')
-  const endedSheetDrag = useRef<{ y: number } | null>(null)
+  const endedSheetDrag = useRef<{ pointerId: number; y: number; moved: boolean } | null>(null)
+  const skipEndedClick = useRef(false)
   const [notesOpen, setNotesOpen] = useState(Boolean(props.notesDefaultOpen))
   const [mobilePane, setMobilePane] = useState<'live' | 'transcript' | 'notes'>(props.notesDefaultOpen ? 'notes' : 'live')
   const [notesW, setNotesW] = useState(() => readNotesW(props.scene))
@@ -1155,6 +1156,38 @@ export default function ListenPane(props: Props) {
     if (!endedSheetUi) setEndedDock('default')
   }, [endedSheetUi])
 
+  const onEndedResizeDown = (e: ReactPointerEvent<HTMLElement>) => {
+    if (!endedSheetUi) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    endedSheetDrag.current = { pointerId: e.pointerId, y: e.clientY, moved: false }
+  }
+  const onEndedResizeMove = (e: ReactPointerEvent<HTMLElement>) => {
+    const drag = endedSheetDrag.current
+    if (!drag || drag.pointerId !== e.pointerId) return
+    if (Math.abs(e.clientY - drag.y) > 8) drag.moved = true
+  }
+  const onEndedResizeUp = (e: ReactPointerEvent<HTMLElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+    const drag = endedSheetDrag.current
+    endedSheetDrag.current = null
+    if (!drag || drag.pointerId !== e.pointerId) return
+    const next = endedDockFromPointer({ startY: drag.y, endY: e.clientY, moved: drag.moved })
+    if (next === 'toggle') return
+    skipEndedClick.current = true
+    setEndedDock(next)
+  }
+  const onEndedResizeCancel = (e: ReactPointerEvent<HTMLElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+    endedSheetDrag.current = null
+  }
+  const onEndedHandleClick = () => {
+    if (skipEndedClick.current) {
+      skipEndedClick.current = false
+      return
+    }
+    setEndedDock((dock) => (dock === 'expanded' ? 'default' : 'expanded'))
+  }
+
   useEffect(() => {
     if (props.listening || paused) setSheet(null)
   }, [props.listening, paused])
@@ -1197,6 +1230,10 @@ export default function ListenPane(props: Props) {
   }
 
   const openNotes = () => {
+    if (skipEndedClick.current) {
+      skipEndedClick.current = false
+      return
+    }
     setNotesOpen(true)
     setMobilePane('notes')
     if (endedSheetUi) setEndedDock('expanded')
@@ -1322,18 +1359,10 @@ export default function ListenPane(props: Props) {
           className="listen-mobile-tabs"
           role="tablist"
           aria-label={phone ? 'Live, transcript, or notes' : 'Live or notes'}
-          onPointerDown={endedSheetUi ? (e) => {
-            if (endedSheetGesture('tabs') !== 'resize') return
-            endedSheetDrag.current = { y: e.clientY }
-          } : undefined}
-          onPointerUp={endedSheetUi ? (e) => {
-            const start = endedSheetDrag.current
-            endedSheetDrag.current = null
-            if (!start) return
-            const dy = start.y - e.clientY
-            if (Math.abs(dy) < 24) return
-            setEndedDock(dy > 0 ? 'expanded' : 'default')
-          } : undefined}
+          onPointerDown={endedSheetUi ? onEndedResizeDown : undefined}
+          onPointerMove={endedSheetUi ? onEndedResizeMove : undefined}
+          onPointerUp={endedSheetUi ? onEndedResizeUp : undefined}
+          onPointerCancel={endedSheetUi ? onEndedResizeCancel : undefined}
         >
           <button
             type="button"
@@ -1341,6 +1370,10 @@ export default function ListenPane(props: Props) {
             aria-selected={phone ? mobilePane === 'live' : stackedPane === 'live'}
             className={(phone ? mobilePane === 'live' : stackedPane === 'live') ? 'on' : ''}
             onClick={() => {
+              if (skipEndedClick.current) {
+                skipEndedClick.current = false
+                return
+              }
               setMobilePane('live')
               if (endedSheetUi) setEndedDock('expanded')
             }}
@@ -1354,6 +1387,10 @@ export default function ListenPane(props: Props) {
               aria-selected={mobilePane === 'transcript'}
               className={mobilePane === 'transcript' ? 'on' : ''}
               onClick={() => {
+                if (skipEndedClick.current) {
+                  skipEndedClick.current = false
+                  return
+                }
                 setNotesOpen(false)
                 setMobilePane('transcript')
                 if (endedSheetUi) setEndedDock('expanded')
@@ -1544,21 +1581,11 @@ export default function ListenPane(props: Props) {
                 className="iphone-ended-handle"
                 aria-expanded={endedDock === 'expanded'}
                 aria-label={endedDock === 'expanded' ? IPHONE_COPY.collapseResults : IPHONE_COPY.expandResults}
-                onPointerDown={(e) => {
-                  if (endedSheetGesture('handle') !== 'resize') return
-                  endedSheetDrag.current = { y: e.clientY }
-                }}
-                onPointerUp={(e) => {
-                  const start = endedSheetDrag.current
-                  endedSheetDrag.current = null
-                  if (!start) return
-                  const dy = start.y - e.clientY
-                  if (Math.abs(dy) < 10) {
-                    setEndedDock((d) => (d === 'expanded' ? 'default' : 'expanded'))
-                    return
-                  }
-                  setEndedDock(dy > 0 ? 'expanded' : 'default')
-                }}
+                onPointerDown={onEndedResizeDown}
+                onPointerMove={onEndedResizeMove}
+                onPointerUp={onEndedResizeUp}
+                onPointerCancel={onEndedResizeCancel}
+                onClick={onEndedHandleClick}
               />
               <span className="iphone-ended-clock">{IPHONE_COPY.endedStatus} · {listenClock(props.elapsedMs || 0)}</span>
               <button type="button" className="iphone-btn primary iphone-continue" onClick={() => props.onContinue?.()}>
@@ -1566,7 +1593,9 @@ export default function ListenPane(props: Props) {
               </button>
             </div>
           ) : null}
-          {endedSheetUi && endedDock === 'expanded' ? null : settingsLockedUi ? (
+          {endedSheetUi ? (
+            settingsList(IPHONE_COPY.appliesToNextRecording)
+          ) : settingsLockedUi ? (
             <p className="iphone-meta" aria-label={IPHONE_COPY.settingsReadonlyAria}>
               {listenMetaLine({
                 scene: props.scene,
@@ -1587,7 +1616,7 @@ export default function ListenPane(props: Props) {
               {IPHONE_COPY.saveSavedLine}
             </div>
           ) : null}
-          {endedSheetUi && endedDock === 'default' ? null : tabs}
+          {tabs}
         </div>
       ) : (
         <>

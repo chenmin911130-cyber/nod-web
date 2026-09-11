@@ -2,6 +2,14 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-11 · #190 审查：Continue 用 meetingStartedAt 当 Ask sessionKey
+- 我以为：`meetingStartedAt` 能代表本场，草稿按它隔离即可。
+- 实际：Continue / `meeting_resume` 会把 `meetingStartedAt` 改成 `now - elapsedMs` 让时钟接着走，ListenPane 当成新会话，草稿被清、Ask 被收起。
+- 规则：Ask/Translate 草稿键必须用续录不变的会话标识（`composeSessionId`），禁止用会被 Continue 改写的时钟字段。
+- 涉及：`sessionKey` · `applyMeetingResume` · `composeSessionId` · `ListenPane` Ask draft
+
+## 2026-09-11 · #187 审查：Watch End 没 arm flush，回执没绑本次 End
+
 ## 2026-09-11 · #187 审查：Watch End 没 arm flush，回执没绑本次 End
 - 我以为：手机 Stop 上 `expect_listen_flush`、每次等待清空 `listenFlushId`，下一条 `listen_flush` 就能放行笔记。
 - 实际：Watch Stop / Record-while-listening 只 `stopListen()`，从未 pending，自动笔记会永远 wait。清空旧 id 后，上一轮迟到回执会完成当前 End。
