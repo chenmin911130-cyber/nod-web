@@ -893,6 +893,66 @@ class ReviewFixTests(_QaBase):
         self.assertEqual([f["text"] for f in sess._qa_buffer], ["我们准备做订阅制", "那按年付呢"])
         self.assertEqual(sess._qa_background, [])
 
+    def test_the_worker_commit_call_site_passes_judged_at(self):
+        # The case above drove `_qa_commit(judged_at=...)` BY HAND, so it stayed green
+        # while the production call site never passed the argument and the guard was
+        # dead code in the worker. This drives the real worker and injects the race
+        # where it actually happens: after the worker's own activity check, before the
+        # commit guard.
+        sess = self._session(judge_stub(qs.VERDICT_READY, question="stale"))
+        sess._start_interview_answer = mock.Mock()
+        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        seen: dict = {}
+        real_commit = sess._qa_commit
+
+        def racing_commit(*args, **kwargs):
+            seen["judged_at"] = kwargs.get("judged_at")
+            sess._on_partial("that depends on", "en")  # the speaker resumed
+            return real_commit(*args, **kwargs)
+
+        sess._qa_commit = racing_commit
+        self._settle(sess)
+        self.assertIsNotNone(seen["judged_at"], "the worker must pass the judgement clock")
+        sess._start_interview_answer.assert_not_called()
+        self.assertEqual(len(sess._qa_buffer), 1)  # kept for the next judgement
+
+    def test_a_stale_run_releases_the_busy_claim_it_already_took(self):
+        # `_start_interview_answer` claims the busy token and only THEN calls the run,
+        # which re-checks the generation. The early return used to sit before the
+        # `finally`, so the claim was never released: the session stayed busy and every
+        # later question queued behind an answer that never existed.
+        sess = self._session(judge_stub(qs.VERDICT_READY))
+        sess._qa_init()
+        gen = sess._qa_gen
+        self.assertIsNotNone(sess._claim_busy())  # as the start point takes it
+        sess._qa_reset("new_session")  # New lands between the start check and the run
+        sess._run_interview_answer("how should we price it?", "en", "", gen=gen)
+        self.assertFalse(sess._busy)
+        self.assertIsNone(sess._busy_token)
+        self.assertEqual(sess._engine, "idle")
+        sess.pipeline.process_text.assert_not_called()
+
+    def test_the_slot_a_stale_run_gives_up_still_answers_the_queue(self):
+        # Releasing must hand the slot over, not drop it.
+        sess = self._session(judge_stub(qs.VERDICT_READY))
+        sess._qa_init()
+        gen = sess._qa_gen
+        self.assertIsNotNone(sess._claim_busy())
+        sess._qa_reset("new_session")
+        sess._pending_q.append(("what about annual billing?", "en", ""))
+        sess._run_interview_answer("how should we price it?", "en", "", gen=gen)
+        self.assertTrue(self._wait(lambda: sess.pipeline.process_text.called))
+        self.assertEqual(self._answers(sess), ["what about annual billing?"])
+
+    def test_a_reset_drops_answers_queued_for_the_abandoned_session(self):
+        # A queued question is dequeued with no generation to check against, so a
+        # reset that leaves it in the queue starts the old session's question later.
+        sess = self._session(judge_stub(qs.VERDICT_READY))
+        sess._qa_init()
+        sess._pending_q.append(("how should we price it?", "en", ""))
+        sess._qa_reset("new_listen")
+        self.assertEqual(list(sess._pending_q), [])
+
     def test_the_current_background_verdict_still_demotes(self):
         sess = self._session(judge_stub(qs.VERDICT_BACKGROUND))
         sess._on_final("我们准备做订阅制", "zh", None, {"stt_turn": 1, "listener_id": 1})

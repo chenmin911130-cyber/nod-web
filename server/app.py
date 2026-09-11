@@ -3738,6 +3738,7 @@ class Session:
                 trigger="judge",
                 version=version,
                 gen=gen,
+                judged_at=started,
             ):
                 logging.getLogger("nod").info(
                     "qa_drop reason=stale_commit cand=%s gen=%s ver=%s now_gen=%s now_ver=%s",
@@ -3891,6 +3892,12 @@ class Session:
             self._qa_stale_version = -1
             self._qa_verdict = None
             self._qa_candidate_id = ""
+        # #191 review fix: a question that was QUEUED because an answer was in flight
+        # belongs to the turn being abandoned just as much as the buffer does, and it
+        # is dequeued without a generation to check against. `_reset_turn_state` (New
+        # / clear / workspace switch) already cleared the queue; a fresh listen and a
+        # close did not, so the old session's queued question could still start.
+        self._pending_q.clear()
         if had:
             logging.getLogger("nod").info("qa_reset reason=%s", reason)
 
@@ -5485,6 +5492,32 @@ class Session:
         self._run_interview_answer(cleaned, lang, context, gen=gen)
         return True
 
+    def _finish_interview_answer(self, tok: object | None) -> None:
+        """Release the answer slot and hand it to whatever is queued next.
+
+        #191 review fix: `_start_interview_answer` claims the busy token BEFORE the
+        answer thread exists, so every path that decides not to answer — including a
+        stale generation discovered at the top of `_run_interview_answer` — has to
+        come through here. Returning without it left the session busy forever and
+        every later question queued behind nothing.
+        """
+        if self._busy_token is not tok:
+            return
+        self._release_busy(tok)
+        self._set_engine("idle")
+        self._emit_phase()
+        nxt = None
+        tok2 = self._claim_busy() if self._pending_q else None
+        if tok2:
+            try:
+                nxt = self._pending_q.popleft()
+            except IndexError:
+                self._release_busy(tok2)
+        if nxt:
+            self._run_interview_answer(*nxt)
+        else:
+            self._drain_pending_ask()
+
     def _run_interview_answer(
         self,
         cleaned: str,
@@ -5493,16 +5526,18 @@ class Session:
         *,
         gen: int | None = None,
     ) -> None:
+        tok = self._busy_token
         # #191 review fix: the thread can start a moment after the start check; a New
-        # that lands in between must not generate. Returning here still releases the
-        # busy claim through the existing `finally`, so nothing hangs.
+        # that lands in between must not generate. The busy claim was already taken by
+        # `_start_interview_answer`, so the stale path releases it explicitly instead
+        # of relying on a `finally` it never reaches.
         if gen is not None and not self._qa_gen_current(gen):
             logging.getLogger("nod").info(
                 "qa_drop reason=stale_run gen=%s now_gen=%s", gen, self._qa_gen
             )
+            self._finish_interview_answer(tok)
             return
         heard = heard_lang_from_text(cleaned, lang)
-        tok = self._busy_token
         self.pipeline._cancel.clear()
         self._set_engine("generating")
         self._emit_phase()
@@ -5516,21 +5551,7 @@ class Session:
                 self.pipeline.process_text(cleaned, "ask", heard)
             finally:
                 self.pipeline._qa_context = ""
-                if self._busy_token is tok:
-                    self._release_busy(tok)
-                    self._set_engine("idle")
-                    self._emit_phase()
-                    nxt = None
-                    tok2 = self._claim_busy() if self._pending_q else None
-                    if tok2:
-                        try:
-                            nxt = self._pending_q.popleft()
-                        except IndexError:
-                            self._release_busy(tok2)
-                    if nxt:
-                        self._run_interview_answer(*nxt)
-                    else:
-                        self._drain_pending_ask()
+                self._finish_interview_answer(tok)
 
         threading.Thread(target=work, daemon=True).start()
 
