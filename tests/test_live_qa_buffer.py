@@ -419,5 +419,153 @@ class JudgePromptPrivacyTests(_QaBase):
         self.assertTrue(any("qa_submit" in r for r in qa_logs))
 
 
+class AnswerContextTests(_QaBase):
+    """#191 acceptance 2/5/6: background + the previous round must reach the
+    ANSWER as context, without rewriting the user-visible question."""
+
+    def test_background_and_uncited_lead_in_become_the_answer_context(self):
+        seen: dict[str, str] = {}
+
+        def routed(messages, timeout=None):
+            frags = _prompt_fragments(messages[-1]["content"])
+            if len(frags) == 1:
+                return json.dumps(
+                    {
+                        "verdict": qs.VERDICT_BACKGROUND,
+                        "question": "",
+                        "fragments": [frags[0][0]],
+                        "reason": "statement",
+                    }
+                )
+            return json.dumps(
+                {
+                    "verdict": qs.VERDICT_READY,
+                    "question": "How should we price it?",
+                    "fragments": [frags[-1][0]],
+                    "reason": "complete",
+                }
+            )
+
+        sess = self._session(routed)
+
+        def fake_pt(text, mode, *a, **kw):
+            seen["text"] = text
+            seen["ctx"] = sess.pipeline._qa_context
+
+        sess.pipeline.process_text = fake_pt
+        sess._on_final("我们准备做订阅制", "zh", None, {"stt_turn": 1, "listener_id": 1})
+        self._settle(sess)
+        self.assertEqual(sess._qa_background, ["我们准备做订阅制"])
+        # The new question: a lead-in the model does NOT cite + the question it does.
+        sess._on_final("他们可能不愿意按月付钱", "zh", None, {"stt_turn": 2, "listener_id": 1})
+        sess._on_final("怎么定价比较好？", "zh", None, {"stt_turn": 3, "listener_id": 1})
+        self._settle(sess)
+        self._wait(lambda: "text" in seen)
+        # The user-visible question is the integrated question only.
+        self.assertEqual(seen["text"], "How should we price it?")
+        self.assertNotIn("我们准备做订阅制", seen["text"])
+        # The background and the uncited lead-in ride along as answer context.
+        self.assertIn("我们准备做订阅制", seen["ctx"])
+        self.assertIn("他们可能不愿意按月付钱", seen["ctx"])
+        self.assertNotIn("怎么定价比较好", seen["ctx"])
+        # And the addendum is scoped to this generation only.
+        self._wait(lambda: sess.pipeline._qa_context == "")
+        self.assertEqual(sess.pipeline._qa_context, "")
+
+    def test_self_follow_up_question_only_carries_prior_round_context(self):
+        # Acceptance 6: "那按年付呢" after a pricing answer must be answered with
+        # the previous round available (that comes from _qa_history, which the
+        # prompt already carries — not duplicated into the context block).
+        seen: dict[str, str] = {}
+        sess = self._session(judge_stub(qs.VERDICT_READY, question="按年付费的价格是多少？"))
+        sess.pipeline._qa_history = [
+            {"qid": "1", "q": "订阅制怎么定价？", "a": "按月十块。"},
+        ]
+
+        def fake_pt(text, mode, *a, **kw):
+            seen["text"] = text
+            seen["ctx"] = sess.pipeline._qa_context
+
+        sess.pipeline.process_text = fake_pt
+        sess._on_final("那按年付呢？", "zh", None, {"stt_turn": 1, "listener_id": 1})
+        self._settle(sess)
+        self._wait(lambda: "text" in seen)
+        self.assertEqual(seen["text"], "按年付费的价格是多少？")
+        self.assertNotIn("按月十块", seen["ctx"])
+
+    def test_a_new_session_context_does_not_leak_into_the_next_answer(self):
+        sess = self._session(judge_stub(qs.VERDICT_READY, question="q1?"))
+        sess._qa_background = ["session A only"]
+        seen: dict[str, str] = {}
+        sess.pipeline.process_text = lambda text, mode, *a, **kw: seen.update(
+            text=text, ctx=sess.pipeline._qa_context
+        )
+        frag = qs.new_fragment("q1?", "en", frag_id="t1:1", at=time.time())
+        sess._qa_buffer = [frag]
+        sess._qa_version = 4
+        sess._qa_verdict = {
+            "version": 4,
+            "verdict": qs.VERDICT_READY,
+            "question": "q1?",
+            "fragments": ["t1:1"],
+        }
+        sess._qa_stop_commit()
+        self._wait(lambda: "text" in seen)
+        self.assertIn("session A only", seen["ctx"])
+        sess._qa_reset("clear")
+        self.assertEqual(sess._qa_background, [])
+
+
+class PromptContextTests(unittest.TestCase):
+    """Pipeline-level: the context addendum lands in the ask SYSTEM prompt."""
+
+    def _pipe(self):
+        from server.app import Pipeline
+
+        pipe = Pipeline.__new__(Pipeline)
+        pipe.cfg = {
+            "llm": {"provider": "deepseek", "model": "deepseek-v4-flash"},
+            "stt": {},
+            "ui": {},
+            "profile": {},
+        }
+        pipe.emit = mock.Mock()
+        pipe._provider = "deepseek"
+        pipe._model = "deepseek-v4-flash"
+        pipe._qa_history = []
+        pipe._last_answer = ""
+        pipe._heard_lang = None
+        pipe._qa_context = ""
+        return pipe
+
+    def test_context_block_reaches_the_ask_system_prompt_only(self):
+        pipe = self._pipe()
+        pipe._qa_context = qs.context_block(["we plan a subscription for students"])
+        msgs = pipe._build_messages("How should we price it?", "ask")
+        self.assertIn("we plan a subscription for students", msgs[0]["content"])
+        self.assertNotIn("we plan a subscription for students", msgs[1]["content"])
+        self.assertIn("How should we price it?", msgs[1]["content"])
+
+    def test_no_context_leaves_the_prompt_untouched(self):
+        pipe = self._pipe()
+        msgs = pipe._build_messages("How should we price it?", "ask")
+        self.assertNotIn("Background from this live conversation", msgs[0]["content"])
+
+    def test_prior_qa_route_is_unchanged(self):
+        pipe = self._pipe()
+        pipe._qa_history = [{"qid": "1", "q": "订阅制怎么定价？", "a": "按月十块。"}]
+        pipe._qa_context = qs.context_block(["we plan a subscription"])
+        msgs = pipe._build_messages("那按年付呢？", "ask")
+        self.assertIn("Recent confirmed Q&A", msgs[0]["content"])
+        self.assertIn("按月十块", msgs[0]["content"])
+        self.assertIn("we plan a subscription", msgs[0]["content"])
+
+    def test_context_block_is_bounded(self):
+        pipe = self._pipe()
+        pipe._qa_context = qs.context_block(["x" * 200, "y" * 200, "z" * 200], max_chars=300)
+        msgs = pipe._build_messages("q?", "ask")
+        self.assertNotIn("z" * 200, msgs[0]["content"])
+
+
 if __name__ == "__main__":
     unittest.main()

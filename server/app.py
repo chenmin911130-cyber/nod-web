@@ -89,6 +89,7 @@ from server.settings import (
     QA_BUFFER_MAX_CHARS,
     QA_BUFFER_MAX_FRAGS,
     QA_BUFFER_MAX_SECONDS,
+    QA_CONTEXT_MAX_CHARS,
     QA_JUDGE_TIMEOUT_SECONDS,
     QA_MAX_QUESTION_CHARS,
     QA_MIN_JUDGE_INTERVAL_SECONDS,
@@ -1211,6 +1212,10 @@ class Pipeline:
         self.client = self._make_client()
         self._qa_history: list[dict] = []
         self._last_answer = ""
+        # Live Q&A (#191): bounded background addendum for the NEXT interview
+        # answer, and only for it. Set right before the answer generation and
+        # cleared after, so it can never leak into another ask/notes prompt.
+        self._qa_context = ""
         self._cancel = threading.Event()
         self._gen_seq = 0
         self._stream = None
@@ -1586,6 +1591,10 @@ class Pipeline:
         if p.get("jd"):
             extra += f"\nJob description (use only if the question is about that job): {p.get('jd')}"
         style = (p.get("style") or "").strip() or "Clear and concise. Lead with the point, then a short explanation."
+        # #191: background lines accumulated by the Live Q&A buffer. Recent
+        # confirmed Q&A already arrives above via _qa_history — do not re-append
+        # the whole session here.
+        qa_ctx = getattr(self, "_qa_context", "") or ""
         sys_msg = (
             "You are a helpful Q&A assistant. Answer the user's question directly and neutrally.\n"
             "Do not role-play as a job candidate and do not dismiss a question as off-topic.\n"
@@ -1598,6 +1607,7 @@ class Pipeline:
             "3. Keep it short: 60-100 words, 3-5 sentences, lead with the conclusion.\n"
             "4. Follow the LANGUAGE hard rule above even if notes are in another language.\n"
             + ctx
+            + qa_ctx
         )
         lang = self._answer_lang(question)
         name = _LANG_NAMES.get(lang, "English")
@@ -2476,7 +2486,7 @@ class Session:
         # for one question and both get billed.
         self._busy_lock = threading.Lock()
         self._busy_token: object | None = None
-        self._pending_q: collections.deque[tuple[str, str | None]] = collections.deque(maxlen=8)
+        self._pending_q: collections.deque[tuple[str, str | None, str]] = collections.deque(maxlen=8)
         self._pending_asks: list[tuple[str, str, Any]] = []
         self._pending_wait: tuple[str | None, float, str | None] = (None, 0.0, None)
         # Live Q&A semantic buffer (issue #191). Consecutive finals accumulate by
@@ -3730,6 +3740,13 @@ class Session:
         cited = list(verdict.get("fragments") or [])
         keys = [str(f["id"]) for f in frags]
         lang = frags[-1].get("lang") if frags else None
+        # Answer context (#191): earlier background + the candidate fragments the
+        # model did NOT cite (a lead-in the question stands on). Recent confirmed
+        # Q&A already reaches the prompt via _qa_history, so it is not repeated.
+        context = qa_semantic.context_block(
+            list(self._qa_background) + qa_semantic.referenced_texts(frags, cited),
+            max_chars=QA_CONTEXT_MAX_CHARS,
+        )
         with self._qa_lock():
             rest = list(self._qa_buffer)
             i = 0
@@ -3746,10 +3763,10 @@ class Session:
             while len(self._qa_answered) > QA_ANSWERED_MAX:
                 self._qa_answered.pop(next(iter(self._qa_answered)))
         logging.getLogger("nod").info(
-            "qa_submit trigger=%s frags=%s cited=%s q_chars=%s rest=%s",
-            trigger, len(frags), len(cited), len(question or ""), len(self._qa_buffer),
+            "qa_submit trigger=%s frags=%s cited=%s q_chars=%s ctx=%s rest=%s",
+            trigger, len(frags), len(cited), len(question or ""), len(context), len(self._qa_buffer),
         )
-        self._start_interview_answer(question, lang)
+        self._start_interview_answer(question, lang, context)
 
     def _qa_drop(self, *, reason: str, trigger: str = "") -> None:
         """Discard the pending candidate WITHOUT answering it."""
@@ -5314,18 +5331,18 @@ class Session:
             return
         self._qa_note_final(cleaned, lang, meta)
 
-    def _start_interview_answer(self, cleaned: str, lang: str | None) -> None:
+    def _start_interview_answer(self, cleaned: str, lang: str | None, context: str = "") -> None:
         heard = heard_lang_from_text(cleaned, lang)
         self._remember_final(cleaned)
         self._maybe_follow_speech(cleaned, heard)
         tok = self._claim_busy()
         if not tok:
-            self._pending_q.append((cleaned, lang))
+            self._pending_q.append((cleaned, lang, context))
             self.emit({"type": "status", "text": "Question queued · answering the previous one"})
             return
-        self._run_interview_answer(cleaned, lang)
+        self._run_interview_answer(cleaned, lang, context)
 
-    def _run_interview_answer(self, cleaned: str, lang: str | None) -> None:
+    def _run_interview_answer(self, cleaned: str, lang: str | None, context: str = "") -> None:
         heard = heard_lang_from_text(cleaned, lang)
         tok = self._busy_token
         self.pipeline._cancel.clear()
@@ -5335,8 +5352,12 @@ class Session:
 
         def work():
             try:
+                # Scoped to this generation: the background block is a system
+                # prompt addendum for the interview answer only (#191).
+                self.pipeline._qa_context = context or ""
                 self.pipeline.process_text(cleaned, "ask", heard)
             finally:
+                self.pipeline._qa_context = ""
                 if self._busy_token is tok:
                     self._release_busy(tok)
                     self._set_engine("idle")
