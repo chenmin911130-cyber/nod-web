@@ -1,6 +1,6 @@
 import unittest
 
-from server.app import WEB_DIST, spa_kind
+from server.app import WEB_DIST, spa_kind, static_media_type
 
 
 class SpaKindTests(unittest.TestCase):
@@ -20,6 +20,11 @@ class SpaKindTests(unittest.TestCase):
     def test_garbage_is_unknown(self):
         self.assertEqual(spa_kind("nonexistent-xyz"), "unknown")
         self.assertEqual(spa_kind("../../requirements.txt"), "unknown")
+
+    def test_webp_is_image_webp(self):
+        self.assertEqual(static_media_type("landing/hero-meeting.webp"), "image/webp")
+        self.assertEqual(static_media_type("/landing/hero-meeting-768.webp"), "image/webp")
+        self.assertIsNone(static_media_type("readme"))
 
 
 @unittest.skipUnless(WEB_DIST.exists(), "frontend build required for the SPA catch-all route")

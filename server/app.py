@@ -6004,6 +6004,28 @@ def spa_kind(full_path: str) -> str:
     return "unknown"
 
 
+STATIC_MEDIA_TYPES = {
+    ".webp": "image/webp",
+    ".avif": "image/avif",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".svg": "image/svg+xml",
+    ".gif": "image/gif",
+    ".ico": "image/x-icon",
+    ".js": "text/javascript",
+    ".css": "text/css",
+    ".woff2": "font/woff2",
+    ".json": "application/json",
+}
+
+
+def static_media_type(path) -> str | None:
+    suffix = Path(str(path)).suffix.lower()
+    return STATIC_MEDIA_TYPES.get(suffix)
+
+
+
 def _not_found_html() -> Response:
     headers = {**HTML_NO_CACHE, "X-Robots-Tag": "noindex, nofollow"}
     return Response(content=NOT_FOUND_HTML, status_code=404, media_type="text/html; charset=utf-8", headers=headers)
@@ -6131,7 +6153,8 @@ if WEB_DIST.exists():
             except (OSError, ValueError):
                 return _not_found_html()
             if dest.is_relative_to(WEB_DIST_REAL) and dest.is_file():
-                return FileResponse(dest)
+                media = static_media_type(dest)
+                return FileResponse(dest, media_type=media) if media else FileResponse(dest)
         if kind == "site":
             return _html_page("index.html")
         return _not_found_html()
