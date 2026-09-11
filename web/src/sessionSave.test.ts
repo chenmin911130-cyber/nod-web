@@ -5,6 +5,7 @@ import {
   applyKeepAck,
   applyKeepFailed,
   beginSave,
+  bindLiveId,
   bumpGeneration,
   decideNewSession,
   emptySaveBook,
@@ -146,6 +147,18 @@ eq(
   'banner',
   'an unknown mode (legacy book) still offers',
 )
+// #196 review fix: binding takes the mode the SERVER announced for that session.
+// With no announcement the book keeps its own mode — the current pane is never
+// used as evidence (that is how a late Translate message was labelled Meeting).
+{
+  const bound = bindLiveId({ ...fresh, sessionMode: 'meeting' }, 's1', 'translate')
+  eq(bound.sessionMode || '', 'translate', 'the announced session mode is bound')
+  const kept = bindLiveId({ ...fresh, sessionMode: 'translate' }, 's1')
+  eq(kept.sessionMode || '', 'translate', 'no announcement keeps the book mode (no pane guess)')
+  const unknown = bindLiveId({ ...fresh, sessionMode: '' }, 's1', undefined)
+  eq(unknown.sessionMode || '', '', 'an unknown book stays unknown')
+  eq(bindLiveId(fresh, undefined, 'translate').liveId, null, 'no id binds nothing')
+}
 
 // keepAfterNotes with old generation discarded
 {

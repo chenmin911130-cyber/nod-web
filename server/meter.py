@@ -541,6 +541,15 @@ def list_history(user_id: str, limit: int = 40) -> list[dict]:
 NOT_PENDING_MODES = ("translate",)
 
 
+def saveable_mode(mode: str | None) -> bool:
+    """True when a session opened in this mode can be saved to History (#196).
+
+    One definition of "this mode has no Save concept", shared by the pending
+    query's filter (NOT_PENDING_MODES) and the server-side `save_prompt`.
+    """
+    return (mode or "").strip().lower() not in NOT_PENDING_MODES
+
+
 def list_pending_history(user_id: str) -> list[dict]:
     """Recoverable, never-saved sessions with content: kept=False + ended + not discarded.
 

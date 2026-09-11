@@ -197,6 +197,74 @@ def _session(**overrides):
     return sess
 
 
+# --- save_prompt attribution (#196 review) ---------------------------------
+
+
+def _offer_session(**overrides):
+    from server.app import Session
+
+    sess = Session.__new__(Session)
+    sess.user_id = "u1"
+    sess.usage_session_id = "sess-1"
+    sess._workspace = "meeting"
+    sess._usage_mode = "meeting"
+    sess.emit = mock.Mock()
+    for key, val in overrides.items():
+        setattr(sess, key, val)
+    return sess
+
+
+def test_save_prompt_carries_the_session_mode():
+    """The client binds the announced mode instead of guessing the current pane."""
+    sess = _offer_session()
+    with mock.patch("server.meter.is_session_kept", return_value=False):
+        sess._offer_save_history()
+    ev = sess.emit.call_args.args[0]
+    assert ev["type"] == "save_prompt"
+    assert ev["id"] == "sess-1"
+    assert ev["mode"] == "meeting"
+
+
+def test_save_prompt_refused_for_a_translate_session_in_the_meeting_pane():
+    """#196 review: the pane is not the session.
+
+    A Translate session still open when the user switches back to Meeting must not
+    emit a save_prompt — the client used to bind that id with the pane mode and
+    replace the real meeting's save target.
+    """
+    sess = _offer_session(_workspace="meeting", _usage_mode="translate")
+    with mock.patch("server.meter.is_session_kept", return_value=False):
+        sess._offer_save_history()
+    sess.emit.assert_not_called()
+
+
+def test_save_prompt_keeps_offering_for_a_legacy_session_without_a_usage_mode():
+    """A session opened before `_usage_mode` existed still offers, as the pane says."""
+    sess = _offer_session(_usage_mode="")
+    with mock.patch("server.meter.is_session_kept", return_value=False):
+        sess._offer_save_history()
+    ev = sess.emit.call_args.args[0]
+    assert ev["mode"] == "meeting"
+
+
+def test_save_prompt_not_offered_when_already_kept():
+    sess = _offer_session()
+    with mock.patch("server.meter.is_session_kept", return_value=True):
+        sess._offer_save_history()
+    sess.emit.assert_not_called()
+
+
+def test_saveable_mode_matches_the_pending_filter():
+    from server.meter import saveable_mode
+
+    assert saveable_mode("meeting") is True
+    assert saveable_mode("lecture") is True
+    assert saveable_mode("") is True  # legacy / unknown stays eligible
+    assert saveable_mode(None) is True
+    assert saveable_mode("translate") is False
+    assert saveable_mode("Translate") is False
+
+
 def test_close_meeting_with_content_does_not_discard():
     sess = _session()
     with (
