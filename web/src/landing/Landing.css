@@ -227,6 +227,23 @@ html.nod-site {
   border: 0;
 }
 
+.skip-link {
+  position: absolute;
+  left: 16px;
+  top: 12px;
+  z-index: 40;
+  padding: 0.55rem 0.9rem;
+  border-radius: 999px;
+  background: #07101f;
+  color: #f2f6fb;
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
 .hero.hero-posters {
   min-height: auto;
   flex-direction: column;
@@ -2732,5 +2749,29 @@ html.nod-site {
 
   .cta {
     padding-bottom: 70px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.nod-site {
+    scroll-behavior: auto;
+  }
+
+  .hero-streaks,
+  .hero-wisp,
+  .hero-glass,
+  .hero-livewave,
+  .live-bar {
+    animation: none !important;
+  }
+
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+
+  .hero-poster-stage img {
+    transition: none;
   }
 }
