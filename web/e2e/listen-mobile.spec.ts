@@ -234,11 +234,22 @@ test.describe('Listen mobile Ask bubble (#193 item 3)', () => {
     // none of that was a tap: the input stayed closed
     await expect(input).toHaveCount(0)
 
-    // a cancelled gesture must not eat the next tap
-    await bubble.dispatchEvent('pointercancel', { pointerId: 9, clientX: 10, clientY: 10 })
+    // A CANCELLED drag (issued while a real drag is in flight) must not arm the
+    // click-swallow — the old shared handler did exactly that and ate the next tap.
+    // Park the pointer away first: with the capture released, an up over the
+    // bubble would itself produce a click and consume the stale flag, hiding it.
+    const cur = (await bubble.boundingBox())!
+    await page.mouse.move(cur.x + cur.width / 2, cur.y + cur.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(cur.x + cur.width / 2 - 90, cur.y + cur.height / 2 - 120, { steps: 8 })
+    await bubble.dispatchEvent('pointercancel', { pointerId: 1, clientX: cur.x, clientY: cur.y })
+    await page.mouse.move(195, 40)
+    await page.mouse.up()
+
+    // one tap must still toggle, whatever the aborted gesture left behind
+    const openBefore = await input.count()
     await bubble.click()
-    await expect(input).toBeVisible()
-    await expect(input).toBeFocused()
+    await expect(input).toHaveCount(openBefore === 0 ? 1 : 0)
   })
 })
 
@@ -375,9 +386,15 @@ test.describe('Listen mobile recording chrome', () => {
     expect(chips.h).toBeGreaterThanOrEqual(40)
     expect(chips.scrollH).toBeLessThanOrEqual(chips.clientH + 1)
     expect(chips.bottom).toBeLessThanOrEqual(boxes.viewport)
-    // while the keyboard is up the input row is the Ask control, so the bubble
-    // steps aside (it returns on blur)
-    await expect(page.getByRole('button', { name: 'Ask' })).toBeHidden()
+    // the bubble stays REACHABLE while the keyboard is up — tapping it is what
+    // closes the input and the keyboard, so hiding it would break the toggle
+    const bubble = page.getByRole('button', { name: 'Ask' })
+    await expect(bubble).toBeVisible()
+    const bubbleBox = (await bubble.boundingBox())!
+    expect(bubbleBox.y + bubbleBox.height).toBeLessThanOrEqual(boxes.viewport)
+    await expect(page.locator('.listen-prompt input')).toBeVisible()
+    await bubble.click()
+    await expect(page.locator('.listen-prompt input')).toHaveCount(0)
     await page.screenshot({ path: `${EVIDENCE}/listen-ask-kb-390.png` })
   })
 })
@@ -521,6 +538,25 @@ test.describe('Translate mobile chrome (#193 item 5)', () => {
     await page.getByRole('button', { name: 'Start voice translation' }).click()
     ws.send({ type: 'phase', capture: 'listening', engine: 'idle' })
     await expect(page.getByRole('button', { name: 'Stop' })).toBeVisible()
+  })
+
+  test('the Translate paused-Stop fix does not widen to Live Q&A', async ({ page }) => {
+    const ws = await mockListenWs(page)
+    await countSends(page)
+    // enter the Live Q&A (interview) workspace through the scene menu
+    await page.getByRole('button', { name: /^Meeting/ }).click()
+    await page.getByRole('option', { name: /Live Q&A/ }).click()
+    await page.getByRole('button', { name: 'Start listening' }).click()
+    ws.send({ type: 'phase', capture: 'listening', engine: 'idle' })
+    await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible()
+    await page.getByRole('button', { name: 'Pause' }).click()
+    ws.send({ type: 'phase', capture: 'paused', engine: 'idle' })
+    await expect(page.getByRole('button', { name: 'Resume' })).toBeVisible()
+
+    // Live Q&A keeps its old handling: a paused Stop is not a Translate stop
+    await page.getByRole('button', { name: 'End' }).click()
+    await page.waitForTimeout(400)
+    expect(await sendsOf(page, 'stop_listen')).toBe(0)
   })
 
   test('Translate offers no Save anywhere (#193 item 8)', async ({ page }) => {

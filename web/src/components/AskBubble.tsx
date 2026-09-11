@@ -125,6 +125,13 @@ export default function AskBubble({
     if (ref.current?.hasPointerCapture(e.pointerId)) ref.current.releasePointerCapture(e.pointerId)
     if (d?.moved) skipClick.current = true
   }
+  // A cancelled gesture must NOT arm the click-swallow: the browser fires no
+  // click for it, so the flag would sit there and eat the user's NEXT tap.
+  const cancelDrag = (e: React.PointerEvent<HTMLButtonElement>) => {
+    drag.current = null
+    skipClick.current = false
+    if (ref.current?.hasPointerCapture(e.pointerId)) ref.current.releasePointerCapture(e.pointerId)
+  }
   const handleClick = () => {
     if (skipClick.current) {
       skipClick.current = false
@@ -144,7 +151,7 @@ export default function AskBubble({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
-      onPointerCancel={endDrag}
+      onPointerCancel={cancelDrag}
       onClick={handleClick}
     >
       <svg width="22" height="22" viewBox="0 0 24 22" fill="none" aria-hidden="true">

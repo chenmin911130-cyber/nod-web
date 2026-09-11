@@ -2694,12 +2694,12 @@ export default function App() {
       endMeetingListeningRef.current('Listening stopped · writing notes', true)
       return
     }
-    // #193: Translate (and Live Q&A) have no notes/save machine, so a PAUSED
-    // session must still Stop — handlePrimary only resumes it, so Pause → Stop
-    // used to leave the listener attached and blocked the next session. This
-    // mirrors the bare stopListen() the translate branch of handlePrimary
-    // already uses from the listening state.
-    if (s.capture === 'paused' && s.workspaceMode !== 'meeting') {
+    // #193: Translate has no notes/save machine, so a PAUSED Translate session
+    // must still Stop — handlePrimary only resumes it, so Pause → Stop used to
+    // leave the listener attached and blocked the next session. This mirrors the
+    // bare stopListen() the translate branch of handlePrimary already uses from
+    // the listening state. Scoped to translate: Live Q&A keeps its old handling.
+    if (s.capture === 'paused' && s.workspaceMode === 'translate') {
       stopListen()
       dispatch({ type: 'engine', ev: { type: 'status', text: 'Stopped' } })
     }
