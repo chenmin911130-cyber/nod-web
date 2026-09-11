@@ -164,3 +164,28 @@ test.describe('Think answer rendering', () => {
     await expect(page.locator('.qa-sources')).toHaveCount(2)
   })
 })
+
+/**
+ * Phone-width before/after evidence (#182 acceptance: the composer must stay
+ * usable with the keyboard up). The on-screen keyboard itself is a native
+ * overlay a browser cannot draw — the layout side of that is covered by the
+ * `keyboardInset` unit test — so these shots pin the phone layout itself.
+ */
+test.describe('Think on a phone viewport', () => {
+  test.use({ viewport: { width: 390, height: 844 } })
+
+  test('shows the switch above the composer, off and on', async ({ page }) => {
+    const { send } = await mockWs(page)
+    // A phone only has the Live Q&A composer inside a live session: on its own
+    // Ready screen there is no input to sit above. Mark capture listening.
+    send({ type: 'phase', capture: 'listening', engine: 'idle' })
+    const toggle = page.getByRole('switch', { name: 'Think' })
+    await expect(toggle).toBeVisible()
+    await expect(toggle).toHaveAttribute('aria-checked', 'false')
+    await shot(page, 'phone-think-off')
+
+    await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-checked', 'true')
+    await shot(page, 'phone-think-on')
+  })
+})
