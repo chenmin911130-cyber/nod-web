@@ -5950,6 +5950,67 @@ HTML_NO_CACHE = {
     "Expires": "0",
 }
 
+SITE_SPA_PAGES = frozenset(
+    {
+        "zh",
+        "login",
+        "signup",
+        "sso-callback",
+        "forgot",
+        "reset",
+        "account",
+        "privacy",
+        "terms",
+        "consent",
+        "admin",
+    }
+)
+
+NOT_FOUND_HTML = """<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Not found — Nodpilot</title>
+    <style>
+      html, body { margin: 0; min-height: 100%; background: #07101f; color: #f2f6fb;
+        font-family: 'IBM Plex Sans', system-ui, sans-serif; }
+      main { box-sizing: border-box; width: min(calc(100% - 48px), 640px); margin: 0 auto; padding: 128px 0 72px; }
+      a { color: #5bdaf4; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p>Not found</p>
+      <h1>This page is not on Nodpilot.</h1>
+      <p><a href="/">Back to the homepage</a></p>
+    </main>
+  </body>
+</html>
+"""
+
+
+def spa_kind(full_path: str) -> str:
+    """Classify a catch-all path: site HTML, app shell, unknown API, or missing."""
+    path = (full_path or "").lstrip("/")
+    if path == "api" or path.startswith("api/"):
+        return "api"
+    if path == "app" or path.startswith("app/"):
+        return "app"
+    if path in SITE_SPA_PAGES or path.startswith("zh/"):
+        return "site"
+    return "unknown"
+
+
+def _not_found_html() -> Response:
+    headers = {**HTML_NO_CACHE, "X-Robots-Tag": "noindex, nofollow"}
+    return Response(content=NOT_FOUND_HTML, status_code=404, media_type="text/html; charset=utf-8", headers=headers)
+
+
+def _not_found_json() -> JSONResponse:
+    return JSONResponse({"detail": "Not found"}, status_code=404)
+
 
 @app.get("/robots.txt")
 def robots():
@@ -6043,9 +6104,12 @@ if WEB_DIST.exists():
 
     @app.get("/{full_path:path}")
     def spa(full_path: str):
-        if full_path == "app" or full_path.startswith("app/"):
+        kind = spa_kind(full_path)
+        if kind == "app":
             page = WEB_DIST / "app.html"
             return _html_page("app.html") if page.exists() else _html_page("index.html")
+        if kind == "api":
+            return _not_found_json()
         # ASGI servers pass the unquoted path through without collapsing dot
         # segments, so "/..%2fdata%2fnod.db" arrives here as "../data/nod.db".
         # Resolve first, then refuse anything that escapes the build output.
@@ -6053,7 +6117,9 @@ if WEB_DIST.exists():
             try:
                 dest = (WEB_DIST / full_path).resolve()
             except (OSError, ValueError):
-                return _html_page("index.html")
+                return _not_found_html()
             if dest.is_relative_to(WEB_DIST_REAL) and dest.is_file():
                 return FileResponse(dest)
-        return _html_page("index.html")
+        if kind == "site":
+            return _html_page("index.html")
+        return _not_found_html()
