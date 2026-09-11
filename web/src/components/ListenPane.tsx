@@ -37,6 +37,7 @@ import { usePhoneChrome } from '../phoneChrome'
 import { askOutcome, groupTranscript, iphoneSummaryHeading, isCatchAskCurrent, liveFeed, liveStageMode, summaryPlainText, transcriptPlainText, type LiveFeedItem } from '../liveView'
 import { useStickToBottom } from '../useStickToBottom'
 import { AnswerContent } from './AnswerContent'
+import { CopyButton, ShareOrCopyButton } from './CopyButton'
 import PhoneSheet from './PhoneSheet'
 import SpeakerAvatar from './SpeakerAvatar'
 
@@ -847,37 +848,10 @@ function IphoneLiveFeed({
   )
 }
 
-async function copyText(text: string) {
-  const value = text.trim()
-  if (!value) return
-  try {
-    await navigator.clipboard.writeText(value)
-  } catch {
-    /* ignore */
-  }
-}
-
-function CopyIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect x="5.2" y="5.2" width="7.4" height="8.2" rx="1.4" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M3.4 10.6V3.8A1.4 1.4 0 0 1 4.8 2.4h5.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  )
-}
-
 function IphoneLineActions({ text }: { text: string }) {
   return (
     <div className="iphone-line-actions">
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation()
-          void copyText(text)
-        }}
-      >
-        {IPHONE_COPY.copyLine}
-      </button>
+      <CopyButton text={text} idle={IPHONE_COPY.copyLine} stopPropagation />
     </div>
   )
 }
@@ -1548,18 +1522,16 @@ export default function ListenPane(props: Props) {
                     <div className="iphone-tr-head-title">{IPHONE_COPY.fullTranscript}</div>
                     <div className="iphone-tr-head-sub">{IPHONE_COPY.allCapturedSpeech}</div>
                   </div>
-                  <button
-                    type="button"
+                  <CopyButton
                     className="iphone-tr-copy-all"
-                    onClick={() => void copyText(transcriptPlainText({
+                    leadingIcon
+                    idle={IPHONE_COPY.copyLine}
+                    text={transcriptPlainText({
                       lines: props.lines,
                       speakerNames: props.speakerNames,
                       translateOn: biOn,
-                    }))}
-                  >
-                    <CopyIcon />
-                    {IPHONE_COPY.copyLine}
-                  </button>
+                    })}
+                  />
                 </div>
               ) : (
                 <div className="listen-kicker">
@@ -1607,13 +1579,11 @@ export default function ListenPane(props: Props) {
                           ) : null}
                           {group.startTs ? <span className="iphone-tr-group-ts">{group.startTs}</span> : null}
                           {groupText ? (
-                            <button
-                              type="button"
+                            <CopyButton
                               className="iphone-tr-group-copy"
-                              onClick={() => void copyText(groupText)}
-                            >
-                              {IPHONE_COPY.copyLine}
-                            </button>
+                              idle={IPHONE_COPY.copyLine}
+                              text={groupText}
+                            />
                           ) : null}
                         </div>
                         {group.lines.map((line, i) => (
@@ -1801,22 +1771,14 @@ export default function ListenPane(props: Props) {
                 {phone && (sections.length > 0 || props.catchNotes.some((note) => note.text.trim())) ? (
                   <div className="iphone-summary-actions">
                     <button type="button" onClick={() => props.onExportPdf?.()}>{IPHONE_COPY.histPdf}</button>
-                    <button
-                      type="button"
-                      onClick={() => void copyText(summaryPlainText({ scene: props.scene, notes, catchNotes: props.catchNotes }))}
-                    >
-                      {IPHONE_COPY.copyLine}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const text = summaryPlainText({ scene: props.scene, notes, catchNotes: props.catchNotes })
-                        if (navigator.share) void navigator.share({ text }).catch(() => copyText(text))
-                        else void copyText(text)
-                      }}
-                    >
-                      {IPHONE_COPY.shareSummary}
-                    </button>
+                    <CopyButton
+                      idle={IPHONE_COPY.copyLine}
+                      text={summaryPlainText({ scene: props.scene, notes, catchNotes: props.catchNotes })}
+                    />
+                    <ShareOrCopyButton
+                      idle={IPHONE_COPY.shareSummary}
+                      text={summaryPlainText({ scene: props.scene, notes, catchNotes: props.catchNotes })}
+                    />
                   </div>
                 ) : phone && props.lines.length > 0 ? (
                   <button type="button" className="iphone-summarize" disabled={props.busy} onClick={runSummary}>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { copyText } from '../historyRestore'
+import { copyFlashText, useCopyFlash } from '../copyFeedback'
 
 /* ============================================================
    口试速记式答案渲染（AutoOverlay + AnswerPane 共用）
@@ -181,7 +181,9 @@ export function AnswerContent({
   const parsed = useMemo(() => parseAnswer(answer), [answer])
   const b = base ?? 'a'
   const [near, setNear] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const { flash, runCopy } = useCopyFlash()
+  const result = flash?.key === 'copy' ? flash.result : null
+  const flashing = !!result
   const hideTimer = useRef(0)
 
   const showCopy = () => {
@@ -197,27 +199,24 @@ export function AnswerContent({
 
   return (
     <article
-      className={`answer-content${copyable ? ' has-copy' : ''}${near ? ' is-near' : ''}`}
+      className={`answer-content${copyable ? ' has-copy' : ''}${near || flashing ? ' is-near' : ''}${flashing ? ' is-flashing' : ''}`}
       onPointerEnter={copyable ? showCopy : undefined}
       onPointerLeave={copyable ? hideCopy : undefined}
     >
       {copyable && (
         <button
           type="button"
-          className={`ans-copy${copied ? ' done' : ''}`}
-          aria-label="Copy answer"
+          className={`ans-copy${result === 'ok' ? ' done' : ''}${result === 'fail' || result === 'empty' ? ' fail' : ''}`}
+          aria-label={result ? copyFlashText(result) : 'Copy answer'}
+          aria-live="polite"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.preventDefault()
             e.stopPropagation()
-            void copyText(answer).then((ok) => {
-              if (!ok) return
-              setCopied(true)
-              window.setTimeout(() => setCopied(false), 1400)
-            })
+            runCopy('copy', answer)
           }}
         >
-          {copied ? 'Copied' : 'Copy'}
+          {result ? copyFlashText(result) : 'Copy'}
         </button>
       )}
       {parsed.lead && (

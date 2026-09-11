@@ -542,30 +542,73 @@ export function applyMeetingResume<T extends {
   }
 }
 
+type FocusSel = { el: Element | null; ranges: Range[] }
+
+function captureFocusSel(): FocusSel {
+  const sel = typeof window === 'undefined' ? null : window.getSelection()
+  const ranges: Range[] = []
+  if (sel) {
+    for (let i = 0; i < sel.rangeCount; i++) ranges.push(sel.getRangeAt(i).cloneRange())
+  }
+  return { el: typeof document === 'undefined' ? null : document.activeElement, ranges }
+}
+
+function restoreFocusSel(prior: FocusSel) {
+  const now = document.activeElement
+  const userMovedFocus = !!(now && now !== prior.el && now !== document.body && now !== document.documentElement)
+  if (!userMovedFocus && prior.el instanceof HTMLElement) {
+    try {
+      prior.el.focus()
+    } catch {
+      /* ignore */
+    }
+  }
+  const live = window.getSelection()?.toString() || ''
+  if (live && live !== prior.ranges.map((range) => range.toString()).join('')) return
+  const sel = window.getSelection()
+  if (!sel || !prior.ranges.length) return
+  try {
+    sel.removeAllRanges()
+    for (const range of prior.ranges) sel.addRange(range)
+  } catch {
+    /* ignore */
+  }
+}
+
+function copyWithTextarea(body: string, prior: FocusSel): boolean {
+  const el = document.createElement('textarea')
+  el.value = body
+  el.setAttribute('readonly', '')
+  el.setAttribute('aria-hidden', 'true')
+  el.tabIndex = -1
+  el.style.position = 'fixed'
+  el.style.top = '0'
+  el.style.left = '0'
+  el.style.opacity = '0'
+  try {
+    document.body.appendChild(el)
+    el.focus()
+    el.select()
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    el.remove()
+    restoreFocusSel(prior)
+  }
+}
+
 export async function copyText(text: string): Promise<boolean> {
   const body = (text || '').trim()
   if (!body) return false
+  const before = captureFocusSel()
   try {
     window.focus()
     await navigator.clipboard.writeText(body)
     return true
   } catch {
-    try {
-      const el = document.createElement('textarea')
-      el.value = body
-      el.setAttribute('readonly', '')
-      el.style.position = 'fixed'
-      el.style.top = '0'
-      el.style.left = '0'
-      el.style.opacity = '0'
-      document.body.appendChild(el)
-      el.focus()
-      el.select()
-      const ok = document.execCommand('copy')
-      el.remove()
-      return ok
-    } catch {
-      return false
-    }
+    const during = captureFocusSel()
+    const userMoved = (during.el && during.el !== before.el) || (window.getSelection()?.toString() || '') !== before.ranges.map((range) => range.toString()).join('')
+    return copyWithTextarea(body, userMoved ? during : before)
   }
 }

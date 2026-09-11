@@ -6,6 +6,7 @@ import { apiUrl, isNativeApp, wsUrl } from './native'
 import { micSilenceShouldWarn } from './micGuard'
 import { audioUplinkWsUrl, controlWsUrl, shouldEmitUplinkNotice, uplinkFailureFromError, uplinkFailureLog, uplinkShouldForwardPcmFromJs, uplinkTokenAfterNativeStart } from './uplink'
 import { isWatchMicPreferred, setWatchPcmSink } from './watch'
+import { copyText } from './historyRestore'
 
 const EVENT_TYPES = new Set([
   'ready',
@@ -419,9 +420,7 @@ export function installWebApi(): void {
     setPinned: () => undefined,
     setStealth: () => undefined,
     setView: () => undefined,
-    copy: (text) => {
-      void navigator.clipboard?.writeText(text)
-    },
+    copy: (text) => copyText(text),
     close: () => undefined,
     minimize: () => undefined,
     getConfig: async () => {

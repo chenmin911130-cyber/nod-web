@@ -49,6 +49,7 @@ import ListenPane from './components/ListenPane'
 import TranslatePane from './components/TranslatePane'
 import StatusToast, { UplinkStatusBanner } from './components/StatusToast'
 import { nextStatusText } from './statusToast'
+import { copyFlashText, useCopyFlash } from './copyFeedback'
 import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
 import { api as authApi, deleteAccount, fetchMe, logout, type Me } from './auth'
@@ -1227,6 +1228,7 @@ export default function App() {
   )
   const [historyOpen, setHistoryOpen] = useState(false)
   const [accountOpen, setAccountOpen] = useState(false)
+  const { flash: copyNotice, runCopy: runLatestCopy, reset: resetCopyNotice } = useCopyFlash()
   const [me, setMe] = useState<Me | null>(null)
   const [signOutError, setSignOutError] = useState('')
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -1819,37 +1821,21 @@ export default function App() {
 
   const copyLatest = useCallback(() => {
     const s = stateRef.current
+    let text = ''
     if (s.workspaceMode === 'translate') {
       const pairs = s.translatePairs
-      const text = (pairs[pairs.length - 1]?.translation || pairs[pairs.length - 1]?.original || '').trim()
-      if (text) {
-        window.api.copy(text)
-        dispatch({ type: 'engine', ev: { type: 'status', text: 'Copied last translation' } })
-      } else {
-        dispatch({ type: 'engine', ev: { type: 'status', text: 'Nothing to copy yet.' } })
-      }
-      return
-    }
-    if (s.workspaceMode === 'meeting') {
-      const lines = s.meetingLines
-      const text = (lines[lines.length - 1]?.text ?? '').trim()
-      if (text) {
-        window.api.copy(text)
-        dispatch({ type: 'engine', ev: { type: 'status', text: 'Copied last transcript line' } })
-      } else {
-        dispatch({ type: 'engine', ev: { type: 'status', text: 'No transcript to copy yet.' } })
-      }
-      return
-    }
-    const turns = s.turns
-    const text = (turns[turns.length - 1]?.a ?? '').trim()
-    if (text) {
-      window.api.copy(text)
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'Copied latest answer' } })
+      text = pairs[pairs.length - 1]?.translation || pairs[pairs.length - 1]?.original || ''
+    } else if (s.workspaceMode === 'meeting') {
+      text = s.meetingLines[s.meetingLines.length - 1]?.text ?? ''
     } else {
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'No completed answer to copy yet.' } })
+      text = s.turns[s.turns.length - 1]?.a ?? ''
     }
-  }, [])
+    runLatestCopy('latest', text)
+  }, [runLatestCopy])
+
+  useEffect(() => {
+    resetCopyNotice()
+  }, [state.workspaceMode, historyOpen, accountOpen, saveBook.liveId, resetCopyNotice])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -3176,16 +3162,6 @@ export default function App() {
     })()
   }, [])
 
-  const copyPairField = useCallback((pair: TranslatePair, field: 'original' | 'translation') => {
-    const text = (field === 'translation' ? pair.translation : pair.original).trim()
-    if (!text) {
-      dispatch({ type: 'engine', ev: { type: 'status', text: field === 'translation' ? 'Nothing to copy yet.' : 'Nothing to copy.' } })
-      return
-    }
-    window.api.copy(text)
-    dispatch({ type: 'engine', ev: { type: 'status', text: field === 'translation' ? 'Copied translation' : 'Copied original' } })
-  }, [])
-
   const handleRetryTranslate = useCallback((id: string) => {
     if (inflightTranslate.current === id) return
     askedTranslate.current.delete(id)
@@ -3732,7 +3708,6 @@ export default function App() {
             onTranslateTo={handleTranslateTo}
             onTranslateFrom={handleTranslateFrom}
             onSwap={handleSwapTranslate}
-            onCopyField={copyPairField}
             onRetry={handleRetryTranslate}
             ttsMode={ttsMode}
             ttsVoice={ttsVoice}
@@ -3870,6 +3845,11 @@ export default function App() {
         )}
       </div>
       <StatusToast text={state.status} />
+      {copyNotice ? (
+        <div className="copy-toast" role="status" aria-live="polite">
+          {copyFlashText(copyNotice.result)}
+        </div>
+      ) : null}
       {clearOpen && (
         <div className="consent-mask" onClick={() => setClearOpen(false)}>
           <div className="consent-card confirm-card" role="dialog" aria-labelledby="clear-title" onClick={(e) => e.stopPropagation()}>
