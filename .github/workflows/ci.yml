@@ -92,6 +92,16 @@ jobs:
           path: web/playwright-report/
           retention-days: 7
 
+  ios-deliver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Delivery gate tests
+        run: node scripts/iosWorktreePods.test.mjs && node scripts/iosDeliver.test.mjs
+
   native-replay:
     runs-on: macos-latest
     steps:

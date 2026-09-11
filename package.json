@@ -5,7 +5,8 @@
   "scripts": {
     "cap:sync": "node scripts/iosWorktreePods.mjs assert-roots && npm run build --prefix web && node scripts/prepare-ios-web.mjs && npx cap sync ios && node scripts/patch-ios-plist.mjs && node scripts/iosWorktreePods.mjs pin",
     "cap:open": "npx cap open ios",
-    "cap:ios": "bash scripts/package-ios.sh"
+    "cap:ios": "bash scripts/package-ios.sh",
+    "test:ios-deliver": "node scripts/iosWorktreePods.test.mjs && node scripts/iosDeliver.test.mjs"
   },
   "dependencies": {
     "@capacitor/app": "^7.1.0",

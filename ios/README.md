@@ -6,28 +6,28 @@ Xcode only runs on a Mac. This Linux/cloud checkout prepares the project; you co
 
 ## Package on a Mac (this is the iOS build)
 
+The only supported delivery path is **[docs/ios-deliver.md](../docs/ios-deliver.md)**. Pack from an isolated worktree of a full 40-character SHA. Do not `git pull` in the main checkout and run `npm run cap:ios` there.
+
 1. Install **Xcode** from the App Store. Open it once and accept the license.
 2. Install **Node 20+** and CocoaPods (`sudo gem install cocoapods` or `brew install cocoapods`).
 3. Sign in to an Apple Developer account in Xcode → Settings → Accounts. Xcode can create App IDs `com.nodpilot.app` and `com.nodpilot.app.watchkitapp` when you pick a Team.
-4. In this repo on the Mac:
+4. On the Mac, in a worktree of the approved commit:
 
 ```bash
-git pull
 npm ci
 (cd web && npm ci)
-npm run cap:ios
+TEAM_ID=XXXXXXXXXX npm run cap:ios -- --sha <40-char-sha> --bundle <n> --out /tmp/nod-deliver-<id> --archive
 ```
 
-That builds `web/dist`, syncs Capacitor, installs pods, and opens Xcode. Select **Team** on both the **App** and **WatchApp** targets, plug in an iPhone, press Run.
+That runs the protected `cap:sync`, archives into `--out`, and writes `manifest.json`. Opening Xcode is `--open` with the same `--sha` and `--bundle`; it is not an install.
 
-To make an archive / IPA after Team is set (10-character Team ID from Xcode → Settings → Accounts):
+Install only the exact artifact from that manifest:
 
 ```bash
-TEAM_ID=XXXXXXXXXX npm run cap:ios -- --archive
-TEAM_ID=XXXXXXXXXX npm run cap:ios -- --ipa
+npm run cap:ios -- --install /tmp/nod-deliver-<id>/manifest.json --install-ok --iphone-udid <udid> --watch-udid <udid>
 ```
 
-`cap:sync` (also run by `cap:ios`) builds `web/dist`, points the app at `app.html` (not the marketing site), and copies assets into `ios/`.
+`cap:sync` (also run by `cap:ios`) builds `web/dist`, points the app at `app.html` (not the marketing site), copies assets into `ios/`, and pins Pods to this checkout.
 
 ## Run on a phone + Watch
 
@@ -49,10 +49,11 @@ If lock-screen audio dies, the usual cause is a missing Background Mode. Re-run 
 
 ## TestFlight
 
-1. In Xcode: **Product → Archive** the **App** scheme (Watch is included).
-2. **Distribute App → App Store Connect → Upload**.
-3. In App Store Connect, add the build to a TestFlight group.
-4. Review notes should say: microphone is used only after in-app consent; Watch and lock-screen recording are explicit listen sessions, not silent capture.
+Upload the archive produced by the locked `cap:ios --archive` path in [docs/ios-deliver.md](../docs/ios-deliver.md). Do not archive from Xcode Organizer on an unlocked checkout.
+
+1. Distribute that archive to App Store Connect.
+2. In App Store Connect, add the build to a TestFlight group.
+3. Review notes should say: microphone is used only after in-app consent; Watch and lock-screen recording are explicit listen sessions, not silent capture.
 
 API and WebSocket traffic always go to `https://nodpilot.com` / `wss://nodpilot.com`. Do not point a store build at localhost.
 

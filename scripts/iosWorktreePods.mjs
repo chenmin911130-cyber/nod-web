@@ -53,6 +53,18 @@ export function assertPluginRoots(root = process.cwd()) {
       throw new Error(`ios worktree pods: ${name} resolves to ${real}, expected ${want}`)
     }
   }
+  const webNm = join(root, 'web/node_modules')
+  if (!existsSync(webNm)) {
+    throw new Error(`ios worktree pods: missing web/node_modules — run npm ci in ${join(rootReal, 'web')}`)
+  }
+  if (lstatSync(webNm).isSymbolicLink()) {
+    const webReal = realpathSync(webNm)
+    if (webReal !== join(rootReal, 'web/node_modules') && !webReal.startsWith(`${rootReal}/web/`)) {
+      throw new Error(
+        `ios worktree pods: web/node_modules is a symlink to ${webReal}. Pack from this worktree: rm web/node_modules && (cd web && npm ci)`,
+      )
+    }
+  }
 }
 
 function pluginPathEntries(pbx, podsDir) {

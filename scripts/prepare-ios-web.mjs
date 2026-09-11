@@ -28,6 +28,15 @@ const found = src.match(/CURRENT_PROJECT_VERSION = (\d+);/)
 if (!found) {
   throw new Error('prepare-ios-web: CURRENT_PROJECT_VERSION not found')
 }
-const next = Number(found[1]) + 1
-writeFileSync(pbx, src.replace(/CURRENT_PROJECT_VERSION = \d+;/g, `CURRENT_PROJECT_VERSION = ${next};`))
-process.stdout.write(`prepare-ios-web: CURRENT_PROJECT_VERSION ${found[1]} -> ${next}\n`)
+const requested = process.env.NOD_IOS_BUNDLE
+if (requested) {
+  if (!/^\d+$/.test(requested)) {
+    throw new Error('prepare-ios-web: NOD_IOS_BUNDLE must be an integer')
+  }
+  writeFileSync(pbx, src.replace(/CURRENT_PROJECT_VERSION = \d+;/g, `CURRENT_PROJECT_VERSION = ${requested};`))
+  process.stdout.write(`prepare-ios-web: CURRENT_PROJECT_VERSION ${found[1]} -> ${requested}\n`)
+} else {
+  const next = Number(found[1]) + 1
+  writeFileSync(pbx, src.replace(/CURRENT_PROJECT_VERSION = \d+;/g, `CURRENT_PROJECT_VERSION = ${next};`))
+  process.stdout.write(`prepare-ios-web: CURRENT_PROJECT_VERSION ${found[1]} -> ${next}\n`)
+}

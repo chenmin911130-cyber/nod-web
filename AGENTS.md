@@ -20,3 +20,7 @@ Single-context: one `CONTEXT.md` at the repo root and ADRs in `docs/adr/`. See `
 ### Self-improve
 
 Record confirmed agent misses in `.cursor/skills/self-improve/errors.md`. Read that log before Watch / listen / Translate / phone-sync work. After a miss, append one entry. See `.cursor/skills/self-improve/SKILL.md`.
+
+## iOS 交付
+
+只走 [docs/ios-deliver.md](docs/ios-deliver.md)：隔离 worktree、完整 SHA、受保护 `cap:sync`、`--out` 清单。不要在主工作区或 Desktop 快捷链接上直接 `npm run cap:ios`，也不要手工 `cap sync`。未给 `--install-ok` 不得装机。
