@@ -2534,6 +2534,11 @@ class Session:
         self._translate_carry = ""
         self._mic_muted = False
         self._workspace = "interview"
+        # #196 review fix: the mode the CURRENT usage row was opened with. It is
+        # fixed at open (`_workspace` keeps changing when the user switches panes),
+        # so it — not the pane the user is looking at — decides whether this session
+        # can be saved and what `save_prompt` says about itself.
+        self._usage_mode = ""
         self._pending_speaker: str | None = None
         self._stt_drops = 0
         self._stt_drop_at = 0.0
@@ -2821,6 +2826,9 @@ class Session:
             self._quota_block(snap)
             return False
         self.usage_session_id = sid
+        # #196 review fix: remember the mode the row was actually opened with — a
+        # later pane switch must not re-label this session (see `_offer_save_history`).
+        self._usage_mode = self._workspace or "interview"
         self.pipeline.usage_session_id = sid
         return True
 
@@ -4786,13 +4794,23 @@ class Session:
             return
         if getattr(self, "_workspace", "") != "meeting":
             return
-        from server.meter import is_session_kept
+        # #196 review fix: the SESSION's own mode (fixed when its usage row was
+        # opened) decides, not the pane the user is looking at now. A Translate
+        # session that is still open when the user switches back to Meeting used to
+        # emit a save_prompt that the client then bound to the meeting save book.
+        session_mode = getattr(self, "_usage_mode", "") or self._workspace
+        from server.meter import is_session_kept, saveable_mode
 
+        if not saveable_mode(session_mode):
+            return
         if is_session_kept(self.usage_session_id):
             return
         self.emit({
             "type": "save_prompt",
             "id": self.usage_session_id,
+            # Announced so the client binds the SESSION's mode instead of guessing
+            # the current pane (#196 review fix).
+            "mode": session_mode,
             "text": "Save this session to History?",
         })
 

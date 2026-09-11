@@ -155,7 +155,7 @@ export type EngineEvent =
   | { type: 'auth_required' }
   | { type: 'quota'; ok: boolean; reason?: string; plan?: string; plan_name?: string; stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; sessions?: number; session_limit?: number; daily_cost_usd?: number; daily_cost_limit?: number; daily_stt_seconds?: number; daily_stt_limit?: number; quota_disabled?: boolean }
   | { type: 'quota_exceeded'; reason: string }
-  | { type: 'save_prompt'; id?: string; text?: string }
+  | { type: 'save_prompt'; id?: string; text?: string; mode?: string }
   | { type: 'history_kept'; id?: string }
   | { type: 'history_keep_failed'; id?: string; reason?: string }
   | { type: 'disconnected' }

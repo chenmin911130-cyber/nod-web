@@ -6,7 +6,7 @@ import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
-import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
+import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, modeIsSaveEligible, sessionIsSaveEligible, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
 import { flushPendingKeepMessage, keepHistoryMessage, watchDiscardCommand, watchFailKeepNativeFace, watchJsFailMayApply, watchKeepNotesWait, watchNativeSaveReduce, watchPhoneStatusMayPush, watchSaveCommand, watchSaveKeepTarget, watchSaveRepeatAction, watchSaveShouldSendKeepHistory, watchSaveStatusPayload, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave, type NativeWatchSaveFace } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
@@ -1267,6 +1267,28 @@ export default function App() {
     setSavePrompt(false)
     setRailDismissed(false)
     setHistoryOpen(false)
+    // #196: a session whose mode has no Save concept is opened for VIEWING only. It
+    // must not enter the save book as undecided — that is what re-armed the Save ask
+    // once the user switched back to Meeting — and it must not be marked saved either
+    // (claiming "saved" for a session that was never saved would be a lie). The book
+    // records the row's real mode so every later offer stays blocked.
+    if (!sessionIsSaveEligible(session)) {
+      markHistoryKept(session.kept !== false)
+      pendingRestoreId.current = null
+      setSaveBannerOpen(false)
+      commitBook({
+        ...saveBookRef.current,
+        liveId: session.id,
+        status: 'saved',
+        offered: true,
+        sessionMode: session.mode || '',
+      })
+      dispatch({
+        type: 'engine',
+        ev: { type: 'status', text: `Opened ${payload.scene} session` },
+      })
+      return
+    }
     if (sessionIsUnsaved(session)) {
       markHistoryKept(false)
       pendingRestoreId.current = session.id
@@ -1275,6 +1297,7 @@ export default function App() {
         liveId: session.id,
         status: 'undecided',
         offered: true,
+        sessionMode: session.mode || '',
       })
       setSaveBannerOpen(true)
       dispatch({
@@ -1291,6 +1314,7 @@ export default function App() {
       liveId: session.id,
       status: 'saved',
       offered: true,
+      sessionMode: session.mode || '',
     })
     dispatch({
       type: 'engine',
@@ -1317,6 +1341,9 @@ export default function App() {
           pendingId: pending?.id || '',
           dismissedIds: dismissedRestoreIds.current,
           workspaceMode: s.workspaceMode,
+          // #196: the row's own mode decides — a pending Translate session must not
+          // restore (nor offer Save) just because the user is back in Meeting.
+          pendingMode: pending?.mode,
         })
         if (surface !== 'page' || !pending) {
           pendingRestoreId.current = null
@@ -1929,9 +1956,14 @@ export default function App() {
     sendKeepNow(pending)
   }
 
-  const bindLiveFromEngine = (id?: string) => {
+  const bindLiveFromEngine = (id?: string, sessionMode?: string) => {
     if (!id) return
-    commitBook(bindLiveId(saveBookRef.current, id))
+    // #196 review fix: bind the SESSION's own mode — announced by the server on the
+    // event — and never the pane the user is looking at. Guessing from the pane is
+    // how a late Translate message got labelled Meeting after the user switched back
+    // and replaced the real meeting's save target. No announcement → the book keeps
+    // whatever mode its own row established (never a pane guess).
+    commitBook(bindLiveId(saveBookRef.current, id, sessionMode))
     if (saveBookRef.current.offered) persistRestoreDismissed(id)
     if (keepEpochRef.current && !keepEpochRef.current.liveId) {
       keepEpochRef.current = { ...keepEpochRef.current, liveId: id }
@@ -1945,6 +1977,7 @@ export default function App() {
       workspaceMode: s.workspaceMode,
       kept: historyKeptRef.current,
       paused: s.capture === 'paused',
+      sessionMode: saveBookRef.current.sessionMode,
     })) return
     const surface = savePromptSurface({
       phone: phoneRef.current,
@@ -1952,6 +1985,7 @@ export default function App() {
       kept: historyKeptRef.current,
       offered: saveBookRef.current.offered,
       hasContent: meetingHasSaveableContent(s),
+      sessionMode: saveBookRef.current.sessionMode,
     })
     if (surface === 'none') return
     commitBook(markOffered(saveBookRef.current))
@@ -2117,7 +2151,15 @@ export default function App() {
         skipOfferSavePromptRef.current = false
         return
       }
-      bindLiveFromEngine(e.id)
+      // #196 review fix: a save_prompt may only take over the save book when the
+      // announced SESSION mode can actually be saved. The id used to be bound
+      // unconditionally with the CURRENT pane mode, so a Translate session's late
+      // message arriving after the user switched back to Meeting was labelled
+      // Meeting and replaced the original meeting's save target.
+      if (!modeIsSaveEligible(e.mode)) {
+        return
+      }
+      bindLiveFromEngine(e.id, e.mode)
       if (watchAutoNotes.current) {
         if (watchStopShouldAutoKeepHistory(watchAutoNotes.current)) {
           window.api.send(watchSaveCommand())
@@ -3529,6 +3571,7 @@ export default function App() {
         hasContent: meetingHasSaveableContent(state),
         listening,
         paused: state.capture === 'paused',
+        sessionMode: saveBook.sessionMode,
       })}
       sessionSaved={state.workspaceMode === 'meeting' && historyKept && meetingHasSaveableContent(state)}
     />
@@ -3542,6 +3585,7 @@ export default function App() {
     hasContent: meetingHasSaveableContent(state),
     listening,
     paused: state.capture === 'paused',
+    sessionMode: saveBook.sessionMode,
   })
   const phoneActions = phone ? (
     <IphoneActions

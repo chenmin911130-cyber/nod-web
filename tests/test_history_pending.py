@@ -30,6 +30,8 @@ def _add_unsaved_meeting(
     kept=False,
     started_at=None,
     with_item=True,
+    mode: str = "meeting",
+    scene: str | None = None,
 ) -> None:
     with session() as db:
         if db.get(User, user_id) is None:
@@ -38,8 +40,8 @@ def _add_unsaved_meeting(
             UsageSession(
                 id=sid,
                 user_id=user_id,
-                mode="meeting",
-                scene="meeting",
+                mode=mode,
+                scene=scene if scene is not None else mode,
                 title=sid,
                 started_at=started_at or utcnow(),
                 ended_at=ended_at,
@@ -109,6 +111,48 @@ def test_pending_older_than_24h_is_purged(meter_env):
         assert db.get(UsageSession, "fresh").discarded_at is None
 
 
+def test_pending_excludes_translate(meter_env):
+    """#196: a Translate session has no Save concept, so it is never a pending target."""
+    from server.meter import list_pending_history
+
+    _add_unsaved_meeting(meter_env, "tr", mode="translate", ended_at=utcnow())
+    assert list_pending_history("u1") == []
+
+
+def test_newer_translate_does_not_mask_older_meeting(meter_env):
+    """The mode filter must run inside the query, before limit(1) — not after it."""
+    from server.meter import list_pending_history
+
+    now = utcnow()
+    _add_unsaved_meeting(meter_env, "tr", mode="translate", started_at=now, ended_at=now)
+    _add_unsaved_meeting(
+        meter_env,
+        "m",
+        mode="meeting",
+        started_at=now - timedelta(minutes=60),
+        ended_at=now - timedelta(minutes=30),
+    )
+    assert [row["id"] for row in list_pending_history("u1")] == ["m"]
+    assert list_pending_history("u1")[0]["mode"] == "meeting"
+
+
+def test_pending_keeps_legacy_row_without_mode(meter_env):
+    """A legacy row with no mode must keep its recovery entry (never hide a real meeting)."""
+    from server.meter import list_pending_history
+
+    _add_unsaved_meeting(meter_env, "legacy", mode="", ended_at=utcnow())
+    assert [row["id"] for row in list_pending_history("u1")] == ["legacy"]
+
+
+def test_kept_translate_still_listed_in_history(meter_env):
+    """Filtering the pending side must not change the saved list."""
+    from server.meter import list_history, list_pending_history
+
+    _add_unsaved_meeting(meter_env, "tr", mode="translate", ended_at=utcnow(), kept=True)
+    assert [row["id"] for row in list_history("u1")] == ["tr"]
+    assert list_pending_history("u1") == []
+
+
 def test_save_history_with_speaker_roundtrips(meter_env):
     from server.meter import list_history, save_history
 
@@ -153,6 +197,74 @@ def _session(**overrides):
     for key, val in overrides.items():
         setattr(sess, key, val)
     return sess
+
+
+# --- save_prompt attribution (#196 review) ---------------------------------
+
+
+def _offer_session(**overrides):
+    from server.app import Session
+
+    sess = Session.__new__(Session)
+    sess.user_id = "u1"
+    sess.usage_session_id = "sess-1"
+    sess._workspace = "meeting"
+    sess._usage_mode = "meeting"
+    sess.emit = mock.Mock()
+    for key, val in overrides.items():
+        setattr(sess, key, val)
+    return sess
+
+
+def test_save_prompt_carries_the_session_mode():
+    """The client binds the announced mode instead of guessing the current pane."""
+    sess = _offer_session()
+    with mock.patch("server.meter.is_session_kept", return_value=False):
+        sess._offer_save_history()
+    ev = sess.emit.call_args.args[0]
+    assert ev["type"] == "save_prompt"
+    assert ev["id"] == "sess-1"
+    assert ev["mode"] == "meeting"
+
+
+def test_save_prompt_refused_for_a_translate_session_in_the_meeting_pane():
+    """#196 review: the pane is not the session.
+
+    A Translate session still open when the user switches back to Meeting must not
+    emit a save_prompt — the client used to bind that id with the pane mode and
+    replace the real meeting's save target.
+    """
+    sess = _offer_session(_workspace="meeting", _usage_mode="translate")
+    with mock.patch("server.meter.is_session_kept", return_value=False):
+        sess._offer_save_history()
+    sess.emit.assert_not_called()
+
+
+def test_save_prompt_keeps_offering_for_a_legacy_session_without_a_usage_mode():
+    """A session opened before `_usage_mode` existed still offers, as the pane says."""
+    sess = _offer_session(_usage_mode="")
+    with mock.patch("server.meter.is_session_kept", return_value=False):
+        sess._offer_save_history()
+    ev = sess.emit.call_args.args[0]
+    assert ev["mode"] == "meeting"
+
+
+def test_save_prompt_not_offered_when_already_kept():
+    sess = _offer_session()
+    with mock.patch("server.meter.is_session_kept", return_value=True):
+        sess._offer_save_history()
+    sess.emit.assert_not_called()
+
+
+def test_saveable_mode_matches_the_pending_filter():
+    from server.meter import saveable_mode
+
+    assert saveable_mode("meeting") is True
+    assert saveable_mode("lecture") is True
+    assert saveable_mode("") is True  # legacy / unknown stays eligible
+    assert saveable_mode(None) is True
+    assert saveable_mode("translate") is False
+    assert saveable_mode("Translate") is False
 
 
 def test_close_meeting_with_content_does_not_discard():

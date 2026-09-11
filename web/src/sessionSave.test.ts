@@ -5,6 +5,7 @@ import {
   applyKeepAck,
   applyKeepFailed,
   beginSave,
+  bindLiveId,
   bumpGeneration,
   decideNewSession,
   emptySaveBook,
@@ -124,6 +125,40 @@ eq(
   'none',
   'interview → none',
 )
+// #196: the SESSION's own mode decides. A Translate session must not open the Save
+// UI even while the user is looking at the Meeting pane (the reported bug).
+eq(
+  savePromptSurface({ phone: true, workspaceMode: 'meeting', kept: false, offered: false, hasContent: true, sessionMode: 'translate' }),
+  'none',
+  'meeting pane + a Translate session → none',
+)
+eq(
+  savePromptSurface({ phone: false, workspaceMode: 'meeting', kept: false, offered: false, hasContent: true, sessionMode: 'translate' }),
+  'none',
+  'non-phone meeting pane + a Translate session → none',
+)
+eq(
+  savePromptSurface({ phone: true, workspaceMode: 'meeting', kept: false, offered: false, hasContent: true, sessionMode: 'meeting' }),
+  'banner',
+  'a Meeting session still offers on the phone',
+)
+eq(
+  savePromptSurface({ phone: true, workspaceMode: 'meeting', kept: false, offered: false, hasContent: true, sessionMode: '' }),
+  'banner',
+  'an unknown mode (legacy book) still offers',
+)
+// #196 review fix: binding takes the mode the SERVER announced for that session.
+// With no announcement the book keeps its own mode — the current pane is never
+// used as evidence (that is how a late Translate message was labelled Meeting).
+{
+  const bound = bindLiveId({ ...fresh, sessionMode: 'meeting' }, 's1', 'translate')
+  eq(bound.sessionMode || '', 'translate', 'the announced session mode is bound')
+  const kept = bindLiveId({ ...fresh, sessionMode: 'translate' }, 's1')
+  eq(kept.sessionMode || '', 'translate', 'no announcement keeps the book mode (no pane guess)')
+  const unknown = bindLiveId({ ...fresh, sessionMode: '' }, 's1', undefined)
+  eq(unknown.sessionMode || '', '', 'an unknown book stays unknown')
+  eq(bindLiveId(fresh, undefined, 'translate').liveId, null, 'no id binds nothing')
+}
 
 // keepAfterNotes with old generation discarded
 {

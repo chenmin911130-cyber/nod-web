@@ -29,6 +29,9 @@ final class PhonePcmStore {
         let sealed: Bool
         let modifiedAt: Date
         let intent: String
+        /// #196: the mode this capture was recorded in (may be "" for captures
+        /// written before this field existed). An empty mode is NOT "meeting".
+        let mode: String
     }
 
     private let fm = FileManager.default
@@ -43,6 +46,9 @@ final class PhonePcmStore {
     private var lastByte = 0
     private var sealed = false
     private var intent = "none"
+    /// #196: recorded mode of the LIVE capture, persisted in its manifest so the
+    /// History list can tell a Translate capture from a Meeting one.
+    private var mode = ""
     private var handle: FileHandle?
     private var diskFull = false
 
@@ -109,6 +115,7 @@ final class PhonePcmStore {
         lastByte = 0
         sealed = false
         intent = "none"
+        mode = ""
         diskFull = usedBytesOnDisk() >= diskCap
         guard !captureId.isEmpty else { return false }
         try? fm.createDirectory(at: captureDir(captureId), withIntermediateDirectories: true)
@@ -135,6 +142,15 @@ final class PhonePcmStore {
         lock.lock(); defer { lock.unlock() }
         guard !id.isEmpty else { return }
         sessionId = id
+        writeManifestLocked()
+    }
+
+    /// #196: record the mode of the live capture. Empty is ignored (unknown stays
+    /// unknown), so a later blank status cannot wipe a known mode.
+    func bindMode(_ value: String) {
+        lock.lock(); defer { lock.unlock() }
+        guard !value.isEmpty else { return }
+        mode = value
         writeManifestLocked()
     }
 
@@ -258,7 +274,8 @@ final class PhonePcmStore {
                 bytes: size,
                 sealed: (meta["sealed"] as? Bool) ?? false,
                 modifiedAt: modified,
-                intent: meta["intent"] as? String ?? "none"
+                intent: meta["intent"] as? String ?? "none",
+                mode: meta["mode"] as? String ?? ""
             ))
         }
         return out.sorted { $0.modifiedAt > $1.modifiedAt }
@@ -320,6 +337,9 @@ final class PhonePcmStore {
         sessionId = meta["sessionId"] as? String ?? ""
         sealed = (meta["sealed"] as? Bool) ?? false
         intent = meta["intent"] as? String ?? "none"
+        // #196: a restart mid-capture must not lose the recorded mode (legacy
+        // manifests have none → "" stays unknown).
+        mode = meta["mode"] as? String ?? ""
         lastByte = (meta["lastByte"] as? Int) ?? 0
         do {
             handle = try FileHandle(forWritingTo: url)
@@ -417,6 +437,8 @@ final class PhonePcmStore {
             "lastByte": lastByte,
             "sealed": sealed,
             "intent": intent,
+            // #196: the mode the capture was recorded in ("" when unknown).
+            "mode": mode,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: body) else { return false }
         do {

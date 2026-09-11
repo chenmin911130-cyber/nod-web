@@ -56,7 +56,10 @@ export function sessionShouldOfferSave(input: {
   hasContent: boolean
   listening?: boolean
   paused?: boolean
+  /** #196: the session's own mode; a mode with no Save concept can never be saved. */
+  sessionMode?: string
 }): boolean {
+  if (!modeIsSaveEligible(input.sessionMode)) return false
   if (input.workspaceMode !== 'meeting' || input.kept || !input.hasContent || input.listening || input.paused) return false
   return input.ended || !input.listening
 }
@@ -66,7 +69,10 @@ export function sessionShouldOpenSavePrompt(input: {
   workspaceMode: string
   kept: boolean
   paused?: boolean
+  /** #196: the session's own mode (see sessionShouldOfferSave). */
+  sessionMode?: string
 }): boolean {
+  if (!modeIsSaveEligible(input.sessionMode)) return false
   return input.workspaceMode === 'meeting' && !input.kept && !input.paused
 }
 
@@ -102,6 +108,8 @@ export function shouldOfferSaveOnce(input: {
   offered: boolean
   listening?: boolean
   paused?: boolean
+  /** #196: the session's own mode; a mode with no Save concept can never be saved. */
+  sessionMode?: string
 }): boolean {
   if (input.offered) return false
   return sessionShouldOfferSave({
@@ -111,6 +119,7 @@ export function shouldOfferSaveOnce(input: {
     hasContent: input.hasContent,
     listening: input.listening,
     paused: input.paused,
+    sessionMode: input.sessionMode,
   })
 }
 
@@ -157,8 +166,17 @@ export function restoreLaunchSurface(input: {
   pendingId: string
   dismissedIds: readonly string[]
   workspaceMode?: string
+  /**
+   * #196: the PENDING RECORD's own mode. The check below keys on the current
+   * workspace, which is not enough — a Translate session that was never saved came
+   * back as the pending row, and once the user switched to Meeting the workspace
+   * check passed and the app laid that Translate session onto Listen and offered
+   * Save for it. The row's own mode decides.
+   */
+  pendingMode?: string
 }): RestoreLaunchSurface {
   if (!input.pendingId) return 'none'
+  if (!modeIsSaveEligible(input.pendingMode)) return 'none'
   if (input.dismissedIds.includes(input.pendingId)) return 'none'
   if (input.workspaceMode && input.workspaceMode !== 'meeting') return 'none'
   if (restoreShouldNotAsk({
@@ -169,8 +187,37 @@ export function restoreLaunchSurface(input: {
   return 'page'
 }
 
+/**
+ * #196: modes a session can be saved from. Translate records audio + a
+ * translation but has NO Save concept, so it must never take part in the
+ * unsaved / pending-restore machinery. An unknown or missing mode stays ELIGIBLE:
+ * legacy rows and old local captures must not lose their recovery entry.
+ */
+export const NOT_SAVEABLE_MODES = ['translate'] as const
+
+export function modeIsSaveEligible(mode: string | null | undefined): boolean {
+  const m = (mode || '').trim().toLowerCase()
+  return !m || !NOT_SAVEABLE_MODES.includes(m as (typeof NOT_SAVEABLE_MODES)[number])
+}
+
+/** Mode-aware save eligibility for a session-shaped row (cloud row or local capture). */
+export function sessionIsSaveEligible(session: { mode?: string | null } | null | undefined): boolean {
+  return modeIsSaveEligible(session?.mode)
+}
+
 export function sessionIsUnsaved(session: { kept?: boolean } | null | undefined): boolean {
   return session?.kept === false
+}
+
+/**
+ * "Unsaved" is a Save-side label, so it may only appear on a session that can be
+ * saved — the row label and every Save/Retry entry keyed on it. Kept separate from
+ * `sessionIsUnsaved` so the raw flag keeps its meaning for the save book / ack logic.
+ */
+export function sessionShowsUnsaved(
+  session: { kept?: boolean; mode?: string | null } | null | undefined,
+): boolean {
+  return sessionIsUnsaved(session) && sessionIsSaveEligible(session)
 }
 
 function historyStartedAtMs(value: string | null | undefined): number {
@@ -206,6 +253,12 @@ export type LocalPhoneCapture = {
   sealed: boolean
   intent: string
   modifiedAt: string
+  /**
+   * #196: the session mode this capture was recorded in, from the phone-side
+   * capture manifest. OPTIONAL on purpose — captures written before this field
+   * existed have none, and an unknown mode must never be assumed to be a meeting.
+   */
+  mode?: string
 }
 
 export function localCaptureHistoryId(row: Pick<LocalPhoneCapture, 'captureId' | 'sessionId'>): string {

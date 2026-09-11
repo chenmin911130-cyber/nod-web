@@ -6,10 +6,11 @@ import {
   historySessionMatches,
   mergePendingHistory,
   mergeLocalCaptures,
+  modeIsSaveEligible,
   overlayNativeSaveJobs,
   sceneOf,
   sessionHasAudio,
-  sessionIsUnsaved,
+  sessionShowsUnsaved,
 } from '../historyRestore'
 import { copyFlashText, useCopyFlash } from '../copyFeedback'
 import { IPHONE_COPY } from '../iphoneCopy'
@@ -150,20 +151,32 @@ export default function HistoryPane({
       api<{ sessions: HistorySession[] }>('/api/account/history?pending=1').catch(() => ({ sessions: [] as HistorySession[] })),
       native
         ? import('nod-mic').then(({ NodMic }) => NodMic.listPendingCaptures()).catch(() => ({ captures: [] }))
-        : Promise.resolve({ captures: [] as Array<{ captureId: string; sessionId: string; bytes: number; sealed: boolean; intent: string; modifiedAt: string }> }),
+        : Promise.resolve({ captures: [] as Array<{ captureId: string; sessionId: string; bytes: number; sealed: boolean; intent: string; modifiedAt: string; mode?: string }> }),
       native ? listWatchSaves() : Promise.resolve({ saves: [] }),
     ])
       .then(([saved, pending, local, jobs]) => {
         const cloud = mergePendingHistory(saved.sessions || [], pending.sessions || [])
-        const withLocal = mergeLocalCaptures(cloud, local.captures || [], (row) => ({
-          id: row.sessionId || `local:${row.captureId}`,
-          mode: 'meeting',
-          title: IPHONE_COPY.saveRestoreTitle,
-          started_at: row.modifiedAt || null,
-          stt_seconds: Math.max(0, Math.round(row.bytes / 32000)),
-          items: [],
-          kept: false,
-        }))
+        // #196: a phone-held capture reports the mode it was recorded in. Captures
+        // written before that field existed fall back to the mode of the cloud row
+        // they belong to; a capture that resolves to NEITHER is left without a mode —
+        // unknown is NOT the same as meeting, but it stays recoverable so a real
+        // meeting capture never loses its entry.
+        const cloudModeOf = (sid: string) =>
+          [...(saved.sessions || []), ...(pending.sessions || [])].find((s) => s.id === sid)?.mode || ''
+        const withLocal = mergeLocalCaptures(cloud, local.captures || [], (row) => {
+          const mode = row.mode || cloudModeOf(row.sessionId)
+          return {
+            id: row.sessionId || `local:${row.captureId}`,
+            mode,
+            // "Unsaved" is a Save-side word: a capture in a mode with no Save concept
+            // keeps the neutral "Session" title instead (the row stays deletable).
+            title: modeIsSaveEligible(mode) ? IPHONE_COPY.saveRestoreTitle : '',
+            started_at: row.modifiedAt || null,
+            stt_seconds: Math.max(0, Math.round(row.bytes / 32000)),
+            items: [],
+            kept: false,
+          }
+        })
         setSessions(overlayNativeSaveJobs(withLocal, jobs.saves || []))
       })
       .catch((ex: Error) => setErr(ex.message))
@@ -252,7 +265,7 @@ export default function HistoryPane({
                     <span className="hist-pick-copy">
                       <b>{s.title || 'Session'}</b>
                       <small>
-                        {sessionIsUnsaved(s) ? `${IPHONE_COPY.saveRestoreTitle} · ` : ''}
+                        {sessionShowsUnsaved(s) ? `${IPHONE_COPY.saveRestoreTitle} · ` : ''}
                         {s.nativeSave === 'failed' ? `${IPHONE_COPY.saveFailed} · ` : ''}
                         {s.nativeSave === 'local' ? `${IPHONE_COPY.saveWaitingSync} · ` : ''}
                         {historyRowWhen(s.started_at, s.stt_seconds)}
