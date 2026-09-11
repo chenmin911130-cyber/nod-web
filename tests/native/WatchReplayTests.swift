@@ -203,6 +203,40 @@ func waitSend() {
         )
         waitSend()
     }
+
+    // #196: the capture must carry the mode it was recorded in, so a phone-held
+    // Translate capture can never be listed as a Meeting one.
+    ingest.reset()
+    func bindModeCapture(_ id: String, session: String, mode: String?) {
+        var info: [String: Any] = ["sessionId": session, "captureId": id]
+        if let mode { info["mode"] = mode }
+        NotificationCenter.default.post(
+            name: Notification.Name("nod.watch.pcm.bind"),
+            object: nil,
+            userInfo: info
+        )
+        waitSend()
+    }
+    bindModeCapture("cap-tr", session: "tr-session", mode: "translate")
+    check(
+        ingest.listCaptures().first { $0.captureId == "cap-tr" }?.mode == "translate",
+        "a Translate capture records its mode"
+    )
+    bindModeCapture("cap-tr", session: "tr-session", mode: nil)
+    check(
+        ingest.listCaptures().first { $0.captureId == "cap-tr" }?.mode == "translate",
+        "a later bind without a mode must not wipe the recorded one"
+    )
+    bindModeCapture("cap-m", session: "m-session", mode: "meeting")
+    check(
+        ingest.listCaptures().first { $0.captureId == "cap-m" }?.mode == "meeting",
+        "a Meeting capture records meeting"
+    )
+    bindModeCapture("cap-legacy", session: "legacy-session", mode: nil)
+    check(
+        ingest.listCaptures().first { $0.captureId == "cap-legacy" }?.mode == "",
+        "a capture bound without a mode stays unknown, never meeting"
+    )
     func postSave(_ sessionId: String, captureId: String = "") -> [String: Any] {
         var out: [String: Any] = [:]
         var msg: [String: Any] = ["action": "save", "sessionId": sessionId]

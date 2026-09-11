@@ -361,7 +361,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             NotificationCenter.default.post(
                 name: Notification.Name("nod.watch.pcm.bind"),
                 object: nil,
-                userInfo: ["captureId": "", "sessionId": sessionId]
+                userInfo: ["captureId": "", "sessionId": sessionId, "mode": lastMode]
             )
         }
         guard WCSession.isSupported() else { return }
@@ -493,7 +493,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             NotificationCenter.default.post(
                 name: Notification.Name("nod.watch.pcm.bind"),
                 object: nil,
-                userInfo: ["captureId": captureId, "sessionId": lastSessionId]
+                userInfo: ["captureId": captureId, "sessionId": lastSessionId, "mode": lastMode]
             )
             let readyReply = NSMutableDictionary()
             NotificationCenter.default.post(

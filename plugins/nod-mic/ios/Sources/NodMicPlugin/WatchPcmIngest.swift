@@ -42,7 +42,8 @@ final class WatchPcmIngest {
         ) { [weak self] note in
             let capture = note.userInfo?["captureId"] as? String ?? ""
             let session = note.userInfo?["sessionId"] as? String ?? ""
-            self?.bind(captureId: capture, sessionId: session)
+            let mode = note.userInfo?["mode"] as? String ?? ""
+            self?.bind(captureId: capture, sessionId: session, mode: mode)
         })
         observers.append(NotificationCenter.default.addObserver(
             forName: .nodWatchPcmReset,
@@ -158,7 +159,7 @@ final class WatchPcmIngest {
         })
     }
 
-    func bind(captureId: String, sessionId: String) {
+    func bind(captureId: String, sessionId: String, mode: String = "") {
         queue.sync { [weak self] in
             guard let self else { return }
             if !self.captureId.isEmpty, !captureId.isEmpty, captureId != self.captureId {
@@ -181,6 +182,11 @@ final class WatchPcmIngest {
             if !sessionId.isEmpty {
                 self.sessionId = sessionId
                 self.store.bindSession(sessionId)
+            }
+            // #196: persist the recorded mode with the capture so History can tell a
+            // Translate capture from a Meeting one after a restart / offline upload.
+            if !mode.isEmpty {
+                self.store.bindMode(mode)
             }
             self.maybeRequestPcmEndLocked()
         }

@@ -136,6 +136,8 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
                 "sealed": info.sealed,
                 "intent": info.intent,
                 "modifiedAt": ISO8601DateFormatter().string(from: info.modifiedAt),
+                // #196: "" means unknown (capture written before the mode was recorded).
+                "mode": info.mode,
             ]
         }
         call.resolve(["captures": rows])

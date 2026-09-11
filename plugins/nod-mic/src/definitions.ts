@@ -22,6 +22,11 @@ export interface NodMicPlugin {
       sealed: boolean
       intent: string
       modifiedAt: string
+      /**
+       * #196: mode this capture was recorded in — '' when unknown (captures written
+       * before the field existed). Callers must NOT assume `meeting` for ''.
+       */
+      mode?: string
     }>
   }>
   deletePendingCapture(options: { captureId: string }): Promise<{ freed: number }>
