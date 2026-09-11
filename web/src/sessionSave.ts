@@ -1,3 +1,5 @@
+import { modeIsSaveEligible } from './historyRestore'
+
 export type SaveStatus = 'undecided' | 'saving' | 'saved' | 'failed'
 export type PendingAfterSave = 'none' | 'new' | 'signout' | 'delete'
 export type KeepFailReason = 'timeout' | 'error' | 'disconnect'
@@ -8,6 +10,13 @@ export type SaveBook = {
   status: SaveStatus
   offered: boolean
   pendingAfterSave: PendingAfterSave
+  /**
+   * #196: the mode the session this book refers to was opened in ('' = unknown,
+   * which stays eligible for legacy rows). A session whose mode has no Save concept
+   * (translate) must never open the Save UI — not even after the user switches the
+   * workspace back to Meeting, which is exactly what a workspace-only check allowed.
+   */
+  sessionMode?: string
 }
 
 export type KeepAfterNotesJob = {
@@ -34,6 +43,7 @@ export function emptySaveBook(): SaveBook {
     status: 'undecided',
     offered: false,
     pendingAfterSave: 'none',
+    sessionMode: '',
   }
 }
 
@@ -97,9 +107,12 @@ export function markOffered(book: SaveBook): SaveBook {
   return { ...book, offered: true }
 }
 
-export function bindLiveId(book: SaveBook, id: string | undefined): SaveBook {
+export function bindLiveId(book: SaveBook, id: string | undefined, sessionMode?: string): SaveBook {
   if (!id) return book
-  return { ...book, liveId: id }
+  const next: SaveBook = { ...book, liveId: id }
+  // #196: only overwrite when the caller actually knows the session's mode.
+  if (sessionMode !== undefined) next.sessionMode = sessionMode
+  return next
 }
 
 export function setPendingAfterSave(book: SaveBook, pending: PendingAfterSave): SaveBook {
@@ -151,8 +164,16 @@ export function savePromptSurface(input: {
   kept: boolean
   offered: boolean
   hasContent: boolean
+  /**
+   * #196: the SESSION's own mode (from the save book). `workspaceMode` is only the
+   * pane the user is looking at: after a Translate session, switching back to
+   * Meeting used to make this return a surface and ask Save for a session that has
+   * no Save concept.
+   */
+  sessionMode?: string
 }): 'banner' | 'modal' | 'none' {
   if (input.kept || !input.hasContent) return 'none'
+  if (!modeIsSaveEligible(input.sessionMode)) return 'none'
   if (input.workspaceMode === 'translate') return 'none'
   if (input.workspaceMode !== 'meeting') return 'none'
   if (input.offered) return 'none'

@@ -1,4 +1,4 @@
-import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, mergeLocalCaptures, overlayNativeSaveJobs, mergePendingHistory, parseRestoreDismissed, rememberRestoreDismissed, restoreAttachedClock, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldOfferSaveOnce, startMeetingKind, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession } from './historyRestore'
+import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, mergeLocalCaptures, mergePendingHistory, modeIsSaveEligible, overlayNativeSaveJobs, parseRestoreDismissed, rememberRestoreDismissed, restoreAttachedClock, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsSaveEligible, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, sessionShowsUnsaved, shouldOfferSaveOnce, startMeetingKind, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession } from './historyRestore'
 import type { HistorySession } from './components/HistoryPane'
 
 function at(h: number, m: number, s = 0): string {
@@ -70,6 +70,25 @@ if (sessionShouldOfferSave({ workspaceMode: 'interview', ended: true, kept: fals
 }
 if (sessionShouldOfferSave({ workspaceMode: 'meeting', ended: true, kept: false, hasContent: false })) {
   throw new Error('empty session must not offer Save')
+}
+// #196: gating on the session's OWN mode, not on the pane the user happens to be in.
+if (sessionShouldOfferSave({ workspaceMode: 'meeting', ended: true, kept: false, hasContent: true, sessionMode: 'translate' })) {
+  throw new Error('a Translate session must never offer Save, even from the Meeting pane')
+}
+if (!sessionShouldOfferSave({ workspaceMode: 'meeting', ended: true, kept: false, hasContent: true, sessionMode: 'meeting' })) {
+  throw new Error('a Meeting session still offers Save')
+}
+if (!sessionShouldOfferSave({ workspaceMode: 'meeting', ended: true, kept: false, hasContent: true, sessionMode: '' })) {
+  throw new Error('an unknown mode (legacy) still offers Save')
+}
+if (shouldOfferSaveOnce({ workspaceMode: 'meeting', ended: true, kept: false, hasContent: true, offered: false, sessionMode: 'translate' })) {
+  throw new Error('shouldOfferSaveOnce must honour the session mode')
+}
+if (sessionShouldOpenSavePrompt({ workspaceMode: 'meeting', kept: false, sessionMode: 'translate' })) {
+  throw new Error('a Translate session must never open the Save prompt from the Meeting pane')
+}
+if (!sessionShouldOpenSavePrompt({ workspaceMode: 'meeting', kept: false, sessionMode: 'lecture' })) {
+  throw new Error('a Lecture session still opens the Save prompt')
 }
 
 if (!sessionShouldOpenSavePrompt({ workspaceMode: 'meeting', kept: false })) {
@@ -235,6 +254,88 @@ if (restoreLaunchSurface({ ...idleRestore, workspaceMode: 'translate' }) !== 'no
   if (restoreLaunchSurface({ ...idleRestore, dismissedIds: again }) !== 'none') {
     throw new Error('Not now must stick so the same id does not relaunch')
   }
+}
+// #196: a Translate session has no Save concept. It must never become the pending
+// restore target (in EITHER workspace), must never read as Unsaved, and a local
+// Translate capture must keep its own mode instead of being relabelled a meeting.
+if (restoreLaunchSurface({ ...idleRestore, pendingMode: 'translate' }) !== 'none') {
+  throw new Error('a pending Translate session must never launch the Meeting restore surface')
+}
+if (restoreLaunchSurface({ ...idleRestore, pendingMode: 'Translate' }) !== 'none') {
+  throw new Error('mode matching must be case-insensitive')
+}
+if (restoreLaunchSurface({ ...idleRestore, pendingMode: 'meeting' }) !== 'page') {
+  throw new Error('a pending Meeting session still restores')
+}
+if (restoreLaunchSurface({ ...idleRestore, pendingMode: undefined }) !== 'page') {
+  throw new Error('a pending row with no mode (legacy) stays recoverable')
+}
+if (modeIsSaveEligible('translate')) throw new Error('translate is not save-eligible')
+if (!modeIsSaveEligible('meeting') || !modeIsSaveEligible('lecture') || !modeIsSaveEligible('interview')) {
+  throw new Error('meeting / lecture / interview stay save-eligible')
+}
+if (!modeIsSaveEligible('') || !modeIsSaveEligible(undefined)) {
+  throw new Error('an unknown mode stays eligible so legacy rows keep their entry')
+}
+if (sessionShowsUnsaved({ kept: false, mode: 'translate' })) {
+  throw new Error('a Translate row is never shown as Unsaved')
+}
+if (!sessionShowsUnsaved({ kept: false, mode: 'meeting' })) {
+  throw new Error('an unsaved Meeting row still shows as Unsaved')
+}
+if (!sessionShowsUnsaved({ kept: false })) {
+  throw new Error('a legacy unsaved row without a mode still shows as Unsaved')
+}
+if (sessionShowsUnsaved({ kept: true, mode: 'meeting' })) {
+  throw new Error('a kept row is never Unsaved')
+}
+if (!sessionIsUnsaved({ kept: false })) {
+  throw new Error('the raw kept flag keeps its meaning for the save book')
+}
+if (sessionIsSaveEligible({ mode: 'translate' })) throw new Error('sessionIsSaveEligible must read the row mode')
+{
+  const local = [
+    {
+      captureId: 'c1',
+      sessionId: 's-tr',
+      bytes: 32000,
+      sealed: true,
+      intent: 'save',
+      modifiedAt: at(11, 0),
+      mode: 'translate',
+    },
+    {
+      captureId: 'c2',
+      sessionId: 's-m',
+      bytes: 32000,
+      sealed: true,
+      intent: 'save',
+      modifiedAt: at(10, 0),
+      mode: 'meeting',
+    },
+    {
+      captureId: 'c3',
+      sessionId: '',
+      bytes: 32000,
+      sealed: true,
+      intent: 'save',
+      modifiedAt: at(9, 0),
+    },
+  ]
+  const rows = mergeLocalCaptures(
+    [] as Array<{ id: string; started_at?: string | null; mode?: string }>,
+    local,
+    (row) => ({
+      id: row.sessionId || `local:${row.captureId}`,
+      mode: row.mode || '',
+      started_at: row.modifiedAt,
+      kept: false,
+    }),
+  )
+  const byId = new Map(rows.map((row) => [row.id, row]))
+  eq(byId.get('s-tr')?.mode || '', 'translate', 'a local Translate capture keeps its own mode')
+  eq(byId.get('s-m')?.mode || '', 'meeting', 'a local Meeting capture keeps meeting')
+  eq(byId.get('local:c3')?.mode || '', '', 'a legacy capture with no mode is not assumed to be a meeting')
 }
 {
   const saved = { id: 'kept-1', title: 'Saved standup', started_at: '2026-09-09T10:00:00.000Z', kept: true as boolean | undefined }

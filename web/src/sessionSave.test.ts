@@ -124,6 +124,28 @@ eq(
   'none',
   'interview → none',
 )
+// #196: the SESSION's own mode decides. A Translate session must not open the Save
+// UI even while the user is looking at the Meeting pane (the reported bug).
+eq(
+  savePromptSurface({ phone: true, workspaceMode: 'meeting', kept: false, offered: false, hasContent: true, sessionMode: 'translate' }),
+  'none',
+  'meeting pane + a Translate session → none',
+)
+eq(
+  savePromptSurface({ phone: false, workspaceMode: 'meeting', kept: false, offered: false, hasContent: true, sessionMode: 'translate' }),
+  'none',
+  'non-phone meeting pane + a Translate session → none',
+)
+eq(
+  savePromptSurface({ phone: true, workspaceMode: 'meeting', kept: false, offered: false, hasContent: true, sessionMode: 'meeting' }),
+  'banner',
+  'a Meeting session still offers on the phone',
+)
+eq(
+  savePromptSurface({ phone: true, workspaceMode: 'meeting', kept: false, offered: false, hasContent: true, sessionMode: '' }),
+  'banner',
+  'an unknown mode (legacy book) still offers',
+)
 
 // keepAfterNotes with old generation discarded
 {
