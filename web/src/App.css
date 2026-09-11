@@ -8574,6 +8574,13 @@ html.nod-phone .app.iphone-v2 .translate-main .empty-sub {
   margin-top: 6px;
 }
 
+/* #193 item 7: with the keyboard open the keyboard owns the bottom edge, so the
+   bar must not also pad for the home indicator — that dead space pushed the
+   controls up inside an already-short visual viewport. */
+html.nod-native.kb-open .app.iphone-v2 .iphone-live-bar {
+  padding-bottom: 10px;
+}
+
 html.nod-phone .app.iphone-v2 .iphone-tr-dock {
   flex: 0 0 auto;
   display: flex;

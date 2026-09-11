@@ -16,6 +16,7 @@ import {
   endedSheetGesture,
   emptyEndShowsReady,
   hideTopStatusRow,
+  variantHasSave,
   historyRestoreHidesAsk,
   bottomBarMode,
   listenAskPlacement,
@@ -67,6 +68,9 @@ eq(bottomBarMode({ listening: false, paused: false, ended: false, hasContent: fa
 eq(hideTopStatusRow({ variant: 'listen' }), true, 'Listen controls live in the bar')
 eq(hideTopStatusRow({ variant: 'translate' }), true, 'Translate controls live in the bar')
 eq(hideTopStatusRow({ variant: 'interview' }), false, 'Live Q&A keeps its own top chrome')
+eq(variantHasSave({ variant: 'listen' }), true, 'Listen keeps its Save row')
+eq(variantHasSave({ variant: 'interview' }), true, 'Live Q&A keeps its Save row')
+eq(variantHasSave({ variant: 'translate' }), false, 'Translate offers no Save row (#193 item 8)')
 
 // ---- #193 item 3: dragging the Ask bubble never becomes a tap ----
 eq(askDragMoved({ dx: 2, dy: 3 }), false, 'a small wobble is still a tap')

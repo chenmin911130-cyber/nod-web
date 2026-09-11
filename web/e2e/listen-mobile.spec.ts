@@ -311,6 +311,10 @@ test.describe('Listen mobile recording chrome', () => {
     expect(boxes.fieldBottom).toBeLessThanOrEqual(boxes.viewport)
     expect(boxes.bubbleBottom).toBeLessThanOrEqual(boxes.viewport)
     expect(boxes.feedOverflow).toMatch(/auto|scroll/)
+    // item 7: with the keyboard up the bar must not also pad for the home
+    // indicator — that dead space is what pushed the controls out of the viewport
+    const padding = await page.locator('.iphone-live-bar').evaluate((el) => getComputedStyle(el).paddingBottom)
+    expect(padding).toBe('10px')
     await page.screenshot({ path: `${EVIDENCE}/listen-ask-kb-390.png` })
   })
 })
@@ -429,6 +433,41 @@ test.describe('Translate mobile chrome (#193 item 5)', () => {
     await page.getByRole('button', { name: 'Start voice translation' }).click()
     ws.send({ type: 'phase', capture: 'listening', engine: 'idle' })
     await expect(page.locator('.iphone-live-bar .iphone-clock')).toHaveText('00:00')
+  })
+
+  test('Translate offers no Save anywhere (#193 item 8)', async ({ page }) => {
+    const ws = await mockListenWs(page, '/app?demo=meeting')
+    await page.getByRole('tab', { name: /translate/i }).click()
+    await page.getByRole('button', { name: 'Start voice translation' }).click()
+    ws.send({ type: 'phase', capture: 'listening', engine: 'idle' })
+    await expect(page.getByRole('button', { name: 'Stop' })).toBeVisible()
+    await page.getByRole('button', { name: 'Stop' }).click()
+    ws.send({ type: 'phase', capture: 'off', engine: 'idle' })
+    await expect(page.getByRole('button', { name: 'Start voice translation' })).toBeVisible()
+    await page.waitForTimeout(600)
+
+    // no prompt, no banner, no retry entry after a finished Translate session
+    await expect(page.getByText('Save this session?')).toHaveCount(0)
+    await expect(page.getByRole('dialog', { name: 'Save to History?' })).toHaveCount(0)
+    await expect(page.getByText(/Retry save/)).toHaveCount(0)
+
+    // the shared More sheet has no Save row in Translate, other rows stay
+    await page.getByRole('button', { name: 'More' }).click()
+    await expect(page.getByRole('button', { name: 'History' })).toBeVisible()
+    await expect(page.getByRole('button', { name: /^Save/ })).toHaveCount(0)
+    await expect(page.getByText(/Available after recording ends/)).toHaveCount(0)
+    await page.screenshot({ path: `${EVIDENCE}/translate-more-390.png` })
+  })
+
+  test('a Meeting Save banner does not appear in Translate', async ({ page }) => {
+    const ws = await mockListenWs(page)
+    await ws.gotoListening()
+    await ws.endSession()
+    await expect(page.getByText('Save this session?')).toBeVisible()
+    await page.getByRole('tab', { name: /translate/i }).click()
+    await expect(page.getByRole('button', { name: 'Start voice translation' })).toBeVisible()
+    await expect(page.getByText('Save this session?')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /^Save/ })).toHaveCount(0)
   })
 })
 

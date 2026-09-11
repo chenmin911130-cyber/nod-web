@@ -25,6 +25,14 @@ export function showListenNew(input: {
 }
 
 /**
+ * #193 item 8: Translate has no Save concept, so its More sheet must not offer
+ * a Save row at all (disabling it would still advertise a Save entry).
+ */
+export function variantHasSave(input: { variant: 'listen' | 'translate' | 'interview' }): boolean {
+  return input.variant !== 'translate'
+}
+
+/**
  * The ended sheet and the top New must agree on what "has content" means, or
  * the New button can appear without a sheet (or the other way round).
  */

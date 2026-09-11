@@ -3553,6 +3553,9 @@ export default function App() {
       onCloseMore={() => setMoreOpen(false)}
       onExportPdf={() => { void handleExportPdf() }}
       onSave={() => {
+        // #193 item 8: Translate has no Save. The More row is gone for that
+        // mode; this keeps any other caller from opening a save for it.
+        if (stateRef.current.workspaceMode === 'translate') return
         if (historyKept) {
           setHistoryOpen(true)
           return
@@ -3658,7 +3661,7 @@ export default function App() {
         />
       ) : null}
       <SavePrompt
-        open={savePrompt}
+        open={savePrompt && state.workspaceMode !== 'translate'}
         secondary={savePromptMode}
         onKeep={(opts) => {
           setSavePrompt(false)

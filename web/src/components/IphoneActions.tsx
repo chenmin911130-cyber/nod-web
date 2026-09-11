@@ -1,5 +1,5 @@
 import { IPHONE_COPY, listenClock, listenControlMode, listenShowsRecClock, listenStatusDot, moreMenuEnabled, moreSaveRow } from '../iphoneCopy'
-import { hideTopStatusRow } from '../listenChrome'
+import { hideTopStatusRow, variantHasSave } from '../listenChrome'
 import PhoneSheet from './PhoneSheet'
 
 function MicIcon() {
@@ -234,6 +234,7 @@ export default function IphoneActions({
             <PdfIcon />
             {IPHONE_COPY.morePdf}
           </button>
+          {variantHasSave({ variant }) ? (
           <button type="button" disabled={saveRow.disabled} onClick={() => { onCloseMore(); onSave() }}>
             {saved ? <CheckIcon /> : <SaveIcon />}
             <span className="iphone-more-copy">
@@ -242,6 +243,7 @@ export default function IphoneActions({
             </span>
             {saveRow.trailing ? <span className="iphone-more-trail">{saveRow.trailing}</span> : null}
           </button>
+          ) : null}
           <button type="button" disabled={!menu.history} onClick={() => { onCloseMore(); onHistory() }}>
             <HistoryIcon />
             {IPHONE_COPY.moreHistory}
