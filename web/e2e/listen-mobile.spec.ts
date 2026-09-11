@@ -211,3 +211,57 @@ test.describe('Listen mobile small phone', () => {
     await page.screenshot({ path: '../docs/design/listen-mobile-2026-09-11/evidence/listen-demo-320.png' })
   })
 })
+
+test.describe('Listen mobile ended sheet tab bar', () => {
+  test.use({ viewport: { width: 390, height: 844 } })
+
+  const dragBar = async (page: import('@playwright/test').Page, dy: number) => {
+    const box = (await page.locator('.listen-mobile-tabs').boundingBox())!
+    const cx = box.x + box.width / 2
+    const cy = box.y + box.height / 2
+    await page.mouse.move(cx, cy)
+    await page.mouse.down()
+    await page.mouse.move(cx, cy + dy, { steps: 10 })
+    await page.mouse.up()
+  }
+
+  test('taps switch Live/Transcript/Notes and drags move the dock', async ({ page }) => {
+    const ws = await mockListenWs(page)
+    await ws.gotoListening()
+    await ws.endSession()
+    const tab = (name: string) => page.getByRole('tab', { name })
+    const handle = page.locator('.iphone-ended-handle')
+    await expect(handle).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.locator('.listen-mobile-tabs')).toHaveCSS('touch-action', 'none')
+
+    // Transcript: a tap must switch the pane (and the sheet expands, per design)
+    await tab('Transcript').click()
+    await expect(tab('Transcript')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('.iphone-tr-card').first()).toBeVisible()
+    await expect(handle).toHaveAttribute('aria-expanded', 'true')
+    await expect(page.getByText('Applies to next recording')).not.toBeVisible()
+    await expect(page.locator('.listen-mobile-tabs')).toHaveCSS('touch-action', 'none')
+
+    // Notes, then back to Live
+    await tab('Notes').click()
+    await expect(tab('Notes')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('section.listen-notes')).toBeVisible()
+    await tab('Live').click()
+    await expect(tab('Live')).toHaveAttribute('aria-selected', 'true')
+
+    // drag down -> default dock, settings visible again
+    await dragBar(page, 90)
+    await expect(handle).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.getByText('Applies to next recording')).toBeVisible()
+
+    // drag up -> expanded dock, settings covered
+    await dragBar(page, -90)
+    await expect(handle).toHaveAttribute('aria-expanded', 'true')
+    await expect(page.getByText('Applies to next recording')).not.toBeVisible()
+
+    // a drag must not eat the next tap on a tab
+    await tab('Transcript').click()
+    await expect(tab('Transcript')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('.iphone-tr-card').first()).toBeVisible()
+  })
+})

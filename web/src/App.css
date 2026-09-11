@@ -9641,7 +9641,8 @@ html.nod-phone .app.iphone-v2 .listen-main:not(.qa).ended-dock-expanded .iphone-
   max-height: none;
 }
 
-html.nod-phone .app.iphone-v2 .listen-main:not(.qa).ended-dock-default .listen-mobile-tabs {
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa).ended-dock-default .listen-mobile-tabs,
+html.nod-phone .app.iphone-v2 .listen-main:not(.qa).ended-dock-expanded .listen-mobile-tabs {
   touch-action: none;
 }
 

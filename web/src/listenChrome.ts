@@ -75,15 +75,22 @@ export function nextComposeSessionId(
   return prev
 }
 
+/**
+ * Vertical travel (px) below which a pointer gesture on the ended sheet counts
+ * as a tap, not a drag. `endedDockFromPointer` and the resize handlers share
+ * this so a gesture can never sit in a gap between "tap" and "drag".
+ */
+export const ENDED_TAP_SLOP = 10
+
 export function endedDockFromPointer(input: {
   startY: number
   endY: number
   moved: boolean
   tapSlop?: number
 }): 'toggle' | EndedSheetDock {
-  const slop = input.tapSlop ?? 10
+  const slop = input.tapSlop ?? ENDED_TAP_SLOP
   const dy = input.startY - input.endY
-  if (!input.moved && Math.abs(dy) < slop) return 'toggle'
+  if (!input.moved && Math.abs(dy) <= slop) return 'toggle'
   return dy > 0 ? 'expanded' : 'default'
 }
 

@@ -1,4 +1,5 @@
 import {
+  ENDED_TAP_SLOP,
   askToggleAffectsCapture,
   emptyEndShowsReady,
   endedSheetAvailable,
@@ -69,6 +70,9 @@ eq(nextComposeSessionId('clear', 4), 5, 'Clear bumps the compose session')
 eq(nextComposeSessionId('restore', 4), 5, 'History restore bumps the compose session')
 
 eq(endedDockFromPointer({ startY: 200, endY: 198, moved: false }), 'toggle', 'a tap on the handle toggles')
+eq(endedDockFromPointer({ startY: 200, endY: 190, moved: false }), 'toggle', 'the tap slop boundary is still a tap')
+eq(endedDockFromPointer({ startY: 200, endY: 188, moved: false }), 'expanded', 'travel past the slop is a drag')
+eq(ENDED_TAP_SLOP, 10, 'tap slop is shared with the resize handler')
 eq(endedDockFromPointer({ startY: 200, endY: 140, moved: true }), 'expanded', 'drag up expands')
 eq(endedDockFromPointer({ startY: 200, endY: 260, moved: true }), 'default', 'drag down docks default')
 

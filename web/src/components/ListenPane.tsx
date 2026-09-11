@@ -34,7 +34,7 @@ import {
   speakerSuggestText,
   spokenSettingsValue,
 } from '../iphoneCopy'
-import { endedDockFromPointer, endedSheetAvailable, listenAskPlacement, nextComposeDraft } from '../listenChrome'
+import { ENDED_TAP_SLOP, endedDockFromPointer, endedSheetAvailable, listenAskPlacement, nextComposeDraft } from '../listenChrome'
 import { usePhoneChrome } from '../phoneChrome'
 import { askOutcome, groupTranscript, iphoneSummaryHeading, isCatchAskCurrent, liveFeed, liveStageMode, summaryPlainText, transcriptPlainText, type LiveFeedItem } from '../liveView'
 import { useStickToBottom } from '../useStickToBottom'
@@ -1057,7 +1057,7 @@ export default function ListenPane(props: Props) {
   const [endedDock, setEndedDock] = useState<'default' | 'expanded'>('default')
   const inputRef = useRef<HTMLInputElement>(null)
   const sessionKeyRef = useRef(props.sessionKey || '')
-  const endedSheetDrag = useRef<{ pointerId: number; y: number; moved: boolean } | null>(null)
+  const endedSheetDrag = useRef<{ pointerId: number; y: number; el: HTMLElement; moved: boolean } | null>(null)
   const skipEndedClick = useRef(false)
   const [notesOpen, setNotesOpen] = useState(Boolean(props.notesDefaultOpen))
   const [mobilePane, setMobilePane] = useState<'live' | 'transcript' | 'notes'>(props.notesDefaultOpen ? 'notes' : 'live')
@@ -1158,13 +1158,29 @@ export default function ListenPane(props: Props) {
 
   const onEndedResizeDown = (e: ReactPointerEvent<HTMLElement>) => {
     if (!endedSheetUi) return
-    e.currentTarget.setPointerCapture(e.pointerId)
-    endedSheetDrag.current = { pointerId: e.pointerId, y: e.clientY, moved: false }
+    // A pointerdown here may still be a tap on a tab (or on the handle).
+    // Capturing eagerly retargets the follow-up `click` to this container, so
+    // the button under the finger never receives it — the ended sheet could
+    // not switch Live/Transcript/Notes at all and the handle click needed the
+    // skip flag. Capture eagerly only when the drag starts on the bar itself;
+    // a drag starting on a button claims capture on its first move instead.
+    const onButton = Boolean((e.target as HTMLElement).closest('button'))
+    if (!onButton) e.currentTarget.setPointerCapture(e.pointerId)
+    skipEndedClick.current = false
+    endedSheetDrag.current = { pointerId: e.pointerId, y: e.clientY, el: e.currentTarget, moved: false }
   }
   const onEndedResizeMove = (e: ReactPointerEvent<HTMLElement>) => {
     const drag = endedSheetDrag.current
-    if (!drag || drag.pointerId !== e.pointerId) return
-    if (Math.abs(e.clientY - drag.y) > 8) drag.moved = true
+    if (!drag || drag.pointerId !== e.pointerId || drag.moved) return
+    if (Math.abs(e.clientY - drag.y) <= ENDED_TAP_SLOP) return
+    drag.moved = true
+    if (!drag.el.hasPointerCapture(e.pointerId)) {
+      try {
+        drag.el.setPointerCapture(e.pointerId)
+      } catch {
+        // capture is best-effort — the pointer can already be gone
+      }
+    }
   }
   const onEndedResizeUp = (e: ReactPointerEvent<HTMLElement>) => {
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
