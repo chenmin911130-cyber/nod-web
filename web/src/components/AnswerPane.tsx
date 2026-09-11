@@ -146,8 +146,8 @@ export default function AnswerPane({ currentQ, partial, turns, busy, listening, 
         </button>
       )}
 
-      {/* #182: the only new control — a compact Think switch above the existing
-          Q&A input. Default off; the value belongs to the session, not the box. */}
+      {/* #219: Think label + iOS switch above the existing Q&A input.
+          Toggling does not submit; the value belongs to the session. */}
       <div className="think-row">
         <button
           type="button"
@@ -157,8 +157,10 @@ export default function AnswerPane({ currentQ, partial, turns, busy, listening, 
           aria-label="Think"
           onClick={() => onThink?.(!think)}
         >
-          <span className="think-dot" aria-hidden="true" />
           Think
+          <span className="think-switch" aria-hidden="true">
+            <span className="think-knob" />
+          </span>
         </button>
       </div>
 

@@ -5039,8 +5039,8 @@ a.tb-menu-action {
   cursor: pointer;
 }
 
-/* #182 Think: one compact switch above the existing Live Q&A input, in the
-   existing palette. Nothing else about the composer moves. */
+/* #219: Think label + iOS switch above the existing Live Q&A input.
+   No capsule, no lamp icon. Toggling does not submit. */
 .think-row {
   display: flex;
   align-items: center;
@@ -5050,27 +5050,23 @@ a.tb-menu-action {
 .think-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--stroke);
-  border-radius: 999px;
-  background: rgba(6, 12, 24, 0.55);
+  gap: 8px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: 0.01em;
   cursor: pointer;
 }
 
 .think-toggle:hover {
-  border-color: rgba(34, 211, 238, 0.38);
   color: var(--text);
 }
 
 .think-toggle.on {
-  border-color: rgba(34, 211, 238, 0.55);
-  background: rgba(34, 211, 238, 0.12);
   color: var(--think);
 }
 
@@ -5079,16 +5075,34 @@ a.tb-menu-action {
   outline-offset: 2px;
 }
 
-.think-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.55;
+.think-switch {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  background: #636366;
+  flex: 0 0 auto;
+  pointer-events: none;
 }
 
-.think-toggle.on .think-dot {
-  opacity: 1;
+.think-toggle.on .think-switch {
+  background: #00d2ff;
+}
+
+.think-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+  transition: transform 0.18s ease;
+}
+
+.think-toggle.on .think-knob {
+  transform: translateX(18px);
 }
 
 /* #182 sources under a Think answer: real links, their publication dates and
@@ -8367,6 +8381,10 @@ html.nod-phone .app.iphone-v2 .interview-qa .qa-hero {
   font-size: 56px;
 }
 
+html.nod-phone .app.iphone-v2 .interview-qa .think-row {
+  padding: 0 16px;
+}
+
 html.nod-phone .app.iphone-v2 .interview-qa .prompt-block {
   flex: 0 0 auto;
   margin: 8px 16px max(14px, env(safe-area-inset-bottom));
@@ -9944,6 +9962,10 @@ html.nod-phone .app.iphone-v2 .iphone-ask-bubble {
   color: #050607;
 }
 
+html.nod-phone .app.iphone-v2 .iphone-ask-bubble svg {
+  overflow: visible;
+}
+
 /* #193 item 3: the bubble is the one Ask entry — draggable, never a duplicate. */
 html.nod-phone .app.iphone-v2 .iphone-ask-bubble.draggable {
   position: relative;
@@ -9967,6 +9989,10 @@ html.nod-phone .app.iphone-v2 .iphone-tr-ask-wrap {
    bottom safe area — the bar does. Avoids deducting the inset twice. */
 html.nod-phone .app.iphone-v2 .iphone-tr-dock .iphone-tr-ask-wrap {
   padding-bottom: 8px;
+}
+
+html.nod-native.kb-open .app.iphone-v2 .iphone-tr-dock .iphone-tr-ask-wrap {
+  padding-bottom: 2px;
 }
 
 html.nod-phone .app.iphone-v2 .iphone-tr-dock .iphone-tr-prompt {

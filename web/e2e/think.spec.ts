@@ -53,6 +53,8 @@ test.describe('Think switch', () => {
     await expect(toggle).toBeVisible()
     await expect(toggle).toHaveAttribute('aria-checked', 'false')
     await expect(toggle).toHaveText(/^Think$/)
+    await expect(toggle.locator('.think-switch')).toBeVisible()
+    await expect(toggle.locator('.think-dot')).toHaveCount(0)
 
     // It sits ABOVE the existing input, which stays visible and unchanged.
     const toggleBox = await toggle.boundingBox()
@@ -74,6 +76,7 @@ test.describe('Think switch', () => {
 
     await toggle.click()
     await expect(toggle).toHaveAttribute('aria-checked', 'true')
+    expect(sent.filter((m) => m.type === 'ask')).toHaveLength(0)
     await expect
       .poll(() => sent.filter((m) => m.type === 'set_think').length, {
         message: 'the switch must reach the server',
