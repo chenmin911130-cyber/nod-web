@@ -4401,18 +4401,19 @@ class Session:
 
         Built only from values that outlive this process — the usage session, the Q&A
         session epoch, the STT turn each fragment came from, and the question text.
-        Deliberately NOT from the fragment ids as such: ``fragment_identity`` folds in
-        ``id(self)`` (a memory address, see ``qa_semantic.fragment_identity``), which a
-        re-created listener can reuse, and which a restart changes. Keying the paid
-        lookup on that would let one submit be taken for another — handing back the
-        wrong sources, or refusing a legitimate search as a duplicate.
+        Deliberately NOT from the fragment id as such: ``fragment_identity`` builds it
+        as ``t<id(listener)>:<turn>``, i.e. around a memory address that a re-created
+        listener can reuse and a restart always changes. Keying the paid lookup on that
+        would let one submit be taken for another — handing back the wrong sources, or
+        refusing a legitimate search as a duplicate.
+
+        The turn lives at the fragment's TOP LEVEL (``new_fragment`` stores it as
+        ``turn``), which is the field read here; the fragment id is only the fallback
+        for synthetic fragments, whose ids (``s<n>`` / ``f<n>``) carry no listener.
         """
         turns: list[str] = []
         for frag in frags:
-            meta = frag.get("meta") if isinstance(frag.get("meta"), dict) else {}
-            turn = meta.get("stt_turn")
-            # Without a real STT turn the synthetic ids (`s<n>` / `f<n>`) are already
-            # process-independent, so they are safe to use as the fallback.
+            turn = frag.get("turn")
             turns.append(str(turn) if turn is not None else str(frag.get("id") or ""))
         digest = hashlib.sha1(
             "\x00".join(

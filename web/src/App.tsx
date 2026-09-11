@@ -286,7 +286,7 @@ type Action =
   | { type: 'retry_translate'; id: string }
   | { type: 'fail_translate'; id: string }
   | { type: 'ask_start' }
-  | { type: 'seed_ask'; text: string; think?: boolean }
+  | { type: 'seed_ask'; text: string; think?: boolean; submitId?: string }
   | { type: 'set_think'; on: boolean }
   | { type: 'fail_ask'; text: string }
   | { type: 'listen_scene'; scene: ListenScene }
@@ -556,7 +556,7 @@ function reducer(state: AppState, action: Action): AppState {
           // with; it belongs to the turn, not to whatever the switch says later.
           const turnThink = ev.think === true
           if (pending >= 0) turns[pending] = { ...turns[pending], id: qid, q: text, think: turnThink }
-          else turns.push({ id: qid, q: text, a: '', think: turnThink })
+          else turns.push({ id: qid, q: text, a: '', think: turnThink, submitId: '' })
           return { ...state, turns, currentQ: text, currentQId: qid, partial: '', busy: true, heardLang: heard ?? state.heardLang }
         }
         case 'line_update': {
@@ -989,9 +989,17 @@ function reducer(state: AppState, action: Action): AppState {
     case 'ask_start':
       return { ...state, busy: true, status: 'Asking…' }
     case 'seed_ask': {
-      // #182: the pending turn remembers the Think value this submit was made
-      // with, so the answer card can offer a Retry that re-runs it the same way.
-      const turns = [...state.turns, { id: '__pending_ask__', q: action.text, a: '', think: action.think === true }]
+      // #182: the pending turn remembers the Think value this submit was made with
+      // and which ORIGINAL submission it belongs to, so the answer card can offer a
+      // Retry that rebuilds the same request instead of guessing from the display
+      // text. The turn keeps both when the server's question frame names its id.
+      const turns = [...state.turns, {
+        id: '__pending_ask__',
+        q: action.text,
+        a: '',
+        think: action.think === true,
+        submitId: action.submitId || '',
+      }]
       return { ...state, turns, currentQ: action.text, busy: true, status: 'Asking…' }
     }
     case 'fail_ask': {
@@ -1114,6 +1122,11 @@ export default function App() {
   const restoreHistoryRef = useRef<(session: HistorySession) => void>(() => undefined)
   const lastRestoredKeepId = useRef<string | null>(null)
   const offerSaveAfterMeetingStopRef = useRef<() => void>(() => undefined)
+  // #182: the ORIGINAL submission behind each Live Q&A turn — the question the user
+  // actually typed and the exact attachments. Kept in a ref (not in the reducer
+  // state) so a Retry can rebuild the same request while the bytes never reach
+  // History/state, and so it is dropped with the session.
+  const submitsRef = useRef(new Map<string, { text: string; files?: AttachPayload[] }>())
   const doClearRef = useRef<() => void>(() => undefined)
   const performSignOutRef = useRef<() => void>(() => undefined)
   const performDeleteRef = useRef<() => void>(() => undefined)
@@ -2272,6 +2285,7 @@ export default function App() {
   }
 
   const doClear = useCallback(() => {
+    submitsRef.current.clear()
     spokenTranslate.current.clear()
     stopSpeech()
     askedTranslate.current.clear()
@@ -2517,8 +2531,11 @@ export default function App() {
     // a question that was already submitted; the submit id is generated here for
     // the same reason (and makes a duplicated submit free on the server).
     const think = stateRef.current.workspaceMode === 'interview' ? stateRef.current.thinkOn : undefined
-    dispatch({ type: 'seed_ask', text: label, think: think === true })
     const submit_id = newSubmitId()
+    // The raw question (possibly empty for an attachment-only submit) and the exact
+    // attachments are what a Retry has to send again; the card's label is display.
+    submitsRef.current.set(submit_id, { text, files })
+    dispatch({ type: 'seed_ask', text: label, think: think === true, submitId: submit_id })
     void (async () => {
       try {
         const attach_id = await parkAttaches(files)
@@ -2540,26 +2557,47 @@ export default function App() {
     })()
   }, [])
 
-  // #182: Retry one Live Q&A answer. It re-asks the SAME question with the Think
-  // value that question originally ran with (the server echoed it on the turn),
-  // and names the answer it retries as `retry_of`, so the server reuses a lookup
-  // that already succeeded instead of paying for it again — and counts a new,
-  // linked attempt when the first one failed.
+  // #182: Retry one Live Q&A answer. It re-asks the SAME question the way it was
+  // originally submitted — the raw text and the same attachments, not the card's
+  // display title (which for an attachment question reads "question (file.csv)" and
+  // would both lose the attachment and change the search term) — with the Think value
+  // that question ran with, and names the answer it retries as `retry_of`. The server
+  // therefore reuses a lookup that already succeeded instead of paying again, and
+  // counts a new, linked attempt when the first one failed.
   const handleRetryTurn = useCallback((turnId: string) => {
     const s = stateRef.current
     const turn = s.turns.find((t) => t.id === turnId)
-    const question = (turn?.q || '').trim()
-    if (!turn || !question || !turn.id || turn.id === '__pending_ask__') return
+    if (!turn || !turn.id || turn.id === '__pending_ask__') return
+    const original = turn.submitId ? submitsRef.current.get(turn.submitId) : undefined
+    // No stored submission (a voice question, or a session restored from History):
+    // the answer's own question text IS what the server was asked, so use it.
+    const text = original ? original.text : (turn.q || '').trim()
+    const files = original?.files
+    const label = text.trim() || (files?.length ? `Please review: ${files.map((f) => f.name).join(', ')}` : '')
+    if (!label) return
     const think = turn.think === true
-    dispatch({ type: 'seed_ask', text: question, think })
-    window.api.send({
-      type: 'ask',
-      text: question,
-      mode: 'ask',
-      think,
-      retry_of: turn.id,
-      submit_id: newSubmitId(),
-    })
+    const submit_id = newSubmitId()
+    submitsRef.current.set(submit_id, { text, files })
+    dispatch({ type: 'seed_ask', text: label, think, submitId: submit_id })
+    void (async () => {
+      try {
+        const attach_id = await parkAttaches(files)
+        window.api.send({
+          type: 'ask',
+          text,
+          attach_id,
+          mode: 'ask',
+          think,
+          retry_of: turn.id,
+          submit_id,
+        })
+      } catch (ex) {
+        dispatch({
+          type: 'fail_ask',
+          text: ex instanceof Error ? ex.message : 'Could not resend the file',
+        })
+      }
+    })()
   }, [])
 
   // #182: the switch is session state; the socket sync below pushes it to the

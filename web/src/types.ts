@@ -14,7 +14,11 @@ export type AnswerSources = {
 }
 // #182 Think: `think` is the value the question was SUBMITTED with (the server
 // echoes it back), so a Retry can re-ask it the way it originally ran.
-export type Turn = { id: string; q: string; a: string; sources?: AnswerSources; think?: boolean }
+// #182 Think: `think` is the value the question was SUBMITTED with (the server
+// echoes it back) and `submitId` names the original submission payload, so a
+// Retry can rebuild the exact same request instead of guessing from the display
+// text.
+export type Turn = { id: string; q: string; a: string; sources?: AnswerSources; think?: boolean; submitId?: string }
 export type CatchNote = {
   id: string
   title: string

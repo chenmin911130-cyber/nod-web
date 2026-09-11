@@ -158,39 +158,55 @@ class SubmitSnapshotTests(unittest.TestCase):
         self.assertIs(calls[1].kwargs.get("think"), False)
 
     def test_the_voice_submit_id_is_session_scoped_and_process_independent(self):
-        # #182 review: the fragment ids fold in `id(self)` (a memory address), so a
-        # submit identity built from them could be reused by a re-created listener,
-        # or collide across sessions and get a legitimate search refused. It is now
-        # a function of values that outlive the process: usage session, Q&A session
-        # epoch, STT turn, and the question itself.
+        # #182 review: the fragment ids fold in `id(listener)` (a memory address), so a
+        # submit identity built from them could be reused by a re-created listener, or
+        # collide across sessions and get a legitimate search refused. It is now a
+        # function of values that outlive the process: usage session, Q&A session
+        # epoch, the fragment's STT turn, and the question itself.
+        #
+        # The fragments come from the REAL constructor (not a hand-built dict), because
+        # the turn lives at the top level (`turn`) and there is no `meta` — reading
+        # `meta["stt_turn"]` silently fell back to the listener-bearing id.
+        from server import qa_semantic
+
         sess = self._session()
         sess._qa_init()
         sess.usage_session_id = "sess-a"
-        aa = {"id": "t140234:7", "meta": {"stt_turn": 7, "listener_id": 140234}}
-        bb = {"id": "t999:7", "meta": {"stt_turn": 7, "listener_id": 999}}
-        first = sess._candidate_submit_id("怎么定价？", [aa])
+
+        def frag(turn, listener):
+            return qa_semantic.new_fragment(
+                "怎么定价？", "zh", frag_id=f"t{listener}:{turn}", at=1.0,
+                meta={"stt_turn": turn, "listener_id": listener},
+            )
+
+        first_frag = frag(7, 140234)
+        # Pin the real shape this fix depends on.
+        self.assertEqual(first_frag["turn"], 7)
+        self.assertNotIn("meta", first_frag)
+
+        first = sess._candidate_submit_id("怎么定价？", [first_frag])
         # The same commit always maps to the same identity (a re-delivered candidate
         # dedupes)...
-        self.assertEqual(first, sess._candidate_submit_id("怎么定价？", [dict(aa)]))
-        # ...and it does not depend on which listener OBJECT produced the fragment.
-        self.assertEqual(first, sess._candidate_submit_id("怎么定价？", [bb]))
-        # Another session, another question, another turn, another listen session:
-        # all different identities, so none of them can collide with this one.
-        sess.usage_session_id = "sess-b"
-        self.assertNotEqual(first, sess._candidate_submit_id("怎么定价？", [aa]))
-        sess.usage_session_id = "sess-a"
-        self.assertNotEqual(first, sess._candidate_submit_id("怎么交付？", [aa]))
-        self.assertNotEqual(
-            first, sess._candidate_submit_id("怎么定价？", [{"meta": {"stt_turn": 8}}])
-        )
-        sess._qa_session_gen += 1
-        self.assertNotEqual(first, sess._candidate_submit_id("怎么定价？", [aa]))
-        # A synthetic fragment (no STT turn) still yields a usable, stable id.
-        synth = {"id": "s3", "meta": {}}
+        self.assertEqual(first, sess._candidate_submit_id("怎么定价？", [frag(7, 140234)]))
+        # ...and it does not depend on the listener address inside the fragment id.
+        self.assertEqual(first, sess._candidate_submit_id("怎么定价？", [frag(7, 999)]))
+        # A fragment that carries no STT turn keeps its synthetic id (s<n>/f<n>),
+        # which is process-independent by construction.
+        synth = qa_semantic.new_fragment("怎么定价？", "zh", frag_id="s3", at=1.0)
+        self.assertIsNone(synth["turn"])
         self.assertEqual(
             sess._candidate_submit_id("怎么定价？", [synth]),
             sess._candidate_submit_id("怎么定价？", [dict(synth)]),
         )
+        # Another session, another question, another turn, another listen session:
+        # all different identities, so none of them can collide with this one.
+        sess.usage_session_id = "sess-b"
+        self.assertNotEqual(first, sess._candidate_submit_id("怎么定价？", [frag(7, 140234)]))
+        sess.usage_session_id = "sess-a"
+        self.assertNotEqual(first, sess._candidate_submit_id("怎么交付？", [frag(7, 140234)]))
+        self.assertNotEqual(first, sess._candidate_submit_id("怎么定价？", [frag(8, 140234)]))
+        sess._qa_session_gen += 1
+        self.assertNotEqual(first, sess._candidate_submit_id("怎么定价？", [frag(7, 140234)]))
 
     def test_the_manual_submit_id_folds_in_the_transcribed_question(self):
         # The recording counter restarts with the process; the question text keeps a

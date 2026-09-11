@@ -145,7 +145,7 @@ test.describe('Think submit identity', () => {
     await page.route('**/api/attach/extract', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: '{"id":"attach-1"}' }),
     )
-    const { sent } = await mockWs(page)
+    const { sent, send } = await mockWs(page)
     await page.locator('.prompt-row input[type=file]').setInputFiles({
       name: 'payroll.txt',
       mimeType: 'text/plain',
@@ -159,9 +159,54 @@ test.describe('Think submit identity', () => {
     const frame = sent.filter((m) => m.type === 'ask')[0]
     // The placeholder the card shows must NOT be the question that gets searched.
     expect(frame.text).toBe('')
+    expect(frame.attach_id).toBe('attach-1')
     expect(frame.think).toBe(false)
     expect(typeof frame.submit_id).toBe('string')
     expect(frame.submit_id).not.toBe('')
+
+    // The server answers with the display title; Retry must still send the empty
+    // question plus the same attachment, never the title.
+    send({ type: 'question', id: 'q-attach-only', text: 'Please review: payroll.txt' })
+    send({ type: 'chunk', id: 'q-attach-only', text: 'ok' })
+    send({ type: 'done', id: 'q-attach-only', stt: 0, llm: 1, ok: true })
+    await page.locator('.qa-ai-card').last().getByRole('button', { name: 'Retry' }).click()
+    await expect.poll(() => sent.filter((m) => m.type === 'ask').length).toBe(2)
+    const retry = sent.filter((m) => m.type === 'ask')[1]
+    expect(retry.text).toBe('')
+    expect(retry.attach_id).toBe('attach-1')
+    expect(retry.retry_of).toBe('q-attach-only')
+  })
+
+  test('Retry rebuilds the original submission, attachments included', async ({ page }) => {
+    await page.route('**/api/attach/extract', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '{"id":"attach-1"}' }),
+    )
+    const { sent, send } = await mockWs(page)
+    await page.locator('.prompt-row input[type=file]').setInputFiles({
+      name: 'payroll.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('PRIVATE PAYROLL'),
+    })
+    await page.locator('.prompt-input').fill('how is the bonus computed?')
+    const answer = page.locator('.gen-btn')
+    await expect(answer).toBeEnabled()
+    await answer.click()
+    await expect.poll(() => sent.filter((m) => m.type === 'ask').length).toBe(1)
+    expect(sent.filter((m) => m.type === 'ask')[0].text).toBe('how is the bonus computed?')
+
+    // The server labels the card with the file name, so the display title is NOT the
+    // question that was searched.
+    send({ type: 'question', id: 'q-attach-text', text: 'how is the bonus computed? (payroll.txt)' })
+    send({ type: 'chunk', id: 'q-attach-text', text: 'ok' })
+    send({ type: 'done', id: 'q-attach-text', stt: 0, llm: 1, ok: true })
+
+    await page.locator('.qa-ai-card').last().getByRole('button', { name: 'Retry' }).click()
+    await expect.poll(() => sent.filter((m) => m.type === 'ask').length).toBe(2)
+    const retry = sent.filter((m) => m.type === 'ask')[1]
+    expect(retry.text).toBe('how is the bonus computed?')
+    expect(retry.attach_id).toBe('attach-1')
+    expect(retry.retry_of).toBe('q-attach-text')
+    expect(retry.mode).toBe('ask')
   })
 
   test('Retry re-asks with the Think value the question ran with', async ({ page }) => {

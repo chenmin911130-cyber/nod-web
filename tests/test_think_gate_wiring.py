@@ -236,6 +236,31 @@ class ThinkGateWiringTests(unittest.TestCase):
         self.assertEqual(len(calls), 1, "the search is never automatically re-sent")
         self.assertEqual(self._counts(), (1, 1), "the attempt stays consumed")
 
+    def test_a_file_ask_retry_reuses_the_lookup_by_its_raw_question(self):
+        # #182 review: the retry has to carry the question the user actually asked, not
+        # the card's display title. With the raw text the search identity matches and
+        # the lookup already paid for is reused; with the display title
+        # ("how is the bonus computed? (payroll.txt)") it would be a new, counted search.
+        events: list[dict] = []
+        calls: list[dict] = []
+        pipe = _pipe(events, calls)
+        prompt = "--- Attached: payroll.txt ---\nPRIVATE PAYROLL\n\nhow is the bonus computed?"
+        pipe.process_text(
+            prompt, "file_ask", think=True,
+            search_text="how is the bonus computed?", submit_id="submit-1",
+        )
+        self.assertEqual(len(calls), 1)
+
+        pipe.process_text(
+            prompt, "file_ask", think=True,
+            search_text="how is the bonus computed?", retry_of="q-first", submit_id="submit-retry",
+        )
+        self.assertEqual(len(calls), 1, "the same raw question reuses the paid lookup")
+        self.assertEqual(self._counts(), (1, 1), "and spends no second attempt")
+        # The attachment still reaches the model on the retry.
+        messages = pipe.client.chat.completions.create.call_args.kwargs["messages"]
+        self.assertTrue(any("PRIVATE PAYROLL" in (m.get("content") or "") for m in messages))
+
     def test_a_model_retry_never_re_searches(self):
         events: list[dict] = []
         calls: list[dict] = []
