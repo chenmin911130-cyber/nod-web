@@ -35,7 +35,7 @@ from server.admin import router as admin_router
 from server.commerce import router as commerce_router
 from server.cors import cors_origins
 from server.db import User, init_db
-from server.headers import CloudflareOriginMiddleware, HostLockMiddleware, SecurityHeadersMiddleware
+from server.headers import ApexRedirectMiddleware, CloudflareOriginMiddleware, HostLockMiddleware, SecurityHeadersMiddleware
 from server.lang import (
     _LANG_NAMES,
     _STT_AUTO_LANGS,
@@ -5066,6 +5066,7 @@ app.add_middleware(
 )
 app.add_middleware(CloudflareOriginMiddleware)
 app.add_middleware(HostLockMiddleware)
+app.add_middleware(ApexRedirectMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(commerce_router)
 app.include_router(admin_router)
@@ -5368,7 +5369,7 @@ def robots():
 @app.get("/sitemap.xml")
 def sitemap():
     base = PUBLIC_URL.rstrip("/")
-    paths = ["/", "/zh", "/privacy", "/terms", "/consent", "/signup", "/login"]
+    paths = ["/", "/zh", "/privacy", "/terms", "/consent"]
     urls = []
     for path in paths:
         loc = base + ("" if path == "/" else path)

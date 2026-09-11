@@ -5,6 +5,7 @@ import { isNativeApp } from '../native'
 import { applySeo, track } from '../site/track'
 import { COPY, type Locale } from './copy'
 import { PRODUCT_NAME } from '../brand'
+import { SITE_ORIGIN, siteUrl } from '../siteOrigin'
 import NodMark from '../site/NodMark'
 import { DemoModal, WatchIcon, type DemoMode } from './HeroDemo'
 import { HERO_POSTERS, heroPosterById, nextHeroPoster, type HeroPosterId } from './heroPosters'
@@ -36,14 +37,14 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
   } as const
 
   useEffect(() => {
-    const origin = window.location.origin.replace(/\/+$/, '')
     applySeo({
       title: t.title,
       description: t.description,
       ogTitle: t.ogTitle,
-      url: `${origin}${locale === 'zh' ? '/zh' : '/'}`,
+      url: siteUrl(locale === 'zh' ? '/zh' : '/'),
       lang: t.htmlLang,
-      image: `${origin}/og.png`,
+      image: `${SITE_ORIGIN}/og.png`,
+      robots: 'index,follow',
     })
     void fetchMe().then((me) => setSignedIn(Boolean(me)))
     const observer = new IntersectionObserver(
