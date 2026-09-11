@@ -382,10 +382,11 @@ class StaticTraversalTests(unittest.TestCase):
             "/../../data/auth_secret.key",
         ):
             with self.subTest(path=path):
-                _, body = _raw_get(path)
+                code, body = _raw_get(path)
+                self.assertEqual(code, 404)
                 self.assertNotIn(b"fastapi==", body)
                 self.assertNotIn(b"SQLite format", body)
-                self.assertIn(b"<", body)  # fell through to index.html
+                self.assertIn(b"<", body)
 
     def test_real_asset_still_served(self):
         code, body = _raw_get("/index.html")
