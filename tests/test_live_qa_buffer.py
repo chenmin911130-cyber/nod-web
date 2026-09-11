@@ -864,11 +864,12 @@ class ReviewFixTests(_QaBase):
         sess = self._session(judge_stub(qs.VERDICT_READY))
         sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
         gen = sess._qa_gen
+        session_gen = sess._qa_session_gen
         sess._qa_reset("new_session")
         self.assertFalse(sess._start_interview_answer("how should we price it?", "en", "", gen=gen))
         sess.pipeline.process_text.assert_not_called()
         self.assertFalse(sess._busy)
-        sess._run_interview_answer("how should we price it?", "en", "", gen=gen)
+        sess._run_interview_answer("how should we price it?", "en", "", session_gen=session_gen)
         sess.pipeline.process_text.assert_not_called()
         self.assertEqual(sess._engine, "idle")
 
@@ -916,6 +917,74 @@ class ReviewFixTests(_QaBase):
         sess._start_interview_answer.assert_not_called()
         self.assertEqual(len(sess._qa_buffer), 1)  # kept for the next judgement
 
+    def test_a_commit_refused_by_a_resumed_speaker_is_rejudged_once_quiet(self):
+        # The review blocker: the worker marks the version "judged" BEFORE it calls
+        # the commit, so a partial that lands between the worker's own activity
+        # check and the commit's re-check left the candidate marked done while the
+        # commit was refused. No later settle would ever look at it again and, with
+        # no further final, the question hung unanswered forever. Once the speaker
+        # is quiet again the SAME candidate must be judged and answered once.
+        sess = self._session(judge_stub(qs.VERDICT_READY, question="How should we price it?"))
+        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        version = sess._qa_version
+        real_commit = sess._qa_commit
+        # The reviewer's window: the speaker resumes ONCE, right after the worker's
+        # own activity check and before the commit guard re-checks the clock. Then
+        # the room goes quiet and no further final ever arrives.
+        resumed = {"done": False}
+
+        def resumed_speaker_commit(*args, **kwargs):
+            if not resumed["done"]:
+                resumed["done"] = True
+                sess._on_partial("that depends on", "en")
+            return real_commit(*args, **kwargs)
+
+        sess._qa_commit = resumed_speaker_commit
+        self._settle(sess)
+        self.assertEqual(sess.pipeline.process_text.call_count, 0)
+        self.assertEqual(len(sess._qa_buffer), 1)
+        # Nothing new was said — only the quiet gap passed. The candidate is still
+        # the current one, so it must not be written off as "already judged".
+        self.assertFalse(sess._qa_version_done(version))
+        self._settle(sess)  # the speaker has been quiet past the settle window
+        self.assertTrue(self._wait(lambda: sess.pipeline.process_text.called))
+        self.assertEqual(sess.pipeline.judge_qa.call_count, 2)
+        self.assertEqual(self._answers(sess), ["How should we price it?"])
+
+    def test_a_refused_commit_recovers_through_the_real_settle_timer(self):
+        # The same recovery, but down the REAL timer chain: after the refusal the
+        # reschedule must actually arm a timer, because once the speaker stops that
+        # timer is the only thing that comes back for the candidate.
+        import server.app as app_mod
+
+        sess = self._session(judge_stub(qs.VERDICT_READY, question="How should we price it?"))
+        del sess._qa_schedule_judge  # restore the real settle timer
+        old_settle = app_mod.QA_SETTLE_SECONDS
+        old_interval = app_mod.QA_MIN_JUDGE_INTERVAL_SECONDS
+        app_mod.QA_SETTLE_SECONDS = 0.2
+        app_mod.QA_MIN_JUDGE_INTERVAL_SECONDS = 0.2
+        try:
+            sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+            real_commit = sess._qa_commit
+            resumed = {"done": False}
+
+            def resumed_speaker_commit(*args, **kwargs):
+                if not resumed["done"]:
+                    resumed["done"] = True
+                    sess._on_partial("that depends on", "en")
+                return real_commit(*args, **kwargs)
+
+            sess._qa_commit = resumed_speaker_commit
+            self.assertTrue(self._wait(lambda: sess.pipeline.judge_qa.call_count == 1))
+            self.assertTrue(
+                self._wait(lambda: sess.pipeline.process_text.called, timeout=5),
+                "the candidate was never judged again after the speaker went quiet",
+            )
+            self.assertEqual(self._answers(sess), ["How should we price it?"])
+        finally:
+            app_mod.QA_SETTLE_SECONDS = old_settle
+            app_mod.QA_MIN_JUDGE_INTERVAL_SECONDS = old_interval
+
     def test_a_stale_run_releases_the_busy_claim_it_already_took(self):
         # `_start_interview_answer` claims the busy token and only THEN calls the run,
         # which re-checks the generation. The early return used to sit before the
@@ -923,10 +992,10 @@ class ReviewFixTests(_QaBase):
         # later question queued behind an answer that never existed.
         sess = self._session(judge_stub(qs.VERDICT_READY))
         sess._qa_init()
-        gen = sess._qa_gen
+        session_gen = sess._qa_session_gen
         self.assertIsNotNone(sess._claim_busy())  # as the start point takes it
         sess._qa_reset("new_session")  # New lands between the start check and the run
-        sess._run_interview_answer("how should we price it?", "en", "", gen=gen)
+        sess._run_interview_answer("how should we price it?", "en", "", session_gen=session_gen)
         self.assertFalse(sess._busy)
         self.assertIsNone(sess._busy_token)
         self.assertEqual(sess._engine, "idle")
@@ -936,11 +1005,12 @@ class ReviewFixTests(_QaBase):
         # Releasing must hand the slot over, not drop it.
         sess = self._session(judge_stub(qs.VERDICT_READY))
         sess._qa_init()
-        gen = sess._qa_gen
+        session_gen = sess._qa_session_gen
         self.assertIsNotNone(sess._claim_busy())
         sess._qa_reset("new_session")
-        sess._pending_q.append(("what about annual billing?", "en", ""))
-        sess._run_interview_answer("how should we price it?", "en", "", gen=gen)
+        # queued in the NEW session, so it is still live when the stale run gives up
+        sess._pending_q.append(("what about annual billing?", "en", "", sess._qa_session_gen))
+        sess._run_interview_answer("how should we price it?", "en", "", session_gen=session_gen)
         self.assertTrue(self._wait(lambda: sess.pipeline.process_text.called))
         self.assertEqual(self._answers(sess), ["what about annual billing?"])
 
@@ -949,9 +1019,84 @@ class ReviewFixTests(_QaBase):
         # reset that leaves it in the queue starts the old session's question later.
         sess = self._session(judge_stub(qs.VERDICT_READY))
         sess._qa_init()
-        sess._pending_q.append(("how should we price it?", "en", ""))
+        sess._pending_q.append(("how should we price it?", "en", "", sess._qa_session_gen))
         sess._qa_reset("new_listen")
         self.assertEqual(list(sess._pending_q), [])
+
+    def test_a_new_before_the_answer_body_runs_stops_the_generation(self):
+        # The run re-checks the generation before it creates the thread; a New that
+        # lands in the gap BEFORE the body executes used to reach `process_text`
+        # anyway, because only the pre-thread check existed.
+        sess = self._session(judge_stub(qs.VERDICT_READY))
+        sess._qa_init()
+        gen = sess._qa_gen
+        bodies: list = []
+
+        class _DeferredThread:
+            def __init__(self, target=None, daemon=None, args=(), **kwargs):
+                bodies.append(target)
+
+            def start(self):
+                pass  # the body has not run yet
+
+        with mock.patch("server.app.threading.Thread", _DeferredThread):
+            self.assertTrue(sess._start_interview_answer("how should we price it?", "en", "", gen=gen))
+        self.assertEqual(len(bodies), 1)
+        sess._qa_reset("new_session")  # New lands in the gap, before the body runs
+        bodies[0]()  # the body now runs for the abandoned session
+        sess.pipeline.process_text.assert_not_called()
+        self.assertFalse(sess._busy)
+        self.assertEqual(sess._engine, "idle")
+
+    def test_a_reset_between_the_start_checks_never_tags_the_new_session(self):
+        # The candidate check and the session tag are two separate reads. A reset
+        # landing between them used to tag the old question with the NEW session, so
+        # the run's own generation check passed and the question was answered into
+        # the session that had just replaced it.
+        sess = self._session(judge_stub(qs.VERDICT_READY))
+        sess._qa_init()
+        gen = sess._qa_gen
+        real_check = sess._qa_gen_current
+
+        def check_then_reset(g):
+            ok = real_check(g)  # the candidate still looks current
+            sess._qa_reset("new_session")  # New lands right after that check
+            return ok
+
+        sess._qa_gen_current = check_then_reset
+        sess._start_interview_answer("how should we price it?", "en", "", gen=gen)
+        sess.pipeline.process_text.assert_not_called()
+        self.assertFalse(sess._busy)  # the refused run released its claim
+
+    def test_a_question_in_hand_when_the_session_resets_never_runs(self):
+        # `_qa_reset` clears the queue, but an item that was ALREADY taken out of
+        # it (the drain pops, then runs) carried no identity to check, so the old
+        # session's question started anyway. The identity travels with the item.
+        sess = self._session(judge_stub(qs.VERDICT_READY))
+        sess._qa_init()
+        gen = sess._qa_gen
+        self.assertIsNotNone(sess._claim_busy())  # the previous answer holds the slot
+        self.assertTrue(sess._start_interview_answer("from the old session", "en", "", gen=gen))
+        self.assertEqual(len(sess._pending_q), 1)
+        item = sess._pending_q.popleft()  # the slot frees exactly here
+        sess._qa_reset("new_session")  # and New lands before the item runs
+        sess._run_interview_answer(item[0], item[1], item[2], session_gen=item[3])
+        sess.pipeline.process_text.assert_not_called()
+        self.assertFalse(sess._busy)
+
+    def test_a_manual_submit_does_not_drop_a_question_already_committed(self):
+        # The manual submit supersedes the PENDING candidate (it bumps the candidate
+        # epoch) but it is not a session reset: a question that was already committed
+        # and queued is not the manual candidate, and the issue spec keeps candidates
+        # unrelated to the manual input. It must still be answered.
+        sess = self._session(judge_stub(qs.VERDICT_READY))
+        sess._qa_init()
+        self.assertIsNotNone(sess._claim_busy())  # the previous answer holds the slot
+        self.assertTrue(sess._start_interview_answer("how should we price it?", "en", "", gen=sess._qa_gen))
+        sess._qa_on_manual_submit()  # the user types a question while the slot is busy
+        sess._finish_interview_answer(sess._busy_token)
+        self.assertTrue(self._wait(lambda: sess.pipeline.process_text.called))
+        self.assertEqual(self._answers(sess), ["how should we price it?"])
 
     def test_the_current_background_verdict_still_demotes(self):
         sess = self._session(judge_stub(qs.VERDICT_BACKGROUND))

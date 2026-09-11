@@ -2486,7 +2486,7 @@ class Session:
         # for one question and both get billed.
         self._busy_lock = threading.Lock()
         self._busy_token: object | None = None
-        self._pending_q: collections.deque[tuple[str, str | None, str]] = collections.deque(maxlen=8)
+        self._pending_q: collections.deque[tuple[str, str | None, str, int]] = collections.deque(maxlen=8)
         self._pending_asks: list[tuple[str, str, Any]] = []
         self._pending_wait: tuple[str | None, float, str | None] = (None, 0.0, None)
         # Live Q&A semantic buffer (issue #191). Consecutive finals accumulate by
@@ -2496,7 +2496,14 @@ class Session:
         self._qa_background: list[str] = []
         self._qa_frag_seq = 0
         self._qa_version = 0
+        # Two epochs, deliberately separate (both bumped by `_qa_reset`):
+        # `_qa_gen` is the CANDIDATE epoch — a manual submit supersedes the pending
+        # candidate and bumps it, which must not stop a question that was already
+        # committed. `_qa_session_gen` is the SESSION epoch — only New / clear /
+        # workspace switch / close move it, and it is what the answer thread and a
+        # queued question validate against.
         self._qa_gen = 0
+        self._qa_session_gen = 0
         self._qa_answered: dict[str, None] = {}
         self._qa_activity_at = 0.0
         self._qa_last_judge_at = 0.0
@@ -3553,6 +3560,7 @@ class Session:
         self._qa_frag_seq = int(getattr(self, "_qa_frag_seq", 0) or 0)
         self._qa_version = int(getattr(self, "_qa_version", 0) or 0)
         self._qa_gen = int(getattr(self, "_qa_gen", 0) or 0)
+        self._qa_session_gen = int(getattr(self, "_qa_session_gen", 0) or 0)
         self._qa_answered = getattr(self, "_qa_answered", None) or {}
         self._qa_activity_at = float(getattr(self, "_qa_activity_at", 0.0) or 0.0)
         self._qa_last_judge_at = float(getattr(self, "_qa_last_judge_at", 0.0) or 0.0)
@@ -3793,6 +3801,20 @@ class Session:
         self.emit({"type": "partial", "text": ""})
         return True
 
+    def _qa_keep_verdict_eligible(self, version: int, gen: int) -> None:
+        """A refused verdict for the STILL-CURRENT candidate is not "done".
+
+        The worker marks the version judged BEFORE it calls the commit, so a refusal
+        that leaves the candidate untouched has to undo that mark: otherwise no later
+        settle looks at the candidate again and, with no further final, the question
+        hangs unanswered forever. Marking it stale keeps it eligible for exactly one
+        more judgement once the speaker is quiet (settle + rate-limit gates still
+        apply). A refusal for a candidate that was replaced needs nothing — the new
+        version was never judged. Callers hold the lock.
+        """
+        if version == self._qa_version and gen == self._qa_gen and self._qa_buffer:
+            self._qa_stale_version = version
+
     def _qa_commit(
         self,
         question: str,
@@ -3823,11 +3845,13 @@ class Session:
         lang = frags[-1].get("lang") if frags else None
         with self._qa_lock():
             if gen != self._qa_gen or version != self._qa_version or not self._qa_buffer:
+                self._qa_keep_verdict_eligible(version, gen)
                 return False
             # #191 review fix: the activity re-check belongs HERE too, not only in the
             # worker before this call — a partial arriving after that check must not
             # let the stale answer through (partials only bump the activity clock).
             if judged_at is not None and self._qa_activity_at > judged_at:
+                self._qa_keep_verdict_eligible(version, gen)
                 return False
             # Answer context (#191): earlier background + the candidate fragments the
             # model did NOT cite (a lead-in the question stands on). Recent confirmed
@@ -3888,6 +3912,11 @@ class Session:
             self._qa_answered = {}
             self._qa_version += 1
             self._qa_gen += 1
+            # The answer chain's session identity: an answer thread that has not
+            # generated yet, and a question already taken out of the queue, both
+            # re-validate against this (the queue is only cleared, which cannot
+            # stop an item that is already in hand).
+            self._qa_session_gen += 1
             self._qa_judged_version = -1
             self._qa_stale_version = -1
             self._qa_verdict = None
@@ -5460,6 +5489,20 @@ class Session:
         with self._qa_lock():
             return int(gen) == self._qa_gen
 
+    def _qa_session_current(self, gen: int) -> bool:
+        """True when the answer chain's SESSION epoch still matches.
+
+        The answer thread and a queued question validate against this rather than
+        `_qa_gen`: a manual submit bumps the CANDIDATE epoch to supersede the pending
+        candidate, and that must not cancel a question which was already committed
+        and queued (the issue spec keeps candidates unrelated to the manual input).
+        Only `_qa_reset` — New / clear / workspace switch / close — moves the session
+        epoch, and that is exactly what must stop an abandoned answer.
+        """
+        self._qa_init()
+        with self._qa_lock():
+            return int(gen) == self._qa_session_gen
+
     def _start_interview_answer(
         self,
         cleaned: str,
@@ -5475,7 +5518,16 @@ class Session:
         switch (all of which call `_qa_reset`) can land between releasing that lock
         and this call — starting then would answer a question the session has
         already abandoned.
+
+        `gen` is the CANDIDATE epoch the commit validated. The answer thread and any
+        queued item are tagged with the SESSION epoch (`_qa_session_gen`) instead,
+        which is what `_run_interview_answer` re-validates.
         """
+        self._qa_init()
+        # The session epoch is snapshotted BEFORE the candidate check on purpose: a
+        # reset bumps both counters, so whichever side of the check it lands on, the
+        # tag is stale and the run refuses instead of answering into the new session.
+        session_gen = self._qa_session_gen
         if gen is not None and not self._qa_gen_current(gen):
             logging.getLogger("nod").info(
                 "qa_drop reason=stale_start gen=%s now_gen=%s", gen, self._qa_gen
@@ -5486,10 +5538,10 @@ class Session:
         self._maybe_follow_speech(cleaned, heard)
         tok = self._claim_busy()
         if not tok:
-            self._pending_q.append((cleaned, lang, context))
+            self._pending_q.append((cleaned, lang, context, session_gen))
             self.emit({"type": "status", "text": "Question queued · answering the previous one"})
             return True
-        self._run_interview_answer(cleaned, lang, context, gen=gen)
+        self._run_interview_answer(cleaned, lang, context, session_gen=session_gen)
         return True
 
     def _finish_interview_answer(self, tok: object | None) -> None:
@@ -5514,7 +5566,7 @@ class Session:
             except IndexError:
                 self._release_busy(tok2)
         if nxt:
-            self._run_interview_answer(*nxt)
+            self._run_interview_answer(nxt[0], nxt[1], nxt[2], session_gen=nxt[3])
         else:
             self._drain_pending_ask()
 
@@ -5524,16 +5576,16 @@ class Session:
         lang: str | None,
         context: str = "",
         *,
-        gen: int | None = None,
+        session_gen: int | None = None,
     ) -> None:
         tok = self._busy_token
         # #191 review fix: the thread can start a moment after the start check; a New
         # that lands in between must not generate. The busy claim was already taken by
         # `_start_interview_answer`, so the stale path releases it explicitly instead
         # of relying on a `finally` it never reaches.
-        if gen is not None and not self._qa_gen_current(gen):
+        if session_gen is not None and not self._qa_session_current(session_gen):
             logging.getLogger("nod").info(
-                "qa_drop reason=stale_run gen=%s now_gen=%s", gen, self._qa_gen
+                "qa_drop reason=stale_run gen=%s now_gen=%s", session_gen, self._qa_session_gen
             )
             self._finish_interview_answer(tok)
             return
@@ -5545,6 +5597,16 @@ class Session:
 
         def work():
             try:
+                # #191 review fix: neither check above is atomic with the generation
+                # itself — the thread body can start a moment later, so it re-validates
+                # the session right before it generates. A New that landed after the
+                # pre-thread check used to reach `process_text` anyway.
+                if session_gen is not None and not self._qa_session_current(session_gen):
+                    logging.getLogger("nod").info(
+                        "qa_drop reason=stale_work gen=%s now_gen=%s",
+                        session_gen, self._qa_session_gen,
+                    )
+                    return
                 # Scoped to this generation: the background block is a system
                 # prompt addendum for the interview answer only (#191).
                 self.pipeline._qa_context = context or ""
