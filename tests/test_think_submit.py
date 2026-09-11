@@ -414,6 +414,22 @@ class ThinkAnswerPathTests(unittest.TestCase):
         # The question frame carries the value this answer runs with, so the answer
         # card can offer a Retry that re-runs the question the same way.
         self.assertIs(_events(events, "question")[-1].get("think"), True)
+
+    def test_the_question_frame_echoes_the_submit_identity(self):
+        # #182 review: the client binds an answer to its pending card by this id. By
+        # arrival order, a voice question committed while an attachment submit was
+        # still uploading inherited that submit's attachments.
+        events: list[dict] = []
+        pipe = _pipe(events)
+        pipe.think_client = _client(results=[])
+        pipe.process_text("what is new?", "ask", think=True, submit_id="submit-abc")
+        self.assertEqual(_events(events, "question")[-1].get("submit_id"), "submit-abc")
+        # A caller with no submit identity (an internal/legacy one) simply has none.
+        events2: list[dict] = []
+        pipe2 = _pipe(events2)
+        pipe2.think_client = _client(results=[])
+        pipe2.process_text("what is new?", "ask")
+        self.assertNotIn("submit_id", _events(events2, "question")[-1])
         self.assertTrue(_events(events, "done")[-1]["ok"])
 
     def test_an_unconfigured_lookup_is_reported_not_faked(self):

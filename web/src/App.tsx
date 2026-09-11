@@ -550,13 +550,23 @@ function reducer(state: AppState, action: Action): AppState {
             }]
             return { ...state, translatePairs, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
           }
-          const pending = state.turns.findIndex((t) => t.id === '__pending_ask__')
+          // #182: bind the answer to the pending card that carries THIS submit's
+          // identity, not to whichever card happens to be pending — an auto-voice
+          // question committed while an attachment submit is still uploading must
+          // not inherit that submit's attachments.
+          const eventSubmitId = typeof ev.submit_id === 'string' ? ev.submit_id : ''
+          const pending = state.turns.findIndex(
+            (t) => t.id === '__pending_ask__' && (!eventSubmitId || t.submitId === eventSubmitId),
+          )
           const turns = state.turns.slice()
           // #182: the server echoes the Think value this question actually runs
           // with; it belongs to the turn, not to whatever the switch says later.
           const turnThink = ev.think === true
-          if (pending >= 0) turns[pending] = { ...turns[pending], id: qid, q: text, think: turnThink }
-          else turns.push({ id: qid, q: text, a: '', think: turnThink, submitId: '' })
+          if (pending >= 0) {
+            turns[pending] = { ...turns[pending], id: qid, q: text, think: turnThink, live: true }
+          } else {
+            turns.push({ id: qid, q: text, a: '', think: turnThink, submitId: eventSubmitId, live: true })
+          }
           return { ...state, turns, currentQ: text, currentQId: qid, partial: '', busy: true, heardLang: heard ?? state.heardLang }
         }
         case 'line_update': {
@@ -999,6 +1009,7 @@ function reducer(state: AppState, action: Action): AppState {
         a: '',
         think: action.think === true,
         submitId: action.submitId || '',
+        live: true,
       }]
       return { ...state, turns, currentQ: action.text, busy: true, status: 'Asking…' }
     }
@@ -2567,10 +2578,14 @@ export default function App() {
   const handleRetryTurn = useCallback((turnId: string) => {
     const s = stateRef.current
     const turn = s.turns.find((t) => t.id === turnId)
-    if (!turn || !turn.id || turn.id === '__pending_ask__') return
+    // A restored/history turn carries neither the Think value the question ran with
+    // nor the submission it was made of, so re-asking it would silently change the
+    // question (a Think question would become a plain one, an attachment question
+    // would lose its file). The card does not offer Retry for those.
+    if (!turn || !turn.live || !turn.id || turn.id === '__pending_ask__') return
     const original = turn.submitId ? submitsRef.current.get(turn.submitId) : undefined
-    // No stored submission (a voice question, or a session restored from History):
-    // the answer's own question text IS what the server was asked, so use it.
+    // No stored payload: this is a question the SERVER committed from speech, where
+    // the answer's own text IS the question the lookup was made with.
     const text = original ? original.text : (turn.q || '').trim()
     const files = original?.files
     const label = text.trim() || (files?.length ? `Please review: ${files.map((f) => f.name).join(', ')}` : '')

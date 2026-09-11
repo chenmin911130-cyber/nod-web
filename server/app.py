@@ -1803,6 +1803,13 @@ class Pipeline:
         # and must not be omitted — otherwise the next transcript line steals the card.
         shown = (display_text or t).strip() if not internal else t
         ev: dict[str, Any] = {"type": "question", "id": qid, "text": shown}
+        if submit_id:
+            # #182: the identity of the submit this answer belongs to. The client binds
+            # the answer to the pending card that carries it, instead of to whichever
+            # card happens to be pending: an auto-voice question committed while an
+            # attachment submit is still uploading must not inherit that submit's
+            # attachments (and then retry the attachment question from the wrong card).
+            ev["submit_id"] = submit_id
         if think and mode in ("ask", "file_ask"):
             # #182: echo the value THIS question is running with. The client stores
             # it with the answer so a later Retry re-asks the question the way it was

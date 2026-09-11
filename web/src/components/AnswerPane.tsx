@@ -113,7 +113,7 @@ export default function AnswerPane({ currentQ, partial, turns, busy, listening, 
                   generating={busy && t.id === last?.id && !t.a}
                   msAgo={msAgo(t.id)}
                   onFollowUp={followUp}
-                  onRetry={onRetryTurn ? () => onRetryTurn(t.id) : undefined}
+                  onRetry={onRetryTurn && t.live ? () => onRetryTurn(t.id) : undefined}
                   sources={t.sources}
                 />
               ))}

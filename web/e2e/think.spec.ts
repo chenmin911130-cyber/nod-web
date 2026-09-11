@@ -209,6 +209,70 @@ test.describe('Think submit identity', () => {
     expect(retry.mode).toBe('ask')
   })
 
+  test('an upload in flight does not hand its attachment to a voice question', async ({ page }) => {
+    // #182 review: the answer used to be bound to whichever card was pending, so a
+    // voice question committed while an attachment submit was still uploading took
+    // that submit's payload — and its Retry then re-sent the attachment question.
+    let release: (() => void) | null = null
+    const gate = new Promise<void>((resolve) => {
+      release = () => resolve()
+    })
+    await page.route('**/api/attach/extract', async (route) => {
+      await gate
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"id":"attach-1"}' })
+    })
+    const { sent, send } = await mockWs(page)
+    await page.locator('.prompt-row input[type=file]').setInputFiles({
+      name: 'payroll.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('PRIVATE PAYROLL'),
+    })
+    await page.locator('.prompt-input').fill('how is the bonus computed?')
+    await page.locator('.gen-btn').click() // the upload is now held
+
+    // A voice question is committed while that upload is still in flight.
+    send({ type: 'question', id: 'q-voice', text: 'what did they say about pricing?', submit_id: 'qa-voice' })
+    send({ type: 'chunk', id: 'q-voice', text: 'ok' })
+    send({ type: 'done', id: 'q-voice', stt: 0, llm: 1, ok: true })
+
+    release!()
+    await expect.poll(() => sent.filter((m) => m.type === 'ask').length).toBe(1)
+    const attach = sent.filter((m) => m.type === 'ask')[0]
+    send({
+      type: 'question',
+      id: 'q-attach',
+      text: 'how is the bonus computed? (payroll.txt)',
+      submit_id: attach.submit_id,
+    })
+    send({ type: 'chunk', id: 'q-attach', text: 'ok' })
+    send({ type: 'done', id: 'q-attach', stt: 0, llm: 1, ok: true })
+
+    // The voice card retries the VOICE question — not the attachment submit.
+    const voiceCard = page.locator('.qa-result').filter({ hasText: 'what did they say about pricing?' })
+    await voiceCard.getByRole('button', { name: 'Retry' }).click()
+    await expect.poll(() => sent.filter((m) => m.type === 'ask').length).toBe(2)
+    const retry = sent.filter((m) => m.type === 'ask')[1]
+    expect(retry.text).toBe('what did they say about pricing?')
+    expect(retry.attach_id).toBeUndefined()
+    expect(retry.retry_of).toBe('q-voice')
+  })
+
+  test('a turn without a live submission offers no Retry', async ({ page }) => {
+    // #182 review: a restored/history turn has neither the Think value the question
+    // ran with nor the attachments it was made of, so re-asking it would silently
+    // change the question. The demo seed is the same shape as a restored turn.
+    const { send } = await mockWs(page)
+    const seeded = page.locator('.qa-result').filter({ hasText: 'New Zealand' })
+    await expect(seeded.getByRole('button', { name: 'Retry' })).toHaveCount(0)
+
+    // A live question in the same session still gets one.
+    send({ type: 'question', id: 'q-live', text: 'what is new?', submit_id: 's-live' })
+    send({ type: 'chunk', id: 'q-live', text: 'ok' })
+    send({ type: 'done', id: 'q-live', stt: 0, llm: 1, ok: true })
+    const live = page.locator('.qa-result').filter({ hasText: 'what is new?' })
+    await expect(live.getByRole('button', { name: 'Retry' })).toBeVisible()
+  })
+
   test('Retry re-asks with the Think value the question ran with', async ({ page }) => {
     const { sent, send } = await mockWs(page)
     const toggle = page.getByRole('switch', { name: 'Think' })

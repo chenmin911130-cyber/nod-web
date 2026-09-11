@@ -17,8 +17,10 @@ export type AnswerSources = {
 // #182 Think: `think` is the value the question was SUBMITTED with (the server
 // echoes it back) and `submitId` names the original submission payload, so a
 // Retry can rebuild the exact same request instead of guessing from the display
-// text.
-export type Turn = { id: string; q: string; a: string; sources?: AnswerSources; think?: boolean; submitId?: string }
+// text. `live` marks a turn created from a real submission in THIS session — a
+// restored/history (or demo) turn has neither the value nor the payload, so it
+// must not offer a Retry it cannot honour.
+export type Turn = { id: string; q: string; a: string; sources?: AnswerSources; think?: boolean; submitId?: string; live?: boolean }
 export type CatchNote = {
   id: string
   title: string
@@ -168,7 +170,7 @@ export type EngineEvent =
   | { type: 'phase'; capture: CaptureState; engine: EngineState }
   | { type: 'status'; text: string }
   | { type: 'partial'; text: string; language?: string; speaker?: string }
-  | { type: 'question'; id: string; text: string; language?: string; speaker?: string; think?: boolean }
+  | { type: 'question'; id: string; text: string; language?: string; speaker?: string; think?: boolean; submit_id?: string }
   | { type: 'line_update'; id: string; text: string; language?: string; speaker?: string; rev: number }
   | { type: 'chunk'; id: string; text: string }
   | ({ type: 'sources'; id?: string } & AnswerSources)
