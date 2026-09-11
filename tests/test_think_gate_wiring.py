@@ -121,16 +121,102 @@ class ThinkGateWiringTests(unittest.TestCase):
         events: list[dict] = []
         calls: list[dict] = []
         pipe = _pipe(events, calls)
-        pipe._new_qid = lambda: "q-fixed"
-        pipe.process_text("what is new?", "ask", think=True)
-        pipe.process_text("what is new?", "ask", think=True)
+        # One submit action, delivered twice (a double forward, a replay after a
+        # reconnect): the same submit id both times.
+        pipe.process_text("what is new?", "ask", think=True, submit_id="submit-1")
+        pipe.process_text("what is new?", "ask", think=True, submit_id="submit-1")
 
-        self.assertEqual(len(calls), 1, "the same request id must be searched once")
+        self.assertEqual(len(calls), 1, "the same submit id must be searched once")
         self.assertEqual(self._counts(), (1, 1), "and must consume exactly one attempt")
         self.assertEqual(
             len([e for e in events if e.get("type") == "sources" and e.get("status") == "ok"]), 2,
             "both answers still show the (reused) sources",
         )
+
+    def test_the_same_text_in_a_new_submit_is_a_new_question(self):
+        # A submit identity is per ACTION, not per text: asking the identical
+        # question again is a legitimate new question and searches on its own.
+        events: list[dict] = []
+        calls: list[dict] = []
+        pipe = _pipe(events, calls)
+        pipe.process_text("what is new?", "ask", think=True, submit_id="submit-1")
+        pipe.process_text("what is new?", "ask", think=True, submit_id="submit-2")
+        self.assertEqual(len(calls), 2, "a new submit action searches again")
+        self.assertEqual(self._counts(), (2, 2))
+
+    def test_a_submit_another_worker_already_claimed_is_never_searched_again(self):
+        # Cross-process / cross-restart: the claim row exists (another worker, or the
+        # same submit coming back after a restart) before this one starts. It must
+        # wait for that result — not buy the lookup a second time.
+        events: list[dict] = []
+        calls: list[dict] = []
+        pipe = _pipe(events, calls)
+        from server import think_budget
+
+        self.assertTrue(
+            think_budget.claim("r-shared-submit", session_id="sess-1", question="what is new?")
+        )
+        # The owner is gone / still working: the bounded wait is what matters, and
+        # the test does not spend it.
+        with mock.patch("server.app.THINK_SEARCH_TIMEOUT_SECONDS", -2.0):
+            pipe.process_text("what is new?", "ask", think=True, submit_id="shared-submit")
+
+        self.assertEqual(calls, [], "a claimed submit must not be searched twice")
+        self.assertEqual(self._counts(), (0, 0), "and must reserve no budget")
+        sources = [e for e in events if e.get("type") == "sources"][0]
+        self.assertEqual(sources["status"], "failed")
+        self.assertIn("进行中", sources["note"])
+        self.assertTrue([e for e in events if e.get("type") == "done"][-1]["ok"])
+
+    def test_a_retry_reuses_a_successful_lookup_instead_of_paying_twice(self):
+        # The user retries the same question: the order says an existing result is
+        # reused, so the retry must not reserve or search.
+        events: list[dict] = []
+        calls: list[dict] = []
+        pipe = _pipe(events, calls)
+        pipe.process_text("what is new?", "ask", think=True, submit_id="submit-1")
+        self.assertEqual(self._counts(), (1, 1))
+
+        pipe.process_text("what is new?", "ask", think=True, retry_of="submit-1", submit_id="submit-retry")
+
+        self.assertEqual(len(calls), 1, "an OK lookup is reused, never re-bought")
+        self.assertEqual(self._counts(), (1, 1), "and consumes no extra attempt")
+        self.assertEqual(
+            [e for e in events if e.get("type") == "sources"][-1]["status"], "ok"
+        )
+        # The reused outcome still carries the excerpt the first lookup stored, so the
+        # retry answers from the same facts instead of from bare links (#182 review).
+        messages = pipe.client.chat.completions.create.call_args.kwargs["messages"]
+        self.assertTrue(any("body" in (m.get("content") or "") for m in messages))
+
+    def test_a_retry_after_a_failure_creates_one_counted_attempt_with_its_parent(self):
+        events: list[dict] = []
+        calls: list[dict] = []
+
+        def flaky(request):
+            calls.append(request)
+            if len(calls) == 1:
+                raise TimeoutError("could not tell whether it was received")
+            return PAYLOAD
+
+        pipe = _pipe(events, calls)
+        pipe.think_client = think.SearchClient(flaky, clock=lambda: 1789012800.0)
+        pipe.process_text("what is new?", "ask", think=True, submit_id="submit-first")
+        self.assertEqual(self._counts(), (1, 1), "the failed attempt stays consumed")
+
+        pipe.process_text(
+            "what is new?", "ask", think=True, retry_of="submit-first", submit_id="submit-retry"
+        )
+
+        self.assertEqual(len(calls), 2, "an unknown/failed lookup may be retried for real")
+        self.assertEqual(self._counts(), (2, 2), "and the retry is counted as its own attempt")
+        from server.think_budget import find_snapshot
+
+        record = find_snapshot("r-submit-retry")
+        self.assertIsNotNone(record)
+        self.assertEqual(record["attempt"], 2)
+        self.assertEqual(record["parent_request_id"], "r-submit-first")
+        self.assertEqual(record["status"], "ok")
 
     def test_a_timed_out_lookup_keeps_the_budget_and_is_not_resent(self):
         # The order's rule: a request that was sent but timed out may have been
@@ -149,53 +235,6 @@ class ThinkGateWiringTests(unittest.TestCase):
 
         self.assertEqual(len(calls), 1, "the search is never automatically re-sent")
         self.assertEqual(self._counts(), (1, 1), "the attempt stays consumed")
-
-    def test_a_retry_reuses_a_successful_lookup_instead_of_paying_twice(self):
-        # The user retries the same question in the same session: the order says
-        # an existing result is reused, so the retry must not reserve or search.
-        events: list[dict] = []
-        calls: list[dict] = []
-        pipe = _pipe(events, calls)
-        pipe._new_qid = lambda: "q-first"
-        pipe.process_text("what is new?", "ask", think=True)
-        self.assertEqual(self._counts(), (1, 1))
-
-        pipe._new_qid = lambda: "q-retry"
-        pipe.process_text("what is new?", "ask", think=True, retry_of="q-first")
-
-        self.assertEqual(len(calls), 1, "an OK lookup is reused, never re-bought")
-        self.assertEqual(self._counts(), (1, 1), "and consumes no extra attempt")
-        self.assertEqual(
-            [e for e in events if e.get("type") == "sources"][-1]["status"], "ok"
-        )
-
-    def test_a_retry_after_a_failure_creates_one_counted_attempt_with_its_parent(self):
-        events: list[dict] = []
-        calls: list[dict] = []
-
-        def flaky(request):
-            calls.append(request)
-            if len(calls) == 1:
-                raise TimeoutError("could not tell whether it was received")
-            return PAYLOAD
-
-        pipe = _pipe(events, calls)
-        pipe.think_client = think.SearchClient(flaky, clock=lambda: 1789012800.0)
-        pipe._new_qid = lambda: "q-first"
-        pipe.process_text("what is new?", "ask", think=True)
-        self.assertEqual(self._counts(), (1, 1), "the failed attempt stays consumed")
-
-        pipe._new_qid = lambda: "q-retry"
-        pipe.process_text("what is new?", "ask", think=True, retry_of="q-first")
-
-        self.assertEqual(len(calls), 2, "an unknown/failed lookup may be retried for real")
-        self.assertEqual(self._counts(), (2, 2), "and the retry is counted as its own attempt")
-        from server.think_budget import find_snapshot
-
-        record = find_snapshot("q-retry")
-        self.assertEqual(record["attempt"], 2)
-        self.assertEqual(record["parent_request_id"], "q-first")
-        self.assertEqual(record["status"], "ok")
 
     def test_a_model_retry_never_re_searches(self):
         events: list[dict] = []

@@ -15,6 +15,7 @@ Two things are pinned here and nowhere else:
 import threading
 import time
 import unittest
+import uuid
 from unittest import mock
 
 from server import think
@@ -46,12 +47,17 @@ def _pipe(events: list[dict]) -> Pipeline:
     pipe._model = "deepseek-flash"
     pipe.client = mock.Mock()
     pipe.client.chat.completions.create.return_value = [_Chunk(content="Beijing.")]
+    # The Think answer is pinned to DeepSeek direct (#182): the tests give the pipe
+    # that credential + the client it should build, and a session of its own so one
+    # test's dedupe record can never answer another test's question.
+    pipe._keys = {"DEEPSEEK_API_KEY": "unit-test-key"}
+    pipe._think_llm = (pipe.client, "deepseek-v4-flash")
     pipe._qa_history = []
     pipe._last_answer = ""
     pipe._cancel = threading.Event()
     pipe._gen_seq = 0
     pipe.user_id = None
-    pipe.usage_session_id = None
+    pipe.usage_session_id = f"sess-{uuid.uuid4().hex[:10]}"
     pipe._heard_lang = None
     return pipe
 
@@ -149,6 +155,82 @@ class SubmitSnapshotTests(unittest.TestCase):
         calls = sess.pipeline.process_text.call_args_list
         self.assertIs(calls[0].kwargs.get("think"), True)
         self.assertIs(calls[1].kwargs.get("think"), False)
+
+    def test_the_value_the_client_froze_with_the_message_wins(self):
+        # #182 review: the backend read the session switch and ignored the `think`
+        # field the client sent, so a toggle flipped while the question was in flight
+        # changed a question that was already submitted.
+        sess = self._session()
+        sess.set_think(True)  # the server's current value — NOT what must run
+        sess.dispatch(
+            {"type": "ask", "text": "what is new?", "think": False, "submit_id": "submit-frozen"}
+        )
+        self.assertTrue(self._wait(lambda: sess.pipeline.process_text.called))
+        call = sess.pipeline.process_text.call_args
+        self.assertIs(call.kwargs.get("think"), False, "the message value must win")
+        self.assertEqual(call.kwargs.get("submit_id"), "submit-frozen")
+        # ...and a message without the field still uses the session value.
+        sess.pipeline.process_text.reset_mock()
+        sess.dispatch({"type": "ask", "text": "another?", "submit_id": "submit-2"})
+        self.assertTrue(self._wait(lambda: sess.pipeline.process_text.called))
+        self.assertIs(sess.pipeline.process_text.call_args.kwargs.get("think"), True)
+
+    def test_a_new_listen_session_keeps_the_switch_and_a_new_session_resets_it(self):
+
+        # #182 review: (re)starting to listen inside one conversation used to run the
+        # same reset as New, dropping Think without telling anyone. It is a listen
+        # session, not a new conversation: the switch survives, and when a real reset
+        # does turn it off the server says so instead of letting the client lie.
+        sess = self._session()
+        sess.set_think(True)
+        sess._open_listener = mock.Mock()
+        sess._claim_listen_start = mock.Mock(return_value=True)
+        sess._release_listen_start = mock.Mock()
+        sess.pipeline.assemblyai_key = mock.Mock(return_value="key")
+        sess._start_listening()
+        self.assertTrue(sess._think_snapshot(), "a new listen session must not drop Think")
+        self.assertEqual([e for e in sess.emit.call_args_list if e.args[0].get("type") == "think"], [])
+
+        # A real session reset (New / clear / workspace switch) still returns to the
+        # default — and announces it.
+        sess._qa_reset("turn_reset")
+        self.assertFalse(sess._think_snapshot())
+        think_events = [e.args[0] for e in sess.emit.call_args_list if e.args[0].get("type") == "think"]
+        self.assertEqual(think_events, [{"type": "think", "on": False}])
+
+    def test_a_manual_recording_carries_think_at_the_confirm_instant(self):
+        # #182 review: the manual (tap-to-confirm) recording was the entry that
+        # forgot Think entirely, so the switch was on and the answer was not.
+        sess = self._session()
+        sess.set_think(True)
+        sess._manual = True
+        sess._manual_lock = threading.Lock()
+        sess._manual_jobs = 0
+        sess._manual_buf = bytearray(b"\x00\x01" * 20000)
+        sess._manual_offset = 0
+        sess._live_manual_captions = mock.Mock(return_value=False)
+        sess._offer_save_history = mock.Mock()
+        sess._emit_phase = mock.Mock()
+        sess._set_engine = mock.Mock()
+        sess._qa_on_manual_submit = mock.Mock()
+        sess._speech_allowed = mock.Mock(return_value=True)
+        sess._polish_manual_text = mock.Mock(side_effect=lambda text: text)
+        sess._transcribe_manual_pcm = mock.Mock(return_value=("how should we price it?", "en"))
+        sess._set_engine = mock.Mock()
+        sess.usage_session_id = "sess-manual"
+
+        with mock.patch("server.app.threading.Thread") as thread:
+            sess._stop_manual()
+        # The recording is transcribed on a worker; run that worker's body inline so
+        # the test sees the submit it makes.
+        started = thread.call_args.kwargs
+        self.assertEqual(started["target"], sess._finish_manual)
+        sess._finish_manual(started["args"][0], **started["kwargs"])
+
+        self.assertTrue(self._wait(lambda: sess.pipeline.process_text.called))
+        call = sess.pipeline.process_text.call_args
+        self.assertIs(call.kwargs.get("think"), True, "the manual entry must carry Think")
+        self.assertTrue(call.kwargs.get("submit_id"), "and its own submit identity")
 
     def test_the_auto_voice_commit_freezes_think_at_commit_time(self):
         # _qa_commit is the auto-voice submit point; the value it passes to the
@@ -308,6 +390,97 @@ class ThinkAnswerPathTests(unittest.TestCase):
         pipe.client.chat.completions.create.return_value = [_Chunk(reasoning="fallback body")]
         pipe.process_text("what is new?", "ask")
         self.assertEqual([e.get("text") for e in _events(events, "chunk")], ["fallback body"])
+
+    def test_the_search_gets_the_users_question_not_the_attachment_body(self):
+        # #182 review: the prompt for an attachment question STARTS with the
+        # extracted file body, and the lookup was handed that prompt — the private
+        # attachment was uploaded to the search provider and the real question was
+        # buried past the query bound. The search term is the typed question only.
+        events: list[dict] = []
+        pipe = _pipe(events)
+        pipe.think_client = mock.Mock()
+        pipe.think_client.search.return_value = think.SearchOutcome(
+            status=think.STATUS_OK,
+            query="what is new?",
+            results=(think.SearchResult("A", "https://e.com/a", "snippet", None),),
+            retrieved_at=1789012800.0,
+        )
+        private_body = "CONFIDENTIAL SALARY DATA 123456"
+        prompt = f"--- Attached: payroll.csv ---\n{private_body}\n\nwhat is new?"
+        pipe.process_text(prompt, "file_ask", think=True, search_text="what is new?")
+        searched = pipe.think_client.search.call_args.args[0]
+        self.assertEqual(searched, "what is new?")
+        self.assertNotIn("CONFIDENTIAL", searched)
+        # ...while the model still gets the whole attachment.
+        messages = pipe.client.chat.completions.create.call_args.kwargs["messages"]
+        self.assertTrue(any(private_body in (m.get("content") or "") for m in messages))
+
+    def test_an_attachment_only_question_is_never_searched(self):
+        # Nothing to look up: no request, no budget reserved — and the answer says
+        # the lookup did not happen instead of pretending it did.
+        events: list[dict] = []
+        pipe = _pipe(events)
+        pipe.think_client = mock.Mock()
+        reserved = mock.Mock(allowed=True, reason="", day_attempts=1, total_attempts=1)
+        with mock.patch("server.think_budget.reserve", return_value=reserved) as reserve:
+            pipe.process_text(
+                "--- Attached: payroll.csv ---\nPRIVATE PAYROLL\n",
+                "file_ask",
+                think=True,
+                search_text="",
+            )
+        pipe.think_client.search.assert_not_called()
+        reserve.assert_not_called()
+        sources = _events(events, "sources")[0]
+        self.assertEqual(sources["status"], "failed")
+        self.assertEqual(sources["results"], [])
+        self.assertIn("附件", sources["note"])
+
+    def test_a_think_answer_is_pinned_to_deepseek_direct(self):
+        # #182 review: the enhanced path must not follow the session provider. With
+        # OpenRouter selected, the Think answer still runs on the pinned DeepSeek
+        # client + model, in thinking mode.
+        events: list[dict] = []
+        pipe = _pipe(events)
+        session_client = mock.Mock()
+        session_client.chat.completions.create.return_value = [_Chunk(content="wrong path")]
+        pinned_client = mock.Mock()
+        pinned_client.chat.completions.create.return_value = [_Chunk(content="right path")]
+        pipe.client = session_client
+        pipe._provider = "openrouter"
+        pipe._model = "some/router-model"
+        pipe._think_llm = (pinned_client, "deepseek-v4-flash")
+        pipe.think_client = _client(results=[("A", "https://e.com/a", None)])
+
+        pipe.process_text("what is new?", "ask", think=True)
+        session_client.chat.completions.create.assert_not_called()
+        kwargs = pinned_client.chat.completions.create.call_args.kwargs
+        self.assertEqual(kwargs["model"], "deepseek-v4-flash")
+        self.assertEqual(kwargs["extra_body"]["thinking"], {"type": "enabled"})
+
+        # Without Think the same pipe answers through the session client, untouched.
+        pipe.process_text("what is new?", "ask")
+        session_kwargs = session_client.chat.completions.create.call_args.kwargs
+        self.assertEqual(session_kwargs["model"], "some/router-model")
+        self.assertNotIn("extra_body", session_kwargs)
+
+    def test_a_missing_deepseek_key_falls_back_instead_of_dying(self):
+        # No DeepSeek credential at all is the only case where the pin cannot hold:
+        # the answer still goes out on the session client, and it is logged — never
+        # silent — but it does not claim to be the specified direct connection.
+        events: list[dict] = []
+        pipe = _pipe(events)
+        pipe._keys = {}
+        pipe._think_llm = None
+        pipe._provider = "openrouter"
+        pipe._model = "some/router-model"
+        pipe.think_client = _client(results=[("A", "https://e.com/a", None)])
+        with mock.patch("server.app.logging") as logging_mock:
+            pipe.process_text("what is new?", "ask", think=True)
+        kwargs = pipe.client.chat.completions.create.call_args.kwargs
+        self.assertEqual(kwargs["model"], "some/router-model")
+        self.assertNotIn("extra_body", kwargs)
+        self.assertTrue(logging_mock.getLogger.return_value.warning.called)
 
     def test_think_scopes_the_search_to_ask_modes_only(self):
         # file_ask is an ask: it carries the enhancement too — and the evidence has

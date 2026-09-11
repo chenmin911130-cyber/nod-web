@@ -199,3 +199,53 @@ def test_a_failed_attempt_is_not_reused_by_a_retry(budget_env):
 
     record_attempt("q1", question="what is new?", session_id="s1", status="failed")
     assert find_question_snapshot("s1", "what is new?") is None, "a failed lookup may be retried for real"
+
+
+def test_the_request_id_comes_from_the_submit_action_when_there_is_one(budget_env):
+    from server.think_budget import build_request_id, is_submit_keyed
+
+    keyed = build_request_id("4f1c9a2e", session_id="s1", question="what is new?")
+    assert keyed == "r-4f1c9a2e"
+    assert is_submit_keyed(keyed)
+    # The same submit action is the same request no matter how it arrives...
+    assert build_request_id("4f1c9a2e", session_id="s1", question="what is new?") == keyed
+    # ...while a different action on identical text is a different request.
+    assert build_request_id("9b7d0c11", session_id="s1", question="what is new?") != keyed
+
+    fallback = build_request_id("", session_id="s1", question="what is new?")
+    assert fallback == build_request_id("", session_id="s1", question="what is new?")
+    assert not is_submit_keyed(fallback), "a question key is not proof of one submit"
+    assert fallback != build_request_id("", session_id="s2", question="what is new?")
+    assert fallback != build_request_id("", session_id="s1", question="and now?")
+    # A hostile / over-long id is bounded and stripped to a safe alphabet.
+    assert build_request_id("a" * 200 + "!$%", session_id="s1", question="q").startswith("r-a")
+
+
+def test_claiming_a_request_is_exclusive_and_leaves_a_pending_row(budget_env):
+    from server.think_budget import claim, find_snapshot, is_pending, record_attempt
+
+    assert claim("r-a") is True, "the first claim owns the lookup"
+    assert claim("r-a") is False, "a second claim must not own it again"
+    snap = find_snapshot("r-a")
+    assert is_pending(snap), "a claimed but unfinished lookup is not a result"
+
+    record_attempt("r-a", question="q", session_id="s1", status="ok", sources={"status": "ok"})
+    assert not is_pending(find_snapshot("r-a")), "closing the claim makes it a real result"
+
+
+def test_a_waiter_sees_the_owners_snapshot_or_an_honest_pending_row(budget_env):
+    from server.think_budget import claim, record_attempt, wait_for_snapshot
+
+    assert claim("r-b") is True
+    # Nobody finished it: the bounded wait gives up and reports the pending row.
+    assert wait_for_snapshot("r-b", timeout=0.01, interval=0.005)["status"] == "pending"
+    record_attempt("r-b", question="q", session_id="s1", status="ok", sources={"status": "ok", "results": [1]})
+    got = wait_for_snapshot("r-b", timeout=0.5, interval=0.005)
+    assert got["status"] == "ok" and got["sources"]["results"] == [1]
+
+
+def test_a_claim_that_cannot_be_written_refuses_the_search(budget_env):
+    from server.think_budget import claim
+
+    with mock.patch("server.think_budget.db_session", side_effect=RuntimeError("store down")):
+        assert claim("r-c") is None, "an untrusted store must not authorise a spend"

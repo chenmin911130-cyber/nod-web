@@ -203,6 +203,17 @@ class SourcesPayloadTests(unittest.TestCase):
         )
         self.assertEqual(payload["note"], "")
 
+    def test_the_stored_snapshot_keeps_the_excerpts_the_client_payload_drops(self):
+        # #182 review: the retry/duplicate snapshot kept only titles, links and
+        # dates, so a reused lookup could not put any fact back in front of the
+        # model. The stored copy carries the excerpts; the client payload does not.
+        out = self.mk_outcome(
+            results=[think.SearchResult("Apple", "https://example.com/a", "the excerpt", "2026-09-10")]
+        )
+        stored = think.sources_payload(out, with_snippets=True)
+        self.assertEqual(stored["results"][0]["snippet"], "the excerpt")
+        self.assertNotIn("snippet", think.sources_payload(out)["results"][0])
+
 
 class SearchClientTests(unittest.TestCase):
     def _client(self, transport, **kw):

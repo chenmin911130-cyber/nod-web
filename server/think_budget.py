@@ -21,11 +21,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from server.db import ThinkSearchDay, ThinkSearchRecord, ThinkSearchState, db_session, utcnow
 
@@ -34,6 +36,16 @@ TOTAL_ROW = "total"
 REASON_DAILY = "DailyLimit"
 REASON_TOTAL = "TotalLimit"
 REASON_STORE = "BudgetStoreUnavailable"
+
+# The status of a row whose lookup was claimed but has not finished yet. A row in
+# this state is NOT a result: whoever finds it must wait for the owner instead of
+# paying for the same submit a second time.
+STATUS_PENDING = "pending"
+
+# Request-id flavours (see build_request_id): an exact submit action vs. a
+# session+question fallback. Only the former may be treated as proof of identity.
+SUBMIT_PREFIX = "r-"
+QUESTION_PREFIX = "q-"
 
 
 @dataclass(frozen=True)
@@ -57,6 +69,44 @@ def utc_day(now: datetime | None = None) -> str:
 def question_hash(question: str) -> str:
     """A stable hash of the question, for retry matching only (never the text)."""
     return hashlib.sha1((question or "").strip().encode("utf-8", "ignore")).hexdigest()[:40]
+
+
+def _sanitize_id(raw: Any, *, limit: int = 56) -> str:
+    """Keep an id to characters that are safe in a primary key and a log line."""
+    return "".join(ch for ch in str(raw or "") if ch.isalnum() or ch in "-_")[:limit]
+
+
+def build_request_id(submit_id: str = "", *, session_id: str = "", question: str = "") -> str:
+    """The identity of ONE submit event — what the dedupe gate is keyed on.
+
+    Two flavours, and the difference matters:
+
+    - ``r-<submit_id>``: the caller KNOWS the identity of this submit action. A
+      duplicate delivery of that action (a replay after a reconnect, the same frame
+      handed to two workers, a restart mid-lookup) produces the same key, so the
+      gate can prove it is the same request and reuse whatever the first one paid
+      for. This is what all three submit entries carry: the client stamps text
+      submits, and the server derives the identity for auto-voice and manual
+      recordings from the thing being committed.
+    - ``q-<hash>``: the caller has no submit identity (an older client, an internal
+      caller). The key is then only "this session + this exact question", which must
+      NOT be treated as proof that two submissions are the same action: a failure
+      stored under it may be retried normally, and a genuinely new submit still
+      searches. It exists so an identical question inside one session can at least
+      reuse a lookup that actually succeeded.
+    """
+    clean = _sanitize_id(submit_id)
+    if clean:
+        return f"{SUBMIT_PREFIX}{clean}"
+    digest = hashlib.sha1(
+        f"{session_id}\x00{(question or '').strip()}".encode("utf-8", "ignore")
+    ).hexdigest()[:32]
+    return f"{QUESTION_PREFIX}{digest}"
+
+
+def is_submit_keyed(request_id: str) -> bool:
+    """True when the id names a submit action (not merely a question)."""
+    return str(request_id or "").startswith(SUBMIT_PREFIX)
 
 
 def reserve(*, daily_limit: int, total_limit: int, now: datetime | None = None) -> Reservation:
@@ -134,6 +184,80 @@ def _counts(db, day: str) -> tuple[int, int]:
     except Exception:
         return 0, 0
     return int(day_attempts), int(total_attempts)
+
+
+def claim(
+    request_id: str,
+    *,
+    session_id: str = "",
+    session_gen: int = 0,
+    question: str = "",
+    attempt: int = 1,
+    parent_request_id: str = "",
+) -> bool | None:
+    """Claim one request id BEFORE any request goes out.
+
+    The primary key is the mutex: the first worker to insert owns the lookup, and a
+    concurrent worker — another thread, another process, another deploy, a restart
+    that came back to the same submit — finds the row and must wait for/reuse the
+    owner's snapshot rather than issue a second paid request. The row is written
+    before the budget is reserved, so a crash mid-lookup leaves evidence of the
+    attempt instead of a request that nobody knows about.
+
+    ``True`` = this caller owns it, ``False`` = someone else does, ``None`` = the
+    store could not be trusted (the caller must NOT search; see the module docstring).
+    """
+    if not request_id:
+        return True
+    try:
+        with db_session() as db:
+            if db.get(ThinkSearchRecord, request_id) is not None:
+                return False
+            try:
+                with db.begin_nested():
+                    db.add(
+                        ThinkSearchRecord(
+                            request_id=request_id,
+                            session_id=session_id,
+                            session_gen=int(session_gen),
+                            question_hash=question_hash(question),
+                            attempt=int(attempt),
+                            parent_request_id=parent_request_id,
+                            status=STATUS_PENDING,
+                            sources="",
+                            retrieved_at=0.0,
+                        )
+                    )
+            except IntegrityError:
+                # Lost the insert race: the winner's row is the truth.
+                return False
+    except Exception as exc:  # a store we cannot trust must never authorise a spend
+        logging.getLogger("nod").warning("think_budget claim failed err=%s", type(exc).__name__)
+        return None
+    return True
+
+
+def is_pending(snap: dict[str, Any] | None) -> bool:
+    """True for a claimed-but-unfinished row: not a result anybody may reuse yet."""
+    return bool(snap) and str(snap.get("status") or "") == STATUS_PENDING
+
+
+def wait_for_snapshot(request_id: str, *, timeout: float, interval: float = 0.25) -> dict[str, Any] | None:
+    """Wait (bounded) for the worker that owns ``request_id`` to finish.
+
+    This is the cross-process half of the dedupe: the loser of the claim waits for
+    the winner's snapshot instead of paying again. A row that never finishes (the
+    owner died mid-lookup) is returned as-is; the caller reports it honestly and an
+    explicit user retry is what creates a new, counted attempt.
+    """
+    if not request_id:
+        return None
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    snap = find_snapshot(request_id)
+    while is_pending(snap) and time.monotonic() < deadline:
+        time.sleep(min(float(interval), max(0.0, deadline - time.monotonic())))
+        snap = find_snapshot(request_id)
+    return snap
 
 
 def record_attempt(
@@ -242,6 +366,40 @@ def find_question_snapshot(session_id: str, question: str) -> dict[str, Any] | N
             return _record_payload(row) if row is not None else None
     except Exception as exc:
         logging.getLogger("nod").warning("think_budget retry lookup failed err=%s", type(exc).__name__)
+        return None
+
+
+def find_latest_snapshot(
+    session_id: str, question: str, *, exclude_request_id: str = ""
+) -> dict[str, Any] | None:
+    """The newest record for this session + exact question, whatever its status.
+
+    Used to chain a user-initiated retry to the lookup it follows: the client names
+    the ANSWER it is retrying, not the request id, so the previous attempt is found
+    by what it was about — including a FAILED one, which is exactly the case a retry
+    is allowed to re-issue. The caller's OWN row is excluded in the query (it may
+    already exist as the claimed-but-pending record of this very retry).
+    """
+    if not session_id or not question:
+        return None
+    digest = question_hash(question)
+    try:
+        with db_session() as db:
+            stmt = (
+                select(ThinkSearchRecord)
+                .where(
+                    ThinkSearchRecord.session_id == session_id,
+                    ThinkSearchRecord.question_hash == digest,
+                )
+                .order_by(ThinkSearchRecord.created_at.desc())
+                .limit(1)
+            )
+            if exclude_request_id:
+                stmt = stmt.where(ThinkSearchRecord.request_id != exclude_request_id)
+            row = db.execute(stmt).scalars().first()
+            return _record_payload(row) if row is not None else None
+    except Exception as exc:
+        logging.getLogger("nod").warning("think_budget latest lookup failed err=%s", type(exc).__name__)
         return None
 
 

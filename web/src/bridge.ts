@@ -21,6 +21,10 @@ const EVENT_TYPES = new Set([
   // #182: the sources a Think answer used. Dropped silently before this was
   // listed — the server emitted it and the reducer was never reached.
   'sources',
+  // #182: the server owns the Think switch; when a session reset turns it back to
+  // its default it says so here, instead of leaving the client showing a value the
+  // next answer will not use.
+  'think',
   'done',
   'error',
   'listen_taken',
@@ -110,6 +114,8 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
         note: asText(o.note),
       } as EngineEvent
     }
+    case 'think':
+      return { type: 'think', on: o.on === true }
     case 'history_keep_failed':
       return {
         type: 'history_keep_failed',

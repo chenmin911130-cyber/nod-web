@@ -199,6 +199,11 @@ THINK_SEARCH_TOTAL_LIMIT = max(1, int(float(os.environ.get("THINK_SEARCH_TOTAL_L
 # Bounded output/thinking budget for one Think answer (the model retry inside
 # process_text never re-runs the search).
 THINK_MAX_OUTPUT_TOKENS = max(256, int(float(os.environ.get("THINK_MAX_OUTPUT_TOKENS") or "1600")))
+# A Think answer ALWAYS runs on DeepSeek's own API with the official model slug
+# (#182): the enhanced path must not follow whatever provider/model a normal answer
+# has selected, and must not be dragged onto a router. `THINK_LLM_MODEL` exists so
+# the model can be moved without touching code, not so it can follow the session.
+THINK_LLM_MODEL = (os.environ.get("THINK_LLM_MODEL") or "deepseek-v4-flash").strip() or "deepseek-v4-flash"
 # How many answered fragment identities to remember for the dedupe window.
 QA_ANSWERED_MAX = max(4, int(float(os.environ.get("QA_ANSWERED_MAX") or "32")))
 

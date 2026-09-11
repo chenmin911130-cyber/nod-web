@@ -3,6 +3,7 @@ import type { AttachPayload } from './attach'
 import type { AppConfig, AppState, AudioSource, EngineEvent, Lang, MeetingLine, PairLang, TranslatePair, ViewMode, WorkspaceMode } from './types'
 import { TRANSLATE_LANGS } from './types'
 import { applySources } from './qaSources'
+import { newSubmitId } from './submitId'
 import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
@@ -572,6 +573,10 @@ function reducer(state: AppState, action: Action): AppState {
           // finished after New / reconnect must not decorate the next answer).
           return { ...state, turns: applySources(state.turns, ev) }
         }
+        case 'think':
+          // #182: the server turned the session switch back to its default
+          // (New / clear / workspace switch). Follow it instead of showing "on".
+          return { ...state, thinkOn: ev.on }
         case 'chunk': {
           let translatePairs = state.translatePairs
           let translateAskId = state.translateAskId
@@ -2503,6 +2508,12 @@ export default function App() {
   const handleAsk = useCallback((text: string, files?: AttachPayload[]) => {
     const label = text.trim() || (files?.length ? `Please review: ${files.map((f) => f.name).join(', ')}` : '')
     dispatch({ type: 'seed_ask', text: label })
+    // #182: freeze the submit at the instant the user sends. Reading the switch
+    // after `parkAttaches` awaited meant a toggle flipped during the upload changed
+    // a question that was already submitted; the submit id is generated here for
+    // the same reason (and makes a duplicated submit free on the server).
+    const think = stateRef.current.workspaceMode === 'interview' ? stateRef.current.thinkOn : undefined
+    const submit_id = newSubmitId()
     void (async () => {
       try {
         const attach_id = await parkAttaches(files)
@@ -2512,7 +2523,8 @@ export default function App() {
           type: 'ask',
           text,
           attach_id,
-          ...(stateRef.current.workspaceMode === 'interview' ? { think: stateRef.current.thinkOn } : {}),
+          submit_id,
+          ...(think === undefined ? {} : { think }),
         })
       } catch (ex) {
         dispatch({

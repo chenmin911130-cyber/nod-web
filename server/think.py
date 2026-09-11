@@ -199,6 +199,10 @@ _REASON_NOTES = {
     "TotalLimit": "试用期联网检索额度已用完",
     "BudgetStoreUnavailable": "检索预算暂不可用，已跳过联网检索",
     "NotConfigured": "未配置联网检索",
+    # The gate refused to pay twice for one submit: the same lookup is already in
+    # flight (another worker / a restart), or the question itself carried no text.
+    "DuplicateInFlight": "同一问题的联网检索仍在进行中，本次未重复检索",
+    "NoQuestionText": "本次提问没有可检索的文字问题（仅附件），未进行联网检索",
 }
 
 
@@ -220,15 +224,26 @@ def retrieval_note(outcome: SearchOutcome) -> str:
     return ""
 
 
-def sources_payload(outcome: SearchOutcome) -> dict[str, Any]:
-    """The client/history payload: real sources, the retrieval stamp, the honest note."""
+def sources_payload(outcome: SearchOutcome, *, with_snippets: bool = False) -> dict[str, Any]:
+    """The client/history payload: real sources, the retrieval stamp, the honest note.
+
+    ``with_snippets`` is for the STORED snapshot only (``think_budget``): a retry
+    or a duplicate submit that reuses a lookup already paid for must still hand the
+    model the excerpts the first answer was built from — a snapshot that kept only
+    titles and links would regenerate the answer from nothing. The client/History
+    payload keeps the shape it always had, so nothing downstream changes.
+    """
+    results: list[dict[str, Any]] = []
+    for r in outcome.results:
+        row: dict[str, Any] = {"title": r.title, "url": r.url, "published_at": r.published_at}
+        if with_snippets:
+            row["snippet"] = r.snippet
+        results.append(row)
     return {
         "status": outcome.status,
         "retrieved_at": outcome.retrieved_at,
         "retrieved_at_text": format_retrieved_at(outcome.retrieved_at),
-        "results": [
-            {"title": r.title, "url": r.url, "published_at": r.published_at} for r in outcome.results
-        ],
+        "results": results,
         "note": retrieval_note(outcome),
     }
 

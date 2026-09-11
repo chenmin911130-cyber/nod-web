@@ -101,6 +101,7 @@ from server.settings import (
     QA_SETTLE_SECONDS,
     QUOTA_DISABLED,
     THINK_REASONING_EFFORT,
+    THINK_LLM_MODEL,
     THINK_MAX_OUTPUT_TOKENS,
     THINK_SEARCH_DAILY_LIMIT,
     THINK_SEARCH_MAX_CHARS_TOTAL,
@@ -859,7 +860,12 @@ PARALLEL_KEY_ENV = "PARALLEL_API_KEY"
 
 
 def _think_outcome_from_snapshot(snap: dict[str, Any], question: str) -> "think_search.SearchOutcome":
-    """Rebuild the search outcome from a stored snapshot (no new spend)."""
+    """Rebuild the search outcome from a stored snapshot (no new spend).
+
+    The stored rows keep each source's excerpt as well as its title/link/date, so a
+    reused lookup hands the model the same facts the first answer saw. Older rows
+    (written before excerpts were stored) simply come back without one.
+    """
     payload = snap.get("sources") if isinstance(snap.get("sources"), dict) else {}
     results = payload.get("results") if isinstance(payload.get("results"), list) else []
     return think_search.SearchOutcome(
@@ -869,6 +875,7 @@ def _think_outcome_from_snapshot(snap: dict[str, Any], question: str) -> "think_
             think_search.SearchResult(
                 title=str(r.get("title") or r.get("url") or ""),
                 url=str(r.get("url") or ""),
+                snippet=str(r.get("snippet") or ""),
                 published_at=(str(r["published_at"]) if r.get("published_at") else None),
             )
             for r in results
@@ -880,17 +887,21 @@ def _think_outcome_from_snapshot(snap: dict[str, Any], question: str) -> "think_
 
 
 def build_think_client(cfg: dict[str, Any] | None = None) -> "think_search.SearchClient | None":
-    """Build the Parallel-backed search client, or None when it is not set up."""
+    """Build the Parallel-backed search client, or None when it is not set up.
+
+    `client_model` tells Parallel which model consumes the results. It is the pinned
+    Think model, not the session's: the session model belongs to whatever the user
+    selected for normal answers, and the enhanced path no longer follows it (#182).
+    """
     key = (os.environ.get(PARALLEL_KEY_ENV, "") or "").strip()
     if not key:
         return None
     endpoint = (os.environ.get("THINK_SEARCH_ENDPOINT") or "").strip() or think_search.PARALLEL_SEARCH_ENDPOINT
-    model = str(((cfg or {}).get("llm") or {}).get("model") or "").strip()
     return think_search.SearchClient(
         think_search.parallel_transport(
             key,
             endpoint=endpoint,
-            client_model=model,
+            client_model=THINK_LLM_MODEL,
             max_chars_total=THINK_SEARCH_MAX_CHARS_TOTAL,
         ),
         timeout=THINK_SEARCH_TIMEOUT_SECONDS,
@@ -1329,6 +1340,9 @@ class Pipeline:
     def set_keys(self, keys: dict[str, str]) -> None:
         self._keys.update({k: v for k, v in keys.items() if v})
         self.client = self._make_client()
+        # The pinned Think client is keyed off DEEPSEEK_API_KEY; if it just changed,
+        # the cached one is stale.
+        self._think_llm = None
 
     def set_model(self, provider: str, model: str) -> None:
         self._provider = provider
@@ -1341,6 +1355,54 @@ class Pipeline:
             "has_llm": bool((self._keys.get("OPENROUTER_API_KEY") or self._keys.get("DEEPSEEK_API_KEY") or "").strip()),
             "has_stt": bool(self.assemblyai_key()),
         }
+
+    def _think_answer_client(self) -> tuple[Any, str, bool]:
+        """The client + model a Think answer MUST run on: DeepSeek direct.
+
+        The issue fixes the enhanced path to ``https://api.deepseek.com`` with the
+        official model, while normal answers keep following the user's provider
+        choice. Reading ``self.client`` here was the bug: selecting OpenRouter (or
+        any other model) silently dragged the Think answer along with it, so the
+        evidence was answered by a different model than the one specified — and, on
+        a provider without DeepSeek's thinking parameter, without thinking at all.
+
+        Returns ``(client, model, pinned)``. ``pinned`` is False only when there is
+        no DeepSeek credential at all to pin to: the answer then falls back to the
+        session client (logged, never silent) so a session whose key is missing
+        still answers instead of failing outright.
+        """
+        cached = getattr(self, "_think_llm", None)
+        if cached is not None:
+            client, model = cached
+            return client, model, True
+        key = str((getattr(self, "_keys", {}) or {}).get("DEEPSEEK_API_KEY") or "").strip()
+        if not key:
+            logging.getLogger("nod").warning("think_answer decision=fallback reason=no_deepseek_key")
+            return self.client, self._model, False
+        timeout = httpx.Timeout(90.0, connect=10.0, read=90.0)
+        client = OpenAI(
+            api_key=key,
+            base_url=PROVIDER_ENDPOINTS["deepseek"],
+            timeout=timeout,
+            max_retries=0,
+        )
+        self._think_llm = (client, THINK_LLM_MODEL)
+        return client, THINK_LLM_MODEL, True
+
+    def _answer_target(self, *, think: bool, images: list | None) -> tuple[Any, str, bool]:
+        """Pick the client + model for ONE answer.
+
+        Think on: the pinned DeepSeek client and its model, with the vision model
+        only when the question actually carries images. Think off: exactly the
+        pre-existing rule (the session's provider/model), untouched.
+        """
+        if think:
+            client, model, pinned = self._think_answer_client()
+            if pinned and images:
+                model = VISION_MODEL
+            return client, model, pinned
+        model = VISION_MODEL if (images and self._provider == "deepseek") else self._model
+        return self.client, model, False
 
     def repair_caption(self, text: str, recent: list[str]) -> str:
         """Light STT polish. Skip when there is no context, and keep the original if the model rewrites too much."""
@@ -1706,6 +1768,8 @@ class Pipeline:
         *,
         think: bool = False,
         retry_of: str = "",
+        search_text: str | None = None,
+        submit_id: str = "",
     ) -> None:
         t = (question or "").strip()
         self._heard_lang = _normalize_stt_lang(heard_lang)
@@ -1765,13 +1829,21 @@ class Pipeline:
         # the answer shows as its sources.
         think_outcome: think_search.SearchOutcome | None = None
         evidence = ""
+        session_id = getattr(self, "usage_session_id", "") or ""
         if think and mode in ("ask", "file_ask"):
             self.emit({"type": "status", "text": STATUS_THINK_SEARCH})
             started_lookup = time.time()
+            # #182: what goes to the search provider is the USER'S QUESTION — never
+            # the prompt the model gets. For an attachment question that prompt
+            # starts with the extracted file body, so passing `t` here uploaded the
+            # attachment and buried the actual question.
+            lookup_text = (t if search_text is None else str(search_text or "")).strip()
             think_outcome, think_decision = self._think_lookup(
-                t,
-                request_id=qid,
-                session_id=getattr(self, "usage_session_id", "") or "",
+                lookup_text,
+                request_id=think_budget.build_request_id(
+                    submit_id, session_id=session_id, question=lookup_text
+                ),
+                session_id=session_id,
                 retry_of=retry_of or "",
             )
             evidence = think_search.format_evidence(think_outcome)
@@ -1785,7 +1857,9 @@ class Pipeline:
                 int((time.time() - started_lookup) * 1000), think_outcome.error or "-",
             )
         messages = self._with_images(self._build_messages(t, mode, evidence=evidence), images)
-        model = VISION_MODEL if (images and self._provider == "deepseek") else self._model
+        # #182: a Think answer is pinned to DeepSeek direct; every other answer keeps
+        # the session's own provider/model.
+        answer_client, model, think_pinned = self._answer_target(think=think, images=images)
         last_err: Exception | None = None
         for attempt in range(2):
             if seq != self._gen_seq or self._cancel.is_set():
@@ -1802,17 +1876,17 @@ class Pipeline:
                 )
                 if not str(model).startswith(("o1", "o3")):
                     kwargs["temperature"] = llm.get("temperature", 0.5)
-                if self._provider == "deepseek":
-                    if think:
-                        # #182: a Think answer runs in thinking mode. The chain of
-                        # thought stays internal (below), the answer body does not.
-                        kwargs["extra_body"] = {
-                            "thinking": {"type": "enabled"},
-                            "reasoning_effort": THINK_REASONING_EFFORT,
-                        }
-                    else:
-                        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-                stream = self.client.chat.completions.create(**kwargs)
+                if think_pinned:
+                    # #182: a Think answer runs in thinking mode on the pinned
+                    # DeepSeek connection. The chain of thought stays internal
+                    # (below), the answer body does not.
+                    kwargs["extra_body"] = {
+                        "thinking": {"type": "enabled"},
+                        "reasoning_effort": THINK_REASONING_EFFORT,
+                    }
+                elif self._provider == "deepseek":
+                    kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+                stream = answer_client.chat.completions.create(**kwargs)
                 with self._stream_lock():
                     self._stream = stream
                 reasoning = ""
@@ -1936,26 +2010,43 @@ class Pipeline:
         session_id: str = "",
         retry_of: str = "",
     ) -> tuple[think_search.SearchOutcome, str]:
-        """One PAID lookup per request, behind the budget gate.
+        """One PAID lookup per submit event, behind the budget gate.
 
         Returns ``(outcome, decision)`` where the decision names what the gate did
-        (`reused_snapshot`, `reused_retry`, `searched`, `denied_*`, `not_configured`)
-        so it can be logged without ever logging the question.
+        (`reused_snapshot`, `reused_concurrent`, `reused_retry`, `searched`,
+        `denied_*`, `duplicate_inflight`, `no_question`, `not_configured`) so it can
+        be logged without ever logging the question.
 
         Order of operations, all required by the order:
         1. an existing snapshot for this exact request is reused (a duplicate or
            concurrent submit must never pay twice);
         2. an explicit retry of the same session+question reuses an OK snapshot,
            while a previous failure may create a NEW attempt (counted);
-        3. only then is budget reserved atomically — a refusal sends no request;
-        4. the reservation is never released, even when the request fails.
+        3. the request id is CLAIMED in the store before anything is spent, so the
+           second copy of one submit — another thread, another process, a restart
+           that queued the same frame — waits for the owner instead of searching;
+        4. only then is budget reserved atomically — a refusal sends no request and
+           is recorded as the request's outcome;
+        5. the reservation is never released, even when the request fails.
         """
         def same_session(snap: dict | None) -> bool:
             """A snapshot is only reusable inside the session that paid for it."""
-            if not snap or not snap.get("sources"):
+            if not snap:
                 return False
             owned = str(snap.get("session_id") or "")
             return not (session_id and owned and owned != session_id)
+
+        def reusable(snap: dict | None) -> bool:
+            """A FINISHED record for this exact request — even a failure — is reused.
+
+            A row still in ``pending`` belongs to a lookup that has not come back
+            yet (see ``think_budget.claim``), so it is not a result.
+            """
+            return same_session(snap) and not think_budget.is_pending(snap)
+
+        # An `r-` id names one submit ACTION; a `q-` id only names a question in a
+        # session. Only the former is proof that two arrivals are the same request.
+        submit_keyed = think_budget.is_submit_keyed(request_id)
 
         def has_results(snap: dict | None) -> bool:
             """An OK lookup with real results: the only thing worth reusing."""
@@ -1965,20 +2056,41 @@ class Pipeline:
             return bool(payload.get("results"))
 
         if request_id:
-            # The SAME request (a duplicate or concurrent submit) reuses whatever
-            # it already paid for — even a failure — so it can never pay twice.
+            # The SAME submit action (a duplicate or concurrent submit) reuses
+            # whatever it already paid for — even a failure — so it can never pay
+            # twice. A question-keyed record is not that proof: a failure stored
+            # under it must never poison a later, legitimate submit.
             snap = think_budget.find_snapshot(request_id)
-            if same_session(snap):
+            if reusable(snap) and (submit_keyed or has_results(snap)):
                 return _think_outcome_from_snapshot(snap, question), "reused_snapshot"
+        if request_id and not submit_keyed:
+            # No submit identity: the same session asking the exact same question
+            # reuses a lookup that actually worked (the rule a retry already uses).
+            same = think_budget.find_question_snapshot(session_id, question)
+            if same_session(same) and has_results(same):
+                return _think_outcome_from_snapshot(same, question), "reused_snapshot"
         if retry_of:
             # An explicit retry only reuses a lookup that actually worked; a
             # failed or unknown attempt may be retried for real (and counted).
             prev = think_budget.find_snapshot(retry_of)
-            if same_session(prev) and has_results(prev):
+            if reusable(prev) and has_results(prev):
                 return _think_outcome_from_snapshot(prev, question), "reused_retry"
             same = think_budget.find_question_snapshot(session_id, question)
-            if same_session(same) and has_results(same):
+            if reusable(same) and has_results(same):
                 return _think_outcome_from_snapshot(same, question), "reused_retry"
+        if not (question or "").strip():
+            # #182: an attachment-only question has no text to look up. Say so and
+            # reserve nothing — the attachment body is never the search term.
+            logging.getLogger("nod").info("think_search decision=no_question")
+            return (
+                think_search.SearchOutcome(
+                    status=think_search.STATUS_FAILED,
+                    query="",
+                    retrieved_at=time.time(),
+                    error="NoQuestionText",
+                ),
+                "no_question",
+            )
         client = getattr(self, "think_client", None)
         if client is None:
             client = build_think_client(self.cfg)
@@ -1991,13 +2103,47 @@ class Pipeline:
                 "not_configured",
             )
 
-        # One search at a time in this process, and the snapshot is re-checked
-        # under the lock: two threads racing on the same request pay once.
+        # Claim BEFORE spending: the store's primary key is the cross-thread /
+        # cross-process / cross-restart mutex for one submit event. The loser of the
+        # race waits (bounded) for the owner's snapshot instead of searching again.
+        # Only a submit-keyed request has an identity to claim on; a question-keyed
+        # fallback has none, so it searches (and is counted) like before this gate.
+        claimed = (
+            think_budget.claim(request_id, session_id=session_id, question=question)
+            if request_id and submit_keyed
+            else True
+        )
+        if claimed is None:
+            logging.getLogger("nod").warning("think_search decision=denied reason=%s", think_budget.REASON_STORE)
+            return (
+                think_search.SearchOutcome(
+                    status=think_search.STATUS_FAILED,
+                    query=think_search.build_query(question),
+                    retrieved_at=time.time(),
+                    error=think_budget.REASON_STORE,
+                ),
+                f"denied:{think_budget.REASON_STORE}",
+            )
+        if not claimed:
+            snap = think_budget.wait_for_snapshot(
+                request_id, timeout=THINK_SEARCH_TIMEOUT_SECONDS + 2.0
+            )
+            if reusable(snap):
+                return _think_outcome_from_snapshot(snap, question), "reused_concurrent"
+            logging.getLogger("nod").warning("think_search decision=duplicate_inflight")
+            return (
+                think_search.SearchOutcome(
+                    status=think_search.STATUS_FAILED,
+                    query=think_search.build_query(question),
+                    retrieved_at=time.time(),
+                    error="DuplicateInFlight",
+                ),
+                "duplicate_inflight",
+            )
+
+        # One search at a time in this process (the claim above already covers the
+        # cross-process case).
         with self._think_lock():
-            if request_id:
-                snap = think_budget.find_snapshot(request_id)
-                if same_session(snap):
-                    return _think_outcome_from_snapshot(snap, question), "reused_snapshot"
             reservation = think_budget.reserve(
                 daily_limit=THINK_SEARCH_DAILY_LIMIT, total_limit=THINK_SEARCH_TOTAL_LIMIT
             )
@@ -2006,34 +2152,61 @@ class Pipeline:
                     "think_search decision=denied reason=%s day=%s total=%s",
                     reservation.reason, reservation.day_attempts, reservation.total_attempts,
                 )
-                return (
-                    think_search.SearchOutcome(
-                        status=think_search.STATUS_FAILED,
-                        query="",
-                        retrieved_at=time.time(),
-                        error=reservation.reason,
-                    ),
-                    f"denied:{reservation.reason}",
+                denied = think_search.SearchOutcome(
+                    status=think_search.STATUS_FAILED,
+                    query=think_search.build_query(question),
+                    retrieved_at=time.time(),
+                    error=reservation.reason,
                 )
+                # The refusal is the request's recorded outcome too: a duplicate
+                # reuses it instead of asking the gate again and again.
+                self._store_think_snapshot(request_id, question, session_id, retry_of, denied)
+                return denied, f"denied:{reservation.reason}"
             outcome = client.search(question)
-            prev = think_budget.find_snapshot(retry_of) if retry_of else None
-            attempt_no = int((prev or {}).get("attempt") or 0) + 1 if retry_of else 1
-            think_budget.record_attempt(
-                request_id or f"adhoc-{int(time.time() * 1000)}",
-                question=question,
-                session_id=session_id,
-                attempt=attempt_no,
-                parent_request_id=retry_of,
-                status=outcome.status,
-                # `reason` is stored for reuse only and is not part of the
-                # payload the client / History receives.
-                sources={**think_search.sources_payload(outcome), "reason": outcome.error or ""},
-                retrieved_at=outcome.retrieved_at,
-            )
+            attempt_no = self._store_think_snapshot(request_id, question, session_id, retry_of, outcome)
             return (
                 outcome,
                 f"searched:attempt={attempt_no}:day={reservation.day_attempts}:total={reservation.total_attempts}",
             )
+
+    def _store_think_snapshot(
+        self,
+        request_id: str,
+        question: str,
+        session_id: str,
+        retry_of: str,
+        outcome: think_search.SearchOutcome,
+    ) -> int:
+        """Close the claimed request with its real outcome. Returns the attempt no.
+
+        The stored sources keep each excerpt as well as its title/link/date, so a
+        reused lookup answers from the same facts instead of from bare links.
+        """
+        # `retry_of` is the ANSWER id the client is retrying, which is not a request
+        # id — resolve it to the record it names so the new attempt is chained to the
+        # lookup it follows instead of to a bare string.
+        prev = think_budget.find_snapshot(retry_of) if retry_of else None
+        if prev is None and retry_of:
+            prev = think_budget.find_latest_snapshot(
+                session_id, question, exclude_request_id=request_id
+            )
+        attempt_no = int((prev or {}).get("attempt") or 0) + 1 if retry_of else 1
+        parent_id = str((prev or {}).get("request_id") or retry_of or "")
+        if not request_id:
+            return attempt_no
+        think_budget.record_attempt(
+            request_id,
+            question=question,
+            session_id=session_id,
+            attempt=attempt_no,
+            parent_request_id=parent_id,
+            status=outcome.status,
+            # `reason` is stored for reuse only and is not part of the payload the
+            # client / History receives.
+            sources={**think_search.sources_payload(outcome, with_snippets=True), "reason": outcome.error or ""},
+            retrieved_at=outcome.retrieved_at,
+        )
+        return attempt_no
 
     def _think_lock(self) -> threading.Lock:
         lock = getattr(self, "_think_mu", None)
@@ -2757,8 +2930,8 @@ class Session:
         # for one question and both get billed.
         self._busy_lock = threading.Lock()
         self._busy_token: object | None = None
-        self._pending_q: collections.deque[tuple[str, str | None, str, int]] = collections.deque(maxlen=8)
-        self._pending_asks: list[tuple[str, str, Any]] = []
+        self._pending_q: collections.deque[tuple[str, str | None, str, int, bool, str]] = collections.deque(maxlen=8)
+        self._pending_asks: list[tuple[str, str, Any, bool, str, str]] = []
         self._pending_wait: tuple[str | None, float, str | None] = (None, 0.0, None)
         # Live Q&A semantic buffer (issue #191). Consecutive finals accumulate by
         # STT turn identity; the model judges completeness. None of this touches
@@ -3291,11 +3464,18 @@ class Session:
             # #182: a user-initiated retry names the request it retries, so the
             # gate can reuse an OK snapshot (or count a fresh attempt) instead of
             # silently paying for the same question twice.
+            # The client freezes the Think value — and the identity of this submit
+            # action — at the moment the user sends, so what arrives here IS the
+            # snapshot; reading the session switch instead would let a toggle
+            # flipped during the send change a question already on its way.
+            sent_think = msg.get("think")
             self.ask(
                 msg.get("text", ""),
                 files,
                 msg.get("mode") or "ask",
+                think=sent_think if isinstance(sent_think, bool) else None,
                 retry_of=str(msg.get("retry_of") or ""),
+                submit_id=str(msg.get("submit_id") or ""),
             )
         elif mtype == "set_workspace":
             self.set_workspace(msg.get("mode") or "interview", msg.get("scene"), msg.get("speakers_expected"))
@@ -4197,12 +4377,24 @@ class Session:
         # answer actually starting must not answer for the abandoned session.
         # #182: the auto-voice candidate is committed here, so this is where its
         # Think value freezes — the same instant its question, context, fragments
-        # and generation do.
+        # and generation do. The submit identity is derived from those same
+        # fragments, so the SAME candidate can never be charged twice while a
+        # different turn — even with identical wording — stays its own question.
         if not self._start_interview_answer(
-            question, lang, context, gen=gen, think=self._think_snapshot()
+            question,
+            lang,
+            context,
+            gen=gen,
+            think=self._think_snapshot(),
+            submit_id=self._candidate_submit_id(keys),
         ):
             return False
         return True
+
+    def _candidate_submit_id(self, keys: list[str]) -> str:
+        """A stable id for ONE committed voice candidate (used by the search gate)."""
+        digest = hashlib.sha1("|".join(keys).encode("utf-8", "ignore")).hexdigest()[:24]
+        return f"qa-{self._qa_session_gen}-{digest}"
 
     def _qa_drop(self, *, reason: str, trigger: str = "") -> None:
         """Discard the pending candidate WITHOUT answering it."""
@@ -4219,10 +4411,16 @@ class Session:
             "qa_drop reason=%s trigger=%s cand=%s frags=%s", reason, trigger or "-", cand, n,
         )
 
-    def _qa_reset(self, reason: str) -> None:
-        """New / clear / workspace switch: nothing from the old turn may answer."""
+    def _qa_reset(self, reason: str, *, reset_think: bool = True) -> None:
+        """New / clear / workspace switch: nothing from the old turn may answer.
+
+        ``reset_think`` is False for a listen session that is only being (re)started
+        within the SAME conversation: the switch belongs to the session, so pressing
+        Listen again must not turn it off behind the user's back.
+        """
         self._qa_init()
         self._qa_cancel_timer()
+        turned_off = False
         with self._qa_lock():
             had = bool(self._qa_buffer or self._qa_verdict or self._qa_background)
             self._qa_buffer = []
@@ -4242,7 +4440,14 @@ class Session:
             # #182: New / clear / workspace switch / close starts a fresh session,
             # so Think goes back to its default (off). A question that was already
             # submitted keeps the value it snapshotted.
-            self._think = False
+            if reset_think:
+                turned_off = bool(self._think)
+                self._think = False
+        if turned_off:
+            # The server owns this switch, so a reset is announced instead of the
+            # client silently showing "on" for a session the next answer will not
+            # use it for.
+            self.emit({"type": "think", "on": False})
         # #191 review fix: a question that was QUEUED because an answer was in flight
         # belongs to the turn being abandoned just as much as the buffer does, and it
         # is dequeued without a generation to check against. `_reset_turn_state` (New
@@ -5194,7 +5399,9 @@ class Session:
             self._listen_gen = getattr(self, "_listen_gen", 0) + 1
             # A genuinely new listen session starts a new turn context (#191):
             # no candidate, timer or in-flight judgement may survive into it.
-            self._qa_reset("new_listen")
+            # #182: it is NOT a new conversation, though — the Think switch belongs
+            # to the session, and re-pressing Listen must not silently drop it.
+            self._qa_reset("new_listen", reset_think=False)
             self._pcm_rx_bytes = 0
             self._stt_tx_bytes = 0
             self._stt_pending_pcm = b""
@@ -5589,10 +5796,18 @@ class Session:
             return
         self._emit_phase()
         self.emit({"type": "status", "text": STATUS_TRANSCRIBE})
-        threading.Thread(target=self._finish_manual, args=(pcm,), daemon=True).start()
+        # #182: a manual recording is a SUBMIT — capture the switch value and a
+        # submit identity at the confirm instant (not after transcription, and not
+        # whenever the answer thread happens to start), then carry both through.
+        self._manual_seq = int(getattr(self, "_manual_seq", 0) or 0) + 1
+        submit_id = f"manual-{getattr(self, 'usage_session_id', '') or 'local'}-{self._manual_seq}"
+        think_flag = self._think_snapshot()
+        threading.Thread(
+            target=self._finish_manual, args=(pcm,), kwargs={"think": think_flag, "submit_id": submit_id}, daemon=True
+        ).start()
         self._offer_save_history()
 
-    def _finish_manual(self, pcm: bytes) -> None:
+    def _finish_manual(self, pcm: bytes, *, think: bool = False, submit_id: str = "") -> None:
         self._set_engine("transcribing")
         try:
             text, lang = self._transcribe_manual_pcm(pcm)
@@ -5631,7 +5846,9 @@ class Session:
         self.pipeline._cancel.clear()
         self._set_engine("generating")
         try:
-            self.pipeline.process_text(cleaned, "ask", heard)
+            # #182: the manual (tap-to-confirm) entry is a real submit entry, so it
+            # carries the same Think snapshot and submit identity as the other two.
+            self.pipeline.process_text(cleaned, "ask", heard, think=think, submit_id=submit_id)
         finally:
             if self._busy_token is tok:
                 self._release_busy(tok)
@@ -5644,10 +5861,10 @@ class Session:
         # generation, no matter which path (ask, manual, interview voice)
         # held the busy flag — otherwise they sit until the next question.
         if self._pending_asks:
-            nxt, md, fl, th, ro = self._pending_asks.pop(0)
-            # #182: re-submit with the Think value the item was QUEUED with, not
-            # whatever the switch says now.
-            self.ask(nxt, fl, md, think=th, retry_of=ro)
+            nxt, md, fl, th, ro, sid = self._pending_asks.pop(0)
+            # #182: re-submit with the Think value (and the submit identity) the item
+            # was QUEUED with, not whatever the switch says now.
+            self.ask(nxt, fl, md, think=th, retry_of=ro, submit_id=sid)
 
     def ask(
         self,
@@ -5656,12 +5873,16 @@ class Session:
         mode="ask",
         *,
         think: bool | None = None,
+        submit_id: str = "",
         retry_of: str = "",
     ) -> None:
-        # #182: snapshot the session's Think value once, at submit. `think` is
-        # passed explicitly only when re-submitting a queued item, so a drained
-        # question keeps the value it was queued with.
+        # #182: snapshot the session's Think value once, at submit. An explicit
+        # `think` — the value the client froze at the moment the user submitted, or
+        # the value a queued item was queued with — always wins over the current
+        # session state, so flipping the switch mid-flight cannot change a question
+        # that is already on its way.
         think_flag = self._think_snapshot() if think is None else bool(think)
+        submit_id = str(submit_id or "")
         extra = attachments_to_prompt(files)
         images = attachment_images(files)
         user_text = (text or "").strip()
@@ -5698,11 +5919,11 @@ class Session:
         tok = self._claim_busy()
         if not tok:
             if mode == "ask" and self._workspace == "interview":
-                self._pending_asks.append((user_text, mode, files, think_flag, retry_of))
+                self._pending_asks.append((user_text, mode, files, think_flag, retry_of, submit_id))
                 self.emit({"type": "status", "text": "Question queued · answering the previous one"})
                 return
             if mode in ("translate", "notes", "listen_ask", "file_ask"):
-                self._pending_asks.append((user_text, mode, files, think_flag, retry_of))
+                self._pending_asks.append((user_text, mode, files, think_flag, retry_of, submit_id))
                 return
             self.emit({"type": "status", "text": "Still working, please wait"})
             self.emit({"type": "done", "id": "", "stt": 0, "llm": 0, "ok": False})
@@ -5720,6 +5941,10 @@ class Session:
                     display_text=display,
                     think=think_flag,
                     retry_of=retry_of,
+                    # #182: the search gets the user's own question — never the
+                    # prompt the model reads, which begins with the attachment body.
+                    search_text=user_text,
+                    submit_id=submit_id,
                 )
             finally:
                 if self._busy_token is tok:
@@ -5864,6 +6089,7 @@ class Session:
         *,
         gen: int | None = None,
         think: bool = False,
+        submit_id: str = "",
     ) -> bool:
         """Start the auto answer for a committed candidate. False = stale, no answer.
 
@@ -5878,7 +6104,8 @@ class Session:
         which is what `_run_interview_answer` re-validates.
 
         `think` is the #182 submit-time snapshot: it rides with the question through
-        the queue, so a switch flipped while it waits cannot change it.
+        the queue, so a switch flipped while it waits cannot change it. `submit_id`
+        is the matching submit identity for the search dedupe gate.
         """
         self._qa_init()
         # The session epoch is snapshotted BEFORE the candidate check on purpose: a
@@ -5895,10 +6122,12 @@ class Session:
         self._maybe_follow_speech(cleaned, heard)
         tok = self._claim_busy()
         if not tok:
-            self._pending_q.append((cleaned, lang, context, session_gen, bool(think)))
+            self._pending_q.append((cleaned, lang, context, session_gen, bool(think), str(submit_id or "")))
             self.emit({"type": "status", "text": "Question queued · answering the previous one"})
             return True
-        self._run_interview_answer(cleaned, lang, context, session_gen=session_gen, think=think)
+        self._run_interview_answer(
+            cleaned, lang, context, session_gen=session_gen, think=think, submit_id=submit_id
+        )
         return True
 
     def _finish_interview_answer(self, tok: object | None) -> None:
@@ -5924,7 +6153,7 @@ class Session:
                 self._release_busy(tok2)
         if nxt:
             self._run_interview_answer(
-                nxt[0], nxt[1], nxt[2], session_gen=nxt[3], think=nxt[4]
+                nxt[0], nxt[1], nxt[2], session_gen=nxt[3], think=nxt[4], submit_id=nxt[5]
             )
         else:
             self._drain_pending_ask()
@@ -5937,6 +6166,7 @@ class Session:
         *,
         session_gen: int | None = None,
         think: bool = False,
+        submit_id: str = "",
     ) -> None:
         tok = self._busy_token
         # #191 review fix: the thread can start a moment after the start check; a New
@@ -5970,8 +6200,9 @@ class Session:
                 # Scoped to this generation: the background block is a system
                 # prompt addendum for the interview answer only (#191).
                 self.pipeline._qa_context = context or ""
-                # #182: `think` is the snapshot this question was committed with.
-                self.pipeline.process_text(cleaned, "ask", heard, think=think)
+                # #182: `think` is the snapshot this question was committed with,
+                # and `submit_id` its identity for the search dedupe gate.
+                self.pipeline.process_text(cleaned, "ask", heard, think=think, submit_id=submit_id)
             finally:
                 self.pipeline._qa_context = ""
                 self._finish_interview_answer(tok)

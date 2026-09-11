@@ -1009,7 +1009,7 @@ class ReviewFixTests(_QaBase):
         self.assertIsNotNone(sess._claim_busy())
         sess._qa_reset("new_session")
         # queued in the NEW session, so it is still live when the stale run gives up
-        sess._pending_q.append(("what about annual billing?", "en", "", sess._qa_session_gen, False))
+        sess._pending_q.append(("what about annual billing?", "en", "", sess._qa_session_gen, False, "s-queued"))
         sess._run_interview_answer("how should we price it?", "en", "", session_gen=session_gen)
         self.assertTrue(self._wait(lambda: sess.pipeline.process_text.called))
         self.assertEqual(self._answers(sess), ["what about annual billing?"])
@@ -1019,7 +1019,7 @@ class ReviewFixTests(_QaBase):
         # reset that leaves it in the queue starts the old session's question later.
         sess = self._session(judge_stub(qs.VERDICT_READY))
         sess._qa_init()
-        sess._pending_q.append(("how should we price it?", "en", "", sess._qa_session_gen, False))
+        sess._pending_q.append(("how should we price it?", "en", "", sess._qa_session_gen, False, "s-queued"))
         sess._qa_reset("new_listen")
         self.assertEqual(list(sess._pending_q), [])
 
@@ -1080,7 +1080,7 @@ class ReviewFixTests(_QaBase):
         self.assertEqual(len(sess._pending_q), 1)
         item = sess._pending_q.popleft()  # the slot frees exactly here
         sess._qa_reset("new_session")  # and New lands before the item runs
-        sess._run_interview_answer(item[0], item[1], item[2], session_gen=item[3])
+        sess._run_interview_answer(item[0], item[1], item[2], session_gen=item[3], think=item[4], submit_id=item[5])
         sess.pipeline.process_text.assert_not_called()
         self.assertFalse(sess._busy)
 

@@ -166,6 +166,9 @@ export type EngineEvent =
   | { type: 'line_update'; id: string; text: string; language?: string; speaker?: string; rev: number }
   | { type: 'chunk'; id: string; text: string }
   | ({ type: 'sources'; id?: string } & AnswerSources)
+  // #182: the server's authoritative Think value. Sent when a session reset turns
+  // the switch back to its default, so the client never shows a stale "on".
+  | { type: 'think'; on: boolean }
   | { type: 'done'; id: string; stt: number; llm: number; ok: boolean }
   | { type: 'error'; text: string }
   | { type: 'listen_taken'; text: string }
@@ -191,7 +194,7 @@ export type EngineMsg =
   | { type: 'keep_history'; content?: boolean; audio?: boolean; id?: string }
   | { type: 'discard_history'; id?: string }
   | { type: 'auth'; token: string }
-  | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; attach_id?: string; mode?: string; think?: boolean; retry_of?: string }
+  | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; attach_id?: string; mode?: string; think?: boolean; retry_of?: string; submit_id?: string }
   | { type: 'set_workspace'; mode: WorkspaceMode; scene?: 'meeting' | 'lecture' | 'interview'; speakers_expected?: number }
   | { type: 'set_llm'; provider: string; model: string }
   | { type: 'set_think'; on: boolean }

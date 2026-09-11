@@ -83,11 +83,15 @@ test.describe('Think switch', () => {
     expect(setThink[setThink.length - 1].on).toBe(true)
     await shot(page, 'interview-think-on')
 
-    // A question submitted now goes out with the value it was submitted under.
+    // A question submitted now goes out with the value it was submitted under, and
+    // with the identity of that one submit action (the server's dedupe key).
     await page.locator('.prompt-input').fill('what is new?')
     await page.locator('.prompt-input').press('Enter')
     await expect.poll(() => sent.filter((m) => m.type === 'ask').length).toBe(1)
     expect(sent.filter((m) => m.type === 'ask')[0].think).toBe(true)
+    const firstSubmitId = sent.filter((m) => m.type === 'ask')[0].submit_id
+    expect(typeof firstSubmitId).toBe('string')
+    expect(firstSubmitId).not.toBe('')
 
     // Finish that answer so the composer is free again (a real server would send
     // these; the mocked one must too, or the next submit is blocked by `busy`).
@@ -103,6 +107,7 @@ test.describe('Think switch', () => {
     await page.locator('.prompt-input').press('Enter')
     await expect.poll(() => sent.filter((m) => m.type === 'ask').length).toBe(2)
     expect(sent.filter((m) => m.type === 'ask')[1].think).toBe(false)
+    expect(sent.filter((m) => m.type === 'ask')[1].submit_id).not.toBe(firstSubmitId)
 
     // New / clear starts a fresh session: back to the default. (The shortcut is
     // ignored while a text field has focus, exactly like the app intends.)
@@ -112,6 +117,19 @@ test.describe('Think switch', () => {
     await page.keyboard.press('F4')
     // The session has content, so New asks first — confirm it.
     await page.getByRole('button', { name: 'Clear', exact: true }).click()
+    await expect(toggle).toHaveAttribute('aria-checked', 'false')
+  })
+
+  test('follows the server when a session reset turns the switch off', async ({ page }) => {
+    // #182 review: the server used to reset Think silently while the client kept
+    // showing "on", so the next question looked like it would search and did not.
+    // The reset is announced, and the client follows it.
+    const { send } = await mockWs(page)
+    const toggle = page.getByRole('switch', { name: 'Think' })
+    await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-checked', 'true')
+
+    send({ type: 'think', on: false })
     await expect(toggle).toHaveAttribute('aria-checked', 'false')
   })
 })
