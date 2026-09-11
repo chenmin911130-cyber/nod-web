@@ -2,9 +2,10 @@ import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type React
 import { accountDeletedNotice, deleteAccountCopy } from '../accountCopy'
 import { api, fetchMe, getToken, setToken } from '../auth'
 import { isNativeApp, maybeReturnToNativeApp, nativeGo } from '../native'
-import { track } from './track'
+import { applySeo, track } from './track'
 import './Site.css'
 import { PRODUCT_NAME } from '../brand'
+import { SITE_ORIGIN, siteUrl } from '../siteOrigin'
 import NodMark from './NodMark'
 
 const GoogleButton = lazy(() => import('./ClerkAuth').then((m) => ({ default: m.GoogleButton })))
@@ -78,6 +79,19 @@ function OtpCodeField({
   )
 }
 
+function useAuthSeo(title: string, path: string, description: string) {
+  useEffect(() => {
+    applySeo({
+      title: `${title} — ${PRODUCT_NAME}`,
+      description,
+      url: siteUrl(path),
+      lang: 'en',
+      image: `${SITE_ORIGIN}/og.png`,
+      robots: 'noindex,nofollow',
+    })
+  }, [description, path, title])
+}
+
 export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) {
   const [email, setEmail] = useState('')
   const [code, setCode] = useState('')
@@ -85,6 +99,8 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const next = new URLSearchParams(location.search).get('next') || '/app'
+
+  useAuthSeo('Sign in', '/login', 'Sign in to Nodpilot with Google or an email code.')
 
   useEffect(() => {
     let cancelled = false
@@ -217,6 +233,8 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
+  useAuthSeo('Create account', '/signup', 'Create a Nodpilot account with Google or an email code.')
+
   useEffect(() => {
     let cancelled = false
     void fetchMe().then((me) => {
@@ -340,6 +358,7 @@ export function SignupPage({ clerkEnabled = false }: { clerkEnabled?: boolean })
 }
 
 export function ForgotPage() {
+  useAuthSeo('Sign in code', '/forgot', 'Nodpilot uses a one-time email code instead of a password reset.')
   return (
     <div className="nod-site-page">
       <Header extra={<a className="button button-cyan header-cta" href="/login">Sign in</a>} />

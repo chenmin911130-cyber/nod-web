@@ -1,3 +1,5 @@
+import { SITE_ORIGIN, siteUrl } from '../siteOrigin'
+
 export type TrackEvent =
   | 'cta_hero_start'
   | 'cta_google'
@@ -54,10 +56,12 @@ export function applySeo(opts: {
   lang: string
   image: string
   ogTitle?: string
+  robots?: string
 }) {
   document.title = opts.title
   document.documentElement.lang = opts.lang
   setMeta('name', 'description', opts.description)
+  setMeta('name', 'robots', opts.robots || 'index,follow')
   setMeta('property', 'og:title', opts.ogTitle || opts.title)
   setMeta('property', 'og:description', opts.description)
   setMeta('property', 'og:url', opts.url)
@@ -69,8 +73,8 @@ export function applySeo(opts: {
   setMeta('name', 'twitter:description', opts.description)
   setMeta('name', 'twitter:image', opts.image)
   setLink('canonical', opts.url)
-  setLink('alternate', `${origin()}/`, 'en')
-  setLink('alternate', `${origin()}/`, 'x-default')
+  setLink('alternate', siteUrl('/'), 'en')
+  setLink('alternate', siteUrl('/'), 'x-default')
   let jsonld = document.getElementById('nod-jsonld') as HTMLScriptElement | null
   if (!jsonld) {
     jsonld = document.createElement('script')
@@ -95,10 +99,6 @@ export function applySeo(opts: {
       description: 'Free public testing',
     },
   })
-}
-
-function origin() {
-  return window.location.origin.replace(/\/+$/, '')
 }
 
 function setMeta(attr: 'name' | 'property', key: string, content: string) {

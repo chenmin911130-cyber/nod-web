@@ -1,7 +1,7 @@
 import unittest
 from unittest import mock
 
-from server.headers import HostLockMiddleware, host_allowed
+from server.headers import ApexRedirectMiddleware, HostLockMiddleware, apex_redirect_url, host_allowed
 from server.ratelimit import allow, rate_limit_global, ws_connect, ws_disconnect
 from server.settings import _allowed_hosts
 
@@ -77,6 +77,61 @@ class AllowedHostsTests(unittest.TestCase):
         hosts = _allowed_hosts("https://nod-web-production.up.railway.app")
         self.assertIn("nod-web-production.up.railway.app", hosts)
         self.assertNotIn("www.nod-web-production.up.railway.app", hosts)
+
+
+class ApexRedirectTests(unittest.TestCase):
+    def test_www_html_redirects_to_apex(self):
+        loc = apex_redirect_url(_scope(path="/zh", host="www.nodpilot.com"), "https://nodpilot.com")
+        self.assertEqual(loc, "https://nodpilot.com/zh")
+
+    def test_www_keeps_query(self):
+        scope = _scope(path="/login", host="www.nodpilot.com")
+        scope["query_string"] = b"next=/app"
+        loc = apex_redirect_url(scope, "https://nodpilot.com")
+        self.assertEqual(loc, "https://nodpilot.com/login?next=/app")
+
+    def test_api_does_not_redirect(self):
+        self.assertIsNone(apex_redirect_url(_scope(path="/api/config", host="www.nodpilot.com"), "https://nodpilot.com"))
+
+    def test_apex_does_not_redirect(self):
+        self.assertIsNone(apex_redirect_url(_scope(path="/", host="nodpilot.com"), "https://nodpilot.com"))
+
+    def test_local_public_url_does_not_redirect(self):
+        self.assertIsNone(apex_redirect_url(_scope(path="/", host="www.nodpilot.com"), "http://127.0.0.1:9320"))
+
+    def test_middleware_sends_301(self):
+        out: dict = {}
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(msg):
+            if msg["type"] == "http.response.start":
+                out["status"] = msg["status"]
+                out["headers"] = dict(msg.get("headers") or [])
+
+        mw = ApexRedirectMiddleware.__new__(ApexRedirectMiddleware)
+        mw.public_url = "https://nodpilot.com"
+        mw.app = mock.AsyncMock()
+        import asyncio
+
+        asyncio.run(mw(_scope(path="/privacy", host="www.nodpilot.com"), receive, send))
+        self.assertEqual(out["status"], 301)
+        self.assertEqual(out["headers"][b"location"], b"https://nodpilot.com/privacy")
+        mw.app.assert_not_called()
+
+    def test_middleware_passes_api(self):
+        mw = ApexRedirectMiddleware.__new__(ApexRedirectMiddleware)
+        mw.public_url = "https://nodpilot.com"
+        mw.app = mock.AsyncMock()
+        mw.app.side_effect = lambda scope, receive, send: None
+        import asyncio
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        asyncio.run(mw(_scope(path="/api/config", host="www.nodpilot.com"), receive, mock.AsyncMock()))
+        mw.app.assert_awaited_once()
 
 
 class HostLockMiddlewareTests(unittest.TestCase):

@@ -1,11 +1,32 @@
 import { useEffect, type ReactNode } from 'react'
-import { track } from './track'
+import { applySeo, track } from './track'
 import './Site.css'
 import { PRODUCT_NAME } from '../brand'
 import { CONSENT_LEAD, CONSENT_USE, PRIVACY_AUDIO, TERMS_SERVICE } from '../legalCopy'
+import { SITE_ORIGIN, siteUrl } from '../siteOrigin'
 import NodMark from './NodMark'
 
-function Shell({ title, children }: { title: string; children: ReactNode }) {
+function Shell({
+  title,
+  path,
+  description,
+  children,
+}: {
+  title: string
+  path: string
+  description: string
+  children: ReactNode
+}) {
+  useEffect(() => {
+    applySeo({
+      title: `${title} — ${PRODUCT_NAME}`,
+      description,
+      url: siteUrl(path),
+      lang: 'en',
+      image: `${SITE_ORIGIN}/og.png`,
+      robots: 'index,follow',
+    })
+  }, [description, path, title])
   return (
     <div className="nod-site-page">
       <header className="site-header">
@@ -37,7 +58,11 @@ export function PrivacyPage() {
     track('open_privacy')
   }, [])
   return (
-    <Shell title="Privacy Policy">
+    <Shell
+      title="Privacy Policy"
+      path="/privacy"
+      description="How Nodpilot collects account data, audio, and transcripts, and how long History is kept."
+    >
       <p>Last updated: 5 September 2026. Nodpilot (“Nodpilot”, “we”) is an early product in free public testing.</p>
       <h2>What we collect</h2>
       <ul>
@@ -76,7 +101,11 @@ export function PrivacyPage() {
 
 export function TermsPage() {
   return (
-    <Shell title="Terms of Service">
+    <Shell
+      title="Terms of Service"
+      path="/terms"
+      description="Terms for using Nodpilot during free public testing."
+    >
       <p>Last updated: 5 September 2026.</p>
       <h2>The service</h2>
       <p>
@@ -113,7 +142,11 @@ export function TermsPage() {
 
 export function ConsentPage() {
   return (
-    <Shell title="Recording consent">
+    <Shell
+      title="Recording consent"
+      path="/consent"
+      description="What you confirm before Nodpilot starts the microphone."
+    >
       <p>{CONSENT_LEAD}</p>
       <h2>Before you start recording</h2>
       <ul>

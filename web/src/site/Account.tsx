@@ -1,5 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, fetchMe, logout, type Me } from '../auth'
+import { applySeo } from './track'
+import { SITE_ORIGIN, siteUrl } from '../siteOrigin'
 import { nativeGo, readNativeAppBuild } from '../native'
 import { downloadHistoryPdf } from '../historyPdf'
 import { CopyButton } from '../components/CopyButton'
@@ -45,7 +47,14 @@ export default function AccountPage() {
   const [appBuild, setAppBuild] = useState('')
 
   useEffect(() => {
-    document.title = `Account · ${PRODUCT_NAME}`
+    applySeo({
+      title: `Account · ${PRODUCT_NAME}`,
+      description: 'Manage your Nodpilot account, History, and deletion.',
+      url: siteUrl('/account'),
+      lang: 'en',
+      image: `${SITE_ORIGIN}/og.png`,
+      robots: 'noindex,nofollow',
+    })
     void readNativeAppBuild().then(setAppBuild)
     void (async () => {
       const user = await fetchMe()
