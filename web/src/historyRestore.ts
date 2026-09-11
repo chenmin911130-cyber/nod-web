@@ -391,7 +391,9 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
       originals.push({ id, text, ts: formatItemTs(item, session.started_at, originals.length) })
     } else if (item.kind === 'question') {
       questions.push({ id, q: text })
-    } else if (item.kind === 'answer' || item.kind === 'listen_ask') {
+    } else if (item.kind === 'answer' || item.kind === 'listen_ask' || item.kind === 'file_ask') {
+      // #182: `file_ask` is an answer (an attachment question) — rows written under
+      // that kind used to be saved but never restored at all.
       answers.set(id, text)
       // #182: the saved sources + retrieval time come back with the answer.
       if (item.sources) sourcesById.set(id, item.sources)

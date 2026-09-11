@@ -173,15 +173,16 @@ class SubmitSnapshotTests(unittest.TestCase):
         sess._qa_init()
         sess.usage_session_id = "sess-a"
 
-        def frag(turn, listener):
+        def frag(turn, listener, stream="1-runA"):
             return qa_semantic.new_fragment(
                 "怎么定价？", "zh", frag_id=f"t{listener}:{turn}", at=1.0,
-                meta={"stt_turn": turn, "listener_id": listener},
+                meta={"stt_turn": turn, "listener_id": listener, "stream": stream},
             )
 
         first_frag = frag(7, 140234)
         # Pin the real shape this fix depends on.
         self.assertEqual(first_frag["turn"], 7)
+        self.assertEqual(first_frag["stream"], "1-runA")
         self.assertNotIn("meta", first_frag)
 
         first = sess._candidate_submit_id("怎么定价？", [first_frag])
@@ -207,6 +208,97 @@ class SubmitSnapshotTests(unittest.TestCase):
         self.assertNotEqual(first, sess._candidate_submit_id("怎么定价？", [frag(8, 140234)]))
         sess._qa_session_gen += 1
         self.assertNotEqual(first, sess._candidate_submit_id("怎么定价？", [frag(7, 140234)]))
+
+    def test_a_new_stt_stream_is_a_new_submit_for_the_same_turn_and_question(self):
+        # #182 review: a resume creates a new CloudListener whose STT turn numbers
+        # restart from the beginning, so (epoch, turn, question) alone let a NEW
+        # question collide with an older paid lookup. The stream identity — unique per
+        # connection AND per process run — is part of the submit identity.
+        from server import qa_semantic
+
+        sess = self._session()
+        sess._qa_init()
+        sess.usage_session_id = "sess-a"
+        sess._qa_session_gen = 4
+
+        def frag(turn, stream):
+            return qa_semantic.new_fragment(
+                "怎么定价？", "zh", frag_id=f"t1:{turn}", at=1.0,
+                meta={"stt_turn": turn, "listener_id": 1, "stream": stream},
+            )
+
+        resumed = sess._candidate_submit_id("怎么定价？", [frag(1, "2-runA")])
+        # The same fragment re-delivered on the same stream is the same submit…
+        self.assertEqual(resumed, sess._candidate_submit_id("怎么定价？", [frag(1, "2-runA")]))
+        # …while the same turn number on a NEW stream (pause → resume) is not.
+        self.assertNotEqual(resumed, sess._candidate_submit_id("怎么定价？", [frag(1, "3-runA")]))
+        # A different process run cannot collide either.
+        self.assertNotEqual(resumed, sess._candidate_submit_id("怎么定价？", [frag(1, "2-runB")]))
+
+    def test_a_cleared_session_drops_a_text_submit_still_waiting_to_start(self):
+        # #182 review: the text worker had no session check (the voice worker has had
+        # one since #191), so a question whose turn was abandoned could still generate
+        # — and, with Think on, search — into the new session.
+        sess = self._session()
+        sess.set_think(True)
+        with mock.patch("server.app.threading.Thread") as thread:
+            sess.ask("what is new?", None, "ask", submit_id="submit-1")
+        self.assertIsNotNone(sess._busy_token, "the submit took the answer slot")
+        body = thread.call_args.kwargs["target"]
+
+        # A New / clear lands before the worker body actually runs.
+        sess._qa_reset("turn_reset")
+        body()
+
+        sess.pipeline.process_text.assert_not_called()
+        self.assertFalse(sess._busy, "and the busy slot must be released")
+
+    def test_a_cleared_session_drops_a_manual_recording_mid_transcription(self):
+        # The transcription takes long enough for a New to land; the recording must
+        # not answer (or search) in the session that replaced it.
+        sess = self._session()
+        sess.set_think(True)
+        sess._manual = False
+        sess._qa_on_manual_submit = mock.Mock()
+        sess._polish_manual_text = mock.Mock(side_effect=lambda text: text)
+        sess._speech_allowed = mock.Mock(return_value=True)
+        sess._set_engine = mock.Mock()
+        sess._emit_phase = mock.Mock()
+        sess._transcribe_manual_pcm = mock.Mock(return_value=("how should we price it?", "en"))
+        sess._qa_init()
+        stale_gen = sess._qa_session_gen
+
+        sess._finish_manual(b"\x00" * 8000, think=True, submit_ref="manual-1", submit_session_gen=stale_gen - 1)
+        sess.pipeline.process_text.assert_not_called()
+        sess._qa_on_manual_submit.assert_not_called()
+
+        # The same recording in the CURRENT session still submits.
+        sess._finish_manual(b"\x00" * 8000, think=True, submit_ref="manual-2", submit_session_gen=stale_gen)
+        self.assertTrue(self._wait(lambda: sess.pipeline.process_text.called))
+        self.assertIs(sess.pipeline.process_text.call_args.kwargs.get("think"), True)
+
+    def test_a_question_failure_names_the_question_it_belongs_to(self):
+        # #182 review: an error frame carried no id, so the client wrote it into
+        # whichever card happened to be waiting (an attachment submit still uploading,
+        # for instance). Failures of a question now name it.
+        events: list[dict] = []
+        pipe = _pipe(events)
+        pipe.think_client = _client(results=[])
+        pipe.client.chat.completions.create.side_effect = RuntimeError("boom")
+        pipe.process_text("what is new?", "ask", think=True, submit_id="submit-1")
+        errors = _events(events, "error")
+        self.assertTrue(errors)
+        self.assertTrue(all(e.get("id") for e in errors), "a question failure names its question")
+        self.assertTrue(all(e["id"] == _events(events, "question")[-1]["id"] for e in errors))
+
+    def test_a_question_that_never_produces_a_body_names_itself(self):
+        events: list[dict] = []
+        pipe = _pipe(events)
+        pipe.client.chat.completions.create.return_value = [_Chunk(reasoning="internal musings")]
+        pipe.think_client = _client(results=[])
+        pipe.process_text("what is new?", "ask", think=True, submit_id="submit-1")
+        errors = _events(events, "error")
+        self.assertEqual(errors[-1]["id"], _events(events, "question")[-1]["id"])
 
     def test_the_manual_submit_id_folds_in_the_transcribed_question(self):
         # The recording counter restarts with the process; the question text keeps a

@@ -1,5 +1,5 @@
 import type { AnswerSources, Turn } from './types'
-import { applySources, hasSourceBlock, renderableSources, safeLink, sourcesAsText } from './qaSources'
+import { answerCopyText, applySources, hasSourceBlock, renderableSources, safeLink, sourcesAsText } from './qaSources'
 
 // The repo's web tests carry no node types, so they assert with a tiny local
 // helper instead of node:assert.
@@ -93,5 +93,14 @@ ok(text.includes('检索时间：2026-09-10 04:00 UTC'), 'export carries the ret
 const failed = sourcesAsText(sources({ status: 'failed', results: [], note: '联网检索失败（TimeoutError）' }))
 ok(failed.includes('联网检索失败'), 'a failed lookup exports its honest note')
 ok(!failed.includes('[1]'), 'a failed lookup exports no fake source')
+
+// The live Copy entry (not only the History export) keeps the sources block.
+const copied = answerCopyText('A new model.', sources())
+ok(copied.startsWith('A new model.'), 'copy keeps the answer first')
+ok(copied.includes('https://example.com/apple'), 'copy keeps the real url')
+ok(copied.includes('检索时间：2026-09-10 04:00 UTC'), 'copy keeps the retrieval time')
+eq(answerCopyText('Plain answer.', undefined), 'Plain answer.', 'a plain answer copies unchanged')
+eq(answerCopyText('', sources()), sourcesAsText(sources()), 'an empty body with sources still copies the sources')
+eq(answerCopyText('  ', undefined), '', 'nothing to copy stays nothing')
 
 console.log('qaSources.test.ts: ok')

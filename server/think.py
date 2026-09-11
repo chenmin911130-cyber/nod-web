@@ -30,6 +30,7 @@ transport-injected and covered by deterministic stubs.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 
@@ -250,7 +251,78 @@ def sources_payload(outcome: SearchOutcome, *, with_snippets: bool = False) -> d
 
 Transport = Callable[[dict[str, Any]], Any]
 
+# --- the stored form of a sources payload ------------------------------------
+#
+# History rows and the dedupe snapshot both keep the payload as a JSON string, so
+# the bound has to be applied to the FIELDS and then to whole entries: cutting the
+# serialized string leaves invalid JSON behind, and a reader then sees "no sources
+# at all" instead of fewer of them (a 5-source payload with long URLs legitimately
+# exceeds an 8 kB cut).
+MAX_STORED_SOURCES_CHARS = 8000
+MAX_STORED_RESULTS = 10
+_STORED_KEYS = ("status", "retrieved_at", "retrieved_at_text", "results", "note", "reason")
+_STORED_TEXT_LIMITS = {"status": 16, "retrieved_at_text": 64, "note": 600, "reason": 200}
+_STORED_RESULT_LIMITS = {
+    "title": MAX_TITLE_CHARS,
+    "url": MAX_URL_CHARS,
+    "published_at": 64,
+    "snippet": MAX_SNIPPET_CHARS,
+}
 
+
+def bounded_sources_json(
+    sources: Mapping[str, Any] | None, *, max_chars: int = MAX_STORED_SOURCES_CHARS
+) -> str:
+    """Serialize a sources payload for storage, bounded WITHOUT breaking the JSON.
+
+    Only the documented keys survive (bounded per field, results capped in number),
+    so what is stored is always a complete, parseable payload. Returns "" when
+    there is nothing storable.
+    """
+    if not isinstance(sources, Mapping) or not sources:
+        return ""
+    payload: dict[str, Any] = {}
+    for key in _STORED_KEYS:
+        if key not in sources:
+            continue
+        value = sources[key]
+        if key == "results":
+            rows: list[dict[str, Any]] = []
+            items = value if isinstance(value, (list, tuple)) else []
+            for item in list(items)[:MAX_STORED_RESULTS]:
+                if not isinstance(item, Mapping):
+                    continue
+                row: dict[str, Any] = {}
+                for field, limit in _STORED_RESULT_LIMITS.items():
+                    if field not in item:
+                        continue
+                    raw = item[field]
+                    row[field] = raw[:limit] if isinstance(raw, str) else (raw if raw is None else str(raw)[:limit])
+                rows.append(row)
+            payload["results"] = rows
+        elif key == "retrieved_at":
+            try:
+                payload[key] = float(value or 0.0)
+            except (TypeError, ValueError):
+                payload[key] = 0.0
+        elif isinstance(value, str):
+            payload[key] = value[: _STORED_TEXT_LIMITS.get(key, 200)]
+        elif value is None or isinstance(value, (int, float, bool)):
+            payload[key] = value
+    try:
+        text = json.dumps(payload, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return ""
+    results = payload.get("results")
+    while isinstance(results, list) and results and len(text) > max_chars:
+        # Still over the bound: drop whole entries, never half a JSON document.
+        results = results[:-1]
+        payload["results"] = results
+        try:
+            text = json.dumps(payload, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return ""
+    return text if len(text) <= max_chars else ""
 class SearchClient:
     """One lookup per committed question, over an injected transport.
 

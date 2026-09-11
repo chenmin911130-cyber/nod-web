@@ -2,7 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import type { AttachPayload } from './attach'
 import type { AppConfig, AppState, AudioSource, EngineEvent, Lang, MeetingLine, PairLang, TranslatePair, ViewMode, WorkspaceMode } from './types'
 import { TRANSLATE_LANGS } from './types'
-import { applySources } from './qaSources'
+import { answerCopyText, applySources } from './qaSources'
 import { newSubmitId } from './submitId'
 import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
@@ -288,7 +288,7 @@ type Action =
   | { type: 'ask_start' }
   | { type: 'seed_ask'; text: string; think?: boolean; submitId?: string }
   | { type: 'set_think'; on: boolean }
-  | { type: 'fail_ask'; text: string }
+  | { type: 'fail_ask'; text: string; submitId?: string }
   | { type: 'listen_scene'; scene: ListenScene }
   | { type: 'translate_on'; on: boolean }
   | { type: 'listen_new' }
@@ -669,8 +669,13 @@ function reducer(state: AppState, action: Action): AppState {
         }
         case 'error': {
           const msg = ev.text || 'Generation failed'
-          if (state.workspaceMode === 'interview' && state.turns.length) {
-            const i = state.turns.findIndex((t) => !t.a)
+          // #182: a failure that names its question is written to THAT card. A
+          // generic error (transcription lost, missing key, a full buffer) must not
+          // be written into whichever question happens to be waiting for an answer —
+          // an attachment submit still uploading would have collected it.
+          const failedId = typeof ev.id === 'string' ? ev.id : ''
+          if (failedId && state.workspaceMode === 'interview') {
+            const i = state.turns.findIndex((t) => t.id === failedId)
             if (i >= 0) {
               const turns = state.turns.slice()
               turns[i] = { ...turns[i], a: msg }
@@ -1014,8 +1019,14 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, turns, currentQ: action.text, busy: true, status: 'Asking…' }
     }
     case 'fail_ask': {
+      // #182: only the card this FAILED submit created may carry its error — the
+      // previous shape marked every pending card, including one belonging to a
+      // different submission that was still uploading.
+      const failedSubmit = action.submitId || ''
       const turns = state.turns.map((t) =>
-        t.id === '__pending_ask__' && !t.a ? { ...t, a: action.text } : t,
+        t.id === '__pending_ask__' && !t.a && (!failedSubmit || t.submitId === failedSubmit)
+          ? { ...t, a: action.text }
+          : t,
       )
       return { ...state, turns, busy: false, status: action.text }
     }
@@ -1910,7 +1921,10 @@ export default function App() {
     } else if (s.workspaceMode === 'meeting') {
       text = s.meetingLines[s.meetingLines.length - 1]?.text ?? ''
     } else {
-      text = s.turns[s.turns.length - 1]?.a ?? ''
+      // #182: Copy takes the sources and the retrieval time with the answer, exactly
+      // like History export — a copied Think answer used to lose its 出处.
+      const turn = s.turns[s.turns.length - 1]
+      text = answerCopyText(turn?.a ?? '', turn?.sources)
     }
     runLatestCopy('latest', text)
   }, [runLatestCopy])
@@ -2547,9 +2561,17 @@ export default function App() {
     // attachments are what a Retry has to send again; the card's label is display.
     submitsRef.current.set(submit_id, { text, files })
     dispatch({ type: 'seed_ask', text: label, think: think === true, submitId: submit_id })
+    // #182: the session this submit belongs to. An attachment upload can outlive a
+    // New / clear / new listen session: the question must then be dropped, not
+    // delivered into the session that replaced it (and it must not search).
+    const sessionKey = composeSessionKey(stateRef.current.workspaceMode, stateRef.current.composeSessionId)
     void (async () => {
       try {
         const attach_id = await parkAttaches(files)
+        if (composeSessionKey(stateRef.current.workspaceMode, stateRef.current.composeSessionId) !== sessionKey) {
+          submitsRef.current.delete(submit_id)
+          return
+        }
         // #182: only the Live Q&A (interview) path carries Think, and it carries
         // the value this submit was made with.
         window.api.send({
@@ -2563,6 +2585,7 @@ export default function App() {
         dispatch({
           type: 'fail_ask',
           text: ex instanceof Error ? ex.message : 'Could not send the file',
+          submitId: submit_id,
         })
       }
     })()
@@ -2594,9 +2617,14 @@ export default function App() {
     const submit_id = newSubmitId()
     submitsRef.current.set(submit_id, { text, files })
     dispatch({ type: 'seed_ask', text: label, think, submitId: submit_id })
+    const sessionKey = composeSessionKey(stateRef.current.workspaceMode, stateRef.current.composeSessionId)
     void (async () => {
       try {
         const attach_id = await parkAttaches(files)
+        if (composeSessionKey(stateRef.current.workspaceMode, stateRef.current.composeSessionId) !== sessionKey) {
+          submitsRef.current.delete(submit_id)
+          return
+        }
         window.api.send({
           type: 'ask',
           text,
@@ -2610,6 +2638,7 @@ export default function App() {
         dispatch({
           type: 'fail_ask',
           text: ex instanceof Error ? ex.message : 'Could not resend the file',
+          submitId: submit_id,
         })
       }
     })()

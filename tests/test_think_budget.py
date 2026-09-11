@@ -239,9 +239,15 @@ def test_a_waiter_sees_the_owners_snapshot_or_an_honest_pending_row(budget_env):
     assert claim("r-b") is True
     # Nobody finished it: the bounded wait gives up and reports the pending row.
     assert wait_for_snapshot("r-b", timeout=0.01, interval=0.005)["status"] == "pending"
-    record_attempt("r-b", question="q", session_id="s1", status="ok", sources={"status": "ok", "results": [1]})
+    record_attempt(
+        "r-b",
+        question="q",
+        session_id="s1",
+        status="ok",
+        sources={"status": "ok", "results": [{"url": "https://e.com/b"}]},
+    )
     got = wait_for_snapshot("r-b", timeout=0.5, interval=0.005)
-    assert got["status"] == "ok" and got["sources"]["results"] == [1]
+    assert got["status"] == "ok" and got["sources"]["results"][0]["url"] == "https://e.com/b"
 
 
 def test_a_claim_that_cannot_be_written_refuses_the_search(budget_env):
@@ -249,3 +255,25 @@ def test_a_claim_that_cannot_be_written_refuses_the_search(budget_env):
 
     with mock.patch("server.think_budget.db_session", side_effect=RuntimeError("store down")):
         assert claim("r-c") is None, "an untrusted store must not authorise a spend"
+
+
+def test_a_long_snapshot_stays_parseable_and_reusable(budget_env):
+    # #182 review: the snapshot serialized with a plain `[:20000]` cut, so a payload
+    # with long excerpts became invalid JSON and a PAYING retry could not reuse it.
+    from server.think import bounded_sources_json
+    from server.think_budget import find_snapshot, record_attempt
+
+    payload = {
+        "status": "ok",
+        "retrieved_at": 1.0,
+        "results": [
+            {"title": "t" * 400, "url": "https://e.com/" + "a" * 2500, "snippet": "s" * 900}
+            for _ in range(5)
+        ],
+        "reason": "",
+    }
+    assert record_attempt("r-long", question="what is new?", session_id="s1", status="ok", sources=payload)
+    snap = find_snapshot("r-long")
+    assert snap is not None and snap["sources"] is not None, "the stored snapshot must parse"
+    assert snap["sources"]["results"], "and keep whole entries"
+    assert len(bounded_sources_json(payload, max_chars=20000)) <= 20000

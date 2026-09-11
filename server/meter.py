@@ -26,13 +26,16 @@ def _day() -> str:
 
 
 def _dump_sources(sources: dict | None) -> str:
-    """#182: store the sources payload bounded; anything unusable becomes ""."""
-    if not sources:
-        return ""
-    try:
-        return json.dumps(sources, ensure_ascii=False)[:8000]
-    except (TypeError, ValueError):
-        return ""
+    """#182: store the sources payload bounded; anything unusable becomes "".
+
+    The bound lives in `think.bounded_sources_json`, which bounds the fields and
+    then whole entries — cutting the serialized string (as this did at 8000 chars)
+    left invalid JSON behind, and the reader then saw no sources at all: a legitimate
+    five-source payload with long URLs was long enough to lose every one of them.
+    """
+    from server import think
+
+    return think.bounded_sources_json(sources)
 
 
 def _parse_sources(raw: str | None) -> dict | None:

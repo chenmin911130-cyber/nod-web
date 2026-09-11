@@ -257,6 +257,108 @@ test.describe('Think submit identity', () => {
     expect(retry.retry_of).toBe('q-voice')
   })
 
+  test('a question whose session was cleared before it was sent never searches', async ({ page }) => {
+    // #182 review: the send happened after the upload await with no session check, so
+    // a New / clear that landed during the upload was ignored and the old question
+    // still reached the server (and, with Think on, searched).
+    let release: (() => void) | null = null
+    const gate = new Promise<void>((resolve) => {
+      release = () => resolve()
+    })
+    await page.route('**/api/attach/extract', async (route) => {
+      await gate
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"id":"attach-1"}' })
+    })
+    const { sent } = await mockWs(page)
+    await page.locator('.prompt-row input[type=file]').setInputFiles({
+      name: 'payroll.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('PRIVATE PAYROLL'),
+    })
+    await page.locator('.gen-btn').click() // the upload is now held
+
+    // New lands while the upload is still in flight.
+    await page.keyboard.press('F4')
+    await page.getByRole('button', { name: 'Clear', exact: true }).click()
+
+    release!()
+    await page.waitForTimeout(500)
+    expect(sent.filter((m) => m.type === 'ask')).toEqual([])
+  })
+
+  test('a failed voice question keeps its error off the pending attachment card', async ({ page }) => {
+    // #182 review: an error frame had no id, so the reducer wrote it into the first
+    // card without an answer — an attachment submit still uploading.
+    let release: (() => void) | null = null
+    const gate = new Promise<void>((resolve) => {
+      release = () => resolve()
+    })
+    await page.route('**/api/attach/extract', async (route) => {
+      await gate
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"id":"attach-1"}' })
+    })
+    const { sent, send } = await mockWs(page)
+    await page.locator('.prompt-row input[type=file]').setInputFiles({
+      name: 'payroll.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('PRIVATE PAYROLL'),
+    })
+    await page.locator('.prompt-input').fill('how is the bonus computed?')
+    await page.locator('.gen-btn').click() // held
+
+    send({ type: 'question', id: 'q-voice', text: 'what did they say about pricing?', submit_id: 'qa-voice' })
+    send({ type: 'error', id: 'q-voice', text: 'Generation failed: boom' })
+    send({ type: 'done', id: 'q-voice', stt: 0, llm: 1, ok: false })
+    // A generic error belongs to no question at all.
+    send({ type: 'error', text: 'Transcription connection lost. Tap Start Listening.' })
+
+    release!()
+    await expect.poll(() => sent.filter((m) => m.type === 'ask').length).toBe(1)
+    const attach = sent.filter((m) => m.type === 'ask')[0]
+    send({
+      type: 'question',
+      id: 'q-attach',
+      text: 'how is the bonus computed? (payroll.txt)',
+      submit_id: attach.submit_id,
+    })
+    send({ type: 'chunk', id: 'q-attach', text: 'The bonus is 10%.' })
+    send({ type: 'done', id: 'q-attach', stt: 0, llm: 1, ok: true })
+
+    const voiceCard = page.locator('.qa-result').filter({ hasText: 'what did they say about pricing?' })
+    const attachCard = page.locator('.qa-result').filter({ hasText: 'how is the bonus computed?' })
+    await expect(voiceCard).toContainText('Generation failed: boom')
+    await expect(attachCard).toContainText('The bonus is 10%.')
+    await expect(attachCard).not.toContainText('Generation failed')
+    await expect(attachCard).not.toContainText('Transcription connection lost')
+  })
+
+  test('Copy keeps the sources and the retrieval time', async ({ page, context }) => {
+    // #182 review: the live Copy entry copied only the answer body, so a Think answer
+    // lost its 出处 even though History export kept it.
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+    const { send } = await mockWs(page)
+    send({ type: 'question', id: 'q-copy', text: 'What did Apple announce?' })
+    send({ type: 'chunk', id: 'q-copy', text: 'A new model.' })
+    send({
+      type: 'sources',
+      id: 'q-copy',
+      status: 'ok',
+      retrieved_at: 1789012800,
+      retrieved_at_text: '2026-09-10 04:00 UTC',
+      results: [{ title: 'Apple News', url: 'https://example.com/apple', published_at: '2026-09-10' }],
+      note: '',
+    })
+    send({ type: 'done', id: 'q-copy', stt: 0, llm: 1, ok: true })
+    await expect(page.locator('.qa-result').filter({ hasText: 'A new model.' })).toBeVisible()
+
+    await page.locator('.prompt-input').blur()
+    await page.keyboard.press('c')
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('A new model.')
+    const clip = await page.evaluate(() => navigator.clipboard.readText())
+    expect(clip).toContain('https://example.com/apple')
+    expect(clip).toContain('检索时间：2026-09-10 04:00 UTC')
+  })
+
   test('a turn without a live submission offers no Retry', async ({ page }) => {
     // #182 review: a restored/history turn has neither the Think value the question
     // ran with nor the attachments it was made of, so re-asking it would silently

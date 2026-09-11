@@ -65,8 +65,11 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
     }
     case 'status':
       return { type: 'status', text: asText(o.text) }
-    case 'error':
-      return { type: 'error', text: asText(o.text) }
+    case 'error': {
+      // #182: a question-scoped failure carries the id of the card it belongs to.
+      const id = asText(o.id)
+      return id ? { type: 'error', text: asText(o.text), id } : { type: 'error', text: asText(o.text) }
+    }
     case 'listen_taken':
       return { type: 'listen_taken', text: asText(o.text) }
     case 'partial':

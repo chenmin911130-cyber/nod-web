@@ -69,6 +69,32 @@ eq(qaPayload.turns[0].sources?.results[0].url ?? '', 'https://example.com/apple'
 eq(qaPayload.turns[0].sources?.retrieved_at_text ?? '', '2026-09-10 04:00 UTC', 'and the retrieval time with them')
 eq(String(qaPayload.turns[1].sources), 'undefined', 'an old record restores without a source block')
 
+// #182: an attachment answer was saved under kind `file_ask`, which the restore
+// never read — so the whole answer (sources included) disappeared from History.
+const attachPayload = restoreFromSession({
+  ...qaSession,
+  id: 's4',
+  items: [
+    { kind: 'question', text: 'review this', qid: 'q9', at: at(16, 0) },
+    {
+      kind: 'file_ask',
+      text: 'an attachment answer',
+      qid: 'q9',
+      at: at(16, 0, 5),
+      sources: {
+        status: 'ok',
+        retrieved_at: 1789012800,
+        retrieved_at_text: '2026-09-10 04:00 UTC',
+        results: [{ title: 'Apple News', url: 'https://example.com/apple', published_at: null }],
+        note: '',
+      },
+    },
+  ],
+})
+eq(attachPayload.turns.length.toString(), '1', 'a legacy file_ask answer restores')
+eq(attachPayload.turns[0].a, 'an attachment answer', 'with its text')
+eq(attachPayload.turns[0].sources?.results[0].url ?? '', 'https://example.com/apple', 'and its sources')
+
 const lecture: HistorySession = {
   id: 's2',
   mode: 'meeting',

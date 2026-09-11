@@ -78,6 +78,10 @@ def new_fragment(
         "lang": lang,
         "at": float(at),
         "turn": m.get("stt_turn"),
+        # #182: which STT connection delivered this fragment (see `_STT_RUN_ID` in
+        # app.py). Kept on the fragment so a submit identity can tell a re-delivery
+        # from a question on a new stream, whose turn numbers restart.
+        "stream": str(m.get("stream") or ""),
         "revision": bool(m.get("revision")),
     }
 

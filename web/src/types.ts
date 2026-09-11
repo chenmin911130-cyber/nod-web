@@ -178,7 +178,7 @@ export type EngineEvent =
   // the switch back to its default, so the client never shows a stale "on".
   | { type: 'think'; on: boolean }
   | { type: 'done'; id: string; stt: number; llm: number; ok: boolean }
-  | { type: 'error'; text: string }
+  | { type: 'error'; text: string; id?: string }
   | { type: 'listen_taken'; text: string }
   | { type: 'auth_required' }
   | { type: 'quota'; ok: boolean; reason?: string; plan?: string; plan_name?: string; stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; sessions?: number; session_limit?: number; daily_cost_usd?: number; daily_cost_limit?: number; daily_stt_seconds?: number; daily_stt_limit?: number; quota_disabled?: boolean }

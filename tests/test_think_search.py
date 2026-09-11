@@ -215,6 +215,54 @@ class SourcesPayloadTests(unittest.TestCase):
         self.assertNotIn("snippet", think.sources_payload(out)["results"][0])
 
 
+class StoredSourcesJsonTests(unittest.TestCase):
+    """#182: the stored payload is bounded on the FIELDS, never by cutting the JSON."""
+
+    def _long(self):
+        return {
+            "status": "ok",
+            "retrieved_at": 1789012800.0,
+            "retrieved_at_text": "2026-09-10 04:00 UTC",
+            "note": "n" * 900,
+            "results": [
+                {"title": "t" * 400, "url": "https://e.com/" + "a" * 2500, "published_at": "2026-09-10", "snippet": "s" * 900}
+                for _ in range(5)
+            ],
+        }
+
+    def test_a_legal_payload_is_bounded_and_still_parseable(self):
+        import json
+
+        raw = think.bounded_sources_json(self._long())
+        self.assertTrue(raw)
+        parsed = json.loads(raw)  # never a cut JSON document
+        self.assertTrue(parsed["results"], "whole entries are kept, not half of one")
+        self.assertLessEqual(len(raw), think.MAX_STORED_SOURCES_CHARS)
+        self.assertTrue(all(len(r["url"]) <= think.MAX_URL_CHARS for r in parsed["results"]))
+        self.assertTrue(all(len(r["snippet"]) <= think.MAX_SNIPPET_CHARS for r in parsed["results"]))
+        self.assertLessEqual(len(parsed["note"]), 600)
+
+    def test_a_short_payload_survives_verbatim(self):
+        import json
+
+        payload = {"status": "ok", "results": [{"title": "A", "url": "https://e.com/a", "published_at": None}]}
+        parsed = json.loads(think.bounded_sources_json(payload))
+        self.assertEqual(parsed["results"][0]["url"], "https://e.com/a")
+
+    def test_unknown_keys_and_junk_never_reach_the_store(self):
+        import json
+
+        parsed = json.loads(
+            think.bounded_sources_json({"status": "ok", "results": ["nope", {"url": 7}], "evil": "x" * 5000})
+        )
+        self.assertNotIn("evil", parsed)
+        self.assertEqual(parsed["results"], [{"url": "7"}])
+
+    def test_nothing_to_store_is_an_empty_string(self):
+        self.assertEqual(think.bounded_sources_json(None), "")
+        self.assertEqual(think.bounded_sources_json({}), "")
+
+
 class SearchClientTests(unittest.TestCase):
     def _client(self, transport, **kw):
         self.clock = _Clock()

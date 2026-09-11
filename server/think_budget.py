@@ -42,6 +42,11 @@ REASON_STORE = "BudgetStoreUnavailable"
 # paying for the same submit a second time.
 STATUS_PENDING = "pending"
 
+# The dedupe snapshot keeps the excerpts a reused lookup needs, so it gets a
+# larger bound than a History row (still applied to fields/entries, not the
+# serialized string).
+SNAPSHOT_MAX_CHARS = 20000
+
 # Request-id flavours (see build_request_id): an exact submit action vs. a
 # session+question fallback. Only the former may be treated as proof of identity.
 SUBMIT_PREFIX = "r-"
@@ -282,10 +287,11 @@ def record_attempt(
         return False
     payload = ""
     if sources:
-        try:
-            payload = json.dumps(sources, ensure_ascii=False)[:20000]
-        except (TypeError, ValueError):
-            payload = ""
+        # Same rule as History: bounded fields and entries, never a cut JSON string
+        # (a snapshot that does not parse is a snapshot nobody can reuse).
+        from server.think import bounded_sources_json
+
+        payload = bounded_sources_json(sources, max_chars=SNAPSHOT_MAX_CHARS)
     try:
         with db_session() as db:
             row = db.get(ThinkSearchRecord, request_id)

@@ -80,3 +80,13 @@ export function sourcesAsText(sources: AnswerSources | undefined): string {
   if (sources?.note) lines.push(sources.note)
   return lines.join('\n')
 }
+
+/**
+ * The text ONE answer puts on the clipboard (or into a share sheet): the answer
+ * body, then the sources block it was built from. Used by the live Copy entry, so
+ * a copied Think answer keeps the 出处 it showed — the History export path already
+ * did this, the copy path did not.
+ */
+export function answerCopyText(answer: string, sources?: AnswerSources): string {
+  return [answer ?? '', sourcesAsText(sources)].filter((part) => part.trim()).join('\n\n')
+}

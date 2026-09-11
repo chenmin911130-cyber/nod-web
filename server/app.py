@@ -116,6 +116,12 @@ from server import uplink
 SR = 16000
 STT_CLOUD = "assemblyai"
 VISION_MODEL = "deepseek-v4-flash-vision-exp"
+# #182: the identity of one STT connection. `stt_turn` restarts with every
+# CloudListener (a resume included), so it alone cannot tell "the same fragment
+# re-delivered" from "a new question on a new stream". The run token makes the
+# stream identity unique per connection AND per process run (a restart cannot
+# collide with an older record).
+_STT_RUN_ID = uuid.uuid4().hex[:8]
 ASSEMBLYAI_WS = "wss://streaming.assemblyai.com/v3/ws"
 ASSEMBLYAI_API = "https://api.assemblyai.com"
 ASSEMBLYAI_MODEL = "universal-3-5-pro"
@@ -1930,7 +1936,10 @@ class Pipeline:
                                 )
                                 self.emit({"type": "quota", **snap})
                                 self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "llm"})
-                                self.emit({"type": "error", "text": _quota_copy(snap)})
+                                # #182: a failure that belongs to THIS question names it;
+                                # a generic error must never be written into whichever
+                                # card happens to be open.
+                                self.emit({"type": "error", "id": qid, "text": _quota_copy(snap)})
                                 self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
                                 return
                     # #182: this local used to be called `think`, which now collides
@@ -1956,7 +1965,7 @@ class Pipeline:
                 # a second create() would double-bill tokens.
                 if attempt == 0 and stream is None and not answer and _is_transient_llm_error(e):
                     continue
-                self.emit({"type": "error", "text": _friendly_gen_error(e)})
+                self.emit({"type": "error", "id": qid, "text": _friendly_gen_error(e)})
                 self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
                 return
             finally:
@@ -1965,14 +1974,14 @@ class Pipeline:
                         self._stream = None
                 _close_llm_stream(stream)
         if last_err and not answer:
-            self.emit({"type": "error", "text": _friendly_gen_error(last_err)})
+            self.emit({"type": "error", "id": qid, "text": _friendly_gen_error(last_err)})
             self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
             return
         if seq != self._gen_seq or self._cancel.is_set():
             self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
             return
         if not answer:
-            self.emit({"type": "error", "text": "Generation failed: empty response"})
+            self.emit({"type": "error", "id": qid, "text": "Generation failed: empty response"})
             self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
             return
         self._last_answer = answer[-400:]
@@ -2262,7 +2271,19 @@ class Pipeline:
                     sources=sources,
                 )
         else:
-            save_history(self.user_id, self.usage_session_id, "answer" if mode == "ask" else mode, answer, qid)
+            # #182: a Think answer's real sources + retrieval time are saved WITH the
+            # answer row. They were only passed on the translate path, so a saved Live
+            # Q&A answer came back from History without the sources the card showed.
+            # An attachment question is an answer too, and uses the same kind the
+            # History restore reads (`file_ask` rows were written but never restored).
+            save_history(
+                self.user_id,
+                self.usage_session_id,
+                "answer" if mode in ("ask", "file_ask") else mode,
+                answer,
+                qid,
+                sources=sources,
+            )
         if mode in ("ask", "notes"):
             try:
                 from server.meter import write_session_notes
@@ -2280,8 +2301,9 @@ class Pipeline:
 
 
 class CloudListener:
-    def __init__(self, api_key: str, cfg: dict[str, Any], on_final, on_partial, on_error, on_drop=None, on_sent=None):
+    def __init__(self, api_key: str, cfg: dict[str, Any], on_final, on_partial, on_error, on_drop=None, on_sent=None, stream_id: str = ""):
         self.api_key = api_key
+        self._stream_id = str(stream_id or "")
         self.cfg = cfg
         self.on_final = on_final
         self.on_partial = on_partial
@@ -2758,6 +2780,8 @@ class CloudListener:
             "turn_order": stt_turn,
             "stt_turn": stt_turn,
             "listener_id": id(self),
+            # #182: this connection's durable identity (see `_STT_RUN_ID`).
+            "stream": self._stream_id,
             "revision": revision,
             "formatted": formatted,
             "stop_commit": self._stop.is_set(),
@@ -4422,11 +4446,17 @@ class Session:
         for frag in frags:
             turn = frag.get("turn")
             turns.append(str(turn) if turn is not None else str(frag.get("id") or ""))
+        # A resume creates a NEW CloudListener whose STT turn numbers restart, so the
+        # stream each fragment came from is part of the identity: the same fragment
+        # re-delivered on one stream is the same submit, while the same turn number on
+        # a new stream is a new question.
+        streams = sorted({str(frag.get("stream") or "") for frag in frags})
         digest = hashlib.sha1(
             "\x00".join(
                 [
                     str(getattr(self, "usage_session_id", "") or ""),
                     str(self._qa_session_gen),
+                    ",".join(streams),
                     ",".join(sorted(turns)),
                     (question or "").strip(),
                 ]
@@ -5456,9 +5486,11 @@ class Session:
         self._stt_stream_gen = getattr(self, "_stt_stream_gen", 0) + 1
         listen_gen = getattr(self, "_listen_gen", 0)
         stream_gen = self._stt_stream_gen
+        stt_stream_id = f"{stream_gen}-{_STT_RUN_ID}"
         listener = CloudListener(
             api_key=key,
             cfg=self._stt_cfg(),
+            stream_id=stt_stream_id,
             on_final=lambda *a, g=listen_gen, sg=stream_gen: (
                 self._on_final(*a)
                 if g == getattr(self, "_listen_gen", 0) and sg == getattr(self, "_stt_stream_gen", 0)
@@ -5844,11 +5876,24 @@ class Session:
         submit_ref = f"manual-{getattr(self, 'usage_session_id', '') or 'local'}-{self._manual_seq}"
         think_flag = self._think_snapshot()
         threading.Thread(
-            target=self._finish_manual, args=(pcm,), kwargs={"think": think_flag, "submit_ref": submit_ref}, daemon=True
+            target=self._finish_manual,
+            args=(pcm,),
+            kwargs={
+                "think": think_flag,
+                "submit_ref": submit_ref,
+                "submit_session_gen": self._qa_session_gen,
+            },
+            daemon=True,
         ).start()
         self._offer_save_history()
 
-    def _finish_manual(self, pcm: bytes, *, think: bool = False, submit_ref: str = "") -> None:
+    def _finish_manual(
+        self, pcm: bytes, *, think: bool = False, submit_ref: str = "", submit_session_gen: int | None = None
+    ) -> None:
+        # #182: the session this recording was confirmed in. Transcription takes long
+        # enough for a New / mode switch to land; the recording must not answer into
+        # the session that replaced it.
+        self._qa_init()
         self._set_engine("transcribing")
         try:
             text, lang = self._transcribe_manual_pcm(pcm)
@@ -5877,6 +5922,13 @@ class Session:
         heard = lang or detect_question_lang(cleaned)
         if not self._speech_allowed(cleaned, lang or heard):
             self.emit({"type": "partial", "text": ""})
+            self._set_engine("idle")
+            self._emit_phase()
+            return
+        if submit_session_gen is not None and not self._qa_session_current(submit_session_gen):
+            logging.getLogger("nod").info(
+                "qa_drop reason=stale_manual gen=%s now_gen=%s", submit_session_gen, self._qa_session_gen
+            )
             self._set_engine("idle")
             self._emit_phase()
             return
@@ -5992,9 +6044,26 @@ class Session:
         self.pipeline._cancel.clear()
         self._set_engine("generating")
         self._emit_phase()
+        # #182: the session this submit belongs to. Clearing / switching workspace
+        # while the submit waits (an attachment upload, a queued slot) must not let it
+        # generate into the NEW session — the voice path has had this check since
+        # #191, the text worker did not.
+        self._qa_init()
+        submit_session_gen = self._qa_session_gen
 
         def work():
             try:
+                # #182: the session this submit belongs to. A New / clear / workspace
+                # switch that lands while the submit waits (an attachment upload, a
+                # queued slot) must not let it generate into the NEW session — the
+                # voice path has had this check since #191, the text worker did not.
+                # Inside the try, so the guard still runs the cleanup that releases
+                # the answer slot instead of leaving the session busy forever.
+                if not self._qa_session_current(submit_session_gen):
+                    logging.getLogger("nod").info(
+                        "qa_drop reason=stale_ask gen=%s now_gen=%s", submit_session_gen, self._qa_session_gen
+                    )
+                    return
                 self.pipeline.process_text(
                     llm_text,
                     mode,
