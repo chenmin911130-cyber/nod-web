@@ -2502,6 +2502,7 @@ class Session:
         self._qa_last_judge_at = 0.0
         self._qa_judging = False
         self._qa_judged_version = -1
+        self._qa_stale_version = -1
         self._qa_verdict: dict[str, Any] | None = None
         self._qa_candidate_id = ""
         self._qa_timer: threading.Timer | None = None
@@ -3557,9 +3558,19 @@ class Session:
         self._qa_last_judge_at = float(getattr(self, "_qa_last_judge_at", 0.0) or 0.0)
         self._qa_judging = bool(getattr(self, "_qa_judging", False))
         self._qa_judged_version = int(getattr(self, "_qa_judged_version", -1) or -1)
+        self._qa_stale_version = int(getattr(self, "_qa_stale_version", -1) or -1)
         self._qa_verdict = getattr(self, "_qa_verdict", None)
         self._qa_candidate_id = str(getattr(self, "_qa_candidate_id", "") or "")
         self._qa_ready = True
+
+    def _qa_version_done(self, version: int) -> bool:
+        """True when this buffer version was judged and the verdict still stands.
+
+        A verdict discarded because the speaker kept going leaves the version
+        judged-but-stale, so it stays eligible for ONE more judgement once
+        speech is quiet again (bounded by the settle + rate-limit gates).
+        """
+        return version == self._qa_judged_version and version != self._qa_stale_version
 
     def _qa_cancel_timer(self) -> None:
         timer = getattr(self, "_qa_timer", None)
@@ -3615,7 +3626,7 @@ class Session:
             n_frags = len(self._qa_buffer)
             quiet_for = now - self._qa_activity_at
             since_judge = now - self._qa_last_judge_at
-            already = version == self._qa_judged_version
+            already = self._qa_version_done(version)
         if quiet_for < QA_SETTLE_SECONDS:
             self._qa_schedule_judge(QA_SETTLE_SECONDS - quiet_for)
             return
@@ -3627,7 +3638,7 @@ class Session:
             self._qa_schedule_judge(QA_MIN_JUDGE_INTERVAL_SECONDS - since_judge)
             return
         with self._qa_lock():
-            if self._qa_judging or version == self._qa_judged_version:
+            if self._qa_judging or self._qa_version_done(version):
                 return
             self._qa_judging = True
             self._qa_last_judge_at = now
@@ -3647,7 +3658,7 @@ class Session:
         if getattr(self, "_qa_timer", None) is not None or self._qa_judging:
             return
         with self._qa_lock():
-            if not self._qa_buffer or self._qa_version == self._qa_judged_version:
+            if not self._qa_buffer or self._qa_version_done(self._qa_version):
                 return
         self._qa_schedule_judge()
 
@@ -3685,6 +3696,10 @@ class Session:
                 # Speech resumed while the model was thinking: the verdict was
                 # computed for a buffer the speaker has already moved past.
                 stale = self._qa_activity_at > started
+            if stale:
+                self._qa_stale_version = version
+            elif self._qa_stale_version == version:
+                self._qa_stale_version = -1
         logging.getLogger("nod").info(
             "qa_judge cand=%s gen=%s ver=%s frags=%s verdict=%s reason=%s ms=%s err=%s stale=%s",
             cand, gen, version, len(frags),
@@ -3803,6 +3818,7 @@ class Session:
             self._qa_version += 1
             self._qa_gen += 1
             self._qa_judged_version = -1
+            self._qa_stale_version = -1
             self._qa_verdict = None
             self._qa_candidate_id = ""
         if had:

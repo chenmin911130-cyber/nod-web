@@ -260,6 +260,32 @@ class SemanticBufferTests(_QaBase):
         self._settle(sess)
         self.assertEqual(bomb.call_count, 1, "a failed judgement must not be retried in a loop")
 
+    def test_a_verdict_invalidated_by_continuation_is_rejudged_once(self):
+        # Acceptance 7/8: the speaker continues (partials only, no new final)
+        # while the model is thinking. The discarded verdict must not be
+        # forgotten — once speech is quiet again the SAME candidate is judged
+        # once more and answered, and it is never re-judged in a loop.
+        gate = threading.Event()
+        sess = self._session(judge_stub(qs.VERDICT_READY, question="How should we price it?", gate=gate))
+        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._qa_activity_at = time.time() - (qs.DEFAULT_BUFFER_MAX_SECONDS + 1)
+        sess._qa_settle_fire()
+        self._wait(lambda: sess._qa_judging)
+        sess._on_partial("how should we price it for", "en")  # speech resumed
+        gate.set()
+        self._wait(lambda: not sess._qa_judging)
+        time.sleep(0.05)
+        sess.pipeline.process_text.assert_not_called()
+        # Second pass over the SAME (unchanged) buffer version.
+        self._settle(sess)
+        self._wait(lambda: sess.pipeline.process_text.called)
+        self.assertEqual(sess.pipeline.process_text.call_count, 1)
+        self.assertEqual(sess.pipeline.judge_qa.call_count, 2)
+        # And it stays quiet from here: no per-timer re-judge loop.
+        self._settle(sess)
+        self._settle(sess)
+        self.assertEqual(sess.pipeline.judge_qa.call_count, 2)
+
     def test_no_model_call_for_partials_alone(self):
         # Acceptance: partials only hint that the speaker continues.
         sess = self._session(judge_stub(qs.VERDICT_READY))
