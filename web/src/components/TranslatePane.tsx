@@ -8,9 +8,10 @@ import EmptyState from './EmptyState'
 import { ttsAutoShouldConfirm, type TtsMode, type TtsVoice } from '../tts'
 import { usePhoneChrome } from '../phoneChrome'
 import { IPHONE_COPY, translateFromChip, translateSourceName, translateSwapAffordance, translateToChip } from '../iphoneCopy'
-import { nextComposeDraft, nextComposeFiles } from '../listenChrome'
+import { nextComposeDraft, nextComposeFiles, bottomBarMode } from '../listenChrome'
 import { CopyBodyHit, CopyIconButton } from './CopyButton'
 import AskBubble from './AskBubble'
+import ListenRecordBar from './ListenRecordBar'
 
 interface Props {
   pairs: TranslatePair[]
@@ -34,6 +35,12 @@ interface Props {
   voiceChrome?: ReactNode
   actions?: ReactNode
   sessionKey?: string
+  capture?: string
+  elapsedMs?: number
+  onStart?: () => void
+  onPause?: () => void
+  onResume?: () => void
+  onStop?: () => void
 }
 
 function langTag(code: PairLang): string {
@@ -238,8 +245,20 @@ export default function TranslatePane({
   voiceChrome,
   actions,
   sessionKey,
+  capture,
+  elapsedMs,
+  onStart,
+  onPause,
+  onResume,
+  onStop,
 }: Props) {
   const native = usePhoneChrome()
+  const barMode = bottomBarMode({
+    listening: capture === 'listening' || capture === 'recording',
+    paused: capture === 'paused',
+    ended: false,
+    hasContent: false,
+  })
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<LocalAttach[]>([])
   const [composeOpen, setComposeOpen] = useState(false)
@@ -595,7 +614,10 @@ export default function TranslatePane({
               type="button"
               className="iphone-ask-collapse"
               aria-label={IPHONE_COPY.collapseAsk}
-              onClick={() => setComposeOpen(false)}
+              onClick={() => {
+                setComposeOpen(false)
+                inputRef.current?.blur()
+              }}
             >
               ⌄
             </button>
@@ -614,6 +636,19 @@ export default function TranslatePane({
               <AskBubble onClick={() => setComposeOpen(true)} />
             </div>
           )}
+          {onStart ? (
+            <ListenRecordBar
+              mode={barMode}
+              elapsedMs={elapsedMs || 0}
+              startLabel={IPHONE_COPY.startTranslate}
+              stopLabel={IPHONE_COPY.translateStop}
+              statusLabel={IPHONE_COPY.translateStatus}
+              onStart={onStart}
+              onPause={onPause}
+              onResume={onResume}
+              onStop={onStop}
+            />
+          ) : null}
         </div>
       ) : (
         <PromptAttach files={files} onChange={setFiles}>

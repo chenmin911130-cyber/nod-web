@@ -1,5 +1,5 @@
 import { IPHONE_COPY, listenClock, listenControlMode, listenShowsRecClock, listenStatusDot, moreMenuEnabled, moreSaveRow } from '../iphoneCopy'
-import { hideListenStatusRow } from '../listenChrome'
+import { hideTopStatusRow } from '../listenChrome'
 import PhoneSheet from './PhoneSheet'
 
 function MicIcon() {
@@ -115,7 +115,7 @@ export default function IphoneActions({
   onNew: () => void
 }) {
   const chrome = listenControlMode({ listening, paused, ended, hasContent, variant })
-  const hideStatus = hideListenStatusRow({ variant, chrome })
+  const hideStatus = hideTopStatusRow({ variant })
   const menu = moreMenuEnabled({ hasContent, canSave })
   const saveRow = moreSaveRow({ saved, canSave })
   const clock = listenClock(elapsedMs)
