@@ -64,6 +64,9 @@ from server.meeting_lines import (
     tail_meta as meeting_tail_meta,
 )
 from server import qa_semantic
+# #182 retrieval seam. Aliased because `process_text` has a local `think` flag:
+# the module does the lookup, the flag says whether to run one.
+from server import think as think_search
 from server.qa_semantic import join_pair
 from server.turn_pacing import cut_decision, split_carry, turn_pacing_from_env, word_span_ms
 from server.stt_audio import (
@@ -96,6 +99,9 @@ from server.settings import (
     QA_PRIOR_QA_PAIRS,
     QA_SETTLE_SECONDS,
     QUOTA_DISABLED,
+    THINK_REASONING_EFFORT,
+    THINK_SEARCH_MAX_RESULTS,
+    THINK_SEARCH_TIMEOUT_SECONDS,
 )
 from server.ratelimit import MAX_WS_FRAME, WS_FRAMES_PER_SEC, allow, ws_client_ip, ws_connect, ws_disconnect
 from server.security import current_user, is_local_scope, user_from_token
@@ -152,6 +158,9 @@ STATUS_LISTEN = "Listening for the next question…"
 STATUS_TRANSCRIBE = "Transcribing carefully — this can take a moment…"
 STATUS_CHECK = "Checking question…"
 STATUS_GENERATE = "Generating answer…"
+# #182: Think runs a real lookup before the answer, in the existing status
+# position — no new panel, no new button.
+STATUS_THINK_SEARCH = "Checking the latest sources…"
 STATUS_ANSWER_READY = "Answer ready"
 STATUS_WAIT_MORE = "I caught part of a question. Keep listening…"
 STATUS_EMPTY = "No speech detected, please try again"
@@ -826,6 +835,66 @@ def _friendly_gen_error(err: BaseException) -> str:
     return f"Generation failed:{err}"
 
 
+# --- Think (#182): the search backend ---------------------------------------
+#
+# DeepSeek's API has no server-side search (its Responses API ignores every
+# built-in tool, `web_search` included), so "latest sources" means this server
+# runs the lookup itself and hands the model the evidence. The provider contract
+# below (endpoint, request body, response fields) is NOT verified against a real
+# key yet — see the PR's unverified items. A missing provider/key is reported as
+# `NotConfigured` on the answer rather than silently pretending to have searched.
+THINK_SEARCH_PROVIDERS = {
+    # provider -> (env var holding the key, default endpoint)
+    "tavily": ("TAVILY_API_KEY", "https://api.tavily.com/search"),
+}
+
+
+def build_think_client(cfg: dict[str, Any] | None = None) -> "think_search.SearchClient | None":
+    """Build the search client from configuration, or None when it is not set up.
+
+    The key is read from the environment (the repo's ``.env`` / the deployment's
+    env), deliberately NOT from the in-app key store: adding a key row would be a
+    UI change, and #182 keeps the rest of the interface untouched.
+    """
+    llm = (cfg or {}).get("llm") or {}
+    provider = str(llm.get("think_search_provider") or os.environ.get("THINK_SEARCH_PROVIDER") or "").strip().lower()
+    if not provider:
+        return None
+    entry = THINK_SEARCH_PROVIDERS.get(provider)
+    if entry is None:
+        logging.getLogger("nod").warning("think_search unknown_provider=%s", provider)
+        return None
+    env_name, default_endpoint = entry
+    key = (os.environ.get(env_name, "") or "").strip()
+    if not key:
+        return None
+    endpoint = str(os.environ.get("THINK_SEARCH_ENDPOINT") or default_endpoint).strip() or default_endpoint
+    return think_search.SearchClient(
+        _search_transport(key, endpoint),
+        timeout=THINK_SEARCH_TIMEOUT_SECONDS,
+        limit=THINK_SEARCH_MAX_RESULTS,
+    )
+
+
+def _search_transport(api_key: str, endpoint: str) -> "think_search.Transport":
+    """The only place #182 touches the network for a lookup."""
+
+    def transport(request: dict[str, Any]) -> Any:
+        body = {
+            "api_key": api_key,
+            "query": request["query"],
+            "max_results": int(request.get("limit") or THINK_SEARCH_MAX_RESULTS),
+            "search_depth": "basic",
+        }
+        timeout = float(request.get("timeout") or THINK_SEARCH_TIMEOUT_SECONDS)
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=5.0)) as client:
+            resp = client.post(endpoint, json=body)
+            resp.raise_for_status()
+            return resp.json()
+
+    return transport
+
+
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "gif", "bmp"}
 _TEXT_EXTS = {"txt", "md"}
 _OFFICE_DOC = {"doc", "docx"}
@@ -1471,7 +1540,7 @@ class Pipeline:
         last["content"] = parts
         return [*messages[:-1], last]
 
-    def _build_messages(self, question: str, mode: str = "auto") -> list[dict]:
+    def _build_messages(self, question: str, mode: str = "auto", *, evidence: str = "") -> list[dict]:
         bilingual = self._bilingual_from_tag(question)
         out_lang = self._out_lang_from_tag(question)
         out_rule = self._output_lang_rule(out_lang, bilingual)
@@ -1608,6 +1677,10 @@ class Pipeline:
             "4. Follow the LANGUAGE hard rule above even if notes are in another language.\n"
             + ctx
             + qa_ctx
+            # #182: retrieved material rides in the SAME system prompt as the rest
+            # of the answer context (one system message, like `qa_ctx` above), and
+            # the block itself says it is external evidence, not instructions.
+            + (("\n\n" + evidence) if evidence else "")
         )
         lang = self._answer_lang(question)
         name = _LANG_NAMES.get(lang, "English")
@@ -1624,6 +1697,8 @@ class Pipeline:
         heard_lang: str | None = None,
         images: list | None = None,
         display_text: str | None = None,
+        *,
+        think: bool = False,
     ) -> None:
         t = (question or "").strip()
         self._heard_lang = _normalize_stt_lang(heard_lang)
@@ -1673,7 +1748,23 @@ class Pipeline:
             max_tokens = max(max_tokens, 800)
         answer = ""
         stream_usage: tuple[int, int] | None = None
-        messages = self._with_images(self._build_messages(t, mode), images)
+        # #182: Think looks the question up ONCE, here — before the model call and
+        # only for a question that was actually submitted. Never per partial, never
+        # on a timer, and the outcome (including "found nothing" / "failed") is what
+        # the answer shows as its sources.
+        think_outcome: think_search.SearchOutcome | None = None
+        evidence = ""
+        if think and mode in ("ask", "file_ask"):
+            self.emit({"type": "status", "text": STATUS_THINK_SEARCH})
+            started_lookup = time.time()
+            think_outcome = self._think_lookup(t)
+            evidence = think_search.format_evidence(think_outcome)
+            logging.getLogger("nod").info(
+                "think_search qid=%s gen=%s flag=1 status=%s sources=%s ms=%s err=%s",
+                qid, seq, think_outcome.status, len(think_outcome.results),
+                int((time.time() - started_lookup) * 1000), think_outcome.error or "-",
+            )
+        messages = self._with_images(self._build_messages(t, mode, evidence=evidence), images)
         model = VISION_MODEL if (images and self._provider == "deepseek") else self._model
         last_err: Exception | None = None
         for attempt in range(2):
@@ -1692,7 +1783,15 @@ class Pipeline:
                 if not str(model).startswith(("o1", "o3")):
                     kwargs["temperature"] = llm.get("temperature", 0.5)
                 if self._provider == "deepseek":
-                    kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+                    if think:
+                        # #182: a Think answer runs in thinking mode. The chain of
+                        # thought stays internal (below), the answer body does not.
+                        kwargs["extra_body"] = {
+                            "thinking": {"type": "enabled"},
+                            "reasoning_effort": THINK_REASONING_EFFORT,
+                        }
+                    else:
+                        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
                 stream = self.client.chat.completions.create(**kwargs)
                 with self._stream_lock():
                     self._stream = stream
@@ -1728,10 +1827,15 @@ class Pipeline:
                                 self.emit({"type": "error", "text": _quota_copy(snap)})
                                 self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
                                 return
-                    think = getattr(delta, "reasoning_content", None) or ""
-                    if think:
-                        reasoning += think
-                if not answer and reasoning:
+                    # #182: this local used to be called `think`, which now collides
+                    # with the Think flag — keep the two apart.
+                    cot_piece = getattr(delta, "reasoning_content", None) or ""
+                    if cot_piece:
+                        reasoning += cot_piece
+                if not answer and reasoning and not think:
+                    # Pre-existing safety net for an empty body. It is deliberately
+                    # NOT used on a Think answer: dumping the chain of thought into
+                    # the answer body is exactly what #182 forbids.
                     answer = reasoning
                     self.emit({"type": "chunk", "id": qid, "text": reasoning})
                 last_err = None
@@ -1777,7 +1881,29 @@ class Pipeline:
                 self._record_usage(t, answer, mode, qid, internal, stream_usage)
             except Exception:
                 logging.getLogger("nod").exception("usage accounting failed")
+        if think_outcome is not None:
+            # #182: the sources (real titles/URLs, the retrieval stamp and the
+            # honest "nothing usable" note) ride with the answer, before `done`,
+            # so the card can render them under the body it belongs to.
+            self.emit({"type": "sources", "id": qid, **think_search.sources_payload(think_outcome)})
         self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": True})
+
+    def _think_lookup(self, question: str) -> think_search.SearchOutcome:
+        """One live lookup for this question, or an explicit failure.
+
+        A missing configuration is reported as a FAILURE, never as a silent
+        fallback: the answer has to be able to say "the lookup did not run"
+        instead of implying that it did.
+        """
+        client = getattr(self, "think_client", None)
+        if client is None:
+            client = build_think_client(self.cfg)
+        if client is None:
+            logging.getLogger("nod").warning("think_search skip=not_configured")
+            return think_search.SearchOutcome(
+                status=think_search.STATUS_FAILED, query="", retrieved_at=time.time(), error="NotConfigured"
+            )
+        return client.search(question)
 
     def _record_usage(
         self,
@@ -2504,6 +2630,11 @@ class Session:
         # queued question validate against.
         self._qa_gen = 0
         self._qa_session_gen = 0
+        # Think (#182): the Live Q&A retrieval switch. Session-scoped and OFF by
+        # default; every committed question snapshots it, so flipping the switch
+        # only ever affects the NEXT submit. `_qa_reset` (New / clear / workspace
+        # switch / close) turns it back off.
+        self._think = False
         self._qa_answered: dict[str, None] = {}
         self._qa_activity_at = 0.0
         self._qa_last_judge_at = 0.0
@@ -3017,6 +3148,9 @@ class Session:
             self.set_workspace(msg.get("mode") or "interview", msg.get("scene"), msg.get("speakers_expected"))
         elif mtype == "set_llm":
             self.set_llm(msg.get("provider", "deepseek"), msg.get("model", ""))
+        elif mtype == "set_think":
+            # #182: session-scoped, affects the next submit only.
+            self.set_think(msg.get("on"))
         elif mtype == "set_lang":
             lang = _normalize_stt_lang(msg.get("language"))
             prev = self._effective_stt_lang()
@@ -3569,6 +3703,7 @@ class Session:
         self._qa_version = int(getattr(self, "_qa_version", 0) or 0)
         self._qa_gen = int(getattr(self, "_qa_gen", 0) or 0)
         self._qa_session_gen = int(getattr(self, "_qa_session_gen", 0) or 0)
+        self._think = bool(getattr(self, "_think", False))
         self._qa_answered = getattr(self, "_qa_answered", None) or {}
         self._qa_activity_at = float(getattr(self, "_qa_activity_at", 0.0) or 0.0)
         self._qa_last_judge_at = float(getattr(self, "_qa_last_judge_at", 0.0) or 0.0)
@@ -3578,6 +3713,23 @@ class Session:
         self._qa_verdict = getattr(self, "_qa_verdict", None)
         self._qa_candidate_id = str(getattr(self, "_qa_candidate_id", "") or "")
         self._qa_ready = True
+
+    # --- Think (#182): session switch + submit-time snapshot -------------------
+    #
+    # `_think` is the session's CURRENT switch value; a committed question never
+    # reads it again. Everything downstream (queues, retries, the answer thread)
+    # carries the snapshot taken at submit, so flipping the switch while a
+    # question is queued or retried cannot retroactively change that question.
+
+    def set_think(self, on: Any) -> None:
+        """Set the session's Think value. Affects the NEXT submit only."""
+        self._qa_init()
+        self._think = bool(on)
+
+    def _think_snapshot(self) -> bool:
+        """Read the Think value exactly once, at submit time."""
+        self._qa_init()
+        return bool(getattr(self, "_think", False))
 
     def _qa_version_done(self, version: int) -> bool:
         """True when this buffer version was judged and the verdict still stands.
@@ -3890,7 +4042,12 @@ class Session:
         # #191 review fix: the start point re-validates the generation — a New /
         # clear / workspace switch landing between the lock release above and the
         # answer actually starting must not answer for the abandoned session.
-        if not self._start_interview_answer(question, lang, context, gen=gen):
+        # #182: the auto-voice candidate is committed here, so this is where its
+        # Think value freezes — the same instant its question, context, fragments
+        # and generation do.
+        if not self._start_interview_answer(
+            question, lang, context, gen=gen, think=self._think_snapshot()
+        ):
             return False
         return True
 
@@ -3929,6 +4086,10 @@ class Session:
             self._qa_stale_version = -1
             self._qa_verdict = None
             self._qa_candidate_id = ""
+            # #182: New / clear / workspace switch / close starts a fresh session,
+            # so Think goes back to its default (off). A question that was already
+            # submitted keeps the value it snapshotted.
+            self._think = False
         # #191 review fix: a question that was QUEUED because an answer was in flight
         # belongs to the turn being abandoned just as much as the buffer does, and it
         # is dequeued without a generation to check against. `_reset_turn_state` (New
@@ -5330,10 +5491,16 @@ class Session:
         # generation, no matter which path (ask, manual, interview voice)
         # held the busy flag — otherwise they sit until the next question.
         if self._pending_asks:
-            nxt, md, fl = self._pending_asks.pop(0)
-            self.ask(nxt, fl, md)
+            nxt, md, fl, th = self._pending_asks.pop(0)
+            # #182: re-submit with the Think value the item was QUEUED with, not
+            # whatever the switch says now.
+            self.ask(nxt, fl, md, think=th)
 
-    def ask(self, text, files=None, mode="ask") -> None:
+    def ask(self, text, files=None, mode="ask", *, think: bool | None = None) -> None:
+        # #182: snapshot the session's Think value once, at submit. `think` is
+        # passed explicitly only when re-submitting a queued item, so a drained
+        # question keeps the value it was queued with.
+        think_flag = self._think_snapshot() if think is None else bool(think)
         extra = attachments_to_prompt(files)
         images = attachment_images(files)
         user_text = (text or "").strip()
@@ -5370,11 +5537,11 @@ class Session:
         tok = self._claim_busy()
         if not tok:
             if mode == "ask" and self._workspace == "interview":
-                self._pending_asks.append((user_text, mode, files))
+                self._pending_asks.append((user_text, mode, files, think_flag))
                 self.emit({"type": "status", "text": "Question queued · answering the previous one"})
                 return
             if mode in ("translate", "notes", "listen_ask", "file_ask"):
-                self._pending_asks.append((user_text, mode, files))
+                self._pending_asks.append((user_text, mode, files, think_flag))
                 return
             self.emit({"type": "status", "text": "Still working, please wait"})
             self.emit({"type": "done", "id": "", "stt": 0, "llm": 0, "ok": False})
@@ -5385,7 +5552,9 @@ class Session:
 
         def work():
             try:
-                self.pipeline.process_text(llm_text, mode, images=images, display_text=display)
+                self.pipeline.process_text(
+                    llm_text, mode, images=images, display_text=display, think=think_flag
+                )
             finally:
                 if self._busy_token is tok:
                     self._release_busy(tok)
@@ -5528,6 +5697,7 @@ class Session:
         context: str = "",
         *,
         gen: int | None = None,
+        think: bool = False,
     ) -> bool:
         """Start the auto answer for a committed candidate. False = stale, no answer.
 
@@ -5540,6 +5710,9 @@ class Session:
         `gen` is the CANDIDATE epoch the commit validated. The answer thread and any
         queued item are tagged with the SESSION epoch (`_qa_session_gen`) instead,
         which is what `_run_interview_answer` re-validates.
+
+        `think` is the #182 submit-time snapshot: it rides with the question through
+        the queue, so a switch flipped while it waits cannot change it.
         """
         self._qa_init()
         # The session epoch is snapshotted BEFORE the candidate check on purpose: a
@@ -5556,10 +5729,10 @@ class Session:
         self._maybe_follow_speech(cleaned, heard)
         tok = self._claim_busy()
         if not tok:
-            self._pending_q.append((cleaned, lang, context, session_gen))
+            self._pending_q.append((cleaned, lang, context, session_gen, bool(think)))
             self.emit({"type": "status", "text": "Question queued · answering the previous one"})
             return True
-        self._run_interview_answer(cleaned, lang, context, session_gen=session_gen)
+        self._run_interview_answer(cleaned, lang, context, session_gen=session_gen, think=think)
         return True
 
     def _finish_interview_answer(self, tok: object | None) -> None:
@@ -5584,7 +5757,9 @@ class Session:
             except IndexError:
                 self._release_busy(tok2)
         if nxt:
-            self._run_interview_answer(nxt[0], nxt[1], nxt[2], session_gen=nxt[3])
+            self._run_interview_answer(
+                nxt[0], nxt[1], nxt[2], session_gen=nxt[3], think=nxt[4]
+            )
         else:
             self._drain_pending_ask()
 
@@ -5595,6 +5770,7 @@ class Session:
         context: str = "",
         *,
         session_gen: int | None = None,
+        think: bool = False,
     ) -> None:
         tok = self._busy_token
         # #191 review fix: the thread can start a moment after the start check; a New
@@ -5628,7 +5804,8 @@ class Session:
                 # Scoped to this generation: the background block is a system
                 # prompt addendum for the interview answer only (#191).
                 self.pipeline._qa_context = context or ""
-                self.pipeline.process_text(cleaned, "ask", heard)
+                # #182: `think` is the snapshot this question was committed with.
+                self.pipeline.process_text(cleaned, "ask", heard, think=think)
             finally:
                 self.pipeline._qa_context = ""
                 self._finish_interview_answer(tok)

@@ -178,6 +178,15 @@ QA_MAX_QUESTION_CHARS = max(120, int(float(os.environ.get("QA_MAX_QUESTION_CHARS
 QA_BACKGROUND_MAX_FRAGS = max(1, int(float(os.environ.get("QA_BACKGROUND_MAX_FRAGS") or "6")))
 QA_CONTEXT_MAX_CHARS = max(120, int(float(os.environ.get("QA_CONTEXT_MAX_CHARS") or "600")))
 QA_PRIOR_QA_PAIRS = max(0, int(float(os.environ.get("QA_PRIOR_QA_PAIRS") or "2")))
+
+# --- Think (#182): live retrieval + deep thinking for Live Q&A answers -------
+# One bounded lookup per committed question. Nothing here runs a background or
+# periodic search: "latest" means "looked up when this question was submitted".
+THINK_SEARCH_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("THINK_SEARCH_TIMEOUT_SECONDS") or "8"))
+THINK_SEARCH_MAX_RESULTS = max(1, int(float(os.environ.get("THINK_SEARCH_MAX_RESULTS") or "5")))
+# Thinking-mode effort for a Think answer (DeepSeek maps unknown values to its own
+# scale). Only applied when the answer actually runs in thinking mode.
+THINK_REASONING_EFFORT = (os.environ.get("THINK_REASONING_EFFORT") or "high").strip() or "high"
 # How many answered fragment identities to remember for the dedupe window.
 QA_ANSWERED_MAX = max(4, int(float(os.environ.get("QA_ANSWERED_MAX") or "32")))
 
