@@ -7,6 +7,7 @@ export const COPY = {
     description:
       'Nodpilot is an AI Listening Assistant that helps you understand conversations in real time, take structured notes afterward, and search those sessions for 30 days.',
     ogTitle: 'Nodpilot — AI Listening Assistant',
+    skipMain: 'Skip to main content',
     navHow: 'How it works',
     navSituations: 'Use cases',
     navPricing: 'Access',
@@ -221,6 +222,7 @@ export const COPY = {
     description:
       'Nodpilot 是 AI Listening Assistant：实时听懂对话，结束后带走结构化笔记，之后 30 天内还能搜回这场。',
     ogTitle: 'Nodpilot — AI Listening Assistant',
+    skipMain: '跳到主内容',
     navHow: '如何工作',
     navSituations: '使用场景',
     navPricing: '使用',

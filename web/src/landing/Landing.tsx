@@ -5,6 +5,7 @@ import { isNativeApp } from '../native'
 import { applySeo, track } from '../site/track'
 import { COPY, type Locale } from './copy'
 import { PRODUCT_NAME } from '../brand'
+import { SITE_ORIGIN, siteUrl } from '../siteOrigin'
 import NodMark from '../site/NodMark'
 import { DemoModal, WatchIcon, type DemoMode } from './HeroDemo'
 import { HERO_POSTERS, heroPosterById, nextHeroPoster, type HeroPosterId } from './heroPosters'
@@ -21,6 +22,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
   const [demoOpen, setDemoOpen] = useState(false)
   const [demoMode, setDemoMode] = useState<DemoMode>('meeting')
   const [poster, setPoster] = useState<HeroPosterId>('meeting')
+  const [loadedPosters, setLoadedPosters] = useState<HeroPosterId[]>(['meeting'])
   const posterHover = useRef(false)
   const posterManualAt = useRef(0)
   const priced = useRef(false)
@@ -36,14 +38,14 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
   } as const
 
   useEffect(() => {
-    const origin = window.location.origin.replace(/\/+$/, '')
     applySeo({
       title: t.title,
       description: t.description,
       ogTitle: t.ogTitle,
-      url: `${origin}${locale === 'zh' ? '/zh' : '/'}`,
+      url: siteUrl(locale === 'zh' ? '/zh' : '/'),
       lang: t.htmlLang,
-      image: `${origin}/og.png`,
+      image: `${SITE_ORIGIN}/og.png`,
+      robots: 'index,follow',
     })
     void fetchMe().then((me) => setSignedIn(Boolean(me)))
     const observer = new IntersectionObserver(
@@ -72,6 +74,10 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
     return () => window.clearInterval(id)
   }, [demoOpen])
 
+  useEffect(() => {
+    setLoadedPosters((current) => (current.includes(poster) ? current : [...current, poster]))
+  }, [poster])
+
   const closeNav = () => setNavOpen(false)
   const onHeroCta = () => track('cta_hero_start', { place: 'hero', signed_in: signedIn })
   const onHeaderCta = () => track('cta_hero_start', { place: 'header' })
@@ -96,6 +102,9 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
 
   return (
     <div className="nod-landing">
+      <a className="skip-link" href="#main">
+        {t.skipMain}
+      </a>
       <header className={`site-header${navOpen ? ' nav-open' : ''}`}>
         <div className="shell header-inner">
           <a className="brand" href={home} onClick={closeNav}>
@@ -142,7 +151,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
         </div>
       </header>
 
-      <main id="top">
+      <main id="main">
         {accountDeletedNotice(typeof location === 'undefined' ? '' : location.search) ? (
           <p className="landing-deleted">{deleteAccountCopy.notice}</p>
         ) : null}
@@ -157,12 +166,16 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
               posterHover.current = false
             }}
           >
-            {HERO_POSTERS.map((item) => (
+            {HERO_POSTERS.filter((item) => loadedPosters.includes(item.id)).map((item) => (
               <img
                 key={item.id}
                 src={item.src}
+                srcSet={item.srcSet}
+                sizes={item.sizes}
                 alt={poster === item.id ? posterAlt[item.id] : ''}
                 className={poster === item.id ? 'on' : ''}
+                fetchPriority={item.id === poster ? 'high' : 'low'}
+                decoding="async"
               />
             ))}
           </div>

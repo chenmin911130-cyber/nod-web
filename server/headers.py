@@ -4,6 +4,8 @@ import hashlib
 import hmac
 import os
 
+from urllib.parse import urlparse
+
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -35,13 +37,14 @@ def content_security_policy() -> str:
     return (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev https://*.clerk.com "
-        f"https://challenges.cloudflare.com https://accounts.google.com https://apis.google.com{extra_h}; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        f"https://challenges.cloudflare.com https://static.cloudflareinsights.com https://accounts.google.com https://apis.google.com{extra_h}; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; "
         "font-src 'self' data: https://fonts.gstatic.com; "
         "img-src 'self' data: blob: https://img.clerk.com https://*.clerk.com https://www.google.com "
         f"https://*.googleusercontent.com{extra_h}; "
         "connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com wss://*.clerk.accounts.dev "
-        "https://accounts.google.com https://www.googleapis.com https://streaming.assemblyai.com "
+        "https://accounts.google.com https://www.googleapis.com https://cloudflareinsights.com "
+        "https://static.cloudflareinsights.com https://streaming.assemblyai.com "
         f"wss://streaming.assemblyai.com https://*.sentry.io https://*.ingest.sentry.io{extra_h}{extra_w}; "
         "frame-src https://*.clerk.accounts.dev https://*.clerk.com https://challenges.cloudflare.com "
         f"https://accounts.google.com{extra_h}; "
@@ -200,6 +203,65 @@ def host_allowed(scope: Scope, allowed_hosts: set[str]) -> bool:
     if client[0] in {"127.0.0.1", "::1", "localhost"} and host in {"127.0.0.1", "localhost"}:
         return True
     return False
+
+
+def canonical_apex_host(public_url: str) -> str:
+    host = (urlparse(public_url or "").hostname or "").strip().lower()
+    if host.startswith("www.") and host.count(".") >= 2:
+        return host[4:]
+    return host
+
+
+def apex_redirect_url(scope: Scope, public_url: str) -> str | None:
+    """www sibling of PUBLIC_URL → https://apex{path}. API and health stay put."""
+    if scope.get("type") != "http":
+        return None
+    path = scope.get("path") or "/"
+    if is_health_path(path) or path == "/api" or path.startswith("/api/"):
+        return None
+    apex = canonical_apex_host(public_url)
+    if not apex or apex in {"127.0.0.1", "localhost"} or "." not in apex:
+        return None
+    host = ""
+    for raw_key, raw_val in scope.get("headers") or []:
+        if raw_key.lower() == b"host":
+            host = raw_val.decode("latin1", "replace").split(":", 1)[0].strip().lower()
+            break
+    if host != f"www.{apex}":
+        return None
+    qs = scope.get("query_string") or b""
+    loc = f"https://{apex}{path}"
+    if qs:
+        loc += "?" + qs.decode("latin1", "replace")
+    return loc
+
+
+class ApexRedirectMiddleware:
+    """Send www HTML navigation to the apex host. API and WebSocket are unchanged."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        from server.settings import PUBLIC_URL
+
+        self.app = app
+        self.public_url = PUBLIC_URL
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        loc = apex_redirect_url(scope, self.public_url)
+        if not loc:
+            await self.app(scope, receive, send)
+            return
+        body = b""
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 301,
+                "headers": [
+                    (b"location", loc.encode("latin1")),
+                    (b"content-length", b"0"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
 
 
 class HostLockMiddleware:

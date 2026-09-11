@@ -122,6 +122,16 @@ class OtpApiTests(unittest.TestCase):
         self.assertIn("Disallow: /api/", text)
         self.assertIn("Allow: /", text)
 
+    def test_sitemap_lists_legal_pages_not_auth(self):
+        res = self.client.get("/sitemap.xml")
+        self.assertEqual(res.status_code, 200)
+        text = res.text
+        self.assertIn("/privacy", text)
+        self.assertIn("/terms", text)
+        self.assertIn("/consent", text)
+        self.assertNotIn("/login", text)
+        self.assertNotIn("/signup", text)
+
 
 class PublicUserSignInTests(unittest.TestCase):
     def test_sign_in_follows_clerk_id(self):

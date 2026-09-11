@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react'
 import '../landing/Landing.css'
 import './Admin.css'
 import { PRODUCT_NAME } from '../brand'
+import { applySeo } from './track'
+import { SITE_ORIGIN, siteUrl } from '../siteOrigin'
 import NodMark from './NodMark'
 
 type Tab = 'overview' | 'users' | 'sessions' | 'feedback' | 'settings'
@@ -140,7 +142,14 @@ export default function AdminPage() {
   }
 
   useEffect(() => {
-    document.title = `Admin · ${PRODUCT_NAME}`
+    applySeo({
+      title: `Admin · ${PRODUCT_NAME}`,
+      description: 'Nodpilot admin.',
+      url: siteUrl('/admin'),
+      lang: 'en',
+      image: `${SITE_ORIGIN}/og.png`,
+      robots: 'noindex,nofollow',
+    })
     void adminApi('/api/admin/overview')
       .then(() => {
         setAuthed(true)
