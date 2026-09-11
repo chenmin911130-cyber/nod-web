@@ -134,6 +134,69 @@ test.describe('Think switch', () => {
   })
 })
 
+/**
+ * #182 review: the two submit paths the unit tests could not reach — the page's
+ * attachment-only submit (which used to send a placeholder as the question and make
+ * the server search for it) and the Live Q&A Retry entry (which did not exist).
+ */
+test.describe('Think submit identity', () => {
+  test('an attachment-only submit carries no question text', async ({ page }) => {
+    // The upload endpoint itself is not this test's subject.
+    await page.route('**/api/attach/extract', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '{"id":"attach-1"}' }),
+    )
+    const { sent } = await mockWs(page)
+    await page.locator('.prompt-row input[type=file]').setInputFiles({
+      name: 'payroll.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('PRIVATE PAYROLL'),
+    })
+    const answer = page.locator('.gen-btn')
+    await expect(answer).toBeEnabled()
+    await answer.click()
+
+    await expect.poll(() => sent.filter((m) => m.type === 'ask').length).toBe(1)
+    const frame = sent.filter((m) => m.type === 'ask')[0]
+    // The placeholder the card shows must NOT be the question that gets searched.
+    expect(frame.text).toBe('')
+    expect(frame.think).toBe(false)
+    expect(typeof frame.submit_id).toBe('string')
+    expect(frame.submit_id).not.toBe('')
+  })
+
+  test('Retry re-asks with the Think value the question ran with', async ({ page }) => {
+    const { sent, send } = await mockWs(page)
+    const toggle = page.getByRole('switch', { name: 'Think' })
+    await toggle.click()
+    await page.locator('.prompt-input').fill('what is new?')
+    await page.locator('.prompt-input').press('Enter')
+    await expect.poll(() => sent.filter((m) => m.type === 'ask').length).toBe(1)
+    const firstSubmitId = sent.filter((m) => m.type === 'ask')[0].submit_id
+
+    // The server answers, echoing the value the question ran with.
+    send({ type: 'question', id: 'q-retry', text: 'what is new?', think: true })
+    send({ type: 'chunk', id: 'q-retry', text: 'ok' })
+    send({ type: 'done', id: 'q-retry', stt: 0, llm: 1, ok: true })
+
+    // The demo seed already shows one answered card, so scope to the newest one.
+    const retry = page.locator('.qa-ai-card').last().getByRole('button', { name: 'Retry' })
+    await expect(retry).toBeVisible()
+
+    // The switch is off for the NEXT question; the retry still runs as the original
+    // did, and names the answer it retries so the server can reuse that lookup.
+    await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-checked', 'false')
+    await retry.click()
+
+    await expect.poll(() => sent.filter((m) => m.type === 'ask').length).toBe(2)
+    const frame = sent.filter((m) => m.type === 'ask')[1]
+    expect(frame.think).toBe(true)
+    expect(frame.retry_of).toBe('q-retry')
+    expect(frame.mode).toBe('ask')
+    expect(frame.submit_id).not.toBe(firstSubmitId)
+  })
+})
+
 test.describe('Think answer rendering', () => {
   test('shows the real sources and the retrieval time, and nothing extra for a plain answer', async ({ page }) => {
     const { send } = await mockWs(page)

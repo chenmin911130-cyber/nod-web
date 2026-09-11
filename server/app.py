@@ -1803,6 +1803,11 @@ class Pipeline:
         # and must not be omitted — otherwise the next transcript line steals the card.
         shown = (display_text or t).strip() if not internal else t
         ev: dict[str, Any] = {"type": "question", "id": qid, "text": shown}
+        if think and mode in ("ask", "file_ask"):
+            # #182: echo the value THIS question is running with. The client stores
+            # it with the answer so a later Retry re-asks the question the way it was
+            # originally submitted instead of guessing from the switch as it is now.
+            ev["think"] = True
         if not internal:
             heard = self._heard_lang or (detect_question_lang(display_text or t) if mode in ("ask", "file_ask") else None)
             if heard:
@@ -4386,15 +4391,40 @@ class Session:
             context,
             gen=gen,
             think=self._think_snapshot(),
-            submit_id=self._candidate_submit_id(keys),
+            submit_id=self._candidate_submit_id(question, frags),
         ):
             return False
         return True
 
-    def _candidate_submit_id(self, keys: list[str]) -> str:
-        """A stable id for ONE committed voice candidate (used by the search gate)."""
-        digest = hashlib.sha1("|".join(keys).encode("utf-8", "ignore")).hexdigest()[:24]
-        return f"qa-{self._qa_session_gen}-{digest}"
+    def _candidate_submit_id(self, question: str, frags: list[dict[str, Any]]) -> str:
+        """A persistent, session-scoped identity for ONE committed voice candidate.
+
+        Built only from values that outlive this process — the usage session, the Q&A
+        session epoch, the STT turn each fragment came from, and the question text.
+        Deliberately NOT from the fragment ids as such: ``fragment_identity`` folds in
+        ``id(self)`` (a memory address, see ``qa_semantic.fragment_identity``), which a
+        re-created listener can reuse, and which a restart changes. Keying the paid
+        lookup on that would let one submit be taken for another — handing back the
+        wrong sources, or refusing a legitimate search as a duplicate.
+        """
+        turns: list[str] = []
+        for frag in frags:
+            meta = frag.get("meta") if isinstance(frag.get("meta"), dict) else {}
+            turn = meta.get("stt_turn")
+            # Without a real STT turn the synthetic ids (`s<n>` / `f<n>`) are already
+            # process-independent, so they are safe to use as the fallback.
+            turns.append(str(turn) if turn is not None else str(frag.get("id") or ""))
+        digest = hashlib.sha1(
+            "\x00".join(
+                [
+                    str(getattr(self, "usage_session_id", "") or ""),
+                    str(self._qa_session_gen),
+                    ",".join(sorted(turns)),
+                    (question or "").strip(),
+                ]
+            ).encode("utf-8", "ignore")
+        ).hexdigest()[:24]
+        return f"qa-{digest}"
 
     def _qa_drop(self, *, reason: str, trigger: str = "") -> None:
         """Discard the pending candidate WITHOUT answering it."""
@@ -5799,15 +5829,18 @@ class Session:
         # #182: a manual recording is a SUBMIT — capture the switch value and a
         # submit identity at the confirm instant (not after transcription, and not
         # whenever the answer thread happens to start), then carry both through.
+        # The identity is session-scoped; the question text is folded in inside
+        # `_finish_manual`, once the recording has actually been transcribed, so a
+        # restarted counter can never hand this recording another one's lookup.
         self._manual_seq = int(getattr(self, "_manual_seq", 0) or 0) + 1
-        submit_id = f"manual-{getattr(self, 'usage_session_id', '') or 'local'}-{self._manual_seq}"
+        submit_ref = f"manual-{getattr(self, 'usage_session_id', '') or 'local'}-{self._manual_seq}"
         think_flag = self._think_snapshot()
         threading.Thread(
-            target=self._finish_manual, args=(pcm,), kwargs={"think": think_flag, "submit_id": submit_id}, daemon=True
+            target=self._finish_manual, args=(pcm,), kwargs={"think": think_flag, "submit_ref": submit_ref}, daemon=True
         ).start()
         self._offer_save_history()
 
-    def _finish_manual(self, pcm: bytes, *, think: bool = False, submit_id: str = "") -> None:
+    def _finish_manual(self, pcm: bytes, *, think: bool = False, submit_ref: str = "") -> None:
         self._set_engine("transcribing")
         try:
             text, lang = self._transcribe_manual_pcm(pcm)
@@ -5848,13 +5881,33 @@ class Session:
         try:
             # #182: the manual (tap-to-confirm) entry is a real submit entry, so it
             # carries the same Think snapshot and submit identity as the other two.
-            self.pipeline.process_text(cleaned, "ask", heard, think=think, submit_id=submit_id)
+            self.pipeline.process_text(
+                cleaned,
+                "ask",
+                heard,
+                think=think,
+                submit_id=self._manual_submit_id(submit_ref, cleaned),
+            )
         finally:
             if self._busy_token is tok:
                 self._release_busy(tok)
                 self._set_engine("idle")
                 self._emit_phase()
                 self._drain_pending_ask()
+
+    def _manual_submit_id(self, submit_ref: str, question: str) -> str:
+        """A session-scoped identity for one confirmed recording.
+
+        The recording counter lives in memory, so it restarts with the process; the
+        transcribed question is folded in so a restarted counter (same session, same
+        number, different question) cannot match an older row and be answered with
+        that row's sources.
+        """
+        ref = str(submit_ref or "").strip()
+        if not ref:
+            return ""
+        digest = hashlib.sha1((question or "").strip().encode("utf-8", "ignore")).hexdigest()[:12]
+        return f"{ref}-{digest}"
 
     def _drain_pending_ask(self) -> None:
         # Summarize/translate queued while busy must run after the current

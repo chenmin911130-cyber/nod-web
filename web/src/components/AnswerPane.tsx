@@ -17,6 +17,8 @@ interface Props {
   /** #182: session Think switch — the toggle sits above the existing input. */
   think?: boolean
   onThink?: (on: boolean) => void
+  /** #182: re-ask one answered question with the Think value it originally ran with. */
+  onRetryTurn?: (id: string) => void
 }
 
 function Sparkle() {
@@ -28,7 +30,7 @@ function Sparkle() {
   )
 }
 
-export default function AnswerPane({ currentQ, partial, turns, busy, listening, onAsk, onCompose, think = false, onThink }: Props) {
+export default function AnswerPane({ currentQ, partial, turns, busy, listening, onAsk, onCompose, think = false, onThink, onRetryTurn }: Props) {
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<LocalAttach[]>([])
   const [now, setNow] = useState(() => Date.now())
@@ -58,7 +60,11 @@ export default function AnswerPane({ currentQ, partial, turns, busy, listening, 
   const submit = () => {
     const t = input.trim()
     if (busy || (!t && files.length === 0)) return
-    onAsk(t || 'Please review the attached files.', files.length ? toPayload(files) : undefined)
+    // #182: an attachment-only submit sends an EMPTY question. The placeholder is
+    // only a display label — sending it as the question made the server treat it as
+    // a real question and run a paid web search for "Please review the attached
+    // files."; the server labels the card from the file names on its own.
+    onAsk(t, files.length ? toPayload(files) : undefined)
     setInput('')
     setFiles([])
   }
@@ -107,6 +113,7 @@ export default function AnswerPane({ currentQ, partial, turns, busy, listening, 
                   generating={busy && t.id === last?.id && !t.a}
                   msAgo={msAgo(t.id)}
                   onFollowUp={followUp}
+                  onRetry={onRetryTurn ? () => onRetryTurn(t.id) : undefined}
                   sources={t.sources}
                 />
               ))}

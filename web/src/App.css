@@ -5022,6 +5022,12 @@ a.tb-menu-action {
   border-top: 1px solid #24303a;
 }
 
+.qa-ai-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
 .qa-ai-link {
   padding: 0;
   border: 0;

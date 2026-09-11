@@ -286,7 +286,7 @@ type Action =
   | { type: 'retry_translate'; id: string }
   | { type: 'fail_translate'; id: string }
   | { type: 'ask_start' }
-  | { type: 'seed_ask'; text: string }
+  | { type: 'seed_ask'; text: string; think?: boolean }
   | { type: 'set_think'; on: boolean }
   | { type: 'fail_ask'; text: string }
   | { type: 'listen_scene'; scene: ListenScene }
@@ -552,8 +552,11 @@ function reducer(state: AppState, action: Action): AppState {
           }
           const pending = state.turns.findIndex((t) => t.id === '__pending_ask__')
           const turns = state.turns.slice()
-          if (pending >= 0) turns[pending] = { ...turns[pending], id: qid, q: text }
-          else turns.push({ id: qid, q: text, a: '' })
+          // #182: the server echoes the Think value this question actually runs
+          // with; it belongs to the turn, not to whatever the switch says later.
+          const turnThink = ev.think === true
+          if (pending >= 0) turns[pending] = { ...turns[pending], id: qid, q: text, think: turnThink }
+          else turns.push({ id: qid, q: text, a: '', think: turnThink })
           return { ...state, turns, currentQ: text, currentQId: qid, partial: '', busy: true, heardLang: heard ?? state.heardLang }
         }
         case 'line_update': {
@@ -986,7 +989,9 @@ function reducer(state: AppState, action: Action): AppState {
     case 'ask_start':
       return { ...state, busy: true, status: 'Asking…' }
     case 'seed_ask': {
-      const turns = [...state.turns, { id: '__pending_ask__', q: action.text, a: '' }]
+      // #182: the pending turn remembers the Think value this submit was made
+      // with, so the answer card can offer a Retry that re-runs it the same way.
+      const turns = [...state.turns, { id: '__pending_ask__', q: action.text, a: '', think: action.think === true }]
       return { ...state, turns, currentQ: action.text, busy: true, status: 'Asking…' }
     }
     case 'fail_ask': {
@@ -2507,12 +2512,12 @@ export default function App() {
 
   const handleAsk = useCallback((text: string, files?: AttachPayload[]) => {
     const label = text.trim() || (files?.length ? `Please review: ${files.map((f) => f.name).join(', ')}` : '')
-    dispatch({ type: 'seed_ask', text: label })
     // #182: freeze the submit at the instant the user sends. Reading the switch
     // after `parkAttaches` awaited meant a toggle flipped during the upload changed
     // a question that was already submitted; the submit id is generated here for
     // the same reason (and makes a duplicated submit free on the server).
     const think = stateRef.current.workspaceMode === 'interview' ? stateRef.current.thinkOn : undefined
+    dispatch({ type: 'seed_ask', text: label, think: think === true })
     const submit_id = newSubmitId()
     void (async () => {
       try {
@@ -2533,6 +2538,28 @@ export default function App() {
         })
       }
     })()
+  }, [])
+
+  // #182: Retry one Live Q&A answer. It re-asks the SAME question with the Think
+  // value that question originally ran with (the server echoed it on the turn),
+  // and names the answer it retries as `retry_of`, so the server reuses a lookup
+  // that already succeeded instead of paying for it again — and counts a new,
+  // linked attempt when the first one failed.
+  const handleRetryTurn = useCallback((turnId: string) => {
+    const s = stateRef.current
+    const turn = s.turns.find((t) => t.id === turnId)
+    const question = (turn?.q || '').trim()
+    if (!turn || !question || !turn.id || turn.id === '__pending_ask__') return
+    const think = turn.think === true
+    dispatch({ type: 'seed_ask', text: question, think })
+    window.api.send({
+      type: 'ask',
+      text: question,
+      mode: 'ask',
+      think,
+      retry_of: turn.id,
+      submit_id: newSubmitId(),
+    })
   }, [])
 
   // #182: the switch is session state; the socket sync below pushes it to the
@@ -3946,6 +3973,7 @@ export default function App() {
                 listening={listening}
                 onAsk={handleAsk}
                 onCompose={setComposeOpen}
+                onRetryTurn={handleRetryTurn}
                 think={state.thinkOn}
                 onThink={handleThink}
               />

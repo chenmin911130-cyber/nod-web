@@ -12,6 +12,7 @@ Two things are pinned here and nowhere else:
    as the answer.
 """
 
+import base64
 import threading
 import time
 import unittest
@@ -156,6 +157,73 @@ class SubmitSnapshotTests(unittest.TestCase):
         self.assertIs(calls[0].kwargs.get("think"), True)
         self.assertIs(calls[1].kwargs.get("think"), False)
 
+    def test_the_voice_submit_id_is_session_scoped_and_process_independent(self):
+        # #182 review: the fragment ids fold in `id(self)` (a memory address), so a
+        # submit identity built from them could be reused by a re-created listener,
+        # or collide across sessions and get a legitimate search refused. It is now
+        # a function of values that outlive the process: usage session, Q&A session
+        # epoch, STT turn, and the question itself.
+        sess = self._session()
+        sess._qa_init()
+        sess.usage_session_id = "sess-a"
+        aa = {"id": "t140234:7", "meta": {"stt_turn": 7, "listener_id": 140234}}
+        bb = {"id": "t999:7", "meta": {"stt_turn": 7, "listener_id": 999}}
+        first = sess._candidate_submit_id("怎么定价？", [aa])
+        # The same commit always maps to the same identity (a re-delivered candidate
+        # dedupes)...
+        self.assertEqual(first, sess._candidate_submit_id("怎么定价？", [dict(aa)]))
+        # ...and it does not depend on which listener OBJECT produced the fragment.
+        self.assertEqual(first, sess._candidate_submit_id("怎么定价？", [bb]))
+        # Another session, another question, another turn, another listen session:
+        # all different identities, so none of them can collide with this one.
+        sess.usage_session_id = "sess-b"
+        self.assertNotEqual(first, sess._candidate_submit_id("怎么定价？", [aa]))
+        sess.usage_session_id = "sess-a"
+        self.assertNotEqual(first, sess._candidate_submit_id("怎么交付？", [aa]))
+        self.assertNotEqual(
+            first, sess._candidate_submit_id("怎么定价？", [{"meta": {"stt_turn": 8}}])
+        )
+        sess._qa_session_gen += 1
+        self.assertNotEqual(first, sess._candidate_submit_id("怎么定价？", [aa]))
+        # A synthetic fragment (no STT turn) still yields a usable, stable id.
+        synth = {"id": "s3", "meta": {}}
+        self.assertEqual(
+            sess._candidate_submit_id("怎么定价？", [synth]),
+            sess._candidate_submit_id("怎么定价？", [dict(synth)]),
+        )
+
+    def test_the_manual_submit_id_folds_in_the_transcribed_question(self):
+        # The recording counter restarts with the process; the question text keeps a
+        # restarted counter from matching an older row (and its sources).
+        sess = self._session()
+        self.assertTrue(sess._manual_submit_id("manual-sess-1", "怎么定价？"))
+        self.assertEqual(
+            sess._manual_submit_id("manual-sess-1", "怎么定价？"),
+            sess._manual_submit_id("manual-sess-1", "怎么定价？"),
+        )
+        self.assertNotEqual(
+            sess._manual_submit_id("manual-sess-1", "怎么定价？"),
+            sess._manual_submit_id("manual-sess-1", "怎么交付？"),
+        )
+        self.assertEqual(sess._manual_submit_id("", "怎么定价？"), "")
+
+    def test_an_attachment_only_submit_never_searches_from_the_real_entry(self):
+        # #182 review: the page used to send the placeholder as the question, which
+        # walked straight past the empty-question guard. The guard is therefore
+        # exercised through `ask()` — the entry the page actually calls — not only by
+        # handing `process_text` an empty string.
+        sess = self._session()
+        sess.set_think(True)
+        data = base64.b64encode(b"PRIVATE PAYROLL 123456").decode()
+        files = [{"name": "payroll.txt", "mime": "text/plain", "data": data}]
+        sess.ask("", files, "ask", submit_id="submit-attach")
+        self.assertTrue(self._wait(lambda: sess.pipeline.process_text.called))
+        call = sess.pipeline.process_text.call_args
+        self.assertEqual(call.kwargs.get("search_text"), "", "nothing to search for")
+        self.assertEqual(call.args[1], "file_ask")
+        self.assertIn("PRIVATE PAYROLL", call.args[0], "the model still gets the attachment")
+        self.assertEqual(call.kwargs.get("submit_id"), "submit-attach")
+
     def test_the_value_the_client_froze_with_the_message_wins(self):
         # #182 review: the backend read the session switch and ignored the `think`
         # field the client sent, so a toggle flipped while the question was in flight
@@ -293,6 +361,7 @@ class ThinkAnswerPathTests(unittest.TestCase):
         pipe.think_client = _client(results=[("A", "https://e.com/a", None)])
         pipe.process_text("what is new?", "ask")
         self.assertEqual(_events(events, "sources"), [])
+        self.assertNotIn("think", _events(events, "question")[-1])
         kwargs = pipe.client.chat.completions.create.call_args.kwargs
         self.assertEqual(kwargs["extra_body"], {"thinking": {"type": "disabled"}})
 
@@ -326,6 +395,9 @@ class ThinkAnswerPathTests(unittest.TestCase):
         self.assertEqual(sources[0]["results"][0]["url"], "https://e.com/a")
         self.assertEqual(sources[0]["retrieved_at_text"], "2026-09-10 04:00 UTC")
         self.assertEqual(sources[0]["note"], "")
+        # The question frame carries the value this answer runs with, so the answer
+        # card can offer a Retry that re-runs the question the same way.
+        self.assertIs(_events(events, "question")[-1].get("think"), True)
         self.assertTrue(_events(events, "done")[-1]["ok"])
 
     def test_an_unconfigured_lookup_is_reported_not_faked(self):

@@ -12,7 +12,9 @@ export type AnswerSources = {
   results: AnswerSource[]
   note: string
 }
-export type Turn = { id: string; q: string; a: string; sources?: AnswerSources }
+// #182 Think: `think` is the value the question was SUBMITTED with (the server
+// echoes it back), so a Retry can re-ask it the way it originally ran.
+export type Turn = { id: string; q: string; a: string; sources?: AnswerSources; think?: boolean }
 export type CatchNote = {
   id: string
   title: string
@@ -162,7 +164,7 @@ export type EngineEvent =
   | { type: 'phase'; capture: CaptureState; engine: EngineState }
   | { type: 'status'; text: string }
   | { type: 'partial'; text: string; language?: string; speaker?: string }
-  | { type: 'question'; id: string; text: string; language?: string; speaker?: string }
+  | { type: 'question'; id: string; text: string; language?: string; speaker?: string; think?: boolean }
   | { type: 'line_update'; id: string; text: string; language?: string; speaker?: string; rev: number }
   | { type: 'chunk'; id: string; text: string }
   | ({ type: 'sources'; id?: string } & AnswerSources)

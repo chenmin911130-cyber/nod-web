@@ -10,6 +10,7 @@ export function QaAnswerCard({
   generating = false,
   msAgo,
   onFollowUp,
+  onRetry,
   sources,
 }: {
   question: string
@@ -18,6 +19,8 @@ export function QaAnswerCard({
   generating?: boolean
   msAgo: number
   onFollowUp?: () => void
+  /** #182: re-ask this question with the Think value it originally ran with. */
+  onRetry?: () => void
   /** #182: real sources + the retrieval time, when Think answered this question. */
   sources?: AnswerSources
 }) {
@@ -53,14 +56,19 @@ export function QaAnswerCard({
             Ask follow-up
             <span aria-hidden="true"> →</span>
           </button>
-          {parts.more && !pending ? (
-            <button type="button" className="qa-ai-link" onClick={() => setOpen((v) => !v)}>
-              More
-              <span aria-hidden="true">{open ? ' ∧' : ' ∨'}</span>
-            </button>
-          ) : (
-            <span />
-          )}
+          <span className="qa-ai-actions">
+            {onRetry && !pending ? (
+              <button type="button" className="qa-ai-link" onClick={onRetry}>
+                Retry
+              </button>
+            ) : null}
+            {parts.more && !pending ? (
+              <button type="button" className="qa-ai-link" onClick={() => setOpen((v) => !v)}>
+                More
+                <span aria-hidden="true">{open ? ' ∧' : ' ∨'}</span>
+              </button>
+            ) : null}
+          </span>
         </div>
       </div>
     </article>
