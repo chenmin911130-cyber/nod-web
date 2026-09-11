@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import re
 import time
+
+import httpx
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -218,33 +220,6 @@ def sources_payload(outcome: SearchOutcome) -> dict[str, Any]:
     }
 
 
-def _default_items(payload: Any) -> list[Mapping[str, Any]]:
-    """Read the provider's result list into canonical mappings.
-
-    Deliberately forgiving about field names and strict about shape: anything it
-    cannot recognise becomes "no results" (``empty``), never an invented source.
-    The provider-specific field mapping is pinned when the provider is confirmed.
-    """
-    if not isinstance(payload, Mapping):
-        return []
-    raw = payload.get("results")
-    if not isinstance(raw, list):
-        return []
-    items: list[Mapping[str, Any]] = []
-    for entry in raw:
-        if not isinstance(entry, Mapping):
-            continue
-        items.append(
-            {
-                "title": entry.get("title") or entry.get("name"),
-                "url": entry.get("url") or entry.get("link"),
-                "snippet": entry.get("content") or entry.get("snippet") or entry.get("description"),
-                "published_at": entry.get("published_date") or entry.get("published_at") or entry.get("date"),
-            }
-        )
-    return items
-
-
 Transport = Callable[[dict[str, Any]], Any]
 
 
@@ -263,13 +238,14 @@ class SearchClient:
         clock: Callable[[], float] = time.time,
         timeout: float = 8.0,
         limit: int = MAX_RESULTS,
-        item_parser: Callable[[Any], list[Mapping[str, Any]]] = _default_items,
+        item_parser: Callable[[Any], list[Mapping[str, Any]]] | None = None,
     ) -> None:
         self._transport = transport
         self._clock = clock
         self._timeout = float(timeout)
         self._limit = int(limit)
-        self._item_parser = item_parser
+        # Default to the confirmed search backend (#182: Parallel Search API).
+        self._item_parser = item_parser if item_parser is not None else parallel_items
 
     def search(self, question: str, hint: str | None = None) -> SearchOutcome:
         query = build_query(question, hint)
@@ -287,3 +263,144 @@ class SearchClient:
             )
         status = STATUS_OK if results else STATUS_EMPTY
         return SearchOutcome(status=status, query=query, results=tuple(results), retrieved_at=self._clock())
+
+# --- Parallel Search API (#182, the confirmed backend) -----------------------
+#
+# Contract pinned from the official OpenAPI spec (docs.parallel.ai/public-openapi.json):
+#   POST https://api.parallel.ai/v1/search
+#   header  x-api-key: <PARALLEL_API_KEY>
+#   body    {objective, search_queries[] (>=1, 3-6 words each), mode, max_chars_total}
+#   resp    {search_id, session_id, results:[{url,title,publish_date,excerpts[]}], usage[]}
+# Think runs mode "basic" only and never calls Task / Monitor / Responses / Extract.
+
+PARALLEL_SEARCH_ENDPOINT = "https://api.parallel.ai/v1/search"
+PARALLEL_MODE = "basic"
+MAX_SEARCH_QUERIES = 3
+MAX_QUERY_WORDS = 6
+MAX_CHARS_TOTAL = 6000
+MAX_OBJECTIVE_CHARS = 400
+
+# Filler that costs a keyword slot without adding meaning. The full question still
+# travels as `objective`, so dropping these never changes what is being asked.
+_STOPWORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did",
+    "of", "to", "in", "on", "at", "for", "with", "and", "or", "but", "if", "then", "than",
+    "this", "that", "these", "those", "it", "its", "as", "by", "from", "about", "into",
+    "i", "we", "you", "they", "he", "she", "me", "us", "them", "my", "our", "your", "their",
+    "can", "could", "should", "would", "will", "shall", "may", "might", "must",
+    "please", "tell", "know", "want", "need", "help",
+    # Question words are intent, not keywords: `objective` already carries the
+    # whole question, so they only cost a keyword slot.
+    "what", "how", "why", "when", "where", "which", "who", "whom", "whose",
+}
+_CJK = re.compile(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9'\-.]*")
+
+
+def _queries_from_words(question: str) -> list[str]:
+    tokens = [t for t in _TOKEN.findall(question)]
+    content = [t for t in tokens if len(t) > 1 and t.lower() not in _STOPWORDS]
+    if not content:
+        content = tokens  # a question made only of stopwords is still a question
+    if not content:
+        return []
+    queries: list[str] = []
+    first = " ".join(content[:MAX_QUERY_WORDS])
+    if first:
+        queries.append(first)
+    if len(content) > MAX_QUERY_WORDS and len(queries) < MAX_SEARCH_QUERIES:
+        last = " ".join(content[-MAX_QUERY_WORDS:])
+        if last and last != first:
+            queries.append(last)
+    return queries
+
+
+def build_search_queries(
+    question: str,
+    *,
+    max_queries: int = MAX_SEARCH_QUERIES,
+    words: int = MAX_QUERY_WORDS,
+) -> list[str]:
+    """1-3 concise keyword queries derived from the question, without a model call.
+
+    The order forbids spending an extra model request just to phrase the search,
+    so this is a deterministic, tested reduction: whitespace-delimited questions
+    become content-word queries (<= words each), and a CJK question — which cannot
+    be word-split without a model — travels whole and bounded. The untouched
+    question still goes out as `objective`, so nothing is lost either way.
+    """
+    text = _collapse(question)
+    if not text:
+        return []
+    if not _CJK.search(text):
+        queries = _queries_from_words(text)
+        return queries[: max(1, max_queries)]
+    # CJK: no reliable word boundary without a tokenizer; one bounded query.
+    return [text[: max(6, words * 4)]]
+
+
+def parallel_items(payload: Any) -> list[Mapping[str, Any]]:
+    """Read the Parallel response into canonical items (spec: V1WebSearchResult)."""
+    if not isinstance(payload, Mapping):
+        return []
+    raw = payload.get("results")
+    if not isinstance(raw, list):
+        return []
+    items: list[Mapping[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, Mapping):
+            continue
+        excerpts = entry.get("excerpts")
+        snippet = ""
+        if isinstance(excerpts, list):
+            snippet = " ".join(str(e).strip() for e in excerpts if str(e or "").strip())
+        items.append(
+            {
+                "title": entry.get("title"),
+                "url": entry.get("url"),
+                "snippet": snippet,
+                # Parallel already normalises this to YYYY-MM-DD, or omits it.
+                "published_at": entry.get("publish_date"),
+            }
+        )
+    return items
+
+
+def parallel_transport(
+    api_key: str,
+    *,
+    endpoint: str = PARALLEL_SEARCH_ENDPOINT,
+    mode: str = PARALLEL_MODE,
+    max_chars_total: int = MAX_CHARS_TOTAL,
+    client_model: str = "",
+) -> Transport:
+    """The only place Think touches the network.
+
+    Implicit retries are disabled at the HTTP layer on purpose: a request that was
+    sent but timed out already counts against the search budget, and the budget
+    gate must not see a silent second call.
+    """
+
+    def transport(request: dict[str, Any]) -> Any:
+        question = str(request.get("query") or "")
+        quote = build_query(question, None, max_chars=MAX_OBJECTIVE_CHARS)
+        queries = build_search_queries(question)
+        if not queries:
+            return {"results": []}
+        body: dict[str, Any] = {
+            "objective": quote,
+            "search_queries": queries,
+            "mode": mode,
+            "max_chars_total": int(max_chars_total),
+        }
+        if client_model:
+            body["client_model"] = client_model
+        timeout = float(request.get("timeout") or 8.0)
+        # retries=0: see the docstring. No SDK, no hidden backoff.
+        transport_layer = httpx.HTTPTransport(retries=0)
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=5.0), transport=transport_layer) as client:
+            resp = client.post(endpoint, json=body, headers={"x-api-key": api_key})
+            resp.raise_for_status()
+            return resp.json()
+
+    return transport

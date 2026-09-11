@@ -839,61 +839,34 @@ def _friendly_gen_error(err: BaseException) -> str:
 #
 # DeepSeek's API has no server-side search (its Responses API ignores every
 # built-in tool, `web_search` included), so "latest sources" means this server
-# runs the lookup itself and hands the model the evidence. The provider contract
-# below (endpoint, request body, response fields) is NOT verified against a real
-# key yet — see the PR's unverified items. A missing provider/key is reported as
-# `NotConfigured` on the answer rather than silently pretending to have searched.
-THINK_SEARCH_PROVIDERS = {
-    # provider -> (env var holding the key, default endpoint)
-    "tavily": ("TAVILY_API_KEY", "https://api.tavily.com/search"),
-}
+# runs the lookup itself — through the Parallel Search API (mode `basic`) — and
+# hands the results to DeepSeek for the thinking answer. The request/response
+# contract is pinned from the official OpenAPI spec (see `server/think.py`).
+#
+# The key is backend-only: read from the environment (repo `.env` locally, the
+# deployment's Variables in production) and never logged, sent to a client, or
+# compiled into the client bundle. A missing key is reported as `NotConfigured`
+# on the answer instead of silently pretending a lookup happened.
+PARALLEL_KEY_ENV = "PARALLEL_API_KEY"
 
 
 def build_think_client(cfg: dict[str, Any] | None = None) -> "think_search.SearchClient | None":
-    """Build the search client from configuration, or None when it is not set up.
-
-    The key is read from the environment (the repo's ``.env`` / the deployment's
-    env), deliberately NOT from the in-app key store: adding a key row would be a
-    UI change, and #182 keeps the rest of the interface untouched.
-    """
-    llm = (cfg or {}).get("llm") or {}
-    provider = str(llm.get("think_search_provider") or os.environ.get("THINK_SEARCH_PROVIDER") or "").strip().lower()
-    if not provider:
-        return None
-    entry = THINK_SEARCH_PROVIDERS.get(provider)
-    if entry is None:
-        logging.getLogger("nod").warning("think_search unknown_provider=%s", provider)
-        return None
-    env_name, default_endpoint = entry
-    key = (os.environ.get(env_name, "") or "").strip()
+    """Build the Parallel-backed search client, or None when it is not set up."""
+    key = (os.environ.get(PARALLEL_KEY_ENV, "") or "").strip()
     if not key:
         return None
-    endpoint = str(os.environ.get("THINK_SEARCH_ENDPOINT") or default_endpoint).strip() or default_endpoint
+    endpoint = (os.environ.get("THINK_SEARCH_ENDPOINT") or "").strip() or think_search.PARALLEL_SEARCH_ENDPOINT
+    model = str(((cfg or {}).get("llm") or {}).get("model") or "").strip()
     return think_search.SearchClient(
-        _search_transport(key, endpoint),
+        think_search.parallel_transport(
+            key,
+            endpoint=endpoint,
+            client_model=model,
+            max_chars_total=THINK_SEARCH_MAX_CHARS_TOTAL,
+        ),
         timeout=THINK_SEARCH_TIMEOUT_SECONDS,
         limit=THINK_SEARCH_MAX_RESULTS,
     )
-
-
-def _search_transport(api_key: str, endpoint: str) -> "think_search.Transport":
-    """The only place #182 touches the network for a lookup."""
-
-    def transport(request: dict[str, Any]) -> Any:
-        body = {
-            "api_key": api_key,
-            "query": request["query"],
-            "max_results": int(request.get("limit") or THINK_SEARCH_MAX_RESULTS),
-            "search_depth": "basic",
-        }
-        timeout = float(request.get("timeout") or THINK_SEARCH_TIMEOUT_SECONDS)
-        with httpx.Client(timeout=httpx.Timeout(timeout, connect=5.0)) as client:
-            resp = client.post(endpoint, json=body)
-            resp.raise_for_status()
-            return resp.json()
-
-    return transport
-
 
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "gif", "bmp"}
 _TEXT_EXTS = {"txt", "md"}

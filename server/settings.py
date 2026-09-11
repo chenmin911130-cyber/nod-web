@@ -184,6 +184,10 @@ QA_PRIOR_QA_PAIRS = max(0, int(float(os.environ.get("QA_PRIOR_QA_PAIRS") or "2")
 # periodic search: "latest" means "looked up when this question was submitted".
 THINK_SEARCH_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("THINK_SEARCH_TIMEOUT_SECONDS") or "8"))
 THINK_SEARCH_MAX_RESULTS = max(1, int(float(os.environ.get("THINK_SEARCH_MAX_RESULTS") or "5")))
+# Upper bound on excerpt characters returned across all search results.
+THINK_SEARCH_MAX_CHARS_TOTAL = max(
+    500, int(float(os.environ.get("THINK_SEARCH_MAX_CHARS_TOTAL") or "6000"))
+)
 # Thinking-mode effort for a Think answer (DeepSeek maps unknown values to its own
 # scale). Only applied when the answer actually runs in thinking mode.
 THINK_REASONING_EFFORT = (os.environ.get("THINK_REASONING_EFFORT") or "high").strip() or "high"
