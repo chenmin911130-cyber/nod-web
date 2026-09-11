@@ -2,6 +2,13 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-11 · #191 Hermes：守卫参数加了却没人传，早退漏掉 busy 释放
+
+- 我以为：`_qa_commit` 新增 `judged_at` 就关掉了「判断期间来了 partial」的窗口；commit message 甚至写着「早退仍会通过既有 `finally` 释放 busy」。
+- 实际：worker（`_qa_judge_worker`）调用 `_qa_commit` 时根本没传 `judged_at` —— 线上守卫是死代码，只有测试手工传参，所以全绿。而 `_run_interview_answer` 的 generation 早退发生在 `finally` **之前**，busy token 是 `_start_interview_answer` 先取的，早退后永不释放 → 会话一直 busy，后续问答全部排队。同类第三处：排队问题被 `_pending_q.popleft()` 取出时没有 generation 可校，而 `_qa_reset` 不清队列（New / 新 listen / close 都不清），被放弃会话的问题仍会开答。
+- 规则：加「守卫参数」必须同时改**唯一的生产调用点**，并写一条从真实调用链注入竞态的测试（本次：把 partial 塞进 `_qa_commit` 调用内部 —— 唯一一个 worker 自检已跑完的窗口）。测试通过 ≠ 路径被覆盖：先问这条测试是走到生产代码，还是自己在构造前置条件。任何 `return` 前先问「这个 claim/token 是谁在哪取的、谁负责放」；带 claim 的早退必须走和正常结束同一条释放/交接路径。
+- 涉及：#191 · `server/app.py` `_qa_judge_worker` / `_qa_commit(judged_at=)` / `_finish_interview_answer` · `tests/test_live_qa_buffer.py::ReviewFixTests`
+
 ## 2026-09-11 · Bundle 81：绕过受保护打包入口，把主仓旧插件编进 App（重演 Bundle 71）
 - 我以为：在 `/tmp` 隔离 worktree 里手工拼 `prepare-ios-web → cap sync ios → patch-ios-plist → xcodebuild`，并让 `node_modules` / `web/node_modules` 软链到主仓共用依赖就够了；`cap sync` 自己会 `pod install`。
 - 实际：`/tmp/ios-build` 的 `node_modules` 指向主仓 → Podfile.lock 与 Pods 工程按 realpath 解析到 `/Users/minchen/Projects/nod-web/plugins`（停在旧 commit），新的网页配旧的 `NodMic.framework`：`strings` 里 `startUplink` / `AudioUplink` / `PhonePcmStore` / `WatchPcmIngest` 全为 0，真机 Listen 报 “Background recording is unavailable. Reopen the app and try again.”。同一轮还把 `prepare-ios-web` 跑在 `npm run build --prefix web` **之前**，`web/dist/index.html` 的原生跳转桩被 vite 覆盖 —— 两处都不报错。
