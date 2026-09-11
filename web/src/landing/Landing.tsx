@@ -21,6 +21,7 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
   const [demoOpen, setDemoOpen] = useState(false)
   const [demoMode, setDemoMode] = useState<DemoMode>('meeting')
   const [poster, setPoster] = useState<HeroPosterId>('meeting')
+  const [loadedPosters, setLoadedPosters] = useState<HeroPosterId[]>(['meeting'])
   const posterHover = useRef(false)
   const posterManualAt = useRef(0)
   const priced = useRef(false)
@@ -71,6 +72,10 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
     }, 7000)
     return () => window.clearInterval(id)
   }, [demoOpen])
+
+  useEffect(() => {
+    setLoadedPosters((current) => (current.includes(poster) ? current : [...current, poster]))
+  }, [poster])
 
   const closeNav = () => setNavOpen(false)
   const onHeroCta = () => track('cta_hero_start', { place: 'hero', signed_in: signedIn })
@@ -157,12 +162,16 @@ export default function Landing({ locale = 'en' }: { locale?: Locale; clerkEnabl
               posterHover.current = false
             }}
           >
-            {HERO_POSTERS.map((item) => (
+            {HERO_POSTERS.filter((item) => loadedPosters.includes(item.id)).map((item) => (
               <img
                 key={item.id}
                 src={item.src}
+                srcSet={item.srcSet}
+                sizes={item.sizes}
                 alt={poster === item.id ? posterAlt[item.id] : ''}
                 className={poster === item.id ? 'on' : ''}
+                fetchPriority={item.id === poster ? 'high' : 'low'}
+                decoding="async"
               />
             ))}
           </div>
