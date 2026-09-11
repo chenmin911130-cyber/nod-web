@@ -2,6 +2,13 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-11 · Bundle 81：绕过受保护打包入口，把主仓旧插件编进 App（重演 Bundle 71）
+- 我以为：在 `/tmp` 隔离 worktree 里手工拼 `prepare-ios-web → cap sync ios → patch-ios-plist → xcodebuild`，并让 `node_modules` / `web/node_modules` 软链到主仓共用依赖就够了；`cap sync` 自己会 `pod install`。
+- 实际：`/tmp/ios-build` 的 `node_modules` 指向主仓 → Podfile.lock 与 Pods 工程按 realpath 解析到 `/Users/minchen/Projects/nod-web/plugins`（停在旧 commit），新的网页配旧的 `NodMic.framework`：`strings` 里 `startUplink` / `AudioUplink` / `PhonePcmStore` / `WatchPcmIngest` 全为 0，真机 Listen 报 “Background recording is unavailable. Reopen the app and try again.”。同一轮还把 `prepare-ios-web` 跑在 `npm run build --prefix web` **之前**，`web/dist/index.html` 的原生跳转桩被 vite 覆盖 —— 两处都不报错。
+- 规则：iOS 打包只走仓库受保护入口 `npm run cap:sync`（`assert-roots → build → prepare → cap sync → patch → pin`）：它在编之前断言 `node_modules` 与 `nod-mic` / `nod-watch` / `nod-auth` 的 realpath 属于当前 worktree，并在 `pod install` 后断言 Pods 工程只编当前 checkout。隔离 worktree 必须自己 `npm ci`（根 + web），禁止把 `node_modules` / `web/node_modules` 链到别的 checkout，也不要手工拼 prepare/cap sync/patch。
+- 装完只核 Bundle 数字不够：必须核最终 `App.app` 的框架符号与编译清单（`NodMic.SwiftFileList` 的源码路径、`startUplink`/`AudioUplink` 等），并核 `capacitor.config.json` 的 `packageClassList`。
+- 涉及：#195 · Bundle 71 / 81 · `scripts/iosWorktreePods.mjs` · `scripts/package-ios.sh` · `/tmp/ios-build` → `/tmp/ios-82`
+
 ## 2026-09-11 · #190 Hermes：结束面板标签被 pointer capture 吃掉点击
 - 我以为：把手和标签栏 pointerdown 一律 `setPointerCapture`，再靠 `skipEndedClick` 区分拖动和 click，就能同时支持拖动手势和键盘/点击。
 - 实际：capture 会把后续 `click` 重定向到捕获元素，Live/Transcript/Notes 收不到 click，结束态切不了 tab；拖完留下的 `skipEndedClick` 还会吞下一次标签点击。9px 抖动会落在 tap/drag 缝里把面板展开。
