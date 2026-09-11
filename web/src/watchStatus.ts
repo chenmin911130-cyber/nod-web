@@ -6,15 +6,25 @@ export type WatchFace = {
   original: string
   translation: string
   previous: string
+  copyId: string
   history: WatchHistItem[]
 }
+
+/** Current original/translation on the live Watch face. History stays a preview.
+ *  WCSession dictionaries are ~65 KB; 12k chars per live field leaves headroom. */
+export const WATCH_LIVE_COPY_MAX = 12_000
+export const WATCH_HIST_LIMIT = 8
 
 type Pair = { id: string; original: string; translation: string }
 type Line = { id: string; text: string; translation?: string }
 type Turn = { id: string; q: string; a: string }
 
+export function watchKeepParagraphs(text: string): string {
+  return text.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 export function watchVisibleOriginal(original: string, translation: string): string {
-  const src = original.replace(/\s+/g, ' ').trim()
+  const src = watchKeepParagraphs(original)
   const dst = watchVisibleTranslation(translation)
   if (!src || !dst) return src
   if (src.toLowerCase() === dst.toLowerCase()) return ''
@@ -47,6 +57,13 @@ export function clipWatch(text: string, max: number): string {
   return `${t.slice(0, Math.max(1, max - 1))}…`
 }
 
+/** Current Watch copy: keep paragraphs; only a high safety cap, not the 800 preview. */
+export function watchLiveCopy(text: string): string {
+  const t = watchKeepParagraphs(text)
+  if (t.length <= WATCH_LIVE_COPY_MAX) return t
+  return `${t.slice(0, WATCH_LIVE_COPY_MAX - 1)}…`
+}
+
 export function buildWatchFace(input: {
   capture: string
   consentOpen: boolean
@@ -70,19 +87,24 @@ export function buildWatchFace(input: {
 
   let original = ''
   let translation = ''
+  let copyId = ''
   if (input.workspaceMode === 'translate' && lastPair) {
     original = lastPair.original
     translation = lastPair.translation
+    copyId = lastPair.id
   } else if (input.workspaceMode === 'interview' && lastTurn) {
     original = lastTurn.q
     translation = lastTurn.a
+    copyId = lastTurn.id
   } else if (input.workspaceMode !== 'interview' && lastLine) {
     original = lastLine.text
     translation = input.translateOn ? lastLine.translation || '' : ''
+    copyId = lastLine.id
   }
   if (listening && input.partial.trim()) {
     if (input.workspaceMode !== 'interview' || !translation.trim()) {
       original = input.partial.trim()
+      if (!copyId) copyId = 'partial'
     }
   }
   translation = watchVisibleTranslation(translation)
@@ -97,7 +119,7 @@ export function buildWatchFace(input: {
 
   const history: WatchHistItem[] = []
   if (input.workspaceMode === 'translate') {
-    for (const p of input.translatePairs.slice(-8).reverse()) {
+    for (const p of input.translatePairs.slice(-WATCH_HIST_LIMIT).reverse()) {
       const text = (p.translation || p.original).trim()
       if (!text) continue
       history.push({
@@ -107,7 +129,7 @@ export function buildWatchFace(input: {
       })
     }
   } else {
-    for (const ln of input.meetingLines.slice(-8).reverse()) {
+    for (const ln of input.meetingLines.slice(-WATCH_HIST_LIMIT).reverse()) {
       const text = (input.translateOn && ln.translation ? ln.translation : ln.text).trim()
       if (!text) continue
       history.push({
@@ -128,9 +150,10 @@ export function buildWatchFace(input: {
   return {
     listening,
     hint: clipWatch(hint, 140),
-    original: clipWatch(original, 800),
-    translation: clipWatch(translation, 800),
+    original: watchLiveCopy(original),
+    translation: watchLiveCopy(translation),
     previous,
+    copyId,
     history,
   }
 }

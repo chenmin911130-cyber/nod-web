@@ -18,6 +18,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var original = ""
     @Published var translation = ""
     @Published var previous = ""
+    @Published var copyId = ""
     @Published var history: [WatchHistItem] = []
     @Published var reachable = false
     @Published var speechLive = false
@@ -234,6 +235,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         original = ""
         translation = ""
         previous = ""
+        copyId = ""
         elapsedMs = 0
         localModeHeld = phoneModeSeen
         starting = true
@@ -442,6 +444,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         original = ""
         translation = ""
         previous = ""
+        copyId = ""
         elapsedMs = 0
         offeringSave = false
         pendingSync = false
@@ -1211,6 +1214,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         }
         if let previous = payload["previous"] as? String {
             self.previous = previous
+        }
+        if let copyId = payload["copyId"] as? String {
+            self.copyId = copyId
         }
         if Self.speechShouldPlay(live: live) {
             if let data = payload["speechData"] as? Data, !data.isEmpty {

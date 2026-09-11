@@ -1,4 +1,4 @@
-import { buildWatchFace, watchPreviousCaption } from './watchStatus'
+import { buildWatchFace, watchPreviousCaption, WATCH_LIVE_COPY_MAX } from './watchStatus'
 
 const face = buildWatchFace({
   capture: 'listening',
@@ -60,6 +60,87 @@ const longFace = buildWatchFace({
 })
 if (longFace.translation !== longZh) {
   throw new Error(`Watch must keep the full current translation, got ${longFace.translation}`)
+}
+if (longFace.copyId !== '2') throw new Error(`current copy must keep its pair id, got ${longFace.copyId}`)
+
+const overLimit = `${'段落一。\n\n'}${'后续说明，'.repeat(200)}`
+if (overLimit.length <= 800) throw new Error('fixture must exceed the old 800 clip')
+const sourceOver = `Move the launch window.\n\n${overLimit}`
+const fullFace = buildWatchFace({
+  capture: 'listening',
+  consentOpen: false,
+  notesAskId: '',
+  notesRaw: '',
+  partial: '',
+  workspaceMode: 'translate',
+  translateOn: true,
+  translatePairs: [{ id: 'long-1', original: sourceOver, translation: overLimit }],
+  meetingLines: [],
+})
+if (fullFace.original.includes('…') && sourceOver.length <= WATCH_LIVE_COPY_MAX) {
+  throw new Error('current original must not use the 800-char preview clip')
+}
+if (fullFace.translation !== overLimit) {
+  throw new Error(`current translation must keep paragraphs and the full body, got len=${fullFace.translation.length}`)
+}
+if (!fullFace.original.includes('\n\n')) {
+  throw new Error('current original must keep paragraph breaks')
+}
+if (fullFace.copyId !== 'long-1') throw new Error(`copy id must follow the pair, got ${fullFace.copyId}`)
+if (fullFace.history[0]?.text.endsWith('…') !== true) {
+  throw new Error('history remains a clipped preview')
+}
+
+const longQa = '字'.repeat(900)
+const qaLong = buildWatchFace({
+  capture: 'listening',
+  consentOpen: false,
+  notesAskId: '',
+  notesRaw: '',
+  partial: '',
+  workspaceMode: 'interview',
+  translateOn: false,
+  translatePairs: [],
+  meetingLines: [],
+  turns: [{ id: 'q-long', q: 'Why ship Friday?\n\nPlease list every risk.', a: longQa }],
+})
+if (qaLong.translation !== longQa) {
+  throw new Error(`Watch Q&A must keep a long answer whole, got len=${qaLong.translation.length}`)
+}
+if (qaLong.copyId !== 'q-long') throw new Error(`Q&A copy id must follow the turn, got ${qaLong.copyId}`)
+if (!qaLong.original.includes('\n\n')) {
+  throw new Error('Watch Q&A original must keep paragraph breaks')
+}
+
+const nearCap = '字'.repeat(WATCH_LIVE_COPY_MAX)
+const nearFace = buildWatchFace({
+  capture: 'listening',
+  consentOpen: false,
+  notesAskId: '',
+  notesRaw: '',
+  partial: '',
+  workspaceMode: 'translate',
+  translateOn: true,
+  translatePairs: [{ id: 'cap-ok', original: 'Keep the window.', translation: nearCap }],
+  meetingLines: [],
+})
+if (nearFace.translation !== nearCap) {
+  throw new Error('current copy at the Watch payload cap must stay unclipped')
+}
+const overCap = '字'.repeat(WATCH_LIVE_COPY_MAX + 40)
+const capFace = buildWatchFace({
+  capture: 'listening',
+  consentOpen: false,
+  notesAskId: '',
+  notesRaw: '',
+  partial: '',
+  workspaceMode: 'translate',
+  translateOn: true,
+  translatePairs: [{ id: 'cap-over', original: 'Keep the window.', translation: overCap }],
+  meetingLines: [],
+})
+if (capFace.translation.length !== WATCH_LIVE_COPY_MAX || !capFace.translation.endsWith('…')) {
+  throw new Error(`Watch live copy must cap at ${WATCH_LIVE_COPY_MAX}, got ${capFace.translation.length}`)
 }
 
 const meeting = buildWatchFace({

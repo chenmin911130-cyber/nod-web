@@ -36,6 +36,7 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
         let original = call.getString("original") ?? ""
         let translation = call.getString("translation") ?? ""
         let previous = call.getString("previous") ?? ""
+        let copyId = call.getString("copyId")
         let mode = call.getString("mode") ?? ""
         let langPair = call.getString("langPair") ?? ""
         let save = call.getString("save") ?? ""
@@ -68,6 +69,7 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
             original: original,
             translation: translation,
             previous: previous,
+            copyId: copyId,
             history: history,
             mode: mode,
             langPair: langPair,

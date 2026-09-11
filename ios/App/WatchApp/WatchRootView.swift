@@ -373,16 +373,7 @@ struct WatchRootView: View {
                     .font(.headline)
                     .foregroundStyle(ink)
             } else {
-                if !session.original.isEmpty {
-                    Text(session.original)
-                        .font(.caption2)
-                        .foregroundStyle(muted)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                if !session.translation.isEmpty {
-                    copyScroll(session.translation)
-                }
+                copyPair(original: session.original, translation: session.translation)
             }
             Spacer(minLength: 0)
             listeningWave
@@ -404,20 +395,11 @@ struct WatchRootView: View {
                     .font(.headline)
                     .foregroundStyle(ink)
             } else {
-                if !session.original.isEmpty {
-                    Text(session.original)
-                        .font(.caption2)
-                        .foregroundStyle(muted)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                if session.translation.isEmpty {
-                    Text(WatchCopy.drafting)
-                        .font(.headline)
-                        .foregroundStyle(ink)
-                } else {
-                    copyScroll(session.translation)
-                }
+                copyPair(
+                    original: session.original,
+                    translation: session.translation,
+                    placeholder: session.translation.isEmpty ? WatchCopy.drafting : nil
+                )
             }
             Spacer(minLength: 0)
             listeningWave
@@ -492,15 +474,30 @@ struct WatchRootView: View {
             .accessibilityLabel(WatchCopy.listening)
     }
 
-    private func copyScroll(_ text: String) -> some View {
+    private func copyPair(original: String, translation: String, placeholder: String? = nil) -> some View {
         ScrollView {
-            Text(text)
-                .font(.body.weight(.semibold))
-                .foregroundStyle(ink)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 6) {
+                if !original.isEmpty {
+                    Text(original)
+                        .font(.caption2)
+                        .foregroundStyle(muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let placeholder, translation.isEmpty {
+                    Text(placeholder)
+                        .font(.headline)
+                        .foregroundStyle(ink)
+                } else if !translation.isEmpty {
+                    Text(translation)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
         }
-        .id(text)
+        .id(session.copyId.isEmpty ? "live" : session.copyId)
         .focusable()
     }
 

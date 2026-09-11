@@ -2,6 +2,7 @@ import { App } from '@capacitor/app'
 import { registerPlugin } from '@capacitor/core'
 import { getToken } from './auth'
 import { isNativeApp, NATIVE_API_ORIGIN } from './native'
+import { WATCH_HIST_LIMIT, WATCH_LIVE_COPY_MAX } from './watchStatus'
 
 type WatchCommand = { action?: string; mode?: string; sessionId?: string }
 type WatchPcm = { data?: string }
@@ -16,6 +17,7 @@ type WatchPlugin = {
     original?: string
     translation?: string
     previous?: string
+    copyId?: string
     history?: WatchHistItem[]
     mode?: string
     langPair?: string
@@ -379,6 +381,7 @@ export function pushWatchStatus(face: {
   original?: string
   translation?: string
   previous?: string
+  copyId?: string
   history?: WatchHistItem[]
   mode?: string
   langPair?: string
@@ -393,10 +396,11 @@ export function pushWatchStatus(face: {
   void NodWatch.setStatus({
     capture: face.capture,
     hint: (face.hint || '').slice(0, 140),
-    original: (face.original || '').slice(0, 800),
-    translation: (face.translation || '').slice(0, 800),
+    original: (face.original || '').slice(0, WATCH_LIVE_COPY_MAX),
+    translation: (face.translation || '').slice(0, WATCH_LIVE_COPY_MAX),
     previous: (face.previous || '').slice(0, 72),
-    history: (face.history || []).slice(0, 8),
+    copyId: face.copyId || '',
+    history: (face.history || []).slice(0, WATCH_HIST_LIMIT),
     mode: face.mode,
     langPair: face.langPair,
     save: face.save,

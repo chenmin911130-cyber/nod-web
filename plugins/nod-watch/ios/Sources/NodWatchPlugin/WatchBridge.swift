@@ -19,6 +19,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastOriginal = ""
     private var lastTranslation = ""
     private var lastPrevious = ""
+    private var lastCopyId = ""
     private var lastHistory: [[String: String]] = []
     private var lastMode = ""
     private var lastLangPair = ""
@@ -325,6 +326,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         original: String = "",
         translation: String = "",
         previous: String = "",
+        copyId: String? = nil,
         history: [[String: String]] = [],
         mode: String = "",
         langPair: String = "",
@@ -338,6 +340,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         lastOriginal = original
         lastTranslation = translation
         lastPrevious = previous
+        if let copyId {
+            lastCopyId = copyId
+        }
         lastHistory = history
         if !mode.isEmpty {
             lastMode = mode
@@ -372,6 +377,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             "original": original,
             "translation": translation,
             "previous": previous,
+            "copyId": lastCopyId,
             "history": history,
         ]
         if !lastMode.isEmpty {
@@ -426,7 +432,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         do {
             try session.updateApplicationContext(payload)
         } catch {
-            /* watch may be locked / unreachable */
+            /* 65 KB WCSession cap: keep the live pair and drop history previews. */
+            var slim = payload
+            slim["history"] = [] as [[String: String]]
+            try? session.updateApplicationContext(slim)
         }
         if session.isReachable {
             session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
