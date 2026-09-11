@@ -2,6 +2,12 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-11 · #193/#194 只按模式隐藏 Save 入口，没修保存状态归属
+- 我以为：按模式不渲染 More 里的 Save 行、Translate 工作区不渲染 SavePrompt，就算把「Translate 不该有 Save」闭环了。
+- 实际：待保存状态本身没有模式。`server/meter.py:list_pending_history` 只筛 kept/ended/discarded，`restoreLaunchSurface`/`savePromptSurface`/`sessionShouldOfferSave` 只看**当前工作区**，`HistoryPane` 给本地录音行硬编码 `mode:'meeting'`。于是 Translate 会话成了 pending：切回 Meeting 的那一刻工作区条件成立，恢复 + Save 又回来了；本地 Translate 录音还被当成待保存 Meeting（bundle 82 真机复测）。
+- 规则：按模式隐藏入口只解决「看得见」。要同时把保存状态按**会话自己的模式**收口 —— 挂起查询（含 limit 之前的模式过滤）、恢复判定、保存簿、行标签、本地录音行元数据都读会话模式；未知/空模式保持可恢复（不猜成 meeting，也不隐藏）。原生 manifest 缺字段时用可信的云端会话元数据（sessionId）解析，仍解析不出就保持未知。
+- 涉及：#193 #194 #196 · `list_pending_history` · `restoreLaunchSurface` · `SaveBook.sessionMode` · `HistoryPane` 本地录音行 · `PhonePcmStore` manifest
+
 ## 2026-09-11 · Bundle 81：绕过受保护打包入口，把主仓旧插件编进 App（重演 Bundle 71）
 - 我以为：在 `/tmp` 隔离 worktree 里手工拼 `prepare-ios-web → cap sync ios → patch-ios-plist → xcodebuild`，并让 `node_modules` / `web/node_modules` 软链到主仓共用依赖就够了；`cap sync` 自己会 `pod install`。
 - 实际：`/tmp/ios-build` 的 `node_modules` 指向主仓 → Podfile.lock 与 Pods 工程按 realpath 解析到 `/Users/minchen/Projects/nod-web/plugins`（停在旧 commit），新的网页配旧的 `NodMic.framework`：`strings` 里 `startUplink` / `AudioUplink` / `PhonePcmStore` / `WatchPcmIngest` 全为 0，真机 Listen 报 “Background recording is unavailable. Reopen the app and try again.”。同一轮还把 `prepare-ios-web` 跑在 `npm run build --prefix web` **之前**，`web/dist/index.html` 的原生跳转桩被 vite 覆盖 —— 两处都不报错。
