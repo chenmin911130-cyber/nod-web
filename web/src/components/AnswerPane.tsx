@@ -14,6 +14,9 @@ interface Props {
   listening?: boolean
   onAsk: (text: string, files?: AttachPayload[]) => void
   onCompose?: (on: boolean) => void
+  /** #182: session Think switch — the toggle sits above the existing input. */
+  think?: boolean
+  onThink?: (on: boolean) => void
 }
 
 function Sparkle() {
@@ -25,7 +28,7 @@ function Sparkle() {
   )
 }
 
-export default function AnswerPane({ currentQ, partial, turns, busy, listening, onAsk, onCompose }: Props) {
+export default function AnswerPane({ currentQ, partial, turns, busy, listening, onAsk, onCompose, think = false, onThink }: Props) {
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<LocalAttach[]>([])
   const [now, setNow] = useState(() => Date.now())
@@ -104,6 +107,7 @@ export default function AnswerPane({ currentQ, partial, turns, busy, listening, 
                   generating={busy && t.id === last?.id && !t.a}
                   msAgo={msAgo(t.id)}
                   onFollowUp={followUp}
+                  sources={t.sources}
                 />
               ))}
               {orphanQ && (
@@ -134,6 +138,22 @@ export default function AnswerPane({ currentQ, partial, turns, busy, listening, 
           Jump to latest
         </button>
       )}
+
+      {/* #182: the only new control — a compact Think switch above the existing
+          Q&A input. Default off; the value belongs to the session, not the box. */}
+      <div className="think-row">
+        <button
+          type="button"
+          className={`think-toggle${think ? ' on' : ''}`}
+          role="switch"
+          aria-checked={think}
+          aria-label="Think"
+          onClick={() => onThink?.(!think)}
+        >
+          <span className="think-dot" aria-hidden="true" />
+          Think
+        </button>
+      </div>
 
       <PromptAttach
         files={files}

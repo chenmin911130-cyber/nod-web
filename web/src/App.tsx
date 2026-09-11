@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import type { AttachPayload } from './attach'
 import type { AppConfig, AppState, AudioSource, EngineEvent, Lang, MeetingLine, PairLang, TranslatePair, ViewMode, WorkspaceMode } from './types'
 import { TRANSLATE_LANGS } from './types'
+import { applySources } from './qaSources'
 import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
@@ -208,6 +209,8 @@ const initial: AppState = {
   turns: [],
   partial: '',
   busy: false,
+  thinkOn: false,
+  wsAttachSeq: 0,
   opacity: 83,
   pinned: true,
   micMuted: false,
@@ -283,6 +286,7 @@ type Action =
   | { type: 'fail_translate'; id: string }
   | { type: 'ask_start' }
   | { type: 'seed_ask'; text: string }
+  | { type: 'set_think'; on: boolean }
   | { type: 'fail_ask'; text: string }
   | { type: 'listen_scene'; scene: ListenScene }
   | { type: 'translate_on'; on: boolean }
@@ -562,6 +566,12 @@ function reducer(state: AppState, action: Action): AppState {
           const currentQ = state.currentQId === ev.id ? ev.text : state.currentQ
           return { ...state, meetingLines, currentQ, partial: '', partialSpeaker: '' }
         }
+        case 'sources': {
+          // #182: attach the retrieved sources to the answer they belong to. An
+          // event for a turn this session does not have is dropped (a lookup that
+          // finished after New / reconnect must not decorate the next answer).
+          return { ...state, turns: applySources(state.turns, ev) }
+        }
         case 'chunk': {
           let translatePairs = state.translatePairs
           let translateAskId = state.translateAskId
@@ -677,7 +687,7 @@ function reducer(state: AppState, action: Action): AppState {
         case 'quota_exceeded':
           return { ...state, busy: false, status: quotaLimitText(ev.reason, state.quota as unknown as QuotaFields) }
         case 'attached':
-          return state
+          return { ...state, wsAttachSeq: state.wsAttachSeq + 1 }
         case 'pcm_drained':
           return state
         case 'listen_flush': {
@@ -716,9 +726,12 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, lang: action.lang }
     case 'source':
       return { ...state, source: action.source }
+    case 'set_think':
+      return { ...state, thinkOn: action.on }
     case 'clear':
       return {
         ...state,
+        thinkOn: false,
         turns: [],
         currentQ: PLACEHOLDER,
         currentQId: '',
@@ -760,6 +773,9 @@ function reducer(state: AppState, action: Action): AppState {
       const clock = action.live ? restoreAttachedClock(elapsed) : restoreSessionClock(elapsed)
       return {
         ...state,
+        // #182: a restored session is a new session — never inherit Think from an
+        // old answer's tag, and never silently keep it on.
+        thinkOn: false,
         workspaceMode: action.mode,
         listenScene: action.scene,
         meetingLines,
@@ -2490,7 +2506,14 @@ export default function App() {
     void (async () => {
       try {
         const attach_id = await parkAttaches(files)
-        window.api.send({ type: 'ask', text, attach_id })
+        // #182: only the Live Q&A (interview) path carries Think, and it carries
+        // the value this submit was made with.
+        window.api.send({
+          type: 'ask',
+          text,
+          attach_id,
+          ...(stateRef.current.workspaceMode === 'interview' ? { think: stateRef.current.thinkOn } : {}),
+        })
       } catch (ex) {
         dispatch({
           type: 'fail_ask',
@@ -2499,6 +2522,18 @@ export default function App() {
       }
     })()
   }, [])
+
+  // #182: the switch is session state; the socket sync below pushes it to the
+  // server, so a reconnect can never leave the client saying "on" while the
+  // server answers with Think off.
+  const handleThink = useCallback((on: boolean) => {
+    dispatch({ type: 'set_think', on })
+  }, [])
+
+  useEffect(() => {
+    if (state.workspaceMode !== 'interview') return
+    window.api.send({ type: 'set_think', on: state.thinkOn })
+  }, [state.thinkOn, state.workspaceMode, state.wsAttachSeq])
 
   const handleOpacity = useCallback((n: number) => {
     window.api.setOpacity(n)
@@ -3895,6 +3930,8 @@ export default function App() {
                 listening={listening}
                 onAsk={handleAsk}
                 onCompose={setComposeOpen}
+                think={state.thinkOn}
+                onThink={handleThink}
               />
             }
             onScene={(scene) => {

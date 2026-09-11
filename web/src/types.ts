@@ -2,7 +2,17 @@ import type { ListenFlushWait } from './recordReport'
 
 export type CaptureState = 'off' | 'listening' | 'recording' | 'paused'
 export type EngineState = 'idle' | 'transcribing' | 'generating'
-export type Turn = { id: string; q: string; a: string }
+// #182 Think: the sources a Think answer actually retrieved. `status` is the
+// honest summary the server sent — `ok` only when usable results exist.
+export type AnswerSource = { title: string; url: string; published_at: string | null }
+export type AnswerSources = {
+  status: 'ok' | 'empty' | 'failed'
+  retrieved_at: number
+  retrieved_at_text: string
+  results: AnswerSource[]
+  note: string
+}
+export type Turn = { id: string; q: string; a: string; sources?: AnswerSources }
 export type CatchNote = {
   id: string
   title: string
@@ -81,6 +91,12 @@ export interface AppState {
   turns: Turn[]
   partial: string
   busy: boolean
+  // #182: the session's Think switch. Off on cold start, off again after New /
+  // clear / restoring a saved session; kept while the same session lives.
+  thinkOn: boolean
+  // Bumped every time the socket (re)attaches, so the Think value can be
+  // re-asserted to the server without silently inverting it.
+  wsAttachSeq: number
   opacity: number
   pinned: boolean
   micMuted: boolean
@@ -149,6 +165,7 @@ export type EngineEvent =
   | { type: 'question'; id: string; text: string; language?: string; speaker?: string }
   | { type: 'line_update'; id: string; text: string; language?: string; speaker?: string; rev: number }
   | { type: 'chunk'; id: string; text: string }
+  | ({ type: 'sources'; id?: string } & AnswerSources)
   | { type: 'done'; id: string; stt: number; llm: number; ok: boolean }
   | { type: 'error'; text: string }
   | { type: 'listen_taken'; text: string }
@@ -174,9 +191,10 @@ export type EngineMsg =
   | { type: 'keep_history'; content?: boolean; audio?: boolean; id?: string }
   | { type: 'discard_history'; id?: string }
   | { type: 'auth'; token: string }
-  | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; attach_id?: string; mode?: string }
+  | { type: 'ask'; text: string; files?: Array<{ name: string; mime: string; data: string }>; attach_id?: string; mode?: string; think?: boolean }
   | { type: 'set_workspace'; mode: WorkspaceMode; scene?: 'meeting' | 'lecture' | 'interview'; speakers_expected?: number }
   | { type: 'set_llm'; provider: string; model: string }
+  | { type: 'set_think'; on: boolean }
   | { type: 'set_lang'; language: string | null }
   | { type: 'set_source'; source: string }
   | { type: 'set_mic_muted'; muted: boolean }
