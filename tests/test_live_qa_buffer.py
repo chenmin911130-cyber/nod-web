@@ -567,5 +567,92 @@ class PromptContextTests(unittest.TestCase):
         self.assertNotIn("z" * 200, msgs[0]["content"])
 
 
+class LifecycleTests(_QaBase):
+    """#191: New / workspace switch / stop / disconnect / cancel must have an
+    explicit invalidation rule for timer, buffer, in-flight judgement and queue."""
+
+    def test_close_drops_the_candidate_without_answering(self):
+        sess = self._session(judge_stub(qs.VERDICT_READY, question="late?"))
+        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        # A ready verdict already computed but not yet committed.
+        sess._qa_verdict = {
+            "version": sess._qa_version,
+            "verdict": qs.VERDICT_READY,
+            "question": "late?",
+            "fragments": ["t1:1"],
+        }
+        # Keep the teardown focused on the QA contract.
+        sess._detach_control_emit = mock.Mock()
+        sess._close_audio_uplink = mock.Mock()
+        sess._stop_listening = mock.Mock()
+        sess.pipeline.abort_stream = mock.Mock()
+        sess._flush_cloud_archive = mock.Mock()
+        sess.usage_session_id = None
+        sess.audio_token = "tok"
+        sess._closed = False
+        sess.close()
+        sess.pipeline.process_text.assert_not_called()
+        self.assertEqual(sess._qa_buffer, [])
+
+    def test_fresh_listen_session_resets_the_candidate(self):
+        sess = self._session(judge_stub(qs.VERDICT_READY))
+        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        gen = sess._qa_gen
+        sess._listen_wanted = False  # room for assertion; the socket is not started
+        with mock.patch("server.app.CloudListener"):
+            sess._open_listener(resume=False)
+        self.assertEqual(sess._qa_buffer, [])
+        self.assertGreater(sess._qa_gen, gen)
+        sess.pipeline.process_text.assert_not_called()
+
+    def test_new_speech_after_a_pause_extends_the_candidate(self):
+        # The same listening session continues across a pause: the earlier
+        # fragment is kept and new speech extends the same candidate.
+        sess = self._session(judge_stub(qs.VERDICT_WAIT))
+        sess._on_final("我想知道", "zh", None, {"stt_turn": 1, "listener_id": 1})
+        self._settle(sess)  # first judgement: still incomplete
+        self.assertEqual(len(sess._qa_buffer), 1)
+        sess._on_partial("大概要多少", "zh")  # speech resumed
+        sess._on_final("大概要多少钱", "zh", None, {"stt_turn": 2, "listener_id": 1})
+        self.assertEqual(len(sess._qa_buffer), 2)
+        self.assertIsNone(sess._qa_verdict)  # the old verdict was invalidated
+
+    def test_cancel_generate_does_not_swallow_the_pending_candidate(self):
+        # Cancel stops the current generation; the candidate is a separate
+        # concern and must still be answerable (manual or a later judgement).
+        sess = self._session(judge_stub(qs.VERDICT_READY, question="How should we price it?"))
+        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess.cancel_generate()
+        self.assertEqual(len(sess._qa_buffer), 1)
+        self._settle(sess)
+        self._wait(lambda: sess.pipeline.process_text.called)
+        self.assertEqual(self._answers(sess), ["How should we price it?"])
+
+    def test_drop_emits_a_reason_and_never_the_text(self):
+        records: list[str] = []
+        import logging
+
+        class _Handler(logging.Handler):
+            def emit(self, record):
+                records.append(record.getMessage())
+
+        logger = logging.getLogger("nod")
+        handler = _Handler()
+        logger.addHandler(handler)
+        old_level = logger.level
+        logger.setLevel(logging.INFO)
+        try:
+            sess = self._session(judge_stub(qs.VERDICT_WAIT))
+            sess._on_final("SECRET turn text", "en", None, {"stt_turn": 1, "listener_id": 1})
+            sess._qa_stop_commit()
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+        drops = [r for r in records if r.startswith("qa_drop")]
+        self.assertTrue(drops)
+        self.assertTrue(any("reason=stop_no_ready_verdict" in r for r in drops), drops)
+        self.assertNotIn("SECRET", "\n".join(drops))
+
+
 if __name__ == "__main__":
     unittest.main()

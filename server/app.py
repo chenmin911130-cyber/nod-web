@@ -2755,6 +2755,9 @@ class Session:
         self._close_audio_uplink()
         uplink.unregister(getattr(self, "audio_token", None))
         self._listen_wanted = False
+        # Teardown must not bill an answer for a candidate that was still being
+        # judged (#191): drop it and invalidate in-flight judgements first.
+        self._qa_reset("close")
         self._stop_listening()
         self.pipeline.abort_stream()
         self._flush_cloud_archive(final=True)
@@ -3689,6 +3692,11 @@ class Session:
             str((verdict or {}).get("reason") or "")[:60], latency_ms, err or "-", stale,
         )
         if stale:
+            if verdict is not None:
+                logging.getLogger("nod").info(
+                    "qa_drop reason=stale_verdict cand=%s gen=%s ver=%s now_ver=%s verdict=%s",
+                    cand, gen, version, self._qa_version, verdict.get("verdict"),
+                )
             self._qa_maybe_reschedule()
             return
         if verdict is None:
@@ -4718,6 +4726,9 @@ class Session:
             return
         if not resume:
             self._listen_gen = getattr(self, "_listen_gen", 0) + 1
+            # A genuinely new listen session starts a new turn context (#191):
+            # no candidate, timer or in-flight judgement may survive into it.
+            self._qa_reset("new_listen")
             self._pcm_rx_bytes = 0
             self._stt_tx_bytes = 0
             self._stt_pending_pcm = b""
