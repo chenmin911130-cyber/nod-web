@@ -63,6 +63,7 @@ from server.meeting_lines import (
     last_sentence_index as meeting_last_sentence_index,
     tail_meta as meeting_tail_meta,
 )
+from server.qa_semantic import join_pair
 from server.turn_pacing import cut_decision, split_carry, turn_pacing_from_env, word_span_ms
 from server.stt_audio import (
     MIN_CHUNK_BYTES,
@@ -512,25 +513,9 @@ def _is_answer_echo(text: str, last_answer: str | None) -> bool:
 
 
 def _join_speech_frags(left: str, right: str) -> str:
-    a = (left or "").strip()
-    b = (right or "").strip()
-    if not a:
-        return b
-    if not b:
-        return a
-    if not _same_speech_script(a, b):
-        return a
-    if b.startswith(a):
-        return b
-    if a.startswith(b):
-        return a
-    if re.search(r"[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]$", a) and re.search(
-        r"^[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]", b
-    ):
-        return a + b
-    if a.endswith(("，", "、", ",", "—", "-")):
-        return a + b if re.search(r"^[\u4e00-\u9fff\u3040-\u30FF]", b) else f"{a} {b}".strip()
-    return f"{a} {b}".strip()
+    # Single implementation lives in server/qa_semantic.py (issue #191) so the
+    # interview buffer and the meeting continuation glue text identically.
+    return join_pair(left, right)
 
 
 def _meeting_line_complete(text: str) -> bool:

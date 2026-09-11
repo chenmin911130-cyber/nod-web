@@ -158,6 +158,29 @@ LISTEN_ZERO_PCM_WATCH_SECONDS = max(
 # Parked control-WS sessions with a live native uplink. Default 10 min.
 UPLINK_ORPHAN_SECONDS = max(60, int(float(os.environ.get("UPLINK_ORPHAN_SECONDS") or "600")))
 
+# --- Live Q&A (interview) semantic buffer + completeness judgement (issue #191) ---
+# How long speech must be quiet (no final, no partial) before the buffered
+# candidate is judged. A new fragment/partial extends the window, so a slow STT
+# turn is never cut in half.
+QA_SETTLE_SECONDS = max(0.3, float(os.environ.get("QA_SETTLE_SECONDS") or "1.3"))
+# One bounded, non-streaming judgement call. On timeout/failure the candidate is
+# NEVER answered (the buffer is kept and manual submit still works).
+QA_JUDGE_TIMEOUT_SECONDS = max(2.0, float(os.environ.get("QA_JUDGE_TIMEOUT_SECONDS") or "8"))
+# Rate limit: never judge more often than this (no per-word / per-partial calls).
+QA_MIN_JUDGE_INTERVAL_SECONDS = max(
+    0.0, float(os.environ.get("QA_MIN_JUDGE_INTERVAL_SECONDS") or "1.0")
+)
+QA_BUFFER_MAX_FRAGS = max(2, int(float(os.environ.get("QA_BUFFER_MAX_FRAGS") or "8")))
+QA_BUFFER_MAX_SECONDS = max(10.0, float(os.environ.get("QA_BUFFER_MAX_SECONDS") or "90"))
+QA_BUFFER_MAX_CHARS = max(200, int(float(os.environ.get("QA_BUFFER_MAX_CHARS") or "1200")))
+QA_MAX_QUESTION_CHARS = max(120, int(float(os.environ.get("QA_MAX_QUESTION_CHARS") or "600")))
+# Bounded background / answer context. Default logging never carries the text.
+QA_BACKGROUND_MAX_FRAGS = max(1, int(float(os.environ.get("QA_BACKGROUND_MAX_FRAGS") or "6")))
+QA_CONTEXT_MAX_CHARS = max(120, int(float(os.environ.get("QA_CONTEXT_MAX_CHARS") or "600")))
+QA_PRIOR_QA_PAIRS = max(0, int(float(os.environ.get("QA_PRIOR_QA_PAIRS") or "2")))
+# How many answered fragment identities to remember for the dedupe window.
+QA_ANSWERED_MAX = max(4, int(float(os.environ.get("QA_ANSWERED_MAX") or "32")))
+
 PLANS: dict[str, dict] = {
     "free": {
         "id": "free",
