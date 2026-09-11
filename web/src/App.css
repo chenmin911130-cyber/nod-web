@@ -5039,11 +5039,12 @@ a.tb-menu-action {
   cursor: pointer;
 }
 
-/* #182 Think: one compact switch above the existing Live Q&A input, in the
-   existing palette. Nothing else about the composer moves. */
+/* #182 Think: one compact switch above the existing Live Q&A input, right-aligned
+   with the composer so it sits over the send side. Nothing else moves. */
 .think-row {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   padding: 0 2px 6px;
 }
 
@@ -5051,8 +5052,8 @@ a.tb-menu-action {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
-  padding: 0 10px;
+  height: 28px;
+  padding: 0 10px 0 8px;
   border: 1px solid var(--stroke);
   border-radius: 999px;
   background: rgba(6, 12, 24, 0.55);
@@ -5079,15 +5080,27 @@ a.tb-menu-action {
   outline-offset: 2px;
 }
 
-.think-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
+.think-icon {
+  display: block;
+  flex: 0 0 auto;
+}
+
+.think-toggle .think-bulb {
+  fill: none;
+}
+
+.think-toggle.on .think-bulb {
+  fill: currentColor;
+  fill-opacity: 0.2;
+}
+
+.think-toggle .think-filament,
+.think-toggle .think-rays {
   opacity: 0.55;
 }
 
-.think-toggle.on .think-dot {
+.think-toggle.on .think-filament,
+.think-toggle.on .think-rays {
   opacity: 1;
 }
 
@@ -8367,9 +8380,13 @@ html.nod-phone .app.iphone-v2 .interview-qa .qa-hero {
   font-size: 56px;
 }
 
+html.nod-phone .app.iphone-v2 .interview-qa .think-row {
+  padding: 2px 16px 0;
+}
+
 html.nod-phone .app.iphone-v2 .interview-qa .prompt-block {
   flex: 0 0 auto;
-  margin: 8px 16px max(14px, env(safe-area-inset-bottom));
+  margin: 6px 16px max(14px, env(safe-area-inset-bottom));
 }
 
 html.nod-phone .app.iphone-v2 .interview-qa .prompt-row {

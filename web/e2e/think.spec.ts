@@ -515,6 +515,15 @@ test.describe('Think on a phone viewport', () => {
     const toggle = page.getByRole('switch', { name: 'Think' })
     await expect(toggle).toBeVisible()
     await expect(toggle).toHaveAttribute('aria-checked', 'false')
+    await expect(toggle.locator('svg.think-icon')).toBeVisible()
+
+    const toggleBox = await toggle.boundingBox()
+    const promptBox = await page.locator('.interview-qa .prompt-block').boundingBox()
+    expect(toggleBox).not.toBeNull()
+    expect(promptBox).not.toBeNull()
+    expect(toggleBox!.y).toBeLessThan(promptBox!.y)
+    expect(Math.abs(toggleBox!.x + toggleBox!.width - (promptBox!.x + promptBox!.width))).toBeLessThan(8)
+
     await shot(page, 'phone-think-off')
 
     await toggle.click()

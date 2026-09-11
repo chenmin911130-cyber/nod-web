@@ -30,6 +30,22 @@ function Sparkle() {
   )
 }
 
+function ThinkIcon() {
+  return (
+    <svg className="think-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        className="think-rays"
+        d="M8 1.05v1.05M12.85 3.4l-.85.85M3.15 3.4l.85.85"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+      />
+      <circle className="think-bulb" cx="8" cy="6.55" r="3.15" stroke="currentColor" strokeWidth="1.35" />
+      <path d="M6.7 10.05h2.6M6.35 11.5h3.3M6.8 12.95h2.4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export default function AnswerPane({ currentQ, partial, turns, busy, listening, onAsk, onCompose, think = false, onThink, onRetryTurn }: Props) {
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<LocalAttach[]>([])
@@ -147,7 +163,8 @@ export default function AnswerPane({ currentQ, partial, turns, busy, listening, 
       )}
 
       {/* #182: the only new control — a compact Think switch above the existing
-          Q&A input. Default off; the value belongs to the session, not the box. */}
+          Q&A input, right-aligned with the composer. Default off; the value
+          belongs to the session, not the box. */}
       <div className="think-row">
         <button
           type="button"
@@ -157,7 +174,7 @@ export default function AnswerPane({ currentQ, partial, turns, busy, listening, 
           aria-label="Think"
           onClick={() => onThink?.(!think)}
         >
-          <span className="think-dot" aria-hidden="true" />
+          <ThinkIcon />
           Think
         </button>
       </div>
