@@ -34,6 +34,41 @@ eq(payload.pairs.length.toString(), '2', 'pair count')
 eq(payload.pairs[0].ts, '11:05', 'first pair ts')
 eq(payload.pairs[1].ts, '11:06', 'second pair ts must come from its own transcript line')
 
+// #182: a saved Think answer comes back with its real sources and retrieval
+// time, and a record written before Think existed comes back with none.
+const qaSession: HistorySession = {
+  id: 's3',
+  mode: 'interview',
+  scene: 'interview',
+  title: 'qa',
+  started_at: at(15, 0),
+  stt_seconds: 4,
+  items: [
+    { kind: 'question', text: 'what is new?', qid: 'q1', at: at(15, 0) },
+    {
+      kind: 'answer',
+      text: 'an answer',
+      qid: 'q1',
+      at: at(15, 0, 5),
+      sources: {
+        status: 'ok',
+        retrieved_at: 1789012800,
+        retrieved_at_text: '2026-09-10 04:00 UTC',
+        results: [{ title: 'Apple News', url: 'https://example.com/apple', published_at: '2026-09-10' }],
+        note: '',
+      },
+    },
+    { kind: 'question', text: 'and now?', qid: 'q2', at: at(15, 1) },
+    { kind: 'answer', text: 'second answer', qid: 'q2', at: at(15, 1, 5), sources: null },
+  ],
+}
+
+const qaPayload = restoreFromSession(qaSession)
+eq(qaPayload.turns.length.toString(), '2', 'both turns restore')
+eq(qaPayload.turns[0].sources?.results[0].url ?? '', 'https://example.com/apple', 'the sources survive the restore')
+eq(qaPayload.turns[0].sources?.retrieved_at_text ?? '', '2026-09-10 04:00 UTC', 'and the retrieval time with them')
+eq(String(qaPayload.turns[1].sources), 'undefined', 'an old record restores without a source block')
+
 const lecture: HistorySession = {
   id: 's2',
   mode: 'meeting',

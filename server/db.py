@@ -91,6 +91,9 @@ class HistoryItem(Base):
     qid: Mapped[str] = mapped_column(String(64), default="")
     text: Mapped[str] = mapped_column(Text, default="")
     speaker: Mapped[str] = mapped_column(String(64), default="")
+    # #182: the sources a Think answer was based on (JSON), "" for every other row
+    # and for records written before this shipped.
+    sources: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -192,6 +195,7 @@ def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     (DATA_DIR / "backups").mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
+    _add_column_if_missing("history_items", "sources", "TEXT DEFAULT ''")
     _add_column_if_missing("users", "clerk_id", "VARCHAR(64) DEFAULT ''")
     _add_column_if_missing("users", "stt_limit_seconds", "INTEGER")
     _add_column_if_missing("usage_sessions", "audio_key", "VARCHAR(400) DEFAULT ''")

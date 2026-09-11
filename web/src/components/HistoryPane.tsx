@@ -17,7 +17,18 @@ import { IPHONE_COPY } from '../iphoneCopy'
 import { isNativeApp } from '../native'
 import { listWatchSaves, retryWatchSave } from '../watch'
 
-export type HistoryItem = { kind: string; text: string; at?: string | null; qid?: string; speaker?: string }
+import type { AnswerSources } from '../types'
+
+// #182: a Think answer stores the sources it used; every older row (and every
+// plain answer) arrives with `sources: null`, which renders exactly as before.
+export type HistoryItem = {
+  kind: string
+  text: string
+  at?: string | null
+  qid?: string
+  speaker?: string
+  sources?: AnswerSources | null
+}
 export type HistoryFile = { kind: string; name: string; href: string }
 export type HistorySession = {
   id: string

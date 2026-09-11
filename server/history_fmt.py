@@ -61,6 +61,37 @@ def session_download_name(
     return f"Nodpilot-{label}-{stamp}.wav"
 
 
+def sources_lines(sources: dict | None) -> list[str]:
+    """#182: the sources block for copy / export.
+
+    Mirrors the client's plain-text block so a saved answer keeps the出处 it was
+    based on. Records written before Think existed carry no sources and produce
+    nothing, and only safe http(s) links are ever written out.
+    """
+    if not isinstance(sources, dict):
+        return []
+    results = sources.get("results")
+    lines: list[str] = []
+    if isinstance(results, list):
+        for i, item in enumerate(results, 1):
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            if not url.lower().startswith(("http://", "https://")):
+                continue
+            title = str(item.get("title") or "").strip() or url
+            published = str(item.get("published_at") or "").strip()
+            lines.append(f"[{i}] {title}" + (f"（发布时间 {published}）" if published else ""))
+            lines.append(f"    {url}")
+    stamp = str(sources.get("retrieved_at_text") or "").strip()
+    if stamp:
+        lines.append(f"检索时间：{stamp}")
+    note = str(sources.get("note") or "").strip()
+    if note:
+        lines.append(note)
+    return lines
+
+
 def session_copy_text(title: str, mode: str | None, scene: str | None, items: list[dict]) -> str:
     label = scene_label(normalize_scene(mode, scene))
     lines = [title.strip() or f"{label} session", f"{label}", ""]
@@ -71,5 +102,6 @@ def session_copy_text(title: str, mode: str | None, scene: str | None, items: li
             continue
         lines.append(kind.upper())
         lines.append(text)
+        lines.extend(sources_lines(item.get("sources")))
         lines.append("")
     return "\n".join(lines).strip() + "\n"

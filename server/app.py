@@ -1878,7 +1878,16 @@ class Pipeline:
             # the client only releases the translate gate and closes the answer
             # card on it, so a DB hiccup here would stick the UI on Translating.
             try:
-                self._record_usage(t, answer, mode, qid, internal, stream_usage)
+                self._record_usage(
+                    t,
+                    answer,
+                    mode,
+                    qid,
+                    internal,
+                    stream_usage,
+                    # #182: a Think answer persists the sources it actually used.
+                    sources=think_search.sources_payload(think_outcome) if think_outcome is not None else None,
+                )
             except Exception:
                 logging.getLogger("nod").exception("usage accounting failed")
         if think_outcome is not None:
@@ -1913,6 +1922,7 @@ class Pipeline:
         qid: str,
         internal: bool,
         stream_usage: tuple[int, int] | None = None,
+        sources: dict | None = None,
     ) -> None:
         from server.meter import consume_llm, save_history, update_history_text
 
@@ -1930,7 +1940,14 @@ class Pipeline:
             if line_id:
                 update_history_text(self.user_id, self.usage_session_id, line_id, answer, kind="translate")
             else:
-                save_history(self.user_id, self.usage_session_id, "answer" if mode == "ask" else mode, answer, qid)
+                save_history(
+                    self.user_id,
+                    self.usage_session_id,
+                    "answer" if mode == "ask" else mode,
+                    answer,
+                    qid,
+                    sources=sources,
+                )
         else:
             save_history(self.user_id, self.usage_session_id, "answer" if mode == "ask" else mode, answer, qid)
         if mode in ("ask", "notes"):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select, update
@@ -21,6 +23,28 @@ from server.settings import (
 
 def _day() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _dump_sources(sources: dict | None) -> str:
+    """#182: store the sources payload bounded; anything unusable becomes ""."""
+    if not sources:
+        return ""
+    try:
+        return json.dumps(sources, ensure_ascii=False)[:8000]
+    except (TypeError, ValueError):
+        return ""
+
+
+def _parse_sources(raw: str | None) -> dict | None:
+    """The stored sources payload, or None for a row that has none (old records)."""
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _iso_utc(dt: datetime | None) -> str | None:
@@ -417,7 +441,15 @@ def consume_llm(
     return bool(snap.get("ok")), snap
 
 
-def save_history(user_id: str, session_id: str | None, kind: str, text: str, qid: str = "", speaker: str = "") -> None:
+def save_history(
+    user_id: str,
+    session_id: str | None,
+    kind: str,
+    text: str,
+    qid: str = "",
+    speaker: str = "",
+    sources: dict | None = None,
+) -> None:
     if not session_id or not (text or "").strip():
         return
     with db_session() as db:
@@ -430,6 +462,8 @@ def save_history(user_id: str, session_id: str | None, kind: str, text: str, qid
                 qid=qid,
                 text=text[:20000],
                 speaker=(speaker or "")[:64],
+                # #182: only a Think answer carries sources; every other row keeps "".
+                sources=_dump_sources(sources),
             )
         )
         row = db.get(UsageSession, session_id)
@@ -490,7 +524,15 @@ def _session_entry(db, s) -> dict:
 
     scene = normalize_scene(s.mode, getattr(s, "scene", "") or "")
     item_rows = [
-        {"kind": i.kind, "text": i.text, "at": _iso_utc(i.created_at), "qid": i.qid, "speaker": i.speaker or ""}
+        {
+            "kind": i.kind,
+            "text": i.text,
+            "at": _iso_utc(i.created_at),
+            "qid": i.qid,
+            "speaker": i.speaker or "",
+            # #182: None for every record written before sources existed.
+            "sources": _parse_sources(getattr(i, "sources", "")),
+        }
         for i in items
     ]
     return {
