@@ -310,12 +310,21 @@ class ThinkAnswerPathTests(unittest.TestCase):
         self.assertEqual([e.get("text") for e in _events(events, "chunk")], ["fallback body"])
 
     def test_think_scopes_the_search_to_ask_modes_only(self):
-        # file_ask is an ask: it carries the enhancement too.
+        # file_ask is an ask: it carries the enhancement too — and the evidence has
+        # to reach the prompt file_ask actually builds (it returns early, so a
+        # lookup whose evidence only lands in the plain-ask prompt is a silent
+        # no-op for attachment questions).
         events: list[dict] = []
         pipe = _pipe(events)
-        pipe.think_client = _client(results=[("A", "https://e.com/a", None)])
+        pipe.think_client = _client(results=[("A", "https://e.com/a", "2026-09-10")])
         pipe.process_text("review this", "file_ask", think=True)
         self.assertEqual(len(_events(events, "sources")), 1)
+        kwargs = pipe.client.chat.completions.create.call_args.kwargs
+        system = [m for m in kwargs["messages"] if m["role"] == "system"]
+        self.assertTrue(
+            any("https://e.com/a" in m["content"] for m in system),
+            "the evidence must reach the file_ask prompt too",
+        )
 
 
 if __name__ == "__main__":

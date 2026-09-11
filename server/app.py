@@ -1616,6 +1616,10 @@ class Pipeline:
                         "If an image is attached, describe and analyze what you actually see.\n"
                         "Do not invent contents that are not in the files."
                         + out_rule
+                        # #182: a question sent with an attachment is still a
+                        # committed question, so a Think lookup's evidence has to
+                        # reach THIS prompt too (this branch returns early).
+                        + (("\n\n" + evidence) if evidence else "")
                     ),
                 },
                 {"role": "user", "content": question},
