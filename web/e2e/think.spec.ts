@@ -286,6 +286,47 @@ test.describe('Think submit identity', () => {
     expect(sent.filter((m) => m.type === 'ask')).toEqual([])
   })
 
+  test('an upload that fails after the session moved on changes nothing', async ({ page }) => {
+    // #182 review: only the success path checked the session, so an upload that
+    // failed after a New still dispatched its failure — and the reducer wrote it into
+    // whichever card was asking, plus forced `busy: false` and the status line.
+    let failUpload: (() => void) | null = null
+    const gate = new Promise<void>((resolve) => {
+      failUpload = () => resolve()
+    })
+    await page.route('**/api/attach/extract', async (route) => {
+      await gate
+      await route.fulfill({ status: 500, contentType: 'application/json', body: '{"detail":"boom"}' })
+    })
+    const { sent, send } = await mockWs(page)
+    await page.locator('.prompt-row input[type=file]').setInputFiles({
+      name: 'payroll.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('PRIVATE PAYROLL'),
+    })
+    await page.locator('.gen-btn').click() // held
+
+    // New lands, and a fresh question is already being answered.
+    await page.keyboard.press('F4')
+    await page.getByRole('button', { name: 'Clear', exact: true }).click()
+    await page.locator('.prompt-input').fill('a fresh question?')
+    await page.locator('.prompt-input').press('Enter')
+    await expect.poll(() => sent.filter((m) => m.type === 'ask').length).toBe(1)
+    const fresh = sent.filter((m) => m.type === 'ask')[0]
+
+    failUpload!()
+    await page.waitForTimeout(400)
+
+    send({ type: 'question', id: 'q-fresh', text: 'a fresh question?', submit_id: fresh.submit_id })
+    send({ type: 'chunk', id: 'q-fresh', text: ' the fresh answer' })
+    send({ type: 'done', id: 'q-fresh', stt: 0, llm: 1, ok: true })
+
+    const card = page.locator('.qa-result').filter({ hasText: 'a fresh question?' })
+    await expect(card).toContainText('the fresh answer')
+    await expect(page.getByText('Could not send the file')).toHaveCount(0)
+    await expect(page.getByText('Could not resend the file')).toHaveCount(0)
+  })
+
   test('a failed voice question keeps its error off the pending attachment card', async ({ page }) => {
     // #182 review: an error frame had no id, so the reducer wrote it into the first
     // card without an answer — an attachment submit still uploading.

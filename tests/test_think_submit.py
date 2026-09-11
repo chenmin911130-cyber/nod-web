@@ -277,6 +277,57 @@ class SubmitSnapshotTests(unittest.TestCase):
         self.assertTrue(self._wait(lambda: sess.pipeline.process_text.called))
         self.assertIs(sess.pipeline.process_text.call_args.kwargs.get("think"), True)
 
+    def test_a_stale_manual_recording_never_reaches_the_new_mode(self):
+        # #182 review: the mode dispatch (`_on_final` for Translate / Meeting) ran
+        # BEFORE the ownership check, so a recording whose mode changed during
+        # transcription still landed in the new mode.
+        sess = self._session()
+        sess._qa_init()
+        stale_gen = sess._qa_session_gen
+        sess._workspace = "translate"  # the mode moved on while transcribing
+        sess._on_final = mock.Mock()
+        sess._transcribe_manual_pcm = mock.Mock(return_value=("some words", "en"))
+        sess._polish_manual_text = mock.Mock(side_effect=lambda text: text)
+        sess._set_engine = mock.Mock()
+        sess._emit_phase = mock.Mock()
+
+        sess._finish_manual(b"\x00" * 8000, submit_ref="m1", submit_session_gen=stale_gen - 1)
+
+        sess._on_final.assert_not_called()
+        sess.pipeline.process_text.assert_not_called()
+        sess._set_engine.assert_not_called()
+        sess._emit_phase.assert_not_called()
+        self.assertEqual(sess.emit.call_args_list, [], "an abandoned worker emits nothing")
+
+    def test_a_stale_manual_recording_does_not_even_start_transcribing(self):
+        # The session can also move on between the confirm and the worker starting.
+        sess = self._session()
+        sess._qa_init()
+        sess._transcribe_manual_pcm = mock.Mock(return_value=("some words", "en"))
+        sess._set_engine = mock.Mock()
+        sess._finish_manual(b"\x00" * 8000, submit_session_gen=sess._qa_session_gen - 1)
+        sess._transcribe_manual_pcm.assert_not_called()
+        sess._set_engine.assert_not_called()
+
+    def test_a_stale_transcription_failure_does_not_touch_the_new_session(self):
+        # The failure branch had no ownership check either: an abandoned worker could
+        # report an error into the live session and mark its engine idle.
+        sess = self._session()
+        sess._qa_init()
+        stale_gen = sess._qa_session_gen
+        sess._transcribe_manual_pcm = mock.Mock(side_effect=RuntimeError("socket lost"))
+        sess._set_engine = mock.Mock()
+        sess._emit_phase = mock.Mock()
+
+        # Not stale yet when it starts, stale by the time it fails.
+        with mock.patch.object(sess, "_manual_session_stale", side_effect=[False, True]):
+            sess._finish_manual(b"\x00" * 8000, submit_session_gen=stale_gen)
+
+        self.assertEqual([e.args[0] for e in sess.emit.call_args_list if e.args[0].get("type") == "error"], [])
+        # Only the initial "transcribing" was set; the failure must not force idle.
+        self.assertEqual([c.args for c in sess._set_engine.call_args_list], [("transcribing",)])
+        sess._emit_phase.assert_not_called()
+
     def test_a_question_failure_names_the_question_it_belongs_to(self):
         # #182 review: an error frame carried no id, so the client wrote it into
         # whichever card happened to be waiting (an attachment submit still uploading,

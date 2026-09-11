@@ -5887,20 +5887,39 @@ class Session:
         ).start()
         self._offer_save_history()
 
+    def _manual_session_stale(self, submit_session_gen: int | None) -> bool:
+        """True when this recording's session has been replaced (New / clear / switch)."""
+        if submit_session_gen is None:
+            return False
+        self._qa_init()
+        return not self._qa_session_current(submit_session_gen)
+
     def _finish_manual(
         self, pcm: bytes, *, think: bool = False, submit_ref: str = "", submit_session_gen: int | None = None
     ) -> None:
         # #182: the session this recording was confirmed in. Transcription takes long
-        # enough for a New / mode switch to land; the recording must not answer into
-        # the session that replaced it.
-        self._qa_init()
+        # enough for a New / clear / mode switch to land, and NOTHING below may touch
+        # the session that replaced it — not the engine state, not an error line, not
+        # the mode dispatch (`_on_final`), and not the answer (which may search).
+        # Checked before anything else, and again the moment transcription returns.
+        if self._manual_session_stale(submit_session_gen):
+            logging.getLogger("nod").info("qa_drop reason=stale_manual stage=start")
+            return
         self._set_engine("transcribing")
         try:
             text, lang = self._transcribe_manual_pcm(pcm)
         except Exception as e:
+            if self._manual_session_stale(submit_session_gen):
+                # An abandoned worker must not push its failure into the live session
+                # (nor mark it idle: the new session owns the engine state).
+                logging.getLogger("nod").info("qa_drop reason=stale_manual stage=error")
+                return
             self.emit({"type": "error", "text": f"Transcription failed:{e}"})
             self._set_engine("idle")
             self._emit_phase()
+            return
+        if self._manual_session_stale(submit_session_gen):
+            logging.getLogger("nod").info("qa_drop reason=stale_manual stage=transcribed")
             return
         text = self._polish_manual_text(text)
         if not (text or "").strip():
@@ -5922,13 +5941,6 @@ class Session:
         heard = lang or detect_question_lang(cleaned)
         if not self._speech_allowed(cleaned, lang or heard):
             self.emit({"type": "partial", "text": ""})
-            self._set_engine("idle")
-            self._emit_phase()
-            return
-        if submit_session_gen is not None and not self._qa_session_current(submit_session_gen):
-            logging.getLogger("nod").info(
-                "qa_drop reason=stale_manual gen=%s now_gen=%s", submit_session_gen, self._qa_session_gen
-            )
             self._set_engine("idle")
             self._emit_phase()
             return

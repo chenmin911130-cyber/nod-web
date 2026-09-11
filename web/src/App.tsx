@@ -755,6 +755,11 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         thinkOn: false,
+        // #182: Clear ends the session, so nothing is pending any more. Without this
+        // the composer stayed `busy` whenever the abandoned work produced no `done`
+        // event: an attachment upload that never became an answer left the input
+        // disabled after New, so the next question could not even be asked.
+        busy: false,
         turns: [],
         currentQ: PLACEHOLDER,
         currentQId: '',
@@ -1021,13 +1026,16 @@ function reducer(state: AppState, action: Action): AppState {
     case 'fail_ask': {
       // #182: only the card this FAILED submit created may carry its error — the
       // previous shape marked every pending card, including one belonging to a
-      // different submission that was still uploading.
+      // different submission that was still uploading. And when that card is gone
+      // (the session was cleared, a new question is already running), the failure
+      // must change nothing at all: not the status line, not `busy`.
       const failedSubmit = action.submitId || ''
-      const turns = state.turns.map((t) =>
-        t.id === '__pending_ask__' && !t.a && (!failedSubmit || t.submitId === failedSubmit)
-          ? { ...t, a: action.text }
-          : t,
+      const failedIndex = state.turns.findIndex(
+        (t) => t.id === '__pending_ask__' && !t.a && (!failedSubmit || t.submitId === failedSubmit),
       )
+      if (failedIndex < 0) return state
+      const turns = state.turns.slice()
+      turns[failedIndex] = { ...turns[failedIndex], a: action.text }
       return { ...state, turns, busy: false, status: action.text }
     }
     case 'fail_translate': {
@@ -2582,6 +2590,13 @@ export default function App() {
           ...(think === undefined ? {} : { think }),
         })
       } catch (ex) {
+        // #182: the failure belongs to the session that submitted it. If a New /
+        // clear landed while the upload was failing, this must change nothing in
+        // the session that replaced it — not a card, not busy, not the status line.
+        if (composeSessionKey(stateRef.current.workspaceMode, stateRef.current.composeSessionId) !== sessionKey) {
+          submitsRef.current.delete(submit_id)
+          return
+        }
         dispatch({
           type: 'fail_ask',
           text: ex instanceof Error ? ex.message : 'Could not send the file',
@@ -2635,6 +2650,10 @@ export default function App() {
           submit_id,
         })
       } catch (ex) {
+        if (composeSessionKey(stateRef.current.workspaceMode, stateRef.current.composeSessionId) !== sessionKey) {
+          submitsRef.current.delete(submit_id)
+          return
+        }
         dispatch({
           type: 'fail_ask',
           text: ex instanceof Error ? ex.message : 'Could not resend the file',
