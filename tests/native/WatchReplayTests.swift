@@ -394,6 +394,148 @@ func waitSend() {
     check(WatchPhoneSession.reduceSaveStatus(doneUi, save: "local").pendingSync == false, "reduce: Done ignores late local")
     check(WatchPhoneSession.reduceSaveStatus(doneUi, save: "failed").saveFailed == false, "reduce: Done ignores late failed")
 
+    // #219: the live copy is paged end to end — the bridge fans the pages out
+    // (application context + transferUserInfo) and the Watch joins them, so a long
+    // original/translation is fully readable instead of clipped.
+    let longPage = String(repeating: "甲", count: 12000)
+    let tailPage = "收尾一句。"
+    WCSession.default.messages.removeAll()
+    WCSession.default.receivedApplicationContext = [:]
+    bridge.pushStatus(
+        capture: "listening",
+        hint: "",
+        original: "Original page 0",
+        translation: longPage,
+        copyId: "page-1",
+        originalSegments: ["Original page 0", "Original page 1"],
+        translationSegments: [longPage, tailPage]
+    )
+    eq(WCSession.default.receivedApplicationContext["copySegIndex"] as? Int ?? -1, 0)
+    eq(WCSession.default.receivedApplicationContext["copySegTotal"] as? Int ?? -1, 2)
+    eq(WCSession.default.receivedApplicationContext["translation"] as? String ?? "", longPage)
+    let fanned = WCSession.default.messages.filter { ($0["copySegIndex"] as? Int) == 1 }
+    check(!fanned.isEmpty, "page 1 must be queued (transferUserInfo) so the context can hold page 0")
+    eq(fanned.last?["translation"] as? String ?? "", tailPage)
+    eq(fanned.last?["original"] as? String ?? "", "Original page 1")
+    check(fanned.last?["history"] == nil, "queued pages leave the history preview to page 0")
+    check(!WCSession.default.messages.isEmpty, "page 0 is also sent live when the Watch is reachable")
+
+    // A status push that only changes save/hint carries the same copy: the tail
+    // pages are not re-queued (the userInfo queue would grow without bound). A
+    // changed page is, and the Watch-ready re-push always re-queues.
+    func queuedPages() -> Int {
+        WCSession.default.messages.filter { ($0["copySegIndex"] as? Int) == 1 }.count
+    }
+    WCSession.default.messages.removeAll()
+    bridge.pushStatus(
+        capture: "listening", hint: "save state", original: "Original page 0", translation: longPage,
+        copyId: "page-1", originalSegments: ["Original page 0", "Original page 1"],
+        translationSegments: [longPage, tailPage]
+    )
+    check(queuedPages() == 0, "an unchanged copy must not re-queue its pages")
+    bridge.pushStatus(
+        capture: "listening", hint: "save state again", original: "Original page 0", translation: longPage,
+        copyId: "page-1", originalSegments: ["Original page 0", "Original page 1"],
+        translationSegments: [longPage, "收尾一句，更长。"]
+    )
+    check(queuedPages() == 1, "a changed page is queued")
+    bridge.pushStatus(
+        capture: "listening", hint: "save state again", original: "Original page 0", translation: longPage,
+        copyId: "page-1", originalSegments: ["Original page 0", "Original page 1"],
+        translationSegments: [longPage, "收尾一句，更长。"]
+    )
+    check(queuedPages() == 1, "the same page set is not queued twice")
+    bridge.markJsReady()
+    check(queuedPages() == 2, "the Watch-ready re-push re-queues every page")
+
+    // One page behaves exactly as before: no page fields at all.
+    WCSession.default.messages.removeAll()
+    WCSession.default.receivedApplicationContext = [:]
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "Solo", translation: "独段", copyId: "solo",
+        originalSegments: ["Solo"], translationSegments: ["独段"]
+    )
+    check(WCSession.default.receivedApplicationContext["copySegIndex"] == nil, "single page keeps the unpaged payload")
+    check(WCSession.default.receivedApplicationContext["copySegTotal"] == nil, "single page has no page total")
+    check(WCSession.default.messages.allSatisfy { $0["copySegIndex"] == nil }, "single page fans out no queued page")
+
+    let watch = WatchPhoneSession(
+        sendBuffer: WatchSendBuffer(),
+        pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("paged")),
+        connect: false
+    )
+    // A copy starts at page 0: a page of an unknown copy is dropped, so a late page
+    // of a superseded copy can never put the old translation back.
+    deliver(watch, ["copyId": "c1", "copySegIndex": 1, "copySegTotal": 2, "original": "org-1", "translation": "page-1"])
+    eq(watch.translation, "")
+    eq(watch.original, "")
+    eq(watch.copyId, "")
+    deliver(watch, ["copyId": "c1", "copySegIndex": 0, "copySegTotal": 2, "original": "org-0", "translation": "page-0"])
+    eq(watch.translation, "page-0")
+    eq(watch.copyId, "c1")
+    // The phone re-pushes every page; page 1 then fills the rest.
+    deliver(watch, ["copyId": "c1", "copySegIndex": 1, "copySegTotal": 2, "original": "org-1", "translation": "page-1"])
+    eq(watch.translation, "page-0page-1")
+    eq(watch.original, "org-0org-1")
+    // A re-sent page is idempotent.
+    deliver(watch, ["copyId": "c1", "copySegIndex": 0, "copySegTotal": 2, "original": "org-0", "translation": "page-0"])
+    eq(watch.translation, "page-0page-1")
+    // A missing middle page keeps the prefix (no gap gluing).
+    deliver(watch, ["copyId": "c4", "copySegIndex": 0, "copySegTotal": 3, "original": "g-0", "translation": "g-0"])
+    eq(watch.translation, "g-0")
+    deliver(watch, ["copyId": "c4", "copySegIndex": 2, "copySegTotal": 3, "original": "g-2", "translation": "g-2"])
+    eq(watch.translation, "g-0")
+    deliver(watch, ["copyId": "c4", "copySegIndex": 1, "copySegTotal": 3, "original": "g-1", "translation": "g-1"])
+    eq(watch.translation, "g-0g-1g-2")
+    // A new copy id starts a new copy on its page 0.
+    deliver(watch, ["copyId": "c5", "copySegIndex": 1, "copySegTotal": 2, "original": "n-1", "translation": "n-1"])
+    eq(watch.translation, "g-0g-1g-2")
+    deliver(watch, ["copyId": "c5", "copySegIndex": 0, "copySegTotal": 2, "original": "n-0", "translation": "n-0"])
+    eq(watch.translation, "n-0")
+    eq(watch.original, "n-0")
+    deliver(watch, ["copyId": "c5", "copySegIndex": 1, "copySegTotal": 2, "original": "n-1", "translation": "n-1"])
+    eq(watch.translation, "n-0n-1")
+    // Page 0 re-delivered for the same copy (Watch relaunch) must NOT drop pages 1..n.
+    deliver(watch, ["copyId": "c5", "copySegIndex": 0, "copySegTotal": 2, "original": "n-0", "translation": "n-0"])
+    eq(watch.translation, "n-0n-1")
+    // Clearing the published copy id (New / Stop, which also blanks original and
+    // translation) drops the pages too, and a queued page of the superseded copy
+    // cannot put the old translation back.
+    watch.copyId = ""
+    watch.original = ""
+    watch.translation = ""
+    deliver(watch, ["copyId": "c5", "copySegIndex": 1, "copySegTotal": 2, "original": "n-1", "translation": "n-1"])
+    eq(watch.translation, "")
+    eq(watch.original, "")
+    eq(watch.copyId, "")
+    deliver(watch, ["copyId": "c6", "copySegIndex": 0, "copySegTotal": 2, "original": "z-0", "translation": "z-0"])
+    eq(watch.translation, "z-0")
+    // An old phone build sends the whole copy in one payload: whole-string replace.
+    deliver(watch, ["copyId": "c7", "original": "one shot", "translation": "整段替换"])
+    eq(watch.translation, "整段替换")
+    eq(watch.original, "one shot")
+    eq(watch.copyId, "c7")
+
+    func restart(id: String, index: Int, text: String, stored: String?) -> Bool {
+        WatchPhoneSession.copyPageStartsNewCopy(
+            incomingId: id,
+            currentId: "c",
+            pageIndex: index,
+            incomingOriginal: text,
+            incomingTranslation: text,
+            storedOriginal: stored,
+            storedTranslation: stored
+        )
+    }
+    check(restart(id: "other", index: 1, text: "x", stored: "x"), "a new copy id restarts")
+    check(!restart(id: "c", index: 1, text: "later", stored: "first"), "a later page never restarts the copy")
+    check(!restart(id: "c", index: 0, text: "same", stored: "same"), "a re-delivered page 0 keeps the pages")
+    check(!restart(id: "c", index: 0, text: "first", stored: nil), "page 0 before its pages is still the same copy")
+    check(restart(id: "c", index: 0, text: "grown", stored: "old"), "a page 0 with new text starts over")
+    check(WatchPhoneSession.copyPageApplies(incomingId: "c", currentId: "c", pageIndex: 5), "pages of the current copy apply")
+    check(WatchPhoneSession.copyPageApplies(incomingId: "new", currentId: "c", pageIndex: 0), "page 0 starts another copy")
+    check(!WatchPhoneSession.copyPageApplies(incomingId: "new", currentId: "c", pageIndex: 1), "a later page of another copy is dropped")
+
     _ = bridge
     print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake and Save tests passed")
  }

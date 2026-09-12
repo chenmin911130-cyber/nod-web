@@ -1,4 +1,4 @@
-import { buildWatchFace, watchPreviousCaption, WATCH_LIVE_COPY_MAX } from './watchStatus'
+import { buildWatchFace, watchLiveCopySegments, watchPreviousCaption, WATCH_LIVE_COPY_MAX } from './watchStatus'
 
 const face = buildWatchFace({
   capture: 'listening',
@@ -139,9 +139,64 @@ const capFace = buildWatchFace({
   translatePairs: [{ id: 'cap-over', original: 'Keep the window.', translation: overCap }],
   meetingLines: [],
 })
-if (capFace.translation.length !== WATCH_LIVE_COPY_MAX || !capFace.translation.endsWith('…')) {
-  throw new Error(`Watch live copy must cap at ${WATCH_LIVE_COPY_MAX}, got ${capFace.translation.length}`)
+// #219: the live copy has no total cap — it is paged for the Watch, never clipped.
+if (capFace.translation !== overCap) {
+  throw new Error(`Watch live copy must stay whole past the page cap, got len=${capFace.translation.length}`)
 }
+
+// Paging: every page fits the frame cap, and joining them restores the whole
+// copy character for character (no ellipsis, nothing dropped).
+const pages = watchLiveCopySegments(overCap)
+if (pages.length < 2) throw new Error(`long copy must be paged, got ${pages.length} page(s)`)
+for (const page of pages) {
+  if (page.length > WATCH_LIVE_COPY_MAX) throw new Error(`page over the frame cap: ${page.length}`)
+  if (page.includes('…')) throw new Error('a page must not contain an ellipsis')
+}
+if (pages.join('') !== overCap) throw new Error('pages must rejoin to the whole copy')
+
+const paraCopy = `${'第一段正文。'.repeat(300)}\n\n${'第二段正文。'.repeat(300)}\n\n最后一句在这里。`
+const paraPages = watchLiveCopySegments(paraCopy)
+if (paraPages.join('') !== paraCopy) throw new Error('paging must be lossless across paragraphs')
+if (paraPages.some((page) => page.length > WATCH_LIVE_COPY_MAX)) throw new Error('paragraph paging exceeded the cap')
+if (!paraPages.join('').endsWith('最后一句在这里。')) throw new Error('the last sentence must survive paging')
+if (paraPages.join('').includes('…')) throw new Error('paging must not add an ellipsis')
+if (!paraCopy.includes('\n\n') || !paraPages.join('').includes('\n\n')) {
+  throw new Error('paging must keep paragraph breaks')
+}
+
+const singleCopy = 'short enough for one page'
+const singlePages = watchLiveCopySegments(singleCopy)
+if (singlePages.length !== 1 || singlePages[0] !== singleCopy) {
+  throw new Error(`short copy must stay one page, got ${JSON.stringify(singlePages)}`)
+}
+if (watchLiveCopySegments('').length !== 0) throw new Error('empty copy has no pages')
+if (watchLiveCopySegments('   \n\n  ').length !== 0) throw new Error('blank copy has no pages')
+const atCap = 'x'.repeat(WATCH_LIVE_COPY_MAX)
+if (watchLiveCopySegments(atCap).length !== 1) throw new Error('a copy exactly at the cap is one page')
+const twoPages = watchLiveCopySegments(`${atCap}y`)
+if (twoPages.length !== 2 || twoPages[0] !== atCap || twoPages[1] !== 'y') {
+  throw new Error(`one char over the cap is two pages, got ${twoPages.map((p) => p.length)}`)
+}
+// An oversized single "word" (no sentence break) still pages at the cap.
+const noBreaks = watchLiveCopySegments('a'.repeat(WATCH_LIVE_COPY_MAX * 2 + 7))
+if (noBreaks.join('') !== 'a'.repeat(WATCH_LIVE_COPY_MAX * 2 + 7)) {
+  throw new Error('hard-split pages must rejoin losslessly')
+}
+if (noBreaks.some((page) => page.length > WATCH_LIVE_COPY_MAX)) {
+  throw new Error('hard-split page exceeded the cap')
+}
+// A code point is never cut in half: every page is valid text on its own.
+const emoji = '🙂'.repeat(WATCH_LIVE_COPY_MAX)
+const emojiPages = watchLiveCopySegments(emoji)
+if (emojiPages.join('') !== emoji) throw new Error('emoji paging must be lossless')
+for (const page of emojiPages) {
+  if ([...page].join('') !== page) throw new Error('a page must not split a surrogate pair')
+}
+// The 800-char preview cap is gone: a >800 copy reads to its last word.
+const tailCopy = `${'正文。'.repeat(400)}收尾一句。`
+const tailPages = watchLiveCopySegments(tailCopy)
+if (!tailPages.join('').endsWith('收尾一句。')) throw new Error('the last sentence must be readable')
+if (tailPages.join('').includes('…')) throw new Error('a >800 copy must not be ellipsized')
 
 const meeting = buildWatchFace({
   capture: 'listening',

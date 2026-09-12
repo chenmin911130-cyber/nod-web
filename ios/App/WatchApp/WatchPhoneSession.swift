@@ -18,7 +18,17 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var original = ""
     @Published var translation = ""
     @Published var previous = ""
-    @Published var copyId = ""
+    @Published var copyId = "" {
+        didSet {
+            if copyId != oldValue { resetCopyPages() }
+        }
+    }
+    /// Pages of the live copy, by page index. The phone sends the copy paged so a
+    /// long original/translation is never clipped; the Watch shows the longest
+    /// prefix it holds (`copyPageTotal` bounds the join).
+    private var copyOriginalPages: [Int: String] = [:]
+    private var copyTranslationPages: [Int: String] = [:]
+    private var copyPageTotal = 0
     @Published var history: [WatchHistItem] = []
     @Published var reachable = false
     @Published var speechLive = false
@@ -236,6 +246,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         translation = ""
         previous = ""
         copyId = ""
+        resetCopyPages()
         elapsedMs = 0
         localModeHeld = phoneModeSeen
         starting = true
@@ -445,6 +456,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         translation = ""
         previous = ""
         copyId = ""
+        resetCopyPages()
         elapsedMs = 0
         offeringSave = false
         pendingSync = false
@@ -757,6 +769,55 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
 
     static func flushShouldSend(pendingBytes: Int) -> Bool {
         pendingBytes > 0
+    }
+
+    /// Whether a page may be applied at all. Pages of the copy on screen always
+    /// extend it; a page of another copy only when it is page 0, because a copy
+    /// starts at page 0. A late page of a superseded copy (New / Stop) can
+    /// therefore never put the old translation back on the Watch.
+    static func copyPageApplies(incomingId: String, currentId: String, pageIndex: Int) -> Bool {
+        if incomingId == currentId { return true }
+        return pageIndex == 0
+    }
+
+    /// Whether an incoming page begins a new copy instead of extending the copy on
+    /// screen. A different copy id always restarts. Page 0 restarts only when it
+    /// supersedes a page 0 we already hold and its text changed: a page 0
+    /// re-delivered by the OS (the application context after the Watch app
+    /// relaunches) must keep the pages queued behind it.
+    static func copyPageStartsNewCopy(
+        incomingId: String,
+        currentId: String,
+        pageIndex: Int,
+        incomingOriginal: String,
+        incomingTranslation: String,
+        storedOriginal: String?,
+        storedTranslation: String?
+    ) -> Bool {
+        if incomingId != currentId { return true }
+        guard pageIndex == 0 else { return false }
+        guard let storedOriginal, let storedTranslation else { return false }
+        return incomingOriginal != storedOriginal || incomingTranslation != storedTranslation
+    }
+
+    /// Drop paged copy state. `copyId`'s didSet calls this on a copy change; the
+    /// session reset points (New / Stop) also clear it explicitly.
+    private func resetCopyPages() {
+        copyOriginalPages.removeAll()
+        copyTranslationPages.removeAll()
+        copyPageTotal = 0
+    }
+
+    /// Longest run of pages held from index 0. A missing page shows its prefix
+    /// rather than gluing a later page onto the head.
+    private func joinedCopy(_ pages: [Int: String]) -> String {
+        guard copyPageTotal > 0 else { return "" }
+        var text = ""
+        for index in 0..<copyPageTotal {
+            guard let page = pages[index] else { break }
+            text += page
+        }
+        return text
     }
 
     static func intField(_ payload: [String: Any], _ key: String) -> Int? {
@@ -1206,17 +1267,53 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         if let hint = payload["hint"] as? String, !hint.isEmpty, !paused, !offeringSave, !savedAck, !saving, !saveFailed, !pendingSync, !starting, !localWatchMic, !draining, !drainFailed, !pcmStalled {
             self.hint = hint
         }
-        if let original = payload["original"] as? String {
-            self.original = original
-        }
-        if let translation = payload["translation"] as? String {
-            self.translation = translation
+        let pageTotal = Self.intField(payload, "copySegTotal") ?? 0
+        let pageIndex = Self.intField(payload, "copySegIndex") ?? -1
+        let paged = pageTotal > 0 && pageIndex >= 0 && pageIndex < pageTotal
+        let pageCopyId = payload["copyId"] as? String ?? copyId
+        if paged {
+            // A late page of a superseded copy is ignored for the copy fields only:
+            // the rest of the payload (capture, hint, save, speech) still applies.
+            if Self.copyPageApplies(incomingId: pageCopyId, currentId: copyId, pageIndex: pageIndex) {
+                let incomingId = pageCopyId
+                let incomingOriginal = payload["original"] as? String ?? ""
+                let incomingTranslation = payload["translation"] as? String ?? ""
+                if Self.copyPageStartsNewCopy(
+                    incomingId: incomingId,
+                    currentId: copyId,
+                    pageIndex: pageIndex,
+                    incomingOriginal: incomingOriginal,
+                    incomingTranslation: incomingTranslation,
+                    storedOriginal: copyOriginalPages[0],
+                    storedTranslation: copyTranslationPages[0]
+                ) {
+                    resetCopyPages()
+                    copyId = incomingId
+                }
+                copyPageTotal = pageTotal
+                copyOriginalPages[pageIndex] = incomingOriginal
+                copyTranslationPages[pageIndex] = incomingTranslation
+                original = joinedCopy(copyOriginalPages)
+                translation = joinedCopy(copyTranslationPages)
+            }
+        } else {
+            // Unpaged payload: the whole copy (backwards compatible), so drop any
+            // pages a previous paged copy left behind.
+            if payload["original"] != nil || payload["translation"] != nil {
+                resetCopyPages()
+            }
+            if let original = payload["original"] as? String {
+                self.original = original
+            }
+            if let translation = payload["translation"] as? String {
+                self.translation = translation
+            }
+            if let copyId = payload["copyId"] as? String {
+                self.copyId = copyId
+            }
         }
         if let previous = payload["previous"] as? String {
             self.previous = previous
-        }
-        if let copyId = payload["copyId"] as? String {
-            self.copyId = copyId
         }
         if Self.speechShouldPlay(live: live) {
             if let data = payload["speechData"] as? Data, !data.isEmpty {

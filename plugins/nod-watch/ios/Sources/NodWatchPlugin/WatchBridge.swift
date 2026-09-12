@@ -20,6 +20,16 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastTranslation = ""
     private var lastPrevious = ""
     private var lastCopyId = ""
+    /// Pages of the live copy, kept so a re-push (Watch became ready) stays paged
+    /// instead of sending the whole text in one oversized application context.
+    private var lastOriginalSegments: [String] = []
+    private var lastTranslationSegments: [String] = []
+    /// Page set already handed to `transferUserInfo`. Status pushes that only change
+    /// save/hint/capture carry the same copy; re-queuing the tail pages every time
+    /// would grow the queued-transfer backlog without adding information.
+    private var queuedCopyId = ""
+    private var queuedOriginalPages: [String] = []
+    private var queuedTranslationPages: [String] = []
     private var lastHistory: [[String: String]] = []
     private var lastMode = ""
     private var lastLangPair = ""
@@ -316,7 +326,12 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             original: lastOriginal,
             translation: lastTranslation,
             previous: lastPrevious,
-            history: lastHistory
+            history: lastHistory,
+            originalSegments: lastOriginalSegments,
+            translationSegments: lastTranslationSegments,
+            // The Watch may have relaunched without its queued pages: re-queue them
+            // even though the copy itself did not change.
+            forceQueue: true
         )
     }
 
@@ -331,14 +346,27 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         mode: String = "",
         langPair: String = "",
         save: String = "",
-        sessionId: String = ""
+        sessionId: String = "",
+        originalSegments: [String] = [],
+        translationSegments: [String] = [],
+        forceQueue: Bool = false
     ) {
         if !capture.isEmpty {
             lastCapture = capture
         }
         lastHint = hint
-        lastOriginal = original
-        lastTranslation = translation
+        // The live copy is paged, never clipped: keep every page so a re-push
+        // (Watch became ready) can replay the whole copy without one big frame.
+        let originalPages = originalSegments.isEmpty
+            ? (original.isEmpty ? [] : [original])
+            : originalSegments
+        let translationPages = translationSegments.isEmpty
+            ? (translation.isEmpty ? [] : [translation])
+            : translationSegments
+        lastOriginalSegments = originalPages
+        lastTranslationSegments = translationPages
+        lastOriginal = originalPages.joined()
+        lastTranslation = translationPages.joined()
         lastPrevious = previous
         if let copyId {
             lastCopyId = copyId
@@ -371,15 +399,23 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
+        // Page 0 rides the application context (and the live sendMessage); the
+        // remaining pages go through transferUserInfo, which is queued and
+        // retried, because updateApplicationContext keeps only the last frame.
+        let pageCount = max(originalPages.count, translationPages.count)
         var payload: [String: Any] = [
             "capture": lastCapture,
             "hint": hint,
-            "original": original,
-            "translation": translation,
+            "original": originalPages.first ?? "",
+            "translation": translationPages.first ?? "",
             "previous": previous,
             "copyId": lastCopyId,
             "history": history,
         ]
+        if pageCount > 1 {
+            payload["copySegIndex"] = 0
+            payload["copySegTotal"] = pageCount
+        }
         if !lastMode.isEmpty {
             payload["mode"] = lastMode
         }
@@ -439,6 +475,36 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         if session.isReachable {
             session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
+        }
+        // Pages 1..n. Queue them even when the Watch looks unreachable: the Watch
+        // joins by index and shows the longest prefix it holds meanwhile. Only a
+        // changed page set is queued, so a save/hint push does not re-enqueue it.
+        let pagesChanged = forceQueue
+            || queuedCopyId != lastCopyId
+            || queuedOriginalPages != originalPages
+            || queuedTranslationPages != translationPages
+        if pageCount > 1, pagesChanged {
+            for index in 1..<pageCount {
+                var page = payload
+                page["copySegIndex"] = index
+                page["original"] = index < originalPages.count ? originalPages[index] : ""
+                page["translation"] = index < translationPages.count ? translationPages[index] : ""
+                // Leave the history preview exactly as page 0 sent it: an empty
+                // array here would wipe the Watch's preview on every queued page.
+                page.removeValue(forKey: "history")
+                session.transferUserInfo(page)
+            }
+        }
+        if pageCount > 1 {
+            queuedCopyId = lastCopyId
+            queuedOriginalPages = originalPages
+            queuedTranslationPages = translationPages
+        } else {
+            // A single-page copy leaves nothing queued; make the next paged copy
+            // queue again even if it matches an older page set.
+            queuedCopyId = ""
+            queuedOriginalPages = []
+            queuedTranslationPages = []
         }
     }
 
