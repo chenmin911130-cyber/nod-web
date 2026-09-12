@@ -88,6 +88,9 @@ export interface TranslatePair {
   from?: PairLang
   failed?: boolean
   passthrough?: boolean
+  // Server copy version this row's text is current to (#219). Both the
+  // incremental chunk and the full watch_copy snapshot carry it.
+  copySeq?: number
 }
 
 export interface AppState {
@@ -172,7 +175,7 @@ export type EngineEvent =
   | { type: 'partial'; text: string; language?: string; speaker?: string }
   | { type: 'question'; id: string; text: string; language?: string; speaker?: string; think?: boolean; submit_id?: string; server_translate?: boolean; translation?: string }
   | { type: 'line_update'; id: string; text: string; language?: string; speaker?: string; rev: number }
-  | { type: 'chunk'; id: string; text: string }
+  | { type: 'chunk'; id: string; text: string; copy_seq?: number; copy_id?: string }
   | ({ type: 'sources'; id?: string } & AnswerSources)
   // #182: the server's authoritative Think value. Sent when a session reset turns
   // the switch back to its default, so the client never shows a stale "on".

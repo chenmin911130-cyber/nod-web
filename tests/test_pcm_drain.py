@@ -1088,9 +1088,13 @@ class HandoffConcurrencyTests(unittest.TestCase):
         sess._listener = None
         sess._handoff_listener = None
         sess._pcm_hold = bytearray(STT_PCM_HOLD_MAX)  # capacity exhausted
-        # Park the control emit (phone lock screen): self.emit becomes a no-op sink.
+        # Park the control emit (phone lock screen): the control sink is dropped,
+        # but the session keeps routing — a parked session still owns the
+        # audio-reachable Watch copy path (#219 P1).
         sess._detach_control_emit()
-        self.assertIs(sess.emit.__func__, Session._sink_emit)
+        self.assertIsNone(sess._client_emit)
+        self.assertIs(sess.emit.__func__, Session._routed_emit)
+        self.assertIs(sess.pipeline.emit.__func__, Session._routed_emit)
         native = mock.Mock()
         sess._send_audio_text = native
         # The overflow frame cannot be held; only the native path can reach the device.

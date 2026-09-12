@@ -59,7 +59,8 @@ import { api as authApi, deleteAccount, fetchMe, logout, type Me } from './auth'
 import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
-import { bumpWatchCopySeq, installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
+import { currentWatchCopySeq, installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
+import { applyChunk, applySnapshot, snapshotApplies } from './copyVersion'
 import { watchStartListenCommand } from './watchReplay'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
@@ -282,7 +283,7 @@ type Action =
   | { type: 'bind_translate'; id: string; rev?: number }
   | { type: 'release_translate' }
   | { type: 'fill_translate'; id: string; translation: string; passthrough?: boolean }
-  | { type: 'apply_watch_copy'; id: string; original: string; translation: string }
+  | { type: 'apply_watch_copy'; id: string; original: string; translation: string; seq?: number }
   | { type: 'clear_translation'; id: string }
   | { type: 'retry_translate'; id: string }
   | { type: 'fail_translate'; id: string }
@@ -354,15 +355,22 @@ function translateBindFromPrompt(text: string): string {
   return m?.[1] ?? ''
 }
 
-function applyTranslateChunk(pairs: TranslatePair[], bindId: string, chunk: string): TranslatePair[] {
+function applyTranslateChunk(pairs: TranslatePair[], bindId: string, chunk: string, copySeq?: number, copyId?: string): TranslatePair[] {
   if (!pairs.length || !chunk) return pairs
-  let idx = bindId ? pairs.findIndex((p) => p.id === bindId) : -1
+  // Prefer the row the server stamped on the chunk: the bind id can be empty or
+  // stale (a re-attach can drop the question that set it), and a chunk landing on
+  // the wrong row would stamp that row's version (#219).
+  let idx = copyId ? pairs.findIndex((p) => p.id === copyId) : -1
+  if (idx < 0 && bindId) idx = pairs.findIndex((p) => p.id === bindId)
   if (idx >= 0 && isTranslatePrompt(pairs[idx].original)) idx = -1
   if (idx < 0) idx = pairs.findIndex((p) => !p.translation && !p.failed && !isTranslatePrompt(p.original))
   if (idx < 0) return pairs
   const next = pairs.slice()
-  const row = next[idx]
-  next[idx] = { ...row, translation: row.translation + chunk, failed: false }
+  // The row also arrives as a full-text snapshot over the native audio socket;
+  // `applyChunk` returns the row untouched when it already holds this version.
+  const updated = applyChunk(next[idx], chunk, copySeq)
+  if (updated === next[idx]) return pairs
+  next[idx] = updated
   return next
 }
 
@@ -631,7 +639,7 @@ function reducer(state: AppState, action: Action): AppState {
               translatePairs.length > 0,
             )
             if (route === 'meeting') meetingLines = applyLineTranslationRev(meetingLines, state.translateBindId, state.translateBindRev, ev.text ?? '')
-            else if (route === 'pairs') translatePairs = applyTranslateChunk(translatePairs, state.translateBindId, ev.text ?? '')
+            else if (route === 'pairs') translatePairs = applyTranslateChunk(translatePairs, state.translateBindId, ev.text ?? '', ev.copy_seq, ev.copy_id)
           }
           if (state.workspaceMode === 'interview' && state.turns.length) {
             const byId = ev.id ? state.turns.findIndex((t) => t.id === ev.id) : -1
@@ -990,9 +998,12 @@ function reducer(state: AppState, action: Action): AppState {
     case 'apply_watch_copy': {
       const idx = state.translatePairs.findIndex((p) => p.id === action.id)
       if (idx >= 0) {
+        // Never regress a row the incremental path already advanced past this
+        // version (the snapshot can arrive after the chunks it contains).
+        if (!snapshotApplies(state.translatePairs[idx].copySeq, action.seq)) return state
         const translatePairs = state.translatePairs.map((p) =>
           p.id === action.id
-            ? { ...p, original: action.original || p.original, translation: action.translation }
+            ? { ...applySnapshot(p, action.translation, action.seq), original: action.original || p.original }
             : p,
         )
         return { ...state, translatePairs }
@@ -1006,6 +1017,7 @@ function reducer(state: AppState, action: Action): AppState {
           original: action.original,
           translation: action.translation,
           to: state.translateTo,
+          copySeq: action.seq,
         }],
       }
     }
@@ -1628,7 +1640,7 @@ export default function App() {
       },
       onWatchCopy: (ev) => {
         askedTranslate.current.add(ev.id)
-        dispatch({ type: 'apply_watch_copy', id: ev.id, original: ev.original, translation: ev.translation })
+        dispatch({ type: 'apply_watch_copy', id: ev.id, original: ev.original, translation: ev.translation, seq: ev.seq })
       },
     })
   }, [])
@@ -1676,6 +1688,11 @@ export default function App() {
         translation: face.translation,
         previous: face.previous,
         history: face.history,
+        // The live face carries the copy version + row id: a face built while the
+        // webview was suspended (phone locked) must not overwrite the newer copy
+        // the native audio path already put on the Watch (#219).
+        copySeq: currentWatchCopySeq(),
+        copyId: face.copyId,
         mode: watchStatusMode(state.workspaceMode, state.listenScene),
         langPair: watchLangPair(state.workspaceMode === 'translate' ? state.translateTo : state.notesTranslateTo),
         ...payload,
@@ -3095,7 +3112,11 @@ export default function App() {
     // translation, so never passthrough typed input. Only a spoken pair (which
     // carries the STT from-tag) may passthrough.
     const typed = String(pairId || '').startsWith('typed-')
-    if (typed) bumpWatchCopySeq()
+    // A typed row is ordered by the server's copy version like any other ask
+    // (`[NOD_TRANSLATE:typed-…]` takes the same emit path), so it must not
+    // fabricate a version of its own — a local bump out of the server's version
+    // space is what let stale text win the equal-version tie-break after New /
+    // switch mode (#219).
     // A meeting line has no translate pair, so its STT lang tag must be passed
     // through — otherwise fromTag is always undefined and every English line in
     // an English-target + Bilingual meeting hits the model. Typed pairs keep the

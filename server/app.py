@@ -3069,11 +3069,18 @@ class Session:
         self._closed = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._watch_copy_seq = 0
+        # Identity of this control session's Watch copy stream. A reconnect that
+        # adopts the parked session keeps it; New / mode switch / a fresh connect
+        # mint another one, so the phone can tell the streams apart.
+        self._watch_copy_session = uuid.uuid4().hex
         self._watch_copy_original: dict[str, str] = {}
         self._watch_copy_buf: dict[str, str] = {}
         self._watch_copy_pair = ""
         self._watch_copy_ask = ""
-        self._client_emit = emit
+        self._client_emit: Callable[[dict], None] | None = emit
+        # `emit` is ALWAYS the router. Detach/reattach only swap `_client_emit`,
+        # so Watch copy forwarding keeps riding the native audio socket while the
+        # phone is locked (#219 P1).
         self.emit = self._routed_emit
         self.pipeline.emit = self._routed_emit
 
@@ -3233,14 +3240,18 @@ class Session:
             self.emit(event)
             self._send_audio_text(event)
 
-    def _sink_emit(self, _obj: dict) -> None:
-        return
-
     def _detach_control_emit(self) -> None:
-        self.emit = self._sink_emit
+        """Silence the control socket without silencing the session.
+
+        A park is "the phone locked, the native audio uplink stays up". Swapping
+        ``emit`` for a sink used to stop the whole translate→Watch copy path in
+        exactly the scenario #219 is about, so only the client sink is dropped.
+        """
+        self._client_emit = None
+        self.emit = self._routed_emit
         pipeline = getattr(self, "pipeline", None)
         if pipeline is not None:
-            pipeline.emit = self._sink_emit
+            pipeline.emit = self._routed_emit
 
     def _close_audio_uplink(self) -> None:
         ws = getattr(self, "_audio_ws", None)
@@ -4016,6 +4027,10 @@ class Session:
             originals[ev["id"]] = piece
             if translate_should_passthrough(piece, (self.cfg.get("ui") or {}).get("translate_to") or "zh", piece_heard):
                 ev["translation"] = piece
+                # This row is already in the caption language, so it supersedes any
+                # in-flight ask for an earlier row: unhook that ask so its late
+                # chunks cannot drag the Watch back to the older line.
+                self._watch_copy_ask = ""
                 self.emit(ev)
                 self._emit_watch_copy(ev["id"], original=piece, translation=piece, done=True)
                 continue
@@ -5341,13 +5356,17 @@ class Session:
             pass
 
     def _routed_emit(self, ev: dict) -> None:
+        # Stage the Watch copy BEFORE the control client sees the event, so the
+        # same event can be stamped with the copy version. The phone consumes the
+        # incremental `chunk` (control socket) and the full `watch_copy` (audio
+        # socket) for one row; without a shared version it duplicates/regresses.
+        row = self._maybe_watch_copy(ev)
         client = getattr(self, "_client_emit", None)
         if callable(client):
             client(ev)
-        else:
-            # Session.__new__ tests assign emit directly.
-            pass
-        self._maybe_watch_copy(ev)
+        # No control client (parked / locked) must still reach the Watch.
+        if row is not None:
+            self._send_audio_text(row)
 
     def _watch_original_from_prompt(self, text: str) -> str:
         marker = "Translate only this line:\n"
@@ -5356,12 +5375,31 @@ class Session:
             return text[at + len(marker) :].strip()
         return ""
 
-    def _emit_watch_copy(self, pair_id: str, *, original: str | None = None, translation: str | None = None, done: bool = False) -> None:
+    def _next_watch_copy_seq(self) -> int:
+        """Monotone copy version, seeded from the clock.
+
+        Session state is per-session but the phone's native dedupe state is not,
+        so a fresh session's first copy must outrank the previous session's last
+        one — otherwise the new session's copy reads as stale and is dropped, and
+        an equal version could let the old text win the keep-longer tie-break.
+        """
+        now_ms = int(time.time() * 1000)
+        self._watch_copy_seq = max(int(getattr(self, "_watch_copy_seq", 0) or 0) + 1, now_ms)
+        return self._watch_copy_seq
+
+    def _watch_copy_row(
+        self,
+        pair_id: str,
+        *,
+        original: str | None = None,
+        translation: str | None = None,
+        done: bool = False,
+    ) -> dict | None:
         if getattr(self, "_workspace", "") != "translate":
-            return
+            return None
         pid = (pair_id or "").strip()
         if not pid:
-            return
+            return None
         src = original if original is not None else (getattr(self, "_watch_copy_original", {}) or {}).get(pid) or ""
         dst = translation if translation is not None else (getattr(self, "_watch_copy_buf", {}) or {}).get(pid) or ""
         if original is not None:
@@ -5376,20 +5414,28 @@ class Session:
                 buf = {}
                 self._watch_copy_buf = buf
             buf[pid] = dst
-        self._watch_copy_seq = int(getattr(self, "_watch_copy_seq", 0) or 0) + 1
-        self._send_audio_text({
+        return {
             "type": "watch_copy",
             "id": pid,
             "original": src,
             "translation": dst,
-            "seq": self._watch_copy_seq,
-            "session_id": self.usage_session_id or "",
+            "seq": self._next_watch_copy_seq(),
+            "session_id": getattr(self, "_watch_copy_session", "") or "",
             "done": bool(done),
-        })
+        }
 
-    def _maybe_watch_copy(self, ev: dict) -> None:
+    def _emit_watch_copy(self, pair_id: str, *, original: str | None = None, translation: str | None = None, done: bool = False) -> None:
+        row = self._watch_copy_row(pair_id, original=original, translation=translation, done=done)
+        if row is not None:
+            self._send_audio_text(row)
+
+    def _maybe_watch_copy(self, ev: dict) -> dict | None:
+        """Mirror a Translate row onto the audio socket for the locked phone.
+
+        Returns the row to send (staged by ``_routed_emit``) or ``None``.
+        """
         if getattr(self, "_workspace", "") != "translate":
-            return
+            return None
         kind = ev.get("type")
         if kind == "question":
             bind = _translate_line_id(ev.get("text") or "")
@@ -5404,20 +5450,31 @@ class Session:
                             buf = {}
                             self._watch_copy_original = buf
                         buf[bind] = src
-            return
+                # A re-ask of the same row (client retry after a wrong-script /
+                # failed answer) must start a fresh translation, not append the
+                # retry onto the abandoned one.
+                held = getattr(self, "_watch_copy_buf", None)
+                if held is not None:
+                    held[bind] = ""
+            return None
         bind = getattr(self, "_watch_copy_pair", "") or ""
         ask_id = getattr(self, "_watch_copy_ask", "") or ""
         if not bind or not ask_id or ev.get("id") != ask_id:
-            return
+            return None
         if kind == "chunk":
             held = getattr(self, "_watch_copy_buf", None)
             if held is None:
                 held = {}
                 self._watch_copy_buf = held
             held[bind] = (held.get(bind) or "") + (ev.get("text") or "")
-            self._emit_watch_copy(bind, done=False)
-        elif kind == "done":
-            self._emit_watch_copy(bind, done=True)
+            row = self._watch_copy_row(bind, done=False)
+            if row is not None:
+                ev["copy_seq"] = row["seq"]
+                ev["copy_id"] = bind
+            return row
+        if kind == "done":
+            return self._watch_copy_row(bind, done=True)
+        return None
 
     def _start_voice_translate(self, pair_id: str, piece: str, heard: str | None) -> None:
         ask = getattr(self, "ask", None)
@@ -6650,8 +6707,11 @@ async def ws_endpoint(ws: WebSocket):
     attach_tok = (ws.query_params.get("attach") or "").strip()
     old = uplink.adopt(attach_tok, user.id) if attach_tok and user is not None else None
     if old is not None:
-        old.emit = emit
-        old.pipeline.emit = emit
+        # Re-attach only the control client. `emit` stays the router so Watch
+        # copies keep flowing over the audio socket (#219 P1).
+        old._client_emit = emit
+        old.emit = old._routed_emit
+        old.pipeline.emit = old._routed_emit
         old._control_lost_at = 0.0
         attach(old)
         old.reattach()

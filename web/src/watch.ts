@@ -26,6 +26,7 @@ type WatchPlugin = {
     pcmDrainedSessionId?: string
     pcmDrainedByte?: number
     copySeq?: number
+    copyId?: string
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {
@@ -46,12 +47,11 @@ type WatchPlugin = {
 
 const NodWatch = registerPlugin<WatchPlugin>('NodWatch')
 
+// Last copy version the phone has seen from the server. The native bridge owns
+// the order within the Watch; this is what the JS face push reports so a stale
+// face (the webview was suspended while the phone was locked) cannot overwrite a
+// newer native copy.
 let watchCopySeq = 0
-
-export function bumpWatchCopySeq(): number {
-  watchCopySeq += 1
-  return watchCopySeq
-}
 
 export function currentWatchCopySeq(): number {
   return watchCopySeq
@@ -418,6 +418,10 @@ export function pushWatchStatus(face: {
   pcmDrainedCaptureId?: string
   pcmDrainedSessionId?: string
   pcmDrainedByte?: number
+  // Only a push that carries the live face sends the copy version + id. A
+  // control-only push (save state, pcm_drained) must leave the Watch copy alone.
+  copySeq?: number
+  copyId?: string
 }): void {
   if (!isNativeApp()) return
   void NodWatch.setStatus({
@@ -427,7 +431,8 @@ export function pushWatchStatus(face: {
     translation: (face.translation || '').slice(0, 800),
     previous: (face.previous || '').slice(0, 72),
     history: (face.history || []).slice(0, 8),
-    copySeq: watchCopySeq,
+    copySeq: face.copySeq,
+    copyId: face.copyId,
     mode: face.mode,
     langPair: face.langPair,
     save: face.save,

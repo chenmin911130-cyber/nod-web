@@ -67,6 +67,12 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastHandshakeFailed = false
     private var lastHandshakeStatus = 0
     private var lastCopySeq = 0
+    /// Identity of the copy the Watch is currently showing. Kept so the
+    /// "keep the longer text" tie-break only applies within one copy: a new
+    /// sentence / New / mode switch must replace the older, longer text.
+    private var lastCopyId = ""
+    /// Control session the copy stream belongs to (server-minted).
+    private var lastCopySession = ""
     private var copyReplay: [[String: Any]] = []
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
@@ -104,7 +110,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             object: nil,
             queue: .main
         ) { [weak self] note in
-            self?.applyWatchCopy(note.userInfo ?? [:])
+            self?.applyWatchCopy((note.userInfo as? [String: Any]) ?? [:])
         }
         NotificationCenter.default.addObserver(
             forName: Notification.Name("nod.watch.pcm.serverDrained"),
@@ -340,12 +346,25 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
 
     func applyWatchCopy(_ obj: [String: Any]) {
         let seq = Self.intValue(obj, "seq")
+        // A strictly older version is a stale frame: an old row arriving after a
+        // newer one, or after New / switch mode. Versions are monotone in time,
+        // so a fresh session can never read as stale.
         if seq > 0, seq < lastCopySeq { return }
+        let session = obj["session_id"] as? String ?? obj["sessionId"] as? String ?? ""
+        if !session.isEmpty, !lastCopySession.isEmpty, session != lastCopySession {
+            // New control session: the previous session's rows must not be
+            // replayed to the phone or the Watch after New / switch mode.
+            copyReplay.removeAll()
+            lastCopyId = ""
+        }
+        if !session.isEmpty { lastCopySession = session }
         if seq > lastCopySeq { lastCopySeq = seq }
+        let id = obj["id"] as? String ?? ""
+        if !id.isEmpty { lastCopyId = id }
         lastOriginal = obj["original"] as? String ?? lastOriginal
         lastTranslation = obj["translation"] as? String ?? lastTranslation
         var row: [String: Any] = [
-            "id": obj["id"] as? String ?? "",
+            "id": id,
             "original": lastOriginal,
             "translation": lastTranslation,
             "seq": lastCopySeq,
@@ -368,7 +387,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             translation: lastTranslation,
             previous: lastPrevious,
             history: lastHistory,
-            copySeq: lastCopySeq
+            copySeq: lastCopySeq,
+            copyId: lastCopyId
         )
     }
 
@@ -383,7 +403,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         langPair: String = "",
         save: String = "",
         sessionId: String = "",
-        copySeq: Int? = nil
+        copySeq: Int? = nil,
+        copyId: String = ""
     ) {
         if !capture.isEmpty {
             lastCapture = capture
@@ -393,17 +414,26 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         var nextTranslation = translation
         var nextPrevious = previous
         if let seq = copySeq {
+            let sameCopy = copyId == lastCopyId
             if lastCopySeq > 0, seq < lastCopySeq {
+                // The phone's JS face is behind the Watch (it was suspended while
+                // locked, or rolled back): never let it overwrite newer copy.
                 nextOriginal = lastOriginal
                 nextTranslation = lastTranslation
                 nextPrevious = lastPrevious
-            } else if seq == lastCopySeq {
+            } else if seq == lastCopySeq, sameCopy {
+                // Same version of the same copy: keep the longer text, because a
+                // chunk can land after the full snapshot.
                 if original.count < lastOriginal.count { nextOriginal = lastOriginal }
                 if translation.count < lastTranslation.count { nextTranslation = lastTranslation }
             } else {
-                lastCopySeq = seq
+                // Newer version, or the same version carrying a different copy
+                // (New / switch mode / typed row): take the whole face.
+                lastCopySeq = max(lastCopySeq, seq)
+                lastCopyId = copyId
             }
         } else if lastCopySeq > 0 {
+            // A control-only push (save, pcm_drained) must not blank the copy.
             nextOriginal = lastOriginal
             nextTranslation = lastTranslation
             nextPrevious = lastPrevious

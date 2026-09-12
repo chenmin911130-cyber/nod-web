@@ -411,6 +411,52 @@ func waitSend() {
     check(!copies.isEmpty, "audio watch_copy reaches Watch without WKWebView JS")
     check((copies.last?["original"] as? String) == "Hello there", "watch_copy keeps the spoken line")
 
+    // #219 P1: one copy version stream, shared by the native rows and the JS face
+    // push. The Watch must never roll back to older text, and a new sentence must
+    // not be blocked by a longer older one.
+    func sendCopy(id: String, original: String, translation: String, seq: Int, session: String) {
+        let wire: [String: Any] = [
+            "type": "watch_copy",
+            "id": id,
+            "original": original,
+            "translation": translation,
+            "seq": seq,
+            "session_id": session,
+            "done": false,
+        ]
+        let text = String(data: try! JSONSerialization.data(withJSONObject: wire), encoding: .utf8)!
+        uplink.handleAudioText(text)
+        waitSend()
+    }
+    WCSession.default.messages.removeAll()
+    sendCopy(id: "pair-a", original: "First", translation: "第一句", seq: 1000, session: "sess-a")
+    sendCopy(id: "pair-b", original: "Second", translation: "第二句", seq: 2000, session: "sess-b")
+    // A late frame of the previous session must not win on arrival order.
+    sendCopy(id: "pair-a2", original: "First again", translation: "还是第一句", seq: 1500, session: "sess-a")
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "第二句")
+
+    // The phone's JS face was suspended while locked: a stale push must not
+    // overwrite the newer native copy.
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "Second", translation: "第二",
+        copySeq: 1900, copyId: "pair-b"
+    )
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "第二句")
+    // Current JS face for the SAME copy, same version, shorter text: keep longer.
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "Second", translation: "第二句",
+        copySeq: 2000, copyId: "pair-b"
+    )
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "第二句")
+    // Same version but a DIFFERENT copy (New / switch mode / a typed row): the
+    // older, longer text must not survive the switch.
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "Typed", translation: "手打",
+        copySeq: 2000, copyId: "typed-1"
+    )
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "手打")
+    eq(WCSession.default.messages.last?["original"] as? String ?? "", "Typed")
+
     _ = bridge
     print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake and Save tests passed")
  }

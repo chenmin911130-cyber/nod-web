@@ -13,6 +13,9 @@ const face = buildWatchFace({
 })
 
 if (face.translation !== '你好') throw new Error(`expected translation, got ${face.translation}`)
+// #219: the face must name the live copy so the native bridge can tell a new
+// sentence / New / switch mode apart from a new version of the same copy.
+if (face.copyId !== '1') throw new Error(`face must carry the live copy id, got ${face.copyId}`)
 if (face.original !== 'hello there') throw new Error(`Watch Translate must keep bilingual source, got ${face.original}`)
 if (face.previous) throw new Error('the first sentence has no previous line')
 if (face.history[0]?.text !== '你好') throw new Error('expected history text')

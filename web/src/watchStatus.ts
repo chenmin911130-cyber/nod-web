@@ -6,6 +6,8 @@ export type WatchFace = {
   original: string
   translation: string
   previous: string
+  /** Row id of the live copy; see `buildWatchFace`. */
+  copyId: string
   history: WatchHistItem[]
 }
 
@@ -70,19 +72,27 @@ export function buildWatchFace(input: {
 
   let original = ''
   let translation = ''
+  // Identity of the row the live face shows (#219). The native bridge uses it to
+  // tell "same copy, same version" (keep the longer text) apart from "new
+  // sentence / New / switch mode at the same version" (replace).
+  let copyId = ''
   if (input.workspaceMode === 'translate' && lastPair) {
     original = lastPair.original
     translation = lastPair.translation
+    copyId = lastPair.id
   } else if (input.workspaceMode === 'interview' && lastTurn) {
     original = lastTurn.q
     translation = lastTurn.a
+    copyId = lastTurn.id
   } else if (input.workspaceMode !== 'interview' && lastLine) {
     original = lastLine.text
     translation = input.translateOn ? lastLine.translation || '' : ''
+    copyId = lastLine.id
   }
   if (listening && input.partial.trim()) {
     if (input.workspaceMode !== 'interview' || !translation.trim()) {
       original = input.partial.trim()
+      if (!copyId) copyId = 'partial'
     }
   }
   translation = watchVisibleTranslation(translation)
@@ -131,6 +141,7 @@ export function buildWatchFace(input: {
     original: clipWatch(original, 800),
     translation: clipWatch(translation, 800),
     previous,
+    copyId,
     history,
   }
 }
