@@ -81,7 +81,15 @@ struct WatchRootView: View {
                                 .multilineTextAlignment(.center)
                                 .lineLimit(2)
                         }
-                        if !session.translation.isEmpty {
+                        if session.copyFailed {
+                            // A dim preview must not read as if the translation
+                            // were still coming (#219).
+                            Text(WatchCopy.translateFailed)
+                                .font(.caption2)
+                                .foregroundStyle(muted)
+                                .multilineTextAlignment(.center)
+                                .lineLimit(1)
+                        } else if !session.translation.isEmpty {
                             Text(session.translation)
                                 .font(.caption)
                                 .foregroundStyle(ink)
@@ -446,6 +454,22 @@ struct WatchRootView: View {
         }
     }
 
+    /// The live copy failed on the phone: say so, instead of leaving a half
+    /// sentence that reads as if it were still translating (#219).
+    private var copyFailedNote: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption2)
+                .foregroundStyle(slate)
+            Text(WatchCopy.translateFailed)
+                .font(.caption2)
+                .foregroundStyle(slate)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
     private var savedAck: some View {
         VStack(spacing: 8) {
             Image(systemName: "checkmark.circle.fill")
@@ -484,7 +508,10 @@ struct WatchRootView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                if let placeholder, translation.isEmpty {
+                if session.copyFailed {
+                    copyFailedNote
+                }
+                if let placeholder, translation.isEmpty, !session.copyFailed {
                     Text(placeholder)
                         .font(.headline)
                         .foregroundStyle(ink)

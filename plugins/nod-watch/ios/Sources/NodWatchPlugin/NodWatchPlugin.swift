@@ -36,7 +36,9 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
         let original = call.getString("original") ?? ""
         let translation = call.getString("translation") ?? ""
         let previous = call.getString("previous") ?? ""
-        let copyId = call.getString("copyId")
+        let copySeq = call.getInt("copySeq")
+        let copyId = call.getString("copyId") ?? ""
+        let copyFailed = call.getBool("copyFailed")
         let mode = call.getString("mode") ?? ""
         let langPair = call.getString("langPair") ?? ""
         let save = call.getString("save") ?? ""
@@ -76,7 +78,10 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
             save: save,
             sessionId: sessionId,
             originalSegments: Self.segments(call, "originalSegments"),
-            translationSegments: Self.segments(call, "translationSegments")
+            translationSegments: Self.segments(call, "translationSegments"),
+            copySeq: copySeq,
+            copyId: copyId,
+            copyFailed: copyFailed
         )
         call.resolve()
     }

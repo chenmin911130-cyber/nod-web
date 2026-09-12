@@ -59,7 +59,8 @@ import { api as authApi, deleteAccount, fetchMe, logout, type Me } from './auth'
 import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
-import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
+import { currentWatchCopySeq, installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
+import { applyChunk, applyCopyRow, applySnapshot, copySessionAccepts, snapshotApplies, upsertCopyRows } from './copyVersion'
 import { watchStartListenCommand } from './watchReplay'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
@@ -241,6 +242,7 @@ const initial: AppState = {
   translateAskId: '',
   translateBindId: '',
   translateBindRev: 0,
+  watchSession: '',
   listenScene: 'meeting' as ListenScene,
   translateOn: true,
   catchNotes: [],
@@ -282,6 +284,7 @@ type Action =
   | { type: 'bind_translate'; id: string; rev?: number }
   | { type: 'release_translate' }
   | { type: 'fill_translate'; id: string; translation: string; passthrough?: boolean }
+  | { type: 'apply_watch_copy'; id: string; original: string; translation: string; seq?: number; order?: number; failed?: boolean; session?: string }
   | { type: 'clear_translation'; id: string }
   | { type: 'retry_translate'; id: string }
   | { type: 'fail_translate'; id: string }
@@ -353,15 +356,22 @@ function translateBindFromPrompt(text: string): string {
   return m?.[1] ?? ''
 }
 
-function applyTranslateChunk(pairs: TranslatePair[], bindId: string, chunk: string): TranslatePair[] {
+function applyTranslateChunk(pairs: TranslatePair[], bindId: string, chunk: string, copySeq?: number, copyId?: string): TranslatePair[] {
   if (!pairs.length || !chunk) return pairs
-  let idx = bindId ? pairs.findIndex((p) => p.id === bindId) : -1
+  // Prefer the row the server stamped on the chunk: the bind id can be empty or
+  // stale (a re-attach can drop the question that set it), and a chunk landing on
+  // the wrong row would stamp that row's version (#219).
+  let idx = copyId ? pairs.findIndex((p) => p.id === copyId) : -1
+  if (idx < 0 && bindId) idx = pairs.findIndex((p) => p.id === bindId)
   if (idx >= 0 && isTranslatePrompt(pairs[idx].original)) idx = -1
   if (idx < 0) idx = pairs.findIndex((p) => !p.translation && !p.failed && !isTranslatePrompt(p.original))
   if (idx < 0) return pairs
   const next = pairs.slice()
-  const row = next[idx]
-  next[idx] = { ...row, translation: row.translation + chunk, failed: false }
+  // The row also arrives as a full-text snapshot over the native audio socket;
+  // `applyChunk` returns the row untouched when it already holds this version.
+  const updated = applyChunk(next[idx], chunk, copySeq)
+  if (updated === next[idx]) return pairs
+  next[idx] = updated
   return next
 }
 
@@ -456,8 +466,14 @@ function reducer(state: AppState, action: Action): AppState {
           const text = ev.text ?? ''
           if (isTranslatePrompt(text)) {
             const tagged = translateBindFromPrompt(text)
+            // A typed row exists locally before the server saw it; the ask carries
+            // the stable order it was given.
+            const translatePairs = tagged && typeof ev.order === 'number'
+              ? state.translatePairs.map((p) => (p.id === tagged && p.copyOrder === undefined ? { ...p, copyOrder: ev.order } : p))
+              : state.translatePairs
             return {
               ...state,
+              translatePairs,
               translateAskId: qid,
               translateBindId: tagged || state.translateBindId,
               partial: '',
@@ -544,9 +560,13 @@ function reducer(state: AppState, action: Action): AppState {
               id: qid,
               ts,
               original: text,
-              translation: '',
+              translation: ev.translation || '',
               to: state.translateTo,
               from: state.translateFrom !== 'auto' ? state.translateFrom : sttTag(ev.language),
+              passthrough: Boolean(ev.translation),
+              // The server's stable sentence position, so a later catch-up can be
+              // ordered even before any copy frame updates this row.
+              copyOrder: ev.order,
             }]
             return { ...state, translatePairs, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
           }
@@ -629,7 +649,7 @@ function reducer(state: AppState, action: Action): AppState {
               translatePairs.length > 0,
             )
             if (route === 'meeting') meetingLines = applyLineTranslationRev(meetingLines, state.translateBindId, state.translateBindRev, ev.text ?? '')
-            else if (route === 'pairs') translatePairs = applyTranslateChunk(translatePairs, state.translateBindId, ev.text ?? '')
+            else if (route === 'pairs') translatePairs = applyTranslateChunk(translatePairs, state.translateBindId, ev.text ?? '', ev.copy_seq, ev.copy_id)
           }
           if (state.workspaceMode === 'interview' && state.turns.length) {
             const byId = ev.id ? state.turns.findIndex((t) => t.id === ev.id) : -1
@@ -657,15 +677,44 @@ function reducer(state: AppState, action: Action): AppState {
               turns[i] = { ...turns[i], a: state.status.startsWith('Generation failed') ? state.status : 'Generation stopped. Please try again.' }
             }
           }
+          // #219: a server-side translate row has no client pump to fail it, so
+          // the server stamps the row's failure on its done. Without this the row
+          // (and the Watch face built from it) looked finished on a half answer.
+          let translatePairs = state.translatePairs
+          if (ev.copy_id && ev.copy_failed) {
+            translatePairs = translatePairs.map((p) => (p.id === ev.copy_id ? { ...p, failed: true } : p))
+          }
           return {
             ...state,
             turns,
+            translatePairs,
             busy: waitingAsk,
             status: waitingAsk ? state.status : 'Ready',
             translateAskId: translateAskIdAfterDone(state.translateAskId, ev.id),
             catchAskId: waitingAsk ? state.catchAskId : '',
             notesAskId: '',
           }
+        }
+        case 'watch_session': {
+          if (!ev.session_id || ev.session_id === state.watchSession) return state
+          return { ...state, watchSession: ev.session_id }
+        }
+        case 'translate_rows': {
+          // Reconnect catch-up: upsert the session's rows with the same version rules
+          // the live paths use, so a row the phone already has is never regressed.
+          const session = ev.session_id || state.watchSession
+          if (!copySessionAccepts(state.watchSession, ev.session_id)) return state
+          const translatePairs = upsertCopyRows(state.translatePairs, ev.rows || [], (row) => ({
+            id: row.id,
+            ts: formatClock(),
+            original: row.original || '',
+            translation: row.translation || '',
+            to: state.translateTo,
+            copySeq: row.seq,
+            copyOrder: row.order,
+            failed: Boolean(row.failed),
+          }))
+          return { ...state, translatePairs, watchSession: session || state.watchSession }
         }
         case 'error': {
           const msg = ev.text || 'Generation failed'
@@ -985,6 +1034,34 @@ function reducer(state: AppState, action: Action): AppState {
       )
       return { ...state, translatePairs, meetingLines, translateBindId: '', busy: false }
     }
+    case 'apply_watch_copy': {
+      // A row from another copy session is a replay or a late frame of a session
+      // the phone already cleared (New / switch mode / Start): never merge it.
+      if (!copySessionAccepts(state.watchSession, action.session)) return state
+      const watchSession = state.watchSession || action.session || ''
+      // One merge for every real path: it fills the stable sentence order, inserts
+      // a missing (replayed / retried / evicted) row where it belongs, and keeps
+      // the version rules for the text.
+      const translatePairs = applyCopyRow(state.translatePairs, {
+        id: action.id,
+        original: action.original,
+        translation: action.translation,
+        seq: action.seq,
+        order: action.order,
+        failed: action.failed,
+      }, (row) => ({
+        id: row.id,
+        ts: formatClock(),
+        original: row.original || '',
+        translation: row.translation || '',
+        to: state.translateTo,
+        copySeq: row.seq,
+        copyOrder: row.order,
+        failed: Boolean(row.failed),
+      }))
+      if (translatePairs === state.translatePairs && watchSession === state.watchSession) return state
+      return { ...state, translatePairs, watchSession }
+    }
     case 'clear_translation': {
       // 翻译被取消/中断时清掉半截译文，避免 pump 把它当已完成而跳过
       const translatePairs = state.translatePairs.map((p) =>
@@ -1271,6 +1348,13 @@ export default function App() {
   }
   const askedTranslate = useRef<Set<string>>(new Set())
   const inflightTranslate = useRef<string | null>(null)
+  // #219: reconnect/wake catch-up. The native replay holds only 24 rows, so the
+  // phone asks the server for the copy session's rows; `rounds` bounds the paging.
+  const copyRowsRounds = useRef(0)
+  const requestCopyRowsRef = useRef<(before?: number) => void>(() => {})
+  requestCopyRowsRef.current = (before = 0) => {
+    window.api.send({ type: 'copy_rows', before })
+  }
   const translateRetries = useRef<Map<string, number>>(new Map())
   const translateFiles = useRef<Map<string, AttachPayload[]>>(new Map())
   const translateTimer = useRef(0)
@@ -1602,6 +1686,10 @@ export default function App() {
         setTtsVoice(voice)
         writeTtsVoice(voice)
       },
+      onWatchCopy: (ev) => {
+        askedTranslate.current.add(ev.id)
+        dispatch({ type: 'apply_watch_copy', id: ev.id, original: ev.original, translation: ev.translation, seq: ev.seq, order: ev.order, failed: ev.failed, session: ev.session })
+      },
     })
   }, [])
 
@@ -1647,8 +1735,13 @@ export default function App() {
         original: face.original,
         translation: face.translation,
         previous: face.previous,
-        copyId: face.copyId,
         history: face.history,
+        // The live face carries the copy version + row id: a face built while the
+        // webview was suspended (phone locked) must not overwrite the newer copy
+        // the native audio path already put on the Watch (#219).
+        copySeq: currentWatchCopySeq(),
+        copyId: face.copyId,
+        copyFailed: face.copyFailed,
         mode: watchStatusMode(state.workspaceMode, state.listenScene),
         langPair: watchLangPair(state.workspaceMode === 'translate' ? state.translateTo : state.notesTranslateTo),
         ...payload,
@@ -1757,6 +1850,11 @@ export default function App() {
         }
       }
       if (e.type === 'attached') {
+        // A reconnect may have missed Translate rows (native replay holds 24, and
+        // a suspended webview can miss rows with the socket still up): ask the
+        // server for the copy session's rows instead of waiting for a reconnect.
+        copyRowsRounds.current = 0
+        queueMicrotask(() => requestCopyRowsRef.current())
         const sid = e.usage_session_id || ''
         if (sid) {
           persistRestoreDismissed(sid)
@@ -1771,6 +1869,15 @@ export default function App() {
             })
             .catch(() => undefined)
         }
+      }
+      // Bound the walk back: 25 x 200 rows is far longer than any lock period, and
+      // a batch that is not empty always makes progress towards the oldest row.
+      if (e.type === 'translate_rows' && e.has_more && copyRowsRounds.current < 25) {
+        copyRowsRounds.current += 1
+        // The cursor is the stable sentence order, not the content version: a
+        // retried early sentence has the newest version but the oldest position.
+        const before = Number(e.oldest_order || 0)
+        queueMicrotask(() => requestCopyRowsRef.current(before))
       }
       if (e.type === 'pcm_drained') {
         pushWatchStatus({
@@ -1826,14 +1933,18 @@ export default function App() {
       if (e.type === 'question' && stateRef.current.workspaceMode === 'translate') {
         const text = e.text ?? ''
         const s = stateRef.current
-        if (!isTranslatePrompt(text) && s.translateFrom !== 'auto') {
+        if (e.server_translate) {
+          askedTranslate.current.add(e.id)
+        } else if (!isTranslatePrompt(text) && s.translateFrom !== 'auto') {
           const heard = parseHeardLang(e.language, text)
           if (!matchesLockedFrom(text, s.translateFrom, heard)) return
         }
-        const last = stateRef.current.translatePairs[stateRef.current.translatePairs.length - 1]
-        if (last && !last.translation && normOriginal(last.original) === normOriginal(text)) {
-          askedTranslate.current.delete(last.id)
-          queueMicrotask(() => pumpTranslateRef.current())
+        if (!e.server_translate) {
+          const last = stateRef.current.translatePairs[stateRef.current.translatePairs.length - 1]
+          if (last && !last.translation && normOriginal(last.original) === normOriginal(text)) {
+            askedTranslate.current.delete(last.id)
+            queueMicrotask(() => pumpTranslateRef.current())
+          }
         }
       }
       // Only LLM `done` releases the translate gate. STT `error` events must not
@@ -3064,6 +3175,11 @@ export default function App() {
     // translation, so never passthrough typed input. Only a spoken pair (which
     // carries the STT from-tag) may passthrough.
     const typed = String(pairId || '').startsWith('typed-')
+    // A typed row is ordered by the server's copy version like any other ask
+    // (`[NOD_TRANSLATE:typed-…]` takes the same emit path), so it must not
+    // fabricate a version of its own — a local bump out of the server's version
+    // space is what let stale text win the equal-version tie-break after New /
+    // switch mode (#219).
     // A meeting line has no translate pair, so its STT lang tag must be passed
     // through — otherwise fromTag is always undefined and every English line in
     // an English-target + Bilingual meeting hits the model. Typed pairs keep the
@@ -3324,7 +3440,13 @@ export default function App() {
       if (readWatchReport()) showWatchReport()
     }
     const onVis = () => {
-      if (document.visibilityState === 'visible') reveal()
+      if (document.visibilityState === 'visible') {
+        reveal()
+        // Waking up must reconcile, not just replay the native 24: the socket may
+        // have stayed up while the webview was suspended (#219).
+        copyRowsRounds.current = 0
+        requestCopyRowsRef.current()
+      }
     }
     document.addEventListener('visibilitychange', onVis)
     window.addEventListener('pageshow', reveal)

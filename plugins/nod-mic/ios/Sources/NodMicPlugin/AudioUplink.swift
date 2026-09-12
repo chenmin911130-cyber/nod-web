@@ -550,6 +550,12 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                            "reason": obj["reason"] as? String ?? "session_ended",
                            "text": obj["text"] as? String ?? ""]
             )
+        case "watch_copy":
+            NotificationCenter.default.post(
+                name: Notification.Name("nod.uplink.watchCopy"),
+                object: nil,
+                userInfo: obj
+            )
         default:
             break
         }
