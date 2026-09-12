@@ -452,12 +452,13 @@ test.describe('Listen mobile replaced-Ask regression (#190)', () => {
 test.describe('Translate mobile chrome (#193 item 5)', () => {
   test.use({ viewport: { width: 390, height: 844 } })
 
-  test('Ask sits above the bar, no New, and Start/Stop live in the bar', async ({ page }) => {
+  test('keyboard entry sits above the bar, no New, and Start/Stop live in the bar', async ({ page }) => {
     const ws = await mockListenWs(page, '/app?demo=meeting')
     await page.getByRole('tab', { name: /translate/i }).click()
     await expect(page.getByRole('button', { name: 'Start voice translation' })).toBeVisible()
-    const bubble = page.getByRole('button', { name: 'Ask' })
+    const bubble = page.getByRole('button', { name: 'Show keyboard' })
     await expect(bubble).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Ask' })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'New session' })).toHaveCount(0)
     const bar = page.locator('.iphone-live-bar')
     const bubbleBox = (await bubble.boundingBox())!

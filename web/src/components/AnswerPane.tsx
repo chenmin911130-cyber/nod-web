@@ -5,6 +5,7 @@ import { toPayload } from '../attach'
 import { QaAnswerCard } from './QaAnswerCard'
 import PromptAttach from './PromptAttach'
 import EmptyState from './EmptyState'
+import ThinkSwitch from './ThinkSwitch'
 
 interface Props {
   currentQ: string
@@ -14,11 +15,17 @@ interface Props {
   listening?: boolean
   onAsk: (text: string, files?: AttachPayload[]) => void
   onCompose?: (on: boolean) => void
-  /** #182: session Think switch — the toggle sits above the existing input. */
+  /** #182: session Think switch. */
   think?: boolean
   onThink?: (on: boolean) => void
   /** #182: re-ask one answered question with the Think value it originally ran with. */
   onRetryTurn?: (id: string) => void
+  /**
+   * #219: off-phone this pane owns the Think switch and keeps it above the
+   * composer. The phone puts it in the recording chrome instead (under End,
+   * right of the mode line), so it must not render a second switch here.
+   */
+  showThink?: boolean
 }
 
 function Sparkle() {
@@ -30,7 +37,7 @@ function Sparkle() {
   )
 }
 
-export default function AnswerPane({ currentQ, partial, turns, busy, listening, onAsk, onCompose, think = false, onThink, onRetryTurn }: Props) {
+export default function AnswerPane({ currentQ, partial, turns, busy, listening, onAsk, onCompose, think = false, onThink, onRetryTurn, showThink = true }: Props) {
   const [input, setInput] = useState('')
   const [files, setFiles] = useState<LocalAttach[]>([])
   const [now, setNow] = useState(() => Date.now())
@@ -146,21 +153,14 @@ export default function AnswerPane({ currentQ, partial, turns, busy, listening, 
         </button>
       )}
 
-      {/* #182: the only new control — a compact Think switch above the existing
-          Q&A input. Default off; the value belongs to the session, not the box. */}
-      <div className="think-row">
-        <button
-          type="button"
-          className={`think-toggle${think ? ' on' : ''}`}
-          role="switch"
-          aria-checked={think}
-          aria-label="Think"
-          onClick={() => onThink?.(!think)}
-        >
-          <span className="think-dot" aria-hidden="true" />
-          Think
-        </button>
-      </div>
+      {/* #219: off-phone, the Think label + iOS switch stay above the existing
+          Q&A input. Toggling does not submit; the value belongs to the session.
+          On the phone the switch lives in the recording chrome instead. */}
+      {showThink && (
+        <div className="think-row">
+          <ThinkSwitch on={think} onToggle={(on) => onThink?.(on)} />
+        </div>
+      )}
 
       <PromptAttach
         files={files}

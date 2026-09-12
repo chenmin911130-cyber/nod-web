@@ -598,6 +598,18 @@ export default function TranslatePane({
       {native ? (
         <div className="iphone-tr-dock">
           {actions}
+          <div className="iphone-tr-ask-wrap">
+            <AskBubble
+              icon="keyboard"
+              expanded={composeOpen}
+              onClick={() => {
+                setComposeOpen((open) => {
+                  if (open) inputRef.current?.blur()
+                  return !open
+                })
+              }}
+            />
+          </div>
           {composeOpen ? (
           <div className="iphone-tr-prompt">
             <input
@@ -631,11 +643,7 @@ export default function TranslatePane({
               <SendIcon />
             </button>
           </div>
-          ) : (
-            <div className="iphone-tr-ask-wrap">
-              <AskBubble onClick={() => setComposeOpen(true)} />
-            </div>
-          )}
+          ) : null}
           {onStart ? (
             <ListenRecordBar
               mode={barMode}

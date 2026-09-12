@@ -80,7 +80,10 @@ export const IPHONE_COPY = {
   accountTitle: 'Account',
   askPlaceholder: 'Ask anything about this meeting…',
   askSend: 'Ask',
+  askEntry: 'Ask',
   typeToTranslate: 'Type to translate',
+  showKeyboard: 'Show keyboard',
+  hideKeyboard: 'Hide keyboard',
   morePdf: 'Export PDF',
   moreSave: 'Save',
   moreSaveHint: 'Available after recording ends',
@@ -350,4 +353,12 @@ export function spokenSettingsValue(lang: Lang): string {
 export function notesSettingsValue(lang: Lang): string {
   if (lang === 'auto') return IPHONE_COPY.notesAutoTitle
   return TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
+}
+
+export type AskEntryKind = 'ask' | 'keyboard'
+
+/** Meeting Ask vs Translate keyboard: the round button's accessible name. */
+export function askEntryLabel(kind: AskEntryKind, expanded = false): string {
+  if (kind === 'keyboard') return expanded ? IPHONE_COPY.hideKeyboard : IPHONE_COPY.showKeyboard
+  return IPHONE_COPY.askEntry
 }
