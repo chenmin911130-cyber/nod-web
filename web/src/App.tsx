@@ -4077,8 +4077,14 @@ export default function App() {
                 onRetryTurn={handleRetryTurn}
                 think={state.thinkOn}
                 onThink={handleThink}
+                // #219: the phone has no bottom Think row — ListenPane renders the
+                // switch under End, on the Live Q&A · Auto-detect line.
+                showThink={!phone}
               />
             }
+            // #219: same switch, phone chrome placement; never rendered twice.
+            think={state.thinkOn}
+            onThink={handleThink}
             onScene={(scene) => {
               const s = stateRef.current
               if (listenSettingsBlocked({ capture: s.capture, workspaceMode: s.workspaceMode })) {

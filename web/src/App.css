@@ -5039,12 +5039,47 @@ a.tb-menu-action {
   cursor: pointer;
 }
 
-/* #219: Think label + iOS switch above the existing Live Q&A input.
-   No capsule, no lamp icon. Toggling does not submit. */
+/* #219: Think label + iOS switch above the existing Live Q&A input (wider
+   layouts). No capsule, no lamp icon. Toggling does not submit. */
 .think-row {
   display: flex;
   align-items: center;
   padding: 0 2px 6px;
+}
+
+/* #219 (phone): the same switch under End, right-aligned on the Live Q&A ·
+   Auto-detect mode line. The row keeps the 44 pt touch target and lets a long
+   mode line wrap instead of squeezing it. */
+.iphone-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0 12px;
+  min-height: 44px;
+  margin: 0 0 6px;
+  box-sizing: border-box;
+}
+
+.iphone-meta-row .iphone-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.iphone-meta-row .think-toggle {
+  flex: 0 0 auto;
+  /* Stay right-aligned even when the mode line wraps the switch onto its own line. */
+  margin-left: auto;
+}
+
+/* The phone chrome sets `.iphone-meta { width: 100%; margin: 4px 0 12px }`, which
+   would push the switch onto a second line; inside this row the mode line sizes
+   to its text and centers on the switch, so both share one line. */
+html.nod-phone .app.iphone-v2 .iphone-stack .iphone-meta-row .iphone-meta {
+  width: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0;
 }
 
 .think-toggle {
@@ -6536,6 +6571,7 @@ html.nod-phone .app.iphone-v2 .iphone-stack {
 html.nod-phone .app.iphone-v2 .iphone-stack .iphone-actions,
 html.nod-phone .app.iphone-v2 .iphone-stack .listen-controls,
 html.nod-phone .app.iphone-v2 .iphone-stack .iphone-meta,
+html.nod-phone .app.iphone-v2 .iphone-stack .iphone-meta-row,
 html.nod-phone .app.iphone-v2 .iphone-stack .iphone-settings,
 html.nod-phone .app.iphone-v2 .iphone-stack .listen-mobile-tabs,
 html.nod-phone .app.iphone-v2 .iphone-stack .tr-toolbar {

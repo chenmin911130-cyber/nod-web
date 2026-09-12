@@ -46,7 +46,7 @@ function shot(page: import('@playwright/test').Page, name: string) {
 }
 
 test.describe('Think switch', () => {
-  test('sits above the Live Q&A input, defaults to off, and is absent elsewhere', async ({ page }) => {
+  test('keeps the inline switch above the input off-phone, defaults to off, and is absent elsewhere', async ({ page }) => {
     await mockWs(page)
 
     const toggle = page.getByRole('switch', { name: 'Think' })
@@ -56,12 +56,15 @@ test.describe('Think switch', () => {
     await expect(toggle.locator('.think-switch')).toBeVisible()
     await expect(toggle.locator('.think-dot')).toHaveCount(0)
 
-    // It sits ABOVE the existing input, which stays visible and unchanged.
+    // Wider layouts keep the switch inline: ABOVE the existing input, which stays
+    // visible and unchanged. The phone moves it into the recording chrome instead
+    // (the phone-viewport test below).
     const toggleBox = await toggle.boundingBox()
     const inputBox = await page.locator('.prompt-input').boundingBox()
     expect(toggleBox).not.toBeNull()
     expect(inputBox).not.toBeNull()
     expect(toggleBox!.y).toBeLessThan(inputBox!.y)
+    await expect(page.locator('.think-row')).toBeVisible()
     await expect(page.locator('.prompt-input')).toBeVisible()
     await shot(page, 'interview-think-off')
 
@@ -502,26 +505,69 @@ test.describe('Think answer rendering', () => {
 })
 
 /**
- * Phone-width before/after evidence (#182 acceptance: the composer must stay
- * usable with the keyboard up). The on-screen keyboard itself is a native
+ * Phone-width before/after evidence (#219: the Think switch belongs to the
+ * recording chrome, not the composer). The on-screen keyboard itself is a native
  * overlay a browser cannot draw — the layout side of that is covered by the
  * `keyboardInset` unit test — so these shots pin the phone layout itself.
  */
 test.describe('Think on a phone viewport', () => {
   test.use({ viewport: { width: 390, height: 844 } })
 
-  test('shows the switch above the composer, off and on', async ({ page }) => {
-    const { send } = await mockWs(page)
-    // A phone only has the Live Q&A composer inside a live session: on its own
-    // Ready screen there is no input to sit above. Mark capture listening.
+  test('sits under End, right of the mode line, off and on', async ({ page }) => {
+    const { sent, send } = await mockWs(page)
+    // A phone only shows the recording chrome and the mode line inside a live
+    // session: on the Ready screen there is no End button to sit under.
     send({ type: 'phase', capture: 'listening', engine: 'idle' })
     const toggle = page.getByRole('switch', { name: 'Think' })
     await expect(toggle).toBeVisible()
     await expect(toggle).toHaveAttribute('aria-checked', 'false')
+    // Exactly one switch: the composer must not keep a second, bottom copy.
+    await expect(page.getByRole('switch', { name: 'Think' })).toHaveCount(1)
+    await expect(page.locator('.listen-qa .think-row')).toHaveCount(0)
+    await expect(page.locator('.iphone-meta-row .think-toggle')).toHaveCount(1)
+
+    const toggleBox = await toggle.boundingBox()
+    const endBox = await page.locator('.iphone-rec-end').boundingBox()
+    const metaBox = await page.locator('.iphone-meta-row .iphone-meta').boundingBox()
+    const rowBox = await page.locator('.iphone-meta-row').boundingBox()
+    expect(toggleBox).not.toBeNull()
+    expect(endBox).not.toBeNull()
+    expect(metaBox).not.toBeNull()
+    expect(rowBox).not.toBeNull()
+    // Under the End button (the recording bar is directly above this row) ...
+    expect(toggleBox!.y).toBeGreaterThanOrEqual(endBox!.y + endBox!.height)
+    // ... on the SAME line as the mode description: left text, right switch ...
+    expect(metaBox!.x + metaBox!.width).toBeLessThanOrEqual(toggleBox!.x)
+    expect(Math.abs((metaBox!.y + metaBox!.height / 2) - (toggleBox!.y + toggleBox!.height / 2))).toBeLessThan(12)
+    // ... and right-aligned inside the row, with a >=44 pt touch target.
+    expect(toggleBox!.x).toBeGreaterThan(rowBox!.x + rowBox!.width / 2)
+    expect(toggleBox!.height).toBeGreaterThanOrEqual(44)
+    // The app asks for mic access when the mocked recorder starts; a browser
+    // without one leaves its "Microphone access needed" toast over the top bar
+    // for 2 s. It is unrelated to this switch, so let it clear before the shot.
+    await page.waitForTimeout(2400)
     await shot(page, 'phone-think-off')
 
     await toggle.click()
     await expect(toggle).toHaveAttribute('aria-checked', 'true')
+    // Toggling is not a submit.
+    expect(sent.filter((m) => m.type === 'ask')).toHaveLength(0)
     await shot(page, 'phone-think-on')
+  })
+
+  test('keeps the switch reachable while Live Q&A shows editable settings', async ({ page }) => {
+    // Live Q&A entered from a meeting that already has lines: capture is off, so
+    // the phone shows the editable chips instead of the mode line — but the Q&A
+    // composer is still on screen, so the switch must not disappear with the old
+    // composer placement.
+    await mockWs(page, '/app?demo=meeting')
+    await page.getByRole('button', { name: /^Meeting/ }).click()
+    await page.getByRole('option', { name: /Live Q&A/ }).click()
+    await expect(page.locator('.prompt-input')).toBeVisible()
+    const toggle = page.getByRole('switch', { name: 'Think' })
+    await expect(toggle).toBeVisible()
+    await expect(page.locator('.iphone-meta-row .think-toggle')).toHaveCount(1)
+    await expect(page.locator('.iphone-meta')).toHaveCount(0)
+    await expect(page.locator('.listen-qa .think-row')).toHaveCount(0)
   })
 })
