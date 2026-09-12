@@ -1,4 +1,4 @@
-import { applyChunk, applySnapshot, chunkApplies, snapshotApplies, upsertCopyRows } from './copyVersion'
+import { applyChunk, applySnapshot, chunkApplies, copySessionAccepts, snapshotApplies, upsertCopyRows } from './copyVersion'
 
 // No version on either side: keep the old behaviour (apply).
 if (!snapshotApplies(undefined, undefined)) throw new Error('unversioned snapshot must apply')
@@ -99,4 +99,42 @@ if (upsertCopyRows(caught, [{ id: 'a', original: 'A', translation: '旧', seq: 9
 }
 if (upsertCopyRows([], [{ id: 'd', original: '', translation: '' }], make).length !== 0) {
   throw new Error('an empty row is not a row')
+}
+
+// Session identity (#219): a row/frame of a session the phone already cleared
+// must not be merged back, but an unknown session (fresh app, older phone) is.
+if (!copySessionAccepts('', 's1')) throw new Error('a first row may adopt its session')
+if (!copySessionAccepts('s1', undefined)) throw new Error('a row without a session is accepted')
+if (!copySessionAccepts('s1', 's1')) throw new Error('the current session is accepted')
+if (copySessionAccepts('s2', 's1')) throw new Error('a row of an older session must be dropped')
+
+// #219 ordering: a catch-up is inserted where its version belongs. The phone can
+// receive the newer half first (native replay) and the older half later (server
+// batch); appending would order the list 7..30, 1..6 and the Watch face — built
+// from the last row — would go backwards.
+const newerPairs: Pair[] = [
+  { id: 'p7', original: 'L7', translation: '7', copySeq: 700 },
+  { id: 'p8', original: 'L8', translation: '8', copySeq: 800 },
+]
+const ordered = upsertCopyRows(newerPairs, [
+  { id: 'p5', original: 'L5', translation: '5', seq: 500 },
+  { id: 'p6', original: 'L6', translation: '6', seq: 600 },
+], make)
+if (ordered.map((p) => p.id).join(',') !== 'p5,p6,p7,p8') {
+  throw new Error(`a catch-up must be inserted by version, got ${ordered.map((p) => p.id).join(',')}`)
+}
+if (ordered[ordered.length - 1].id !== 'p8') {
+  throw new Error('the newest row must stay last: the Watch face shows the last row')
+}
+// Replaying them again changes nothing.
+if (upsertCopyRows(ordered, [
+  { id: 'p5', original: 'L5', translation: '5', seq: 500 },
+  { id: 'p6', original: 'L6', translation: '6', seq: 600 },
+], make) !== ordered) {
+  throw new Error('a replayed catch-up must leave the list identical')
+}
+// A row with no version still lands (at the end) rather than being dropped.
+const noVersion = upsertCopyRows(newerPairs, [{ id: 'px', original: 'LX', translation: 'X' }], make)
+if (noVersion.length !== 3 || noVersion[2].id !== 'px') {
+  throw new Error('an unversioned catch-up row is appended')
 }

@@ -43,10 +43,17 @@ export function applyChunk<T extends CopyRow>(row: T, chunk: string, seq?: numbe
   return { ...row, translation: row.translation + chunk, failed: false, copySeq: seq ?? row.copySeq } as T
 }
 
-/** Replace the text with the full snapshot. Returns the row unchanged when stale. */
+/**
+ * Replace the text with the full snapshot. Returns the row unchanged when it is
+ * stale — or when the snapshot says exactly what the row already says, so a
+ * replay/catch-up does not churn the list.
+ */
 export function applySnapshot<T extends CopyRow>(row: T, translation: string, seq?: number, failed?: boolean): T {
   if (!snapshotApplies(row.copySeq, seq)) return row
-  return { ...row, translation, copySeq: seq ?? row.copySeq, failed: failed ?? row.failed } as T
+  const nextSeq = seq ?? row.copySeq
+  const nextFailed = failed ?? row.failed
+  if (row.translation === translation && row.copySeq === nextSeq && row.failed === nextFailed) return row
+  return { ...row, translation, copySeq: nextSeq, failed: nextFailed } as T
 }
 
 /** One row of the reconnect batch the server sends on re-attach (#219). */
@@ -77,7 +84,16 @@ export function upsertCopyRows<T extends CopyRow & { id: string; original: strin
     const at = next.findIndex((p) => p.id === row.id)
     if (at < 0) {
       if (!(row.original || '').trim() && !(row.translation || '').trim()) continue
-      next = [...next, make(row)]
+      // Insert where the row's version says it belongs. Appending would put a
+      // catch-up of the OLDER half (7..30 arrives first, then 1..6) after the
+      // newer rows, so the list — and the Watch face, which shows the last row —
+      // would go backwards (#219).
+      let insertAt = next.length
+      if (typeof row.seq === 'number') {
+        const after = next.findIndex((p) => typeof p.copySeq === 'number' && (p.copySeq as number) > row.seq!)
+        if (after >= 0) insertAt = after
+      }
+      next = [...next.slice(0, insertAt), make(row), ...next.slice(insertAt)]
       continue
     }
     const merged = applySnapshot(next[at], row.translation || '', row.seq, row.failed)
@@ -86,4 +102,14 @@ export function upsertCopyRows<T extends CopyRow & { id: string; original: strin
     next = next.map((p, i) => (i === at ? { ...merged, original } : p))
   }
   return next
+}
+
+/**
+ * Whether a copy row/frame belongs to the phone's current copy session (#219).
+ * An unknown session on either side is accepted: the first row of a fresh
+ * app/webview adopts the session, and an older phone build sends none.
+ */
+export function copySessionAccepts(current: string, incoming?: string): boolean {
+  if (!incoming || !current) return true
+  return incoming === current
 }

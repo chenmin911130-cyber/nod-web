@@ -515,6 +515,10 @@ func waitSend() {
     sendCopy(id: "new-row", original: "New", translation: "新句", seq: 7002, session: "sess-two")
     eq(WCSession.default.messages.last?["translation"] as? String ?? "", "新句")
     eq(WCSession.default.messages.last?["copyId"] as? String ?? "", "new-row")
+    // The server copy version rides the payload: the Watch orders copies with it
+    // (monotone across a phone app restart), not with a per-run counter.
+    check((WCSession.default.messages.last?["copySeq"] as? Int ?? 0) > 0,
+          "the payload carries the server copy version")
 
     _ = bridge
     print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake and Save tests passed")

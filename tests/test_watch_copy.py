@@ -313,3 +313,47 @@ class WatchCopyTests(unittest.TestCase):
             self.assertTrue(pages)
             self.assertEqual("".join(pages), _watch_copy_normalize(raw))
             self.assertTrue(all(len(page) <= cap for page in pages), [(len(p), cap) for p in pages])
+
+    def test_the_recovery_batch_pages_and_can_be_asked_for(self):
+        """More than one page of rows: the phone can keep fetching, in order."""
+        sess, events, audio = self._session()
+        for i in range(250):
+            sess.emit({
+                "type": "question",
+                "id": f"ask-{i}",
+                "text": f"[NOD_TRANSLATE:pair-{i}]\nTranslate only this line:\nline {i}",
+            })
+            sess.emit({"type": "chunk", "id": f"ask-{i}", "text": f"第{i}句"})
+        # Re-attach sends the newest page and says there is more.
+        events.clear()
+        sess.reattach()
+        first = next(e for e in events if e.get("type") == "translate_rows")
+        self.assertEqual(len(first["rows"]), 200)
+        self.assertTrue(first["has_more"])
+        self.assertEqual(first["rows"][0]["id"], "pair-50")
+        self.assertEqual(first["rows"][-1]["id"], "pair-249")
+        # The phone asks for what is older than what it got.
+        events.clear()
+        sess.dispatch({"type": "copy_rows", "before": first["oldest_seq"]})
+        older = next(e for e in events if e.get("type") == "translate_rows")
+        self.assertEqual([row["id"] for row in older["rows"]], [f"pair-{i}" for i in range(50)])
+        self.assertFalse(older["has_more"])
+        self.assertEqual(older["rows"][0]["translation"], "第0句")
+        # A workspace with no copy session still answers (so the phone stops asking).
+        sess._workspace = "meeting"
+        events.clear()
+        sess.dispatch({"type": "copy_rows"})
+        empty = next(e for e in events if e.get("type") == "translate_rows")
+        self.assertEqual(empty["rows"], [])
+        self.assertFalse(empty["has_more"])
+
+    def test_a_cross_session_batch_is_not_replayed(self):
+        """Rows of a copy session the phone cleared must not be re-sent."""
+        sess, events, audio = self._session()
+        sess.emit({"type": "question", "id": "ask-1", "text": "[NOD_TRANSLATE:pair-1]\nTranslate only this line:\nHello"})
+        sess.emit({"type": "chunk", "id": "ask-1", "text": "你好"})
+        sess._qa_reset("new_session")
+        events.clear()
+        sess.dispatch({"type": "copy_rows"})
+        empty = next(e for e in events if e.get("type") == "translate_rows")
+        self.assertEqual(empty["rows"], [])

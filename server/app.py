@@ -3659,6 +3659,23 @@ class Session:
             self.emit({"type": "status", "text": "Cleared"})
         elif mtype == "cancel_generate":
             self.cancel_generate()
+        elif mtype == "copy_rows":
+            # The phone asks for the session's Translate rows instead of waiting for
+            # a socket re-attach: a suspended webview can miss rows with the socket
+            # still up. `before` walks backwards for a session longer than one page.
+            try:
+                before_seq = int(msg.get("before") or 0)
+            except (TypeError, ValueError):
+                before_seq = 0
+            batch = self._watch_copy_batch(before_seq)
+            if batch is None:
+                batch = {
+                    "type": "translate_rows",
+                    "session_id": getattr(self, "_watch_copy_session", "") or "",
+                    "rows": [],
+                    "has_more": False,
+                }
+            self.emit(batch)
         elif mtype == "set_translate_to":
             self.set_translate_to(msg.get("lang") or "zh")
         elif mtype == "ping":
@@ -5551,13 +5568,15 @@ class Session:
             row["ok"] = bool(ok)
         return row
 
-    def _watch_copy_batch(self) -> dict | None:
-        """Every Translate row of this copy session, for a phone that missed them.
+    WATCH_COPY_BATCH = 200
 
-        The native replay holds only the last 24 rows; a lock screen longer than
-        that would silently drop the earlier sentences. On reconnect the server
-        sends the session's rows (with their versions) so the phone can fill the
-        gaps and end up identical to the Watch (#219).
+    def _watch_copy_batch(self, before_seq: int = 0) -> dict | None:
+        """A page of this copy session's Translate rows, newest last.
+
+        The native replay holds only the last 24 rows, and a suspended webview can
+        miss rows with the socket still up, so the phone asks for them explicitly.
+        ``before_seq`` walks backwards for a session longer than one page: the
+        response says `has_more` so the phone can keep fetching (#219).
         """
         if getattr(self, "_workspace", "") != "translate":
             return None
@@ -5567,20 +5586,26 @@ class Session:
         buf = getattr(self, "_watch_copy_buf", None) or {}
         failed = getattr(self, "_watch_copy_failed", None) or {}
         seq_of = getattr(self, "_watch_copy_seq_of", None) or {}
-        rows = [
-            {
+        entries = []
+        for pid, src in originals.items():
+            seq = int(seq_of.get(pid, 0) or 0)
+            if before_seq > 0 and seq >= before_seq:
+                continue
+            entries.append({
                 "id": pid,
                 "original": src,
                 "translation": buf.get(pid, ""),
                 "failed": bool(failed.get(pid)),
-                "seq": int(seq_of.get(pid, 0) or 0),
-            }
-            for pid, src in list(originals.items())[-200:]
-        ]
+                "seq": seq,
+            })
+        has_more = len(entries) > self.WATCH_COPY_BATCH
+        rows = entries[-self.WATCH_COPY_BATCH:]
         return {
             "type": "translate_rows",
             "session_id": getattr(self, "_watch_copy_session", "") or "",
             "rows": rows,
+            "has_more": has_more,
+            "oldest_seq": rows[0]["seq"] if rows else 0,
         }
 
     def _emit_watch_copy(self, pair_id: str, *, original: str | None = None, translation: str | None = None, done: bool = False) -> None:

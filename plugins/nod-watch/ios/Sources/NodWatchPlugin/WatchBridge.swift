@@ -499,8 +499,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             "original": lastOriginal,
             "translation": lastTranslation,
             "previous": lastPrevious,
-            // The Watch keys "same sentence" and its failure state off this id.
+            // The Watch keys "same sentence" and its failure state off these; the
+            // server copy version orders copies across a phone app restart.
             "copyId": lastCopyId,
+            "copySeq": lastCopySeq,
             "copyFailed": lastCopyFailed ? "true" : "false",
             "history": history,
         ]

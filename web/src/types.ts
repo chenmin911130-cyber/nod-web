@@ -183,7 +183,7 @@ export type EngineEvent =
   | { type: 'watch_session'; session_id: string }
   // #219: the copy session's Translate rows, sent on reconnect so a phone that was
   // locked longer than the native replay (24 rows) can fill in the gaps.
-  | { type: 'translate_rows'; session_id?: string; rows: Array<{ id: string; original: string; translation: string; failed?: boolean; seq?: number }> }
+  | { type: 'translate_rows'; session_id?: string; rows: Array<{ id: string; original: string; translation: string; failed?: boolean; seq?: number }>; has_more?: boolean; oldest_seq?: number }
   | { type: 'chunk'; id: string; text: string; copy_seq?: number; copy_id?: string }
   | ({ type: 'sources'; id?: string } & AnswerSources)
   // #182: the server's authoritative Think value. Sent when a session reset turns
@@ -226,6 +226,9 @@ export type EngineMsg =
   | { type: 'cancel_generate' }
   | { type: 'set_translate_from'; language: PairLang | null }
   | { type: 'set_translate_to'; lang: PairLang }
+  // #219: ask for the copy session's Translate rows (reconnect/wake catch-up).
+  // `before` walks backwards past the server's batch size.
+  | { type: 'copy_rows'; before?: number }
   | { type: 'ping' }
 
 export interface Api {

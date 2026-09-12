@@ -60,7 +60,7 @@ import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
 import { currentWatchCopySeq, installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
-import { applyChunk, applySnapshot, snapshotApplies, upsertCopyRows } from './copyVersion'
+import { applyChunk, applySnapshot, copySessionAccepts, snapshotApplies, upsertCopyRows } from './copyVersion'
 import { watchStartListenCommand } from './watchReplay'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
@@ -694,7 +694,7 @@ function reducer(state: AppState, action: Action): AppState {
           // Reconnect catch-up: upsert the session's rows with the same version rules
           // the live paths use, so a row the phone already has is never regressed.
           const session = ev.session_id || state.watchSession
-          if (session && state.watchSession && session !== state.watchSession) return state
+          if (!copySessionAccepts(state.watchSession, ev.session_id)) return state
           const translatePairs = upsertCopyRows(state.translatePairs, ev.rows || [], (row) => ({
             id: row.id,
             ts: formatClock(),
@@ -1027,7 +1027,7 @@ function reducer(state: AppState, action: Action): AppState {
     case 'apply_watch_copy': {
       // A row from another copy session is a replay or a late frame of a session
       // the phone already cleared (New / switch mode / Start): never merge it.
-      if (action.session && state.watchSession && action.session !== state.watchSession) return state
+      if (!copySessionAccepts(state.watchSession, action.session)) return state
       const watchSession = state.watchSession || action.session || ''
       const idx = state.translatePairs.findIndex((p) => p.id === action.id)
       if (idx >= 0) {
@@ -1344,6 +1344,13 @@ export default function App() {
   }
   const askedTranslate = useRef<Set<string>>(new Set())
   const inflightTranslate = useRef<string | null>(null)
+  // #219: reconnect/wake catch-up. The native replay holds only 24 rows, so the
+  // phone asks the server for the copy session's rows; `rounds` bounds the paging.
+  const copyRowsRounds = useRef(0)
+  const requestCopyRowsRef = useRef<(before?: number) => void>(() => {})
+  requestCopyRowsRef.current = (before = 0) => {
+    window.api.send({ type: 'copy_rows', before })
+  }
   const translateRetries = useRef<Map<string, number>>(new Map())
   const translateFiles = useRef<Map<string, AttachPayload[]>>(new Map())
   const translateTimer = useRef(0)
@@ -1839,6 +1846,11 @@ export default function App() {
         }
       }
       if (e.type === 'attached') {
+        // A reconnect may have missed Translate rows (native replay holds 24, and
+        // a suspended webview can miss rows with the socket still up): ask the
+        // server for the copy session's rows instead of waiting for a reconnect.
+        copyRowsRounds.current = 0
+        queueMicrotask(() => requestCopyRowsRef.current())
         const sid = e.usage_session_id || ''
         if (sid) {
           persistRestoreDismissed(sid)
@@ -1853,6 +1865,11 @@ export default function App() {
             })
             .catch(() => undefined)
         }
+      }
+      if (e.type === 'translate_rows' && e.has_more && copyRowsRounds.current < 5) {
+        copyRowsRounds.current += 1
+        const before = Number(e.oldest_seq || 0)
+        queueMicrotask(() => requestCopyRowsRef.current(before))
       }
       if (e.type === 'pcm_drained') {
         pushWatchStatus({
@@ -3415,7 +3432,13 @@ export default function App() {
       if (readWatchReport()) showWatchReport()
     }
     const onVis = () => {
-      if (document.visibilityState === 'visible') reveal()
+      if (document.visibilityState === 'visible') {
+        reveal()
+        // Waking up must reconcile, not just replay the native 24: the socket may
+        // have stayed up while the webview was suspended (#219).
+        copyRowsRounds.current = 0
+        requestCopyRowsRef.current()
+      }
     }
     document.addEventListener('visibilitychange', onVis)
     window.addEventListener('pageshow', reveal)
