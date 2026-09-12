@@ -1866,7 +1866,9 @@ export default function App() {
             .catch(() => undefined)
         }
       }
-      if (e.type === 'translate_rows' && e.has_more && copyRowsRounds.current < 5) {
+      // Bound the walk back: 25 x 200 rows is far longer than any lock period, and
+      // a batch that is not empty always makes progress towards the oldest row.
+      if (e.type === 'translate_rows' && e.has_more && copyRowsRounds.current < 25) {
         copyRowsRounds.current += 1
         const before = Number(e.oldest_seq || 0)
         queueMicrotask(() => requestCopyRowsRef.current(before))
