@@ -6,7 +6,7 @@ import json
 import unittest
 from unittest import mock
 
-from server.app import CFG, KEYS, Session
+from server.app import CFG, KEYS, Session, WATCH_COPY_PAGE_MAX, watch_copy_pages
 
 
 class WatchCopyTests(unittest.TestCase):
@@ -272,3 +272,44 @@ class WatchCopyTests(unittest.TestCase):
         events.clear()
         sess.reattach()
         self.assertEqual([e for e in events if e.get("type") == "translate_rows"], [])
+
+    def test_a_long_copy_is_paged_for_the_locked_phone(self):
+        """The native path must hand the Watch joinable pages, not one big frame."""
+        sess, events, audio = self._session()
+        long_text = "甲" * 13000
+        sess._emit_watch_copy("pair-1", original="short", translation=long_text, done=True)
+        row = audio[-1]
+        self.assertNotIn("original_pages", row)
+        pages = row["translation_pages"]
+        self.assertGreater(len(pages), 1)
+        self.assertEqual("".join(pages), long_text)
+        self.assertTrue(all(len(page) <= WATCH_COPY_PAGE_MAX for page in pages))
+        # A short copy stays a plain string: no doubled payload for the common case.
+        sess._emit_watch_copy("pair-2", original="hi", translation="你好", done=True)
+        self.assertNotIn("translation_pages", audio[-1])
+        self.assertNotIn("original_pages", audio[-1])
+
+    def test_watch_copy_pages_are_lossless(self):
+        """Pages re-join to the normalized copy, never exceed the cap, never truncate."""
+        from server.app import _watch_copy_normalize
+
+        cases = [
+            ("", 12000),
+            ("   ", 12000),
+            ("hello", 7),
+            ("a" * 12000, 12000),
+            ("a" * 12001, 12000),
+            ("你好" * 7000, 12000),
+            ("p1\n\np2\n\n" + "x" * 30000 + "\n\np4", 12000),
+            ("z" * 25000, 100),
+            ("a。b。" * 7000, 12000),
+            ("😀" * 9000, 12000),
+        ]
+        for raw, cap in cases:
+            pages = watch_copy_pages(raw, cap)
+            if not raw.strip():
+                self.assertEqual(pages, [])
+                continue
+            self.assertTrue(pages)
+            self.assertEqual("".join(pages), _watch_copy_normalize(raw))
+            self.assertTrue(all(len(page) <= cap for page in pages), [(len(p), cap) for p in pages])

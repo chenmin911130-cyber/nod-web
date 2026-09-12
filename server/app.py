@@ -607,6 +607,70 @@ def _translate_line_id(question: str) -> str | None:
     return m.group(1) if m else None
 
 
+# One page of a Watch copy. The native bridge sends page 0 in the application
+# context and the rest through transferUserInfo, so a copy of any length reaches
+# the Watch without one oversized WCSession dictionary. Mirrors the JS
+# ``WATCH_LIVE_COPY_MAX`` / ``watchLiveCopySegments`` (web/src/watchStatus.ts).
+WATCH_COPY_PAGE_MAX = 12_000
+_COPY_SENTENCE_RE = re.compile(r"[^。！？!?；;\n]*[。！？!?；;\n]+|[^。！？!?；;\n]+$")
+
+
+def _watch_copy_normalize(text: str) -> str:
+    """Mirror `watchKeepParagraphs`: collapse runs, keep paragraph breaks."""
+    compact = re.sub(r"[ \t]+", " ", text or "")
+    return re.sub(r"\n{3,}", "\n\n", compact).strip()
+
+
+def _copy_hard_split(unit: str, cap: int) -> list[str]:
+    out: list[str] = []
+    current = ""
+    for char in unit:
+        if current and len(current) + 1 > cap:
+            out.append(current)
+            current = ""
+        current += char
+    if current:
+        out.append(current)
+    return out
+
+
+def watch_copy_pages(text: str, cap: int = WATCH_COPY_PAGE_MAX) -> list[str]:
+    """Split a Watch copy into pages that re-join to exactly the normalized text.
+
+    Nothing is dropped and no ellipsis is added: the Watch joins the pages back,
+    so the live copy has no total length limit (#219).
+    """
+    cap = max(1, int(cap))
+    normalized = _watch_copy_normalize(text)
+    if not normalized:
+        return []
+    if len(normalized) <= cap:
+        return [normalized]
+    paragraphs = normalized.split("\n\n")
+    pieces: list[str] = []
+    for index, paragraph in enumerate(paragraphs):
+        # Keep the blank line with the paragraph it follows so join() is lossless.
+        unit = paragraph if index == len(paragraphs) - 1 else f"{paragraph}\n\n"
+        if len(unit) <= cap:
+            pieces.append(unit)
+            continue
+        for sentence in _COPY_SENTENCE_RE.findall(unit) or [unit]:
+            if len(sentence) <= cap:
+                pieces.append(sentence)
+            else:
+                pieces.extend(_copy_hard_split(sentence, cap))
+    pages: list[str] = []
+    current = ""
+    for piece in pieces:
+        if current and len(current) + len(piece) > cap:
+            pages.append(current)
+            current = ""
+        current += piece
+    if current:
+        pages.append(current)
+    return pages
+
+
 def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
     stt = cfg.get("stt") or {}
     silence = str(stt.get("max_turn_silence") or "1600")
@@ -5477,6 +5541,12 @@ class Session:
             held_seq = {}
             self._watch_copy_seq_of = held_seq
         held_seq[pid] = seq
+        # A long copy is paged so the locked phone's native path can hand the
+        # Watch joinable pages instead of one oversized dictionary (#219).
+        if len(src) > WATCH_COPY_PAGE_MAX:
+            row["original_pages"] = watch_copy_pages(src)
+        if len(dst) > WATCH_COPY_PAGE_MAX:
+            row["translation_pages"] = watch_copy_pages(dst)
         if ok is not None:
             row["ok"] = bool(ok)
         return row
