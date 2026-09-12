@@ -621,19 +621,20 @@ func waitSend() {
         pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("paged")),
         connect: false
     )
-    // A copy starts at page 0: a page of an unknown copy is dropped, so a late page
-    // of a superseded copy can never put the old translation back.
+    // A copy starts at page 0: a tail that outran its head (the two ride different
+    // WCSession channels) is parked, not applied, and not lost — it is spliced in
+    // when its head lands.
     deliver(watch, ["copyId": "c1", "copySegIndex": 1, "copySegTotal": 2, "original": "org-1", "translation": "page-1"])
     eq(watch.translation, "")
     eq(watch.original, "")
     eq(watch.copyId, "")
     deliver(watch, ["copyId": "c1", "copySegIndex": 0, "copySegTotal": 2, "original": "org-0", "translation": "page-0"])
-    eq(watch.translation, "page-0")
-    eq(watch.copyId, "c1")
-    // The phone re-pushes every page; page 1 then fills the rest.
-    deliver(watch, ["copyId": "c1", "copySegIndex": 1, "copySegTotal": 2, "original": "org-1", "translation": "page-1"])
     eq(watch.translation, "page-0page-1")
     eq(watch.original, "org-0org-1")
+    eq(watch.copyId, "c1")
+    // Re-delivering the tail is idempotent.
+    deliver(watch, ["copyId": "c1", "copySegIndex": 1, "copySegTotal": 2, "original": "org-1", "translation": "page-1"])
+    eq(watch.translation, "page-0page-1")
     // A re-sent page is idempotent.
     deliver(watch, ["copyId": "c1", "copySegIndex": 0, "copySegTotal": 2, "original": "org-0", "translation": "page-0"])
     eq(watch.translation, "page-0page-1")
@@ -644,12 +645,13 @@ func waitSend() {
     eq(watch.translation, "g-0")
     deliver(watch, ["copyId": "c4", "copySegIndex": 1, "copySegTotal": 3, "original": "g-1", "translation": "g-1"])
     eq(watch.translation, "g-0g-1g-2")
-    // A new copy id starts a new copy on its page 0.
+    // A new copy id starts a new copy on its page 0; its earlier tail is parked and
+    // joins that head immediately (tail -> head across channels).
     deliver(watch, ["copyId": "c5", "copySegIndex": 1, "copySegTotal": 2, "original": "n-1", "translation": "n-1"])
     eq(watch.translation, "g-0g-1g-2")
     deliver(watch, ["copyId": "c5", "copySegIndex": 0, "copySegTotal": 2, "original": "n-0", "translation": "n-0"])
-    eq(watch.translation, "n-0")
-    eq(watch.original, "n-0")
+    eq(watch.translation, "n-0n-1")
+    eq(watch.original, "n-0n-1")
     deliver(watch, ["copyId": "c5", "copySegIndex": 1, "copySegTotal": 2, "original": "n-1", "translation": "n-1"])
     eq(watch.translation, "n-0n-1")
     // Page 0 re-delivered for the same copy (Watch relaunch) must NOT drop pages 1..n.
@@ -802,11 +804,23 @@ func waitSend() {
     // A `done` raises the server copy version without changing the head text.
     deliver(interleaved, ["copyId": "i1", "copySeq": 11, "copySegIndex": 0, "copySegTotal": 3, "copyVersion": 5, "original": "o0", "translation": "p0"])
     eq(interleaved.translation, "p0")
-    // Page 2 was re-queued at a newer content version and lands first.
+    // Page 2 belongs to a NEWER content generation whose head has not landed: it is
+    // parked (a new head must not be spliced onto an old tail), so it is neither
+    // shown nor lost.
     deliver(interleaved, ["copyId": "i1", "copySeq": 11, "copySegIndex": 2, "copySegTotal": 3, "copyVersion": 6, "original": "o2", "translation": "p2"])
     eq(interleaved.translation, "p0")
-    // The delayed page 1 still carries the version/seq it was queued with.
+    // The delayed page 1 still carries the version/seq it was queued with — the
+    // older SERVER version must not gate it inside one sentence.
     deliver(interleaved, ["copyId": "i1", "copySeq": 10, "copySegIndex": 1, "copySegTotal": 3, "copyVersion": 5, "original": "o1", "translation": "p1"])
+    eq(interleaved.translation, "p0p1")
+    eq(interleaved.original, "o0o1")
+    // The newer generation's head lands with the SAME text: the sentence is not a new
+    // generation (nothing to reset), and the parked page 2 joins it immediately.
+    deliver(interleaved, ["copyId": "i1", "copySeq": 12, "copySegIndex": 0, "copySegTotal": 3, "copyVersion": 6, "original": "o0", "translation": "p0"])
+    eq(interleaved.translation, "p0p1p2")
+    // Re-delivering the tails at that version is idempotent.
+    deliver(interleaved, ["copyId": "i1", "copySeq": 12, "copySegIndex": 1, "copySegTotal": 3, "copyVersion": 6, "original": "o1", "translation": "p1"])
+    deliver(interleaved, ["copyId": "i1", "copySeq": 12, "copySegIndex": 2, "copySegTotal": 3, "copyVersion": 6, "original": "o2", "translation": "p2"])
     eq(interleaved.translation, "p0p1p2")
     eq(interleaved.original, "o0o1o2")
 
@@ -901,6 +915,148 @@ func waitSend() {
     check(WatchPhoneSession.copyPageApplies(incomingId: "c", currentId: "c", pageIndex: 5), "pages of the current copy apply")
     check(WatchPhoneSession.copyPageApplies(incomingId: "new", currentId: "c", pageIndex: 0), "page 0 starts another copy")
     check(!WatchPhoneSession.copyPageApplies(incomingId: "new", currentId: "c", pageIndex: 1), "a later page of another copy is dropped")
+
+    // A previous test left a pcm rejection in the singleton bridge; the real app
+    // clears it on a new capture, so do the same before pushing status again
+    // (otherwise the receiver's stale-rejection guard drops the whole payload).
+    bridge.session(WCSession.default, didReceiveMessage: [
+        "action": "start", "captureId": "copy-status-\(UUID().uuidString)",
+        "at": Date().timeIntervalSince1970,
+    ]) { _ in }
+    waitSend()
+
+    // #219 review P2-2: head and tails ride different WCSession channels (the
+    // application context / sendMessage vs the queued userInfo), so a tail can
+    // arrive before its head. Neither order may lose a page, and nothing may rely
+    // on another ready or on the text happening to change again.
+    let outOfOrder = WatchPhoneSession(
+        sendBuffer: WatchSendBuffer(),
+        pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("out-of-order")),
+        connect: false
+    )
+    WCSession.default.messages.removeAll()
+    WCSession.default.receivedApplicationContext = [:]
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "A", translation: "甲",
+        copyId: "copy-A", originalSegments: ["A"], translationSegments: ["甲"],
+        copySeq: 900001
+    )
+    deliver(outOfOrder, WCSession.default.receivedApplicationContext)
+    eq(outOfOrder.translation, "甲")
+    let pageB0 = String(repeating: "乙", count: 12000)
+    let pageB1 = "乙尾"
+    WCSession.default.messages.removeAll()
+    WCSession.default.receivedApplicationContext = [:]
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "B", translation: pageB0 + pageB1,
+        copyId: "copy-B", originalSegments: ["B"], translationSegments: [pageB0, pageB1],
+        copySeq: 900002
+    )
+    let bTail = WCSession.default.messages.first { ($0["copySegIndex"] as? Int) == 1 }
+    check(bTail != nil, "B's tail is queued")
+    let bHead = WCSession.default.receivedApplicationContext
+    // The queued tail lands first: it must not switch the sentence, and must not be
+    // thrown away either.
+    deliver(outOfOrder, bTail!)
+    eq(outOfOrder.translation, "甲")
+    eq(outOfOrder.copyId, "copy-A")
+    deliver(outOfOrder, bHead)
+    eq(outOfOrder.copyId, "copy-B")
+    eq(outOfOrder.translation, pageB0 + pageB1)
+
+    // The same for a new content generation of ONE sentence: a new-generation tail
+    // that outruns its changed head is parked and joins that head (no old tail mixed
+    // into the new text, no page lost).
+    let generations = WatchPhoneSession(
+        sendBuffer: WatchSendBuffer(),
+        pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("generations")),
+        connect: false
+    )
+    let g1 = [String(repeating: "一", count: 12000), String(repeating: "二", count: 12000), "一尾"]
+    let g2 = [String(repeating: "壹", count: 12000), String(repeating: "贰", count: 12000), "壹尾"]
+    WCSession.default.messages.removeAll()
+    WCSession.default.receivedApplicationContext = [:]
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "H1", translation: g1.joined(),
+        copyId: "gen-1", originalSegments: ["H1"], translationSegments: g1,
+        copySeq: 900003
+    )
+    deliver(generations, WCSession.default.receivedApplicationContext)
+    eq(generations.translation, g1[0])
+    WCSession.default.messages.removeAll()
+    WCSession.default.receivedApplicationContext = [:]
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "H2", translation: g2.joined(),
+        copyId: "gen-1", originalSegments: ["H2"], translationSegments: g2,
+        copySeq: 900004
+    )
+    let g2Tails = WCSession.default.messages.filter { (($0["copySegIndex"] as? Int) ?? 0) > 0 }
+    let g2Head = WCSession.default.receivedApplicationContext
+    check(g2Tails.count >= 2, "a changed head re-queues every tail, got \(g2Tails.count)")
+    // A tail of the new generation outruns its head: it is parked, so the old head
+    // is never spliced onto the new tail.
+    deliver(generations, g2Tails.last!)
+    eq(generations.translation, g1[0])
+    deliver(generations, g2Head)
+    eq(generations.original, "H2")
+    // The parked tail joins its head; the rest of the re-queued tails complete the
+    // new generation, and none of the old generation's text survives.
+    deliver(generations, g2Tails.first!)
+    eq(generations.translation, g2.joined())
+    check(!generations.translation.contains("一"), "no old-generation text may survive")
+
+    // #219 review P2-3: the phone's page counter restarts with its process. The same
+    // sentence comes back with a NEWER server version and a LOWER page counter; the
+    // Watch must take it immediately instead of rejecting new content until the
+    // counter climbs back — while a pre-restart page cannot roll it back.
+    let rebooted = WatchPhoneSession(
+        sendBuffer: WatchSendBuffer(),
+        pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("rebooted")),
+        connect: false
+    )
+    let oldLong = String(repeating: "旧", count: 12000)
+    deliver(rebooted, ["copyId": "A", "copySeq": 100, "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 100, "original": "o-old", "translation": oldLong])
+    deliver(rebooted, ["copyId": "A", "copySeq": 100, "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 100, "original": "o-old2", "translation": "旧尾"])
+    eq(rebooted.translation, oldLong + "旧尾")
+    // Phone restarted: same sentence, newer server version, counter back to 1.
+    deliver(rebooted, ["copyId": "A", "copySeq": 101, "copyVersion": 1, "original": "o-new", "translation": "新"])
+    eq(rebooted.translation, "新")
+    eq(rebooted.original, "o-new")
+    // Its paged form restores immediately too.
+    deliver(rebooted, ["copyId": "A", "copySeq": 101, "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 1, "original": "o-new", "translation": "新0"])
+    deliver(rebooted, ["copyId": "A", "copySeq": 101, "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 1, "original": "o-new1", "translation": "新1"])
+    eq(rebooted.translation, "新0新1")
+    // A pre-restart page (higher page version, OLDER server version) stays out.
+    deliver(rebooted, ["copyId": "A", "copySeq": 100, "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 100, "original": "o-old2", "translation": "旧尾"])
+    eq(rebooted.translation, "新0新1")
+    eq(rebooted.original, "o-newo-new1")
+
+    // An older copy (smaller server version) can neither take over nor park its way
+    // back in.
+    deliver(rebooted, ["copyId": "OLD", "copySeq": 50, "copyVersion": 200, "original": "o-oldcopy", "translation": "旧副本"])
+    eq(rebooted.translation, "新0新1")
+    eq(rebooted.copyId, "A")
+    deliver(rebooted, ["copyId": "OLD", "copySeq": 51, "copySegIndex": 0, "copySegTotal": 1, "copyVersion": 201, "original": "o-oldcopy", "translation": "旧副本2"])
+    eq(rebooted.translation, "新0新1")
+    eq(rebooted.copyId, "A")
+
+    // The parked-tail cache is bounded: many heads' tails cannot grow it forever.
+    let bounded = WatchPhoneSession(
+        sendBuffer: WatchSendBuffer(),
+        pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("bounded")),
+        connect: false
+    )
+    deliver(bounded, ["copyId": "keep", "copySeq": 1, "copyVersion": 1, "original": "keep", "translation": "keep"])
+    for i in 0..<20 {
+        deliver(bounded, [
+            "copyId": "pend-\(i)", "copySeq": 1000 + i, "copySegIndex": 1, "copySegTotal": 2,
+            "copyVersion": 1 + i, "original": "o", "translation": "t",
+        ])
+    }
+    check(bounded.testingPendingCopyKeys().count <= 6,
+          "the parked-tail cache is bounded, got \(bounded.testingPendingCopyKeys().count)")
+    eq(bounded.translation, "keep")
+    eq(bounded.copyId, "keep")
 
     _ = bridge
     print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake and Save tests passed")

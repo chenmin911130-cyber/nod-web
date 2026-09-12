@@ -51,6 +51,18 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     /// copy's page 0 (it must not become the current content again). Not cleared
     /// by `resetCopyPages`: it guards across copies.
     private var copySeqHigh = 0
+    /// Server copy version of the sentence currently on screen. The phone's page
+    /// counter restarts with its process while this one does not, so it is what
+    /// tells a re-paged copy after a phone restart from a genuinely older payload.
+    private var copyEpochSeq = 0
+    /// Tail pages that arrived before the head they belong to. Head and tails ride
+    /// different WCSession channels (application context / sendMessage vs the
+    /// queued userInfo), so their order is not guaranteed; a tail is parked keyed
+    /// `"<copyId>#<copyVersion>"` and spliced in when that head lands. Bounded.
+    private var copyPendingPages: [String: [Int: (original: String, translation: String)]] = [:]
+    private var copyPendingKeys: [String] = []
+    private static let copyPendingKeyLimit = 6
+    private static let copyPendingPageLimit = 32
     @Published var history: [WatchHistItem] = []
     @Published var reachable = false
     @Published var speechLive = false
@@ -269,6 +281,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         previous = ""
         copyId = ""
         resetCopyPages()
+        resetPendingCopyPages()
         elapsedMs = 0
         localModeHeld = phoneModeSeen
         starting = true
@@ -479,6 +492,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         previous = ""
         copyId = ""
         resetCopyPages()
+        resetPendingCopyPages()
         elapsedMs = 0
         offeringSave = false
         pendingSync = false
@@ -875,6 +889,54 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         copyGenerationVersion = 0
         copyUnpaged = false
     }
+
+    /// Drop parked tail pages (New / Stop). Deliberately NOT part of
+    /// `resetCopyPages`: a head change has to be able to splice in the tails that
+    /// arrived before it.
+    private func resetPendingCopyPages() {
+        copyPendingPages.removeAll()
+        copyPendingKeys.removeAll()
+    }
+
+    static func copyPendingKey(id: String, version: Int) -> String {
+        "\(id)#\(version)"
+    }
+
+    /// Park a tail page for the head it belongs to. Bounded: the newest
+    /// `copyPendingKeyLimit` heads, at most `copyPendingPageLimit` pages each.
+    private func stashPendingCopy(id: String, version: Int, index: Int, original: String, translation: String) {
+        let key = Self.copyPendingKey(id: id, version: version)
+        var pages = copyPendingPages[key] ?? [:]
+        if pages[index] == nil, pages.count >= Self.copyPendingPageLimit { return }
+        pages[index] = (original: original, translation: translation)
+        copyPendingPages[key] = pages
+        copyPendingKeys.removeAll { $0 == key }
+        copyPendingKeys.append(key)
+        while copyPendingKeys.count > Self.copyPendingKeyLimit {
+            copyPendingPages.removeValue(forKey: copyPendingKeys.removeFirst())
+        }
+    }
+
+    /// Splice the parked tails of the head just accepted into its page slots. No
+    /// effect for an unpaged head: that payload already carries the whole text.
+    private func applyPendingCopy(id: String, version: Int) {
+        guard copyPageTotal > 0 else { return }
+        let key = Self.copyPendingKey(id: id, version: version)
+        guard let pages = copyPendingPages.removeValue(forKey: key) else { return }
+        copyPendingKeys.removeAll { $0 == key }
+        for (index, page) in pages where index > 0 && index < copyPageTotal {
+            copyOriginalPages[index] = page.original
+            copyTranslationPages[index] = page.translation
+            copyPageVersions[index] = max(copyPageVersions[index] ?? version, version)
+        }
+        original = joinedCopy(copyOriginalPages)
+        translation = joinedCopy(copyTranslationPages)
+    }
+
+    #if PCM_REPLAY_TESTING
+    /// Parked `"<copyId>#<copyVersion>"` keys, for the bounded-cache test.
+    func testingPendingCopyKeys() -> [String] { copyPendingKeys }
+    #endif
 
     /// Leave the unpaged representation with a page 0 of `version`: buffered tail
     /// pages of that same generation may join it, anything older (or without a
@@ -1363,75 +1425,127 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         // The server's copy version orders different copies (a phone per-run
         // counter cannot): an older copy's page 0 must not become current again.
         // Inside one sentence it must NOT gate pages — see `copySeqApplies`.
-        let pageSeq = Self.intField(payload, "copySeq")
+        let pageSeq = Self.intField(payload, "copySeq") ?? 0
         let sameCopyId = !copyId.isEmpty && pageCopyId == copyId
         let seqApplies = Self.copySeqApplies(incoming: pageSeq, high: copySeqHigh, sameCopyId: sameCopyId)
+        // The phone's page counter restarts with its process; the server's copySeq
+        // does not. A head carrying a NEWER server version but an OLDER page counter
+        // is therefore the same sentence re-paged after a phone restart: accept it
+        // and rebase the counters instead of rejecting new content until the counter
+        // climbs back. A stale payload cannot qualify — it carries a smaller seq.
+        let rebased = pageSeq > 0
+            && pageSeq > copyEpochSeq
+            && (pageVersion ?? 0) < copyPage0Version
         if paged {
-            // A late page of a superseded copy is ignored for the copy fields only:
-            // the rest of the payload (capture, hint, save, speech) still applies.
-            if seqApplies, Self.copyPageApplies(incomingId: pageCopyId, currentId: copyId, pageIndex: pageIndex) {
-                // Record the server version even when the page itself is stale, so a
-                // later cross-copy comparison still sees how far this phone has got.
-                if let pageSeq, pageSeq > 0 { copySeqHigh = max(copySeqHigh, pageSeq) }
-                let incomingId = pageCopyId
-                let incomingOriginal = payload["original"] as? String ?? ""
-                let incomingTranslation = payload["translation"] as? String ?? ""
-                let newCopy = Self.copyPageStartsNewCopy(
-                    incomingId: incomingId,
-                    currentId: copyId,
-                    pageIndex: pageIndex,
-                    incomingOriginal: incomingOriginal,
-                    incomingTranslation: incomingTranslation,
-                    storedOriginal: copyOriginalPages[0],
-                    storedTranslation: copyTranslationPages[0]
-                )
-                let versionApplies = Self.copyPageVersionApplies(
-                    incoming: pageVersion,
-                    pageIndex: pageIndex,
-                    sameCopyId: incomingId == copyId,
-                    slotVersion: copyPageVersions[pageIndex],
-                    page0Version: copyPage0Version,
-                    generationVersion: copyGenerationVersion
-                )
-                if copyUnpaged, pageIndex != 0 {
-                    // The current content came from an unpaged payload. A tail page
-                    // may be buffered for the generation it belongs to (it joins
-                    // once page 0 of that version lands) but must never switch the
-                    // copy to the paged representation: that is what let a late
-                    // tail of the previous multi-page copy wipe the text.
-                    if versionApplies {
+            let incomingId = pageCopyId
+            let incomingOriginal = payload["original"] as? String ?? ""
+            let incomingTranslation = payload["translation"] as? String ?? ""
+            let version = pageVersion ?? 0
+            if seqApplies {
+                if pageSeq > 0 { copySeqHigh = max(copySeqHigh, pageSeq) }
+                if !Self.copyPageApplies(incomingId: incomingId, currentId: copyId, pageIndex: pageIndex) {
+                    // A tail of another copy: its head rides a different channel and
+                    // may still be in flight, so park it. Only a head may switch the
+                    // sentence (the old copy's page 0 stays rejected by `seqApplies`).
+                    stashPendingCopy(id: incomingId, version: version, index: pageIndex,
+                                     original: incomingOriginal, translation: incomingTranslation)
+                } else if pageIndex > 0 {
+                    if let pageVersion, pageVersion < copyGenerationVersion {
+                        // A tail of a previous content generation of this sentence.
+                    } else if let pageVersion, pageVersion > copyPage0Version {
+                        // A newer generation whose head has not arrived yet: park it,
+                        // so a new head and an old tail can never be spliced.
+                        stashPendingCopy(id: incomingId, version: pageVersion, index: pageIndex,
+                                         original: incomingOriginal, translation: incomingTranslation)
+                    } else if copyUnpaged {
+                        // The whole text came from one payload. A tail may be kept for
+                        // its generation, but must never switch the representation:
+                        // that is what let a late tail wipe the text.
+                        if Self.copyPageVersionApplies(
+                            incoming: pageVersion,
+                            pageIndex: pageIndex,
+                            sameCopyId: true,
+                            slotVersion: copyPageVersions[pageIndex],
+                            page0Version: copyPage0Version,
+                            generationVersion: copyGenerationVersion
+                        ) {
+                            copyOriginalPages[pageIndex] = incomingOriginal
+                            copyTranslationPages[pageIndex] = incomingTranslation
+                            if let pageVersion {
+                                copyPageVersions[pageIndex] = max(copyPageVersions[pageIndex] ?? pageVersion, pageVersion)
+                            }
+                        }
+                    } else if Self.copyPageVersionApplies(
+                        incoming: pageVersion,
+                        pageIndex: pageIndex,
+                        sameCopyId: true,
+                        slotVersion: copyPageVersions[pageIndex],
+                        page0Version: copyPage0Version,
+                        generationVersion: copyGenerationVersion
+                    ) {
                         copyOriginalPages[pageIndex] = incomingOriginal
                         copyTranslationPages[pageIndex] = incomingTranslation
                         if let pageVersion {
                             copyPageVersions[pageIndex] = max(copyPageVersions[pageIndex] ?? pageVersion, pageVersion)
                         }
+                        original = joinedCopy(copyOriginalPages)
+                        translation = joinedCopy(copyTranslationPages)
                     }
-                } else if versionApplies {
-                    if newCopy {
-                        resetCopyPages()
-                        if incomingId != copyId { copyId = incomingId }
-                    } else if copyUnpaged {
-                        // Only a page 0 leaves the unpaged representation, and only
-                        // pages of its own generation may join it.
-                        leaveUnpagedCopy(at: pageVersion)
-                    }
-                    copyPageTotal = pageTotal
-                    copyOriginalPages[pageIndex] = incomingOriginal
-                    copyTranslationPages[pageIndex] = incomingTranslation
-                    if let pageVersion {
-                        copyPageVersions[pageIndex] = max(copyPageVersions[pageIndex] ?? pageVersion, pageVersion)
-                    }
-                    if pageIndex == 0 {
-                        if let pageVersion { copyPage0Version = max(copyPage0Version, pageVersion) }
-                        // A changed head text is a new content generation: pages of
-                        // the previous generation stay rejected until re-queued at
-                        // this version (the bridge re-queues them all).
-                        if newCopy, let pageVersion {
-                            copyGenerationVersion = pageVersion
+                } else {
+                    // A head: it may start another copy, the same copy's next content
+                    // generation (stream edit / Retry), or be the phone's first frame
+                    // after its process restarted.
+                    let newHead = Self.copyPageStartsNewCopy(
+                        incomingId: incomingId,
+                        currentId: copyId,
+                        pageIndex: pageIndex,
+                        incomingOriginal: incomingOriginal,
+                        incomingTranslation: incomingTranslation,
+                        storedOriginal: copyOriginalPages[0],
+                        storedTranslation: copyTranslationPages[0]
+                    )
+                    let versionApplies = rebased || Self.copyPageVersionApplies(
+                        incoming: pageVersion,
+                        pageIndex: pageIndex,
+                        sameCopyId: incomingId == copyId,
+                        slotVersion: copyPageVersions[pageIndex],
+                        page0Version: copyPage0Version,
+                        generationVersion: copyGenerationVersion
+                    )
+                    if versionApplies {
+                        if newHead || rebased {
+                            resetCopyPages()
+                            if incomingId != copyId { copyId = incomingId }
+                        } else if copyUnpaged {
+                            // Only a page 0 leaves the unpaged representation, and only
+                            // pages of its own generation may join it.
+                            leaveUnpagedCopy(at: pageVersion)
                         }
+                        copyPageTotal = pageTotal
+                        copyOriginalPages[0] = incomingOriginal
+                        copyTranslationPages[0] = incomingTranslation
+                        if rebased {
+                            copyPageVersions[0] = version
+                            copyPage0Version = version
+                            copyGenerationVersion = version
+                        } else {
+                            if let pageVersion {
+                                copyPageVersions[0] = max(copyPageVersions[0] ?? pageVersion, pageVersion)
+                                copyPage0Version = max(copyPage0Version, pageVersion)
+                                // A changed head text is a new content generation:
+                                // pages of the previous one stay rejected until they
+                                // are re-queued at this version (the bridge re-queues
+                                // them all when the head changed).
+                                if newHead { copyGenerationVersion = pageVersion }
+                            }
+                        }
+                        if pageSeq > 0 { copyEpochSeq = pageSeq }
+                        original = joinedCopy(copyOriginalPages)
+                        translation = joinedCopy(copyTranslationPages)
+                        // Tails that outran this head ride a different channel: splice
+                        // them in now instead of waiting for a re-push.
+                        applyPendingCopy(id: incomingId, version: copyPage0Version)
                     }
-                    original = joinedCopy(copyOriginalPages)
-                    translation = joinedCopy(copyTranslationPages)
                 }
             }
         } else {
@@ -1441,13 +1555,15 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             let unpagedSameCopy = !copyId.isEmpty && (unpagedId ?? copyId) == copyId
             // The OS re-delivers the last application context when the Watch app
             // relaunches; an OLD one must not roll the whole text back to an earlier
-            // content version of the copy already on screen. A new copy starts its
-            // own per-run counter, so this only compares within one copy.
+            // content version of the copy already on screen. `rebased` is the mirror
+            // case — the phone restarted, so its counter is smaller while the server
+            // version moved forward — and must be accepted.
             let staleUnpaged = unpagedSameCopy
                 && pageVersion != nil
                 && pageVersion! < copyPage0Version
+                && !rebased
             if seqApplies, !staleUnpaged, payload["original"] != nil || payload["translation"] != nil {
-                if let pageSeq, pageSeq > 0 { copySeqHigh = max(copySeqHigh, pageSeq) }
+                if pageSeq > 0 { copySeqHigh = max(copySeqHigh, pageSeq) }
                 // Keep the content version as this representation's floor: a late
                 // tail of the multi-page copy it replaced is older than it and must
                 // stay rejected, and only a page 0 may switch back to paged.
@@ -1460,6 +1576,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 let floor = pageVersion ?? fallbackFloor
                 copyPage0Version = floor
                 copyGenerationVersion = floor
+                if pageSeq > 0 { copyEpochSeq = pageSeq }
                 if let original = payload["original"] as? String {
                     self.original = original
                 }
