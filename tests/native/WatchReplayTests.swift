@@ -394,6 +394,23 @@ func waitSend() {
     check(WatchPhoneSession.reduceSaveStatus(doneUi, save: "local").pendingSync == false, "reduce: Done ignores late local")
     check(WatchPhoneSession.reduceSaveStatus(doneUi, save: "failed").saveFailed == false, "reduce: Done ignores late failed")
 
+    WCSession.default.messages.removeAll()
+    let copyWire: [String: Any] = [
+        "type": "watch_copy",
+        "id": "pair-lock",
+        "original": "Hello there",
+        "translation": "你好",
+        "seq": 3,
+        "session_id": "native-session",
+        "done": true,
+    ]
+    let copyText = String(data: try JSONSerialization.data(withJSONObject: copyWire), encoding: .utf8)!
+    uplink.handleAudioText(copyText)
+    waitSend()
+    let copies = WCSession.default.messages.filter { ($0["translation"] as? String) == "你好" }
+    check(!copies.isEmpty, "audio watch_copy reaches Watch without WKWebView JS")
+    check((copies.last?["original"] as? String) == "Hello there", "watch_copy keeps the spoken line")
+
     _ = bridge
     print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake and Save tests passed")
  }

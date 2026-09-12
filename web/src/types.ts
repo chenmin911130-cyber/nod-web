@@ -170,7 +170,7 @@ export type EngineEvent =
   | { type: 'phase'; capture: CaptureState; engine: EngineState }
   | { type: 'status'; text: string }
   | { type: 'partial'; text: string; language?: string; speaker?: string }
-  | { type: 'question'; id: string; text: string; language?: string; speaker?: string; think?: boolean; submit_id?: string }
+  | { type: 'question'; id: string; text: string; language?: string; speaker?: string; think?: boolean; submit_id?: string; server_translate?: boolean; translation?: string }
   | { type: 'line_update'; id: string; text: string; language?: string; speaker?: string; rev: number }
   | { type: 'chunk'; id: string; text: string }
   | ({ type: 'sources'; id?: string } & AnswerSources)

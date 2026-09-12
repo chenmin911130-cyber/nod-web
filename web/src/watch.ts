@@ -25,6 +25,7 @@ type WatchPlugin = {
     pcmDrainedCaptureId?: string
     pcmDrainedSessionId?: string
     pcmDrainedByte?: number
+    copySeq?: number
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {
@@ -40,9 +41,21 @@ type WatchPlugin = {
   addListener(event: 'command', cb: (ev: WatchCommand) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'pcm', cb: (ev: WatchPcm) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'saveResult', cb: (ev: { save?: string; sessionId?: string }) => void): Promise<{ remove: () => Promise<void> }>
+  addListener(event: 'watchCopy', cb: (ev: { id?: string; original?: string; translation?: string; seq?: number; done?: boolean }) => void): Promise<{ remove: () => Promise<void> }>
 }
 
 const NodWatch = registerPlugin<WatchPlugin>('NodWatch')
+
+let watchCopySeq = 0
+
+export function bumpWatchCopySeq(): number {
+  watchCopySeq += 1
+  return watchCopySeq
+}
+
+export function currentWatchCopySeq(): number {
+  return watchCopySeq
+}
 
 function storeWatchAccount(): void {
   if (!isNativeApp()) return
@@ -290,6 +303,7 @@ export function installWatchRemote(handlers: {
   onTtsLive: () => void
   onTtsTap: () => void
   onTtsVoice: (voice: 'male' | 'female') => void
+  onWatchCopy: (ev: { id: string; original: string; translation: string; seq: number }) => void
 }): () => void {
   if (!isNativeApp()) return () => undefined
   let gone = false
@@ -316,6 +330,7 @@ export function installWatchRemote(handlers: {
       if (document.visibilityState === 'visible') {
         void replaySaves()
         resumeWatchKeeps()
+        void NodWatch.ready()
       }
     }
     document.addEventListener('visibilitychange', onVis)
@@ -324,6 +339,7 @@ export function installWatchRemote(handlers: {
         if (!isActive || gone) return
         void replaySaves()
         resumeWatchKeeps()
+        void NodWatch.ready()
       })
       handles.push(appState)
     } catch {
@@ -362,7 +378,21 @@ export function installWatchRemote(handlers: {
       if (watchPcmShouldClaimMic()) setPreferWatchMic(true)
       deliverPcm(ev.data || '')
     })
-    handles.push(command, pcm)
+    const watchCopy = await NodWatch.addListener('watchCopy', (ev) => {
+      if (gone) return
+      const seq = typeof ev.seq === 'number' ? ev.seq : Number(ev.seq || 0)
+      if (seq > watchCopySeq) watchCopySeq = seq
+      const id = String(ev.id || '')
+      if (!id) return
+      handlers.onWatchCopy({
+        id,
+        original: ev.original || '',
+        translation: ev.translation || '',
+        seq,
+      })
+    })
+    handles.push(command, pcm, watchCopy)
+    void NodWatch.ready()
   })().catch(() => undefined)
   return () => {
     gone = true
@@ -397,6 +427,7 @@ export function pushWatchStatus(face: {
     translation: (face.translation || '').slice(0, 800),
     previous: (face.previous || '').slice(0, 72),
     history: (face.history || []).slice(0, 8),
+    copySeq: watchCopySeq,
     mode: face.mode,
     langPair: face.langPair,
     save: face.save,

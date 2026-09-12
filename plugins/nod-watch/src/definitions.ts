@@ -21,6 +21,7 @@ export interface NodWatchPlugin {
     pcmDrainedByte?: number
     pcmAckCaptureId?: string
     pcmAckSessionId?: string
+    copySeq?: number
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {

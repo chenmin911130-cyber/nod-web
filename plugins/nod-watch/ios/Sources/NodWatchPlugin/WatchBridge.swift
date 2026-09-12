@@ -66,6 +66,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastPcmSealed = false
     private var lastHandshakeFailed = false
     private var lastHandshakeStatus = 0
+    private var lastCopySeq = 0
+    private var copyReplay: [[String: Any]] = []
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
     private var uplinkActive = false
@@ -96,6 +98,13 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         ) { [weak self] note in
             let code = (note.userInfo?["status"] as? Int) ?? 0
             self?.markUplinkHandshakeFailed(status: code)
+        }
+        NotificationCenter.default.addObserver(
+            forName: Notification.Name("nod.uplink.watchCopy"),
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            self?.applyWatchCopy(note.userInfo ?? [:])
         }
         NotificationCenter.default.addObserver(
             forName: Notification.Name("nod.watch.pcm.serverDrained"),
@@ -309,6 +318,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         for chunk in pcm {
             plugin?.notifyListeners("pcm", data: ["data": chunk])
         }
+        let copies = copyReplay
+        for row in copies {
+            plugin?.notifyListeners("watchCopy", data: row)
+        }
         pushStatus(
             capture: lastCapture,
             hint: lastHint,
@@ -316,6 +329,46 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             translation: lastTranslation,
             previous: lastPrevious,
             history: lastHistory
+        )
+    }
+
+    private static func intValue(_ obj: [String: Any], _ key: String) -> Int {
+        if let n = obj[key] as? Int { return n }
+        if let n = obj[key] as? Double { return Int(n) }
+        return Int(obj[key] as? String ?? "") ?? 0
+    }
+
+    func applyWatchCopy(_ obj: [String: Any]) {
+        let seq = Self.intValue(obj, "seq")
+        if seq > 0, seq < lastCopySeq { return }
+        if seq > lastCopySeq { lastCopySeq = seq }
+        lastOriginal = obj["original"] as? String ?? lastOriginal
+        lastTranslation = obj["translation"] as? String ?? lastTranslation
+        var row: [String: Any] = [
+            "id": obj["id"] as? String ?? "",
+            "original": lastOriginal,
+            "translation": lastTranslation,
+            "seq": lastCopySeq,
+            "sessionId": obj["session_id"] as? String ?? obj["sessionId"] as? String ?? lastSessionId,
+        ]
+        if let done = obj["done"] as? Bool {
+            row["done"] = done
+        } else if let done = obj["done"] as? String {
+            row["done"] = done == "true"
+        }
+        copyReplay.append(row)
+        if copyReplay.count > 24 {
+            copyReplay.removeFirst(copyReplay.count - 24)
+        }
+        plugin?.notifyListeners("watchCopy", data: row)
+        pushStatus(
+            capture: lastCapture,
+            hint: lastHint,
+            original: lastOriginal,
+            translation: lastTranslation,
+            previous: lastPrevious,
+            history: lastHistory,
+            copySeq: lastCopySeq
         )
     }
 
@@ -329,15 +382,35 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         mode: String = "",
         langPair: String = "",
         save: String = "",
-        sessionId: String = ""
+        sessionId: String = "",
+        copySeq: Int? = nil
     ) {
         if !capture.isEmpty {
             lastCapture = capture
         }
         lastHint = hint
-        lastOriginal = original
-        lastTranslation = translation
-        lastPrevious = previous
+        var nextOriginal = original
+        var nextTranslation = translation
+        var nextPrevious = previous
+        if let seq = copySeq {
+            if lastCopySeq > 0, seq < lastCopySeq {
+                nextOriginal = lastOriginal
+                nextTranslation = lastTranslation
+                nextPrevious = lastPrevious
+            } else if seq == lastCopySeq {
+                if original.count < lastOriginal.count { nextOriginal = lastOriginal }
+                if translation.count < lastTranslation.count { nextTranslation = lastTranslation }
+            } else {
+                lastCopySeq = seq
+            }
+        } else if lastCopySeq > 0 {
+            nextOriginal = lastOriginal
+            nextTranslation = lastTranslation
+            nextPrevious = lastPrevious
+        }
+        lastOriginal = nextOriginal
+        lastTranslation = nextTranslation
+        lastPrevious = nextPrevious
         lastHistory = history
         if !mode.isEmpty {
             lastMode = mode
@@ -369,9 +442,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         var payload: [String: Any] = [
             "capture": lastCapture,
             "hint": hint,
-            "original": original,
-            "translation": translation,
-            "previous": previous,
+            "original": lastOriginal,
+            "translation": lastTranslation,
+            "previous": lastPrevious,
             "history": history,
         ]
         if !lastMode.isEmpty {

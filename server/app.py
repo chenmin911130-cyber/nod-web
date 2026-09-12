@@ -54,6 +54,7 @@ from server.lang import (
     listen_ask_lang,
     matches_locked_speech,
     split_code_switched,
+    translate_should_passthrough,
 )
 from server.meeting_lines import (
     decide as meeting_decide,
@@ -3067,6 +3068,14 @@ class Session:
         self._audio_ws = None
         self._closed = False
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._watch_copy_seq = 0
+        self._watch_copy_original: dict[str, str] = {}
+        self._watch_copy_buf: dict[str, str] = {}
+        self._watch_copy_pair = ""
+        self._watch_copy_ask = ""
+        self._client_emit = emit
+        self.emit = self._routed_emit
+        self.pipeline.emit = self._routed_emit
 
     def _archive_prefix(self) -> str:
         return f"users/{self.user_id}/sessions/{self.usage_session_id}/audio/"
@@ -3999,7 +4008,19 @@ class Session:
                 ev["language"] = piece_heard
             if speaker:
                 ev["speaker"] = speaker
+            ev["server_translate"] = True
+            originals = getattr(self, "_watch_copy_original", None)
+            if originals is None:
+                originals = {}
+                self._watch_copy_original = originals
+            originals[ev["id"]] = piece
+            if translate_should_passthrough(piece, (self.cfg.get("ui") or {}).get("translate_to") or "zh", piece_heard):
+                ev["translation"] = piece
+                self.emit(ev)
+                self._emit_watch_copy(ev["id"], original=piece, translation=piece, done=True)
+                continue
             self.emit(ev)
+            self._start_voice_translate(ev["id"], piece, piece_heard)
 
     def _flush_translate_carry(self, reason: str) -> None:
         carry = (getattr(self, "_translate_carry", "") or "").strip()
@@ -5318,6 +5339,106 @@ class Session:
                 asyncio.run_coroutine_threadsafe(_send(), loop)
         except Exception:
             pass
+
+    def _routed_emit(self, ev: dict) -> None:
+        client = getattr(self, "_client_emit", None)
+        if callable(client):
+            client(ev)
+        else:
+            # Session.__new__ tests assign emit directly.
+            pass
+        self._maybe_watch_copy(ev)
+
+    def _watch_original_from_prompt(self, text: str) -> str:
+        marker = "Translate only this line:\n"
+        at = (text or "").find(marker)
+        if at >= 0:
+            return text[at + len(marker) :].strip()
+        return ""
+
+    def _emit_watch_copy(self, pair_id: str, *, original: str | None = None, translation: str | None = None, done: bool = False) -> None:
+        if getattr(self, "_workspace", "") != "translate":
+            return
+        pid = (pair_id or "").strip()
+        if not pid:
+            return
+        src = original if original is not None else (getattr(self, "_watch_copy_original", {}) or {}).get(pid) or ""
+        dst = translation if translation is not None else (getattr(self, "_watch_copy_buf", {}) or {}).get(pid) or ""
+        if original is not None:
+            buf = getattr(self, "_watch_copy_original", None)
+            if buf is None:
+                buf = {}
+                self._watch_copy_original = buf
+            buf[pid] = src
+        if translation is not None:
+            buf = getattr(self, "_watch_copy_buf", None)
+            if buf is None:
+                buf = {}
+                self._watch_copy_buf = buf
+            buf[pid] = dst
+        self._watch_copy_seq = int(getattr(self, "_watch_copy_seq", 0) or 0) + 1
+        self._send_audio_text({
+            "type": "watch_copy",
+            "id": pid,
+            "original": src,
+            "translation": dst,
+            "seq": self._watch_copy_seq,
+            "session_id": self.usage_session_id or "",
+            "done": bool(done),
+        })
+
+    def _maybe_watch_copy(self, ev: dict) -> None:
+        if getattr(self, "_workspace", "") != "translate":
+            return
+        kind = ev.get("type")
+        if kind == "question":
+            bind = _translate_line_id(ev.get("text") or "")
+            if bind:
+                self._watch_copy_pair = bind
+                self._watch_copy_ask = str(ev.get("id") or "")
+                if bind not in getattr(self, "_watch_copy_original", {}):
+                    src = self._watch_original_from_prompt(ev.get("text") or "")
+                    if src:
+                        buf = getattr(self, "_watch_copy_original", None)
+                        if buf is None:
+                            buf = {}
+                            self._watch_copy_original = buf
+                        buf[bind] = src
+            return
+        bind = getattr(self, "_watch_copy_pair", "") or ""
+        ask_id = getattr(self, "_watch_copy_ask", "") or ""
+        if not bind or not ask_id or ev.get("id") != ask_id:
+            return
+        if kind == "chunk":
+            held = getattr(self, "_watch_copy_buf", None)
+            if held is None:
+                held = {}
+                self._watch_copy_buf = held
+            held[bind] = (held.get(bind) or "") + (ev.get("text") or "")
+            self._emit_watch_copy(bind, done=False)
+        elif kind == "done":
+            self._emit_watch_copy(bind, done=True)
+
+    def _start_voice_translate(self, pair_id: str, piece: str, heard: str | None) -> None:
+        ask = getattr(self, "ask", None)
+        if not callable(ask):
+            return
+        target = _normalize_translate_to((self.cfg.get("ui") or {}).get("translate_to"))
+        target_name = _LANG_NAMES.get(target, "Chinese")
+        source_hint = heard or self._effective_stt_lang()
+        source_line = ""
+        if source_hint:
+            source_line = f"Source language: {_LANG_NAMES.get(source_hint, source_hint)}.\n"
+        prev = [t for t, _ in (getattr(self, "_recent_finals", None) or [])[:-1][-6:]]
+        context = ""
+        if prev:
+            numbered = "\n".join(f"{i}. {line}" for i, line in enumerate(prev, 1))
+            context = f"Previous lines (context only, do not translate):\n{numbered}\n\n"
+        prompt = (
+            f"[NOD_TRANSLATE:{pair_id}]\nTranslate to {target_name}. {source_line}"
+            f"{context}Translate only this line:\n{piece}"
+        )
+        ask(prompt, mode="translate")
 
     def pause_listen(self) -> None:
         """Pause live capture and stop AssemblyAI billing.

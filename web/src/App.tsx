@@ -59,7 +59,7 @@ import { api as authApi, deleteAccount, fetchMe, logout, type Me } from './auth'
 import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
-import { installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
+import { bumpWatchCopySeq, installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
 import { watchStartListenCommand } from './watchReplay'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
@@ -282,6 +282,7 @@ type Action =
   | { type: 'bind_translate'; id: string; rev?: number }
   | { type: 'release_translate' }
   | { type: 'fill_translate'; id: string; translation: string; passthrough?: boolean }
+  | { type: 'apply_watch_copy'; id: string; original: string; translation: string }
   | { type: 'clear_translation'; id: string }
   | { type: 'retry_translate'; id: string }
   | { type: 'fail_translate'; id: string }
@@ -544,9 +545,10 @@ function reducer(state: AppState, action: Action): AppState {
               id: qid,
               ts,
               original: text,
-              translation: '',
+              translation: ev.translation || '',
               to: state.translateTo,
               from: state.translateFrom !== 'auto' ? state.translateFrom : sttTag(ev.language),
+              passthrough: Boolean(ev.translation),
             }]
             return { ...state, translatePairs, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
           }
@@ -984,6 +986,28 @@ function reducer(state: AppState, action: Action): AppState {
         ln.id === action.id ? { ...ln, translation: action.translation, translateFailed: false } : ln,
       )
       return { ...state, translatePairs, meetingLines, translateBindId: '', busy: false }
+    }
+    case 'apply_watch_copy': {
+      const idx = state.translatePairs.findIndex((p) => p.id === action.id)
+      if (idx >= 0) {
+        const translatePairs = state.translatePairs.map((p) =>
+          p.id === action.id
+            ? { ...p, original: action.original || p.original, translation: action.translation }
+            : p,
+        )
+        return { ...state, translatePairs }
+      }
+      if (!action.original.trim() && !action.translation.trim()) return state
+      return {
+        ...state,
+        translatePairs: [...state.translatePairs, {
+          id: action.id,
+          ts: formatClock(),
+          original: action.original,
+          translation: action.translation,
+          to: state.translateTo,
+        }],
+      }
     }
     case 'clear_translation': {
       // 翻译被取消/中断时清掉半截译文，避免 pump 把它当已完成而跳过
@@ -1602,6 +1626,10 @@ export default function App() {
         setTtsVoice(voice)
         writeTtsVoice(voice)
       },
+      onWatchCopy: (ev) => {
+        askedTranslate.current.add(ev.id)
+        dispatch({ type: 'apply_watch_copy', id: ev.id, original: ev.original, translation: ev.translation })
+      },
     })
   }, [])
 
@@ -1825,14 +1853,18 @@ export default function App() {
       if (e.type === 'question' && stateRef.current.workspaceMode === 'translate') {
         const text = e.text ?? ''
         const s = stateRef.current
-        if (!isTranslatePrompt(text) && s.translateFrom !== 'auto') {
+        if (e.server_translate) {
+          askedTranslate.current.add(e.id)
+        } else if (!isTranslatePrompt(text) && s.translateFrom !== 'auto') {
           const heard = parseHeardLang(e.language, text)
           if (!matchesLockedFrom(text, s.translateFrom, heard)) return
         }
-        const last = stateRef.current.translatePairs[stateRef.current.translatePairs.length - 1]
-        if (last && !last.translation && normOriginal(last.original) === normOriginal(text)) {
-          askedTranslate.current.delete(last.id)
-          queueMicrotask(() => pumpTranslateRef.current())
+        if (!e.server_translate) {
+          const last = stateRef.current.translatePairs[stateRef.current.translatePairs.length - 1]
+          if (last && !last.translation && normOriginal(last.original) === normOriginal(text)) {
+            askedTranslate.current.delete(last.id)
+            queueMicrotask(() => pumpTranslateRef.current())
+          }
         }
       }
       // Only LLM `done` releases the translate gate. STT `error` events must not
@@ -3063,6 +3095,7 @@ export default function App() {
     // translation, so never passthrough typed input. Only a spoken pair (which
     // carries the STT from-tag) may passthrough.
     const typed = String(pairId || '').startsWith('typed-')
+    if (typed) bumpWatchCopySeq()
     // A meeting line has no translate pair, so its STT lang tag must be passed
     // through — otherwise fromTag is always undefined and every English line in
     // an English-target + Bilingual meeting hits the model. Typed pairs keep the
