@@ -520,10 +520,18 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             for index in 1..<pageCount {
                 let originalPage = index < originalPages.count ? originalPages[index] : ""
                 let translationPage = index < translationPages.count ? translationPages[index] : ""
-                let alreadyQueued = queuedOriginalPages.indices.contains(index)
-                    && queuedTranslationPages.indices.contains(index)
-                    && queuedOriginalPages[index] == originalPage
-                    && queuedTranslationPages[index] == translationPage
+                // Compare each field on its own: the two fields can have different
+                // page counts (a short original, a long translation), and requiring
+                // the slot to exist in BOTH re-queued the tail on every push — the
+                // queue would grow without bound while a sentence streams.
+                let queuedOriginalPage = queuedOriginalPages.indices.contains(index)
+                    ? queuedOriginalPages[index]
+                    : ""
+                let queuedTranslationPage = queuedTranslationPages.indices.contains(index)
+                    ? queuedTranslationPages[index]
+                    : ""
+                let alreadyQueued = queuedOriginalPage == originalPage
+                    && queuedTranslationPage == translationPage
                 if !queueAll, alreadyQueued { continue }
                 session.transferUserInfo([
                     "copyId": lastCopyId,

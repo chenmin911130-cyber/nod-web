@@ -448,6 +448,22 @@ func waitSend() {
     bridge.markJsReady()
     check(queuedPages() == 2, "the Watch-ready re-push re-queues every page")
 
+    // The two live fields can have different page counts (a short original, a long
+    // translation). Requiring the slot to exist in BOTH used to re-queue the tail on
+    // every push, so the queue grew without bound while a sentence streamed.
+    WCSession.default.messages.removeAll()
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "One page only", translation: longPage,
+        copyId: "uneven-1", originalSegments: ["One page only"], translationSegments: [longPage, tailPage]
+    )
+    check(queuedPages() == 1, "an uneven pair queues its tail once")
+    WCSession.default.messages.removeAll()
+    bridge.pushStatus(
+        capture: "listening", hint: "save state", original: "One page only", translation: longPage,
+        copyId: "uneven-1", originalSegments: ["One page only"], translationSegments: [longPage, tailPage]
+    )
+    check(queuedPages() == 0, "an unchanged tail is not re-queued when the original has fewer pages")
+
     // #219 P1: a queued tail page carries ONLY the copy. A queued transfer can be
     // delivered long after it was created, so replaying sessionId/save/pcm/hint
     // from that moment would rebind the current recording to an old session.
