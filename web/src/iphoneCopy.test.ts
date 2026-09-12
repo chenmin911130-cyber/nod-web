@@ -1,5 +1,6 @@
 import {
   IPHONE_COPY,
+  askEntryLabel,
   speakerSuggestText,
   canSwitchWorkspace,
   isListenReadyView,
@@ -117,6 +118,11 @@ eq(translateSwapAffordance({ from: 'auto', heardFrom: null }), 'arrow', 'unlocke
 eq(translateSwapAffordance({ from: 'auto', heardFrom: 'en' }), 'swap', 'heard language turns the arrow into swap')
 eq(translateSwapAffordance({ from: 'en', heardFrom: null }), 'swap', 'locked From can swap')
 eq(IPHONE_COPY.typeToTranslate, 'Type to translate', 'Translate prompt is Type to translate')
+eq(IPHONE_COPY.askEntry, 'Ask', 'Meeting Ask names the question entry')
+eq(askEntryLabel('ask'), 'Ask', 'Ask stays Ask whether the field is open')
+eq(askEntryLabel('ask', true), 'Ask', 'Ask does not change name when expanded')
+eq(askEntryLabel('keyboard'), 'Show keyboard', 'Translate closed names Show keyboard')
+eq(askEntryLabel('keyboard', true), 'Hide keyboard', 'Translate open names Hide keyboard')
 eq(recClock(724000), 'REC 00:12:04', 'REC is status, not a button')
 eq(canSwitchWorkspace({ listening: false }), true, 'Ready can change mode')
 eq(canSwitchWorkspace({ listening: true }), false, 'cannot hot-switch while listening')

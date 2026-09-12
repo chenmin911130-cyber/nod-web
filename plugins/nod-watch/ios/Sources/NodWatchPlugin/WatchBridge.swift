@@ -19,6 +19,20 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastOriginal = ""
     private var lastTranslation = ""
     private var lastPrevious = ""
+    /// Pages of the live copy, kept so a re-push (Watch became ready) stays paged
+    /// instead of sending the whole text in one oversized application context.
+    private var lastOriginalSegments: [String] = []
+    private var lastTranslationSegments: [String] = []
+    /// Page set already handed to `transferUserInfo`. Status pushes that only change
+    /// save/hint/capture carry the same copy; re-queuing the tail pages every time
+    /// would grow the queued-transfer backlog without adding information.
+    private var queuedCopyId = ""
+    private var queuedOriginalPages: [String] = []
+    private var queuedTranslationPages: [String] = []
+    /// Content version of the paged copy. It increments only when the page set
+    /// changes (page text or copy id), never on a Watch-ready re-push, so the Watch
+    /// can drop a page that arrives after newer content replaced it.
+    private var copyPageVersion = 0
     private var lastHistory: [[String: String]] = []
     private var lastMode = ""
     private var lastLangPair = ""
@@ -66,6 +80,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastPcmSealed = false
     private var lastHandshakeFailed = false
     private var lastHandshakeStatus = 0
+    /// Server copy version: time-monotone, and the only value that can order two
+    /// DIFFERENT copies (the phone's per-run page counter cannot).
     private var lastCopySeq = 0
     /// Identity of the copy the Watch is currently showing. Kept so the
     /// "keep the longer text" tie-break only applies within one copy: a new
@@ -338,7 +354,12 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             original: lastOriginal,
             translation: lastTranslation,
             previous: lastPrevious,
-            history: lastHistory
+            history: lastHistory,
+            originalSegments: lastOriginalSegments,
+            translationSegments: lastTranslationSegments,
+            // The Watch may have relaunched without its queued pages: re-queue them
+            // even though the copy itself did not change.
+            forceQueue: true
         )
     }
 
@@ -408,9 +429,13 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             original: lastOriginal,
             translation: lastTranslation,
             previous: lastPrevious,
-            history: lastHistory,
-            copySeq: lastCopySeq,
             copyId: lastCopyId,
+            history: lastHistory,
+            // #219 integration: the server pages a copy that exceeds the per-frame
+            // cap, so the locked phone's native path fans the pages out.
+            originalSegments: (obj["original_pages"] as? [String]) ?? [],
+            translationSegments: (obj["translation_pages"] as? [String]) ?? [],
+            copySeq: lastCopySeq,
             copyFailed: lastCopyFailed
         )
     }
@@ -421,13 +446,16 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         original: String = "",
         translation: String = "",
         previous: String = "",
+        copyId: String? = nil,
         history: [[String: String]] = [],
         mode: String = "",
         langPair: String = "",
         save: String = "",
         sessionId: String = "",
+        originalSegments: [String] = [],
+        translationSegments: [String] = [],
+        forceQueue: Bool = false,
         copySeq: Int? = nil,
-        copyId: String = "",
         copyFailed: Bool? = nil
     ) {
         if !capture.isEmpty {
@@ -437,37 +465,52 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         // Only a push that knows the copy state changes the failure marker; a
         // control-only push (save / pcm_drained) must leave it alone.
         if let copyFailed { lastCopyFailed = copyFailed }
-        var nextOriginal = original
-        var nextTranslation = translation
+        // 1) Which copy is this push allowed to change? (#222 rules; the server
+        //    copy version below is the same one the payload stamps.)
+        var nextOriginalPages = originalSegments.isEmpty
+            ? (original.isEmpty ? [] : [original])
+            : originalSegments
+        var nextTranslationPages = translationSegments.isEmpty
+            ? (translation.isEmpty ? [] : [translation])
+            : translationSegments
+        var nextOriginal = nextOriginalPages.joined()
+        var nextTranslation = nextTranslationPages.joined()
         var nextPrevious = previous
+        var keepCopy = false
         if let seq = copySeq {
-            let sameCopy = copyId == lastCopyId
+            let sameCopy = (copyId ?? lastCopyId) == lastCopyId
             if lastCopySeq > 0, seq < lastCopySeq {
-                // The phone's JS face is behind the Watch (it was suspended while
-                // locked, or rolled back): never let it overwrite newer copy.
-                nextOriginal = lastOriginal
-                nextTranslation = lastTranslation
-                nextPrevious = lastPrevious
+                keepCopy = true
             } else if seq == lastCopySeq, sameCopy {
-                // Same version of the same copy: keep the longer text, because a
-                // chunk can land after the full snapshot.
-                if original.count < lastOriginal.count { nextOriginal = lastOriginal }
-                if translation.count < lastTranslation.count { nextTranslation = lastTranslation }
+                if nextOriginal.count < lastOriginal.count {
+                    nextOriginal = lastOriginal
+                    nextOriginalPages = lastOriginalSegments
+                }
+                if nextTranslation.count < lastTranslation.count {
+                    nextTranslation = lastTranslation
+                    nextTranslationPages = lastTranslationSegments
+                }
             } else {
-                // Newer version, or the same version carrying a different copy
-                // (New / switch mode / typed row): take the whole face.
                 lastCopySeq = max(lastCopySeq, seq)
-                lastCopyId = copyId
+                if let copyId { lastCopyId = copyId }
             }
         } else if lastCopySeq > 0 {
-            // A control-only push (save, pcm_drained) must not blank the copy.
+            keepCopy = true
+        }
+        if keepCopy {
             nextOriginal = lastOriginal
             nextTranslation = lastTranslation
             nextPrevious = lastPrevious
+            nextOriginalPages = lastOriginalSegments
+            nextTranslationPages = lastTranslationSegments
         }
+        let originalPages = nextOriginalPages
+        let translationPages = nextTranslationPages
         lastOriginal = nextOriginal
         lastTranslation = nextTranslation
         lastPrevious = nextPrevious
+        lastOriginalSegments = originalPages
+        lastTranslationSegments = translationPages
         lastHistory = history
         if !mode.isEmpty {
             lastMode = mode
@@ -496,19 +539,47 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
+        // Content version + per-page queue decision. The version is bumped BEFORE
+        // the payload is built so page 0 and the pages queued with it agree; a
+        // Watch-ready re-push (`forceQueue`) re-sends without bumping, because the
+        // content did not change.
+        let copyIdChanged = queuedCopyId != lastCopyId
+        let pagesChanged = copyIdChanged
+            || queuedOriginalPages != originalPages
+            || queuedTranslationPages != translationPages
+        if pagesChanged {
+            // The Watch compares versions, so a content change must be observable.
+            copyPageVersion += 1
+        }
+        // A changed head text starts a new copy generation on the Watch, which
+        // resets every slot: all pages must be re-queued for it even when a tail
+        // page's own text is unchanged.
+        let headChanged = queuedOriginalPages.first != originalPages.first
+            || queuedTranslationPages.first != translationPages.first
+        let queueAll = forceQueue || copyIdChanged || headChanged
+        // Page 0 rides the application context (and the live sendMessage); the
+        // remaining pages go through transferUserInfo, which is queued and
+        // retried, because updateApplicationContext keeps only the last frame.
+        let pageCount = max(originalPages.count, translationPages.count)
         var payload: [String: Any] = [
             "capture": lastCapture,
             "hint": hint,
-            "original": lastOriginal,
-            "translation": lastTranslation,
+            "original": originalPages.first ?? "",
+            "translation": translationPages.first ?? "",
             "previous": lastPrevious,
-            // The Watch keys "same sentence" and its failure state off these; the
-            // server copy version orders copies across a phone app restart.
+            // The Watch keys "same sentence", its ordering and its failure state off
+            // these. `copyVersion` orders pages of one phone run; `copySeq` orders
+            // two DIFFERENT copies and survives a phone restart.
             "copyId": lastCopyId,
+            "copyVersion": copyPageVersion,
             "copySeq": lastCopySeq,
             "copyFailed": lastCopyFailed ? "true" : "false",
             "history": history,
         ]
+        if pageCount > 1 {
+            payload["copySegIndex"] = 0
+            payload["copySegTotal"] = pageCount
+        }
         if !lastMode.isEmpty {
             payload["mode"] = lastMode
         }
@@ -561,11 +632,52 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         do {
             try session.updateApplicationContext(payload)
         } catch {
-            /* watch may be locked / unreachable */
+            /* 65 KB WCSession cap: keep the live pair and drop history previews. */
+            var slim = payload
+            slim["history"] = [] as [[String: String]]
+            try? session.updateApplicationContext(slim)
         }
         if session.isReachable {
             session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
         }
+        // Pages 1..n. Queue them even when the Watch looks unreachable: the Watch
+        // joins by index and shows the longest prefix it holds meanwhile.
+        //
+        // A queued page carries ONLY the copy (id, page slot, version, text). A
+        // transferUserInfo can be delivered long after it was created, so replaying
+        // the rest of the payload (sessionId, save, pcm*, hint) from that moment
+        // would rebind the current recording to an old session.
+        if pageCount > 1 {
+            for index in 1..<pageCount {
+                let originalPage = index < originalPages.count ? originalPages[index] : ""
+                let translationPage = index < translationPages.count ? translationPages[index] : ""
+                // Compare each field on its own: the two fields can have different
+                // page counts (a short original, a long translation), and requiring
+                // the slot to exist in BOTH re-queued the tail on every push — the
+                // queue would grow without bound while a sentence streams.
+                let queuedOriginalPage = queuedOriginalPages.indices.contains(index)
+                    ? queuedOriginalPages[index]
+                    : ""
+                let queuedTranslationPage = queuedTranslationPages.indices.contains(index)
+                    ? queuedTranslationPages[index]
+                    : ""
+                let alreadyQueued = queuedOriginalPage == originalPage
+                    && queuedTranslationPage == translationPage
+                if !queueAll, alreadyQueued { continue }
+                session.transferUserInfo([
+                    "copyId": lastCopyId,
+                    "copySegIndex": index,
+                    "copySegTotal": pageCount,
+                    "copyVersion": copyPageVersion,
+                    "copySeq": lastCopySeq,
+                    "original": originalPage,
+                    "translation": translationPage,
+                ])
+            }
+        }
+        queuedCopyId = lastCopyId
+        queuedOriginalPages = originalPages
+        queuedTranslationPages = translationPages
     }
 
     static func watchListenMode(_ raw: String) -> String {
@@ -782,6 +894,25 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     #if PCM_REPLAY_TESTING
     /// Rows replayed to the phone when the Watch asks (see `handleWatchReady`).
     func testingCopyReplay() -> [[String: Any]] { copyReplay }
+
+    /// Drop every piece of copy state the bridge keeps. The bridge is a singleton,
+    /// so without this one test block's copy version/session leaks into the next.
+    func testingResetCopyState() {
+        lastCopyId = ""
+        lastCopySeq = 0
+        lastCopySession = ""
+        lastCopyFailed = false
+        lastOriginal = ""
+        lastTranslation = ""
+        lastPrevious = ""
+        lastOriginalSegments = []
+        lastTranslationSegments = []
+        queuedCopyId = ""
+        queuedOriginalPages = []
+        queuedTranslationPages = []
+        copyPageVersion = 0
+        copyReplay.removeAll()
+    }
 
     func testingResetJobs() {
         jobs = [:]

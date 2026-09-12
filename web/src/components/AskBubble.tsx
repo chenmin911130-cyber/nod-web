@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { askEntryLabel, type AskEntryKind } from '../iphoneCopy'
 import { askBubbleBounds, askDragMoved, clampAskBubble } from '../listenChrome'
 
 const BUBBLE_SIZE = 52
@@ -11,21 +12,64 @@ function visibleHeight(): number {
   return window.visualViewport?.height ?? window.innerHeight
 }
 
+function SparkleMark() {
+  return (
+    <path
+      d="M19.35.2l.7 2.35 2.35.7-2.35.7-.7 2.35-.7-2.35-2.35-.7 2.35-.7.7-2.35z"
+      fill="currentColor"
+    />
+  )
+}
+
+function AskGlyph() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 22" fill="none" aria-hidden="true">
+      <path
+        d="M4.5 4.6c0-1.16.93-2.1 2.08-2.1h10.04c1.15 0 2.08.94 2.08 2.1v6.7c0 1.16-.93 2.1-2.08 2.1H11.1L7.1 17.3v-3.9H6.58c-1.15 0-2.08-.94-2.08-2.1V4.6z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+      />
+      <SparkleMark />
+    </svg>
+  )
+}
+
+function KeyboardGlyph() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 22" fill="none" aria-hidden="true">
+      <rect x="2.6" y="5.4" width="16.8" height="12" rx="2.3" stroke="currentColor" strokeWidth="1.75" />
+      <rect x="5.1" y="7.8" width="2.05" height="1.55" rx="0.35" fill="currentColor" />
+      <rect x="8.05" y="7.8" width="2.05" height="1.55" rx="0.35" fill="currentColor" />
+      <rect x="11" y="7.8" width="2.05" height="1.55" rx="0.35" fill="currentColor" />
+      <rect x="13.95" y="7.8" width="2.05" height="1.55" rx="0.35" fill="currentColor" />
+      <rect x="5.85" y="10.3" width="2.05" height="1.55" rx="0.35" fill="currentColor" />
+      <rect x="8.8" y="10.3" width="2.05" height="1.55" rx="0.35" fill="currentColor" />
+      <rect x="11.75" y="10.3" width="2.05" height="1.55" rx="0.35" fill="currentColor" />
+      <rect x="6.35" y="13.1" width="9.4" height="1.7" rx="0.45" fill="currentColor" />
+      <SparkleMark />
+    </svg>
+  )
+}
+
 /**
  * #193 item 3: one bubble that opens/closes the Ask input and can be dragged
  * out of the way. A drag only moves it — it never toggles the input, never
  * sends, and never stops capture; a tap (travel under ASK_DRAG_SLOP) toggles.
+ * #219: Meeting uses the bubble+spark glyph; Translate uses keyboard+spark.
  */
 export default function AskBubble({
   expanded,
   onClick,
   className = '',
   draggable = false,
+  icon = 'ask',
 }: {
   expanded?: boolean
   onClick: () => void
   className?: string
   draggable?: boolean
+  icon?: AskEntryKind
 }) {
   const ref = useRef<HTMLButtonElement>(null)
   const drag = useRef<{
@@ -146,7 +190,7 @@ export default function AskBubble({
       type="button"
       className={`iphone-ask-bubble${className ? ` ${className}` : ''}${draggable ? ' draggable' : ''}`}
       style={draggable ? { transform: `translate(${offset.dx}px, ${offset.dy}px)` } : undefined}
-      aria-label="Ask"
+      aria-label={askEntryLabel(icon, Boolean(expanded))}
       aria-expanded={expanded}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -154,12 +198,7 @@ export default function AskBubble({
       onPointerCancel={cancelDrag}
       onClick={handleClick}
     >
-      <svg width="22" height="22" viewBox="0 0 24 22" fill="none" aria-hidden="true">
-        <path
-          d="M4.2 3.2C4.2 2 5.2 1 6.4 1h11.2C18.8 1 19.8 2 19.8 3.2v8.2c0 1.2-1 2.2-2.2 2.2H11l-4.6 3.4v-3.4H6.4c-1.2 0-2.2-1-2.2-2.2V3.2z"
-          fill="currentColor"
-        />
-      </svg>
+      {icon === 'keyboard' ? <KeyboardGlyph /> : <AskGlyph />}
     </button>
   )
 }

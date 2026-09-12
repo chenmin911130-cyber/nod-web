@@ -71,16 +71,26 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
             original: original,
             translation: translation,
             previous: previous,
+            copyId: copyId,
             history: history,
             mode: mode,
             langPair: langPair,
             save: save,
             sessionId: sessionId,
+            originalSegments: Self.segments(call, "originalSegments"),
+            translationSegments: Self.segments(call, "translationSegments"),
             copySeq: copySeq,
             copyId: copyId,
             copyFailed: copyFailed
         )
         call.resolve()
+    }
+
+    /// Pages of the live copy. The bridge fans them out; a malformed entry is
+    /// skipped rather than turning the whole copy into a non-string.
+    private static func segments(_ call: CAPPluginCall, _ key: String) -> [String] {
+        guard let rows = call.getArray(key) else { return [] }
+        return rows.compactMap { $0 as? String }
     }
 
     private var fileExport: FileExport?
