@@ -284,6 +284,66 @@ class UplinkWsLifecycleTests(unittest.TestCase):
         finally:
             audio_cm.__exit__(None, None, None)
 
+    def test_watch_copy_keeps_flowing_while_control_is_parked(self) -> None:
+        """#219 P1: parking the control socket must not stop the Watch copy stream.
+
+        The phone locking drops the control WS (session parked) while the native
+        audio uplink stays up. Translate results must keep being routed to that
+        socket before and after the phone reconnects, and the phone must get the
+        copy version on the chunk it also consumes.
+
+        The audio frame itself is asserted at the `_send_audio_text` boundary:
+        starlette's TestClient gives each websocket its own event loop, so a frame
+        pushed from the session's (control) loop can never land on the audio test
+        session even though one uvicorn loop serves both in production.
+        """
+        client, _uid = _authed_client()
+        ctrl_cm = client.websocket_connect("/ws")
+        control = ctrl_cm.__enter__()
+        events = _drain_until(control, "audio_uplink")
+        token = next(e["token"] for e in events if e.get("type") == "audio_uplink")
+        audio_cm = client.websocket_connect(f"/ws/audio?token={token}")
+        audio = audio_cm.__enter__()
+        try:
+            sess = uplink.get(token)
+            self.assertIsNotNone(sess)
+            sess._listener = object()
+            _wait_until(lambda: bool(sess._uplink_connected))
+            sess._workspace = "translate"
+            sess.cfg.setdefault("ui", {})["translate_to"] = "zh"
+            sess.emit({
+                "type": "question",
+                "id": "ask-1",
+                "text": "[NOD_TRANSLATE:pair-1]\nTranslate only this line:\nHello there",
+            })
+            native: list[dict] = []
+            sess._send_audio_text = native.append
+            # Phone locks: control drops, session parked, audio uplink stays.
+            ctrl_cm.__exit__(None, None, None)
+            ctrl_cm = None
+            _wait_until(lambda: uplink.is_parked(token))
+            self.assertIsNone(sess._client_emit)
+            sess.emit({"type": "chunk", "id": "ask-1", "text": "你好"})
+            self.assertEqual([row["translation"] for row in native], ["你好"])
+            locked = native[-1]
+            self.assertEqual(locked["type"], "watch_copy")
+            self.assertEqual(locked["id"], "pair-1")
+            self.assertTrue(locked["session_id"])
+            # Phone wakes and re-attaches: the same routing must keep working.
+            with client.websocket_connect(f"/ws?attach={token}") as control2:
+                _drain_until(control2, "attached")
+                sess.emit({"type": "chunk", "id": "ask-1", "text": "！"})
+                live = _drain_until(control2, "chunk")
+                self.assertTrue(any(e.get("copy_seq") for e in live))
+                self.assertEqual([row["translation"] for row in native], ["你好", "你好！"])
+                self.assertGreater(native[-1]["seq"], locked["seq"])
+                self.assertEqual(native[-1]["session_id"], locked["session_id"])
+        finally:
+            if audio_cm is not None:
+                audio_cm.__exit__(None, None, None)
+            if ctrl_cm is not None:
+                ctrl_cm.__exit__(None, None, None)
+
 
 if __name__ == "__main__":
     unittest.main()

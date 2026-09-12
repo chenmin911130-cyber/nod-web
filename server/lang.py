@@ -240,3 +240,51 @@ def matches_locked_speech(text: str, locked: str | None, heard: str | None = Non
     if heard == locked:
         return True
     return guessed in (locked, "en")
+
+
+_LATIN_SCRIPT_TARGETS = frozenset(("en", "es", "fr", "de", "it", "pt"))
+_NOT_ENGLISH_MARKS = re.compile(r"[¿¡ñßœæàâçèéêëîïôùûÿáéíóúüäöüßãõàèìòù]", re.I)
+_NOT_ENGLISH_WORDS = re.compile(
+    r"\b(?:hola|gracias|buenos|bonjour|bonsoir|merci|salut|pourquoi|êtes|ça|"
+    r"wie geht|nicht|danke|bitte|guten|você|não|olá|obrigado|perché|ciao|"
+    r"grazie|più|cómo|estás|usted|quién|dónde|también|comment ça|comment ca|"
+    r"como estas|qué tal|que tal)\b",
+    re.I,
+)
+
+
+def _compact_speech(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def looks_like_target(text: str, to: str) -> bool:
+    """Mirror web/src/translateGate.ts looksLikeTarget for voice passthrough."""
+    chars = [c for c in _compact_speech(text) if not c.isspace()]
+    if len(chars) < 2:
+        return False
+    n = len(chars)
+    han = sum(1 for c in chars if "\u4e00" <= c <= "\u9fff")
+    kana = sum(1 for c in chars if "\u3040" <= c <= "\u30ff")
+    hangul = len(re.findall(r"[\uac00-\ud7af]", "".join(chars)))
+    latin = sum(1 for c in chars if ("A" <= c <= "Z") or ("a" <= c <= "z") or ("\u00c0" <= c <= "\u00ff"))
+    if to == "zh":
+        return han / n >= 0.5 and kana == 0 and hangul == 0
+    if to == "ja":
+        return kana / n >= 0.12 or ((han + kana) / n >= 0.5 and kana > 0)
+    if to == "en":
+        raw = _compact_speech(text)
+        return latin / n >= 0.7 and han + kana + hangul == 0 and not _NOT_ENGLISH_MARKS.search(raw) and not _NOT_ENGLISH_WORDS.search(raw)
+    return False
+
+
+def translate_should_passthrough(text: str, to: str, from_tag: str | None = None) -> bool:
+    """Skip the LLM when the spoken line is already the caption language.
+
+    Latin targets need a matching STT tag; zh/ja can use script. Mirrors
+    ``translateShouldPassthrough`` so lock-screen server translate does not
+    double-charge a same-language line.
+    """
+    target = _normalize_translate_to(to)
+    if target in _LATIN_SCRIPT_TARGETS:
+        return bool(from_tag) and from_tag == target
+    return looks_like_target(text, target)

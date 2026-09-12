@@ -6,7 +6,10 @@ export type WatchFace = {
   original: string
   translation: string
   previous: string
+  /** Row id of the live copy; see `buildWatchFace`. */
   copyId: string
+  /** The live copy failed on the phone (model/quota), so the Watch can say so. */
+  copyFailed: boolean
   history: WatchHistItem[]
 }
 
@@ -17,8 +20,8 @@ export type WatchFace = {
 export const WATCH_LIVE_COPY_MAX = 12_000
 export const WATCH_HIST_LIMIT = 8
 
-type Pair = { id: string; original: string; translation: string }
-type Line = { id: string; text: string; translation?: string }
+type Pair = { id: string; original: string; translation: string; failed?: boolean }
+type Line = { id: string; text: string; translation?: string; translateFailed?: boolean }
 type Turn = { id: string; q: string; a: string }
 
 export function watchKeepParagraphs(text: string): string {
@@ -142,11 +145,17 @@ export function buildWatchFace(input: {
 
   let original = ''
   let translation = ''
+  // Identity of the row the live face shows (#219). The native bridge uses it to
+  // tell "same copy, same version" (keep the longer text) apart from "new
+  // sentence / New / switch mode at the same version" (replace).
   let copyId = ''
+  let copyFailed = false
   if (input.workspaceMode === 'translate' && lastPair) {
     original = lastPair.original
     translation = lastPair.translation
     copyId = lastPair.id
+    copyId = lastPair.id
+    copyFailed = Boolean(lastPair.failed)
   } else if (input.workspaceMode === 'interview' && lastTurn) {
     original = lastTurn.q
     translation = lastTurn.a
@@ -155,6 +164,8 @@ export function buildWatchFace(input: {
     original = lastLine.text
     translation = input.translateOn ? lastLine.translation || '' : ''
     copyId = lastLine.id
+    copyId = lastLine.id
+    copyFailed = Boolean(lastLine.translateFailed)
   }
   if (listening && input.partial.trim()) {
     if (input.workspaceMode !== 'interview' || !translation.trim()) {
@@ -210,6 +221,7 @@ export function buildWatchFace(input: {
     translation: watchKeepParagraphs(translation),
     previous,
     copyId,
+    copyFailed,
     history,
   }
 }

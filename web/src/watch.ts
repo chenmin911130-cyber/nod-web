@@ -17,7 +17,6 @@ type WatchPlugin = {
     original?: string
     translation?: string
     previous?: string
-    copyId?: string
     /** Live copy split into ≤ WATCH_LIVE_COPY_MAX pages; the bridge fans them out. */
     originalSegments?: string[]
     translationSegments?: string[]
@@ -30,6 +29,9 @@ type WatchPlugin = {
     pcmDrainedCaptureId?: string
     pcmDrainedSessionId?: string
     pcmDrainedByte?: number
+    copySeq?: number
+    copyId?: string
+    copyFailed?: boolean
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {
@@ -45,9 +47,20 @@ type WatchPlugin = {
   addListener(event: 'command', cb: (ev: WatchCommand) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'pcm', cb: (ev: WatchPcm) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'saveResult', cb: (ev: { save?: string; sessionId?: string }) => void): Promise<{ remove: () => Promise<void> }>
+  addListener(event: 'watchCopy', cb: (ev: { id?: string; original?: string; translation?: string; seq?: number; order?: number; done?: boolean; failed?: boolean; sessionId?: string }) => void): Promise<{ remove: () => Promise<void> }>
 }
 
 const NodWatch = registerPlugin<WatchPlugin>('NodWatch')
+
+// Last copy version the phone has seen from the server. The native bridge owns
+// the order within the Watch; this is what the JS face push reports so a stale
+// face (the webview was suspended while the phone was locked) cannot overwrite a
+// newer native copy.
+let watchCopySeq = 0
+
+export function currentWatchCopySeq(): number {
+  return watchCopySeq
+}
 
 function storeWatchAccount(): void {
   if (!isNativeApp()) return
@@ -295,6 +308,7 @@ export function installWatchRemote(handlers: {
   onTtsLive: () => void
   onTtsTap: () => void
   onTtsVoice: (voice: 'male' | 'female') => void
+  onWatchCopy: (ev: { id: string; original: string; translation: string; seq: number; order: number; failed: boolean; session: string }) => void
 }): () => void {
   if (!isNativeApp()) return () => undefined
   let gone = false
@@ -321,6 +335,7 @@ export function installWatchRemote(handlers: {
       if (document.visibilityState === 'visible') {
         void replaySaves()
         resumeWatchKeeps()
+        void NodWatch.ready()
       }
     }
     document.addEventListener('visibilitychange', onVis)
@@ -329,6 +344,7 @@ export function installWatchRemote(handlers: {
         if (!isActive || gone) return
         void replaySaves()
         resumeWatchKeeps()
+        void NodWatch.ready()
       })
       handles.push(appState)
     } catch {
@@ -367,7 +383,24 @@ export function installWatchRemote(handlers: {
       if (watchPcmShouldClaimMic()) setPreferWatchMic(true)
       deliverPcm(ev.data || '')
     })
-    handles.push(command, pcm)
+    const watchCopy = await NodWatch.addListener('watchCopy', (ev) => {
+      if (gone) return
+      const seq = typeof ev.seq === 'number' ? ev.seq : Number(ev.seq || 0)
+      if (seq > watchCopySeq) watchCopySeq = seq
+      const id = String(ev.id || '')
+      if (!id) return
+      handlers.onWatchCopy({
+        id,
+        original: ev.original || '',
+        translation: ev.translation || '',
+        seq,
+        order: typeof ev.order === 'number' ? ev.order : Number(ev.order || 0),
+        failed: Boolean(ev.failed),
+        session: String(ev.sessionId || ''),
+      })
+    })
+    handles.push(command, pcm, watchCopy)
+    void NodWatch.ready()
   })().catch(() => undefined)
   return () => {
     gone = true
@@ -384,7 +417,6 @@ export function pushWatchStatus(face: {
   original?: string
   translation?: string
   previous?: string
-  copyId?: string
   history?: WatchHistItem[]
   mode?: string
   langPair?: string
@@ -394,6 +426,11 @@ export function pushWatchStatus(face: {
   pcmDrainedCaptureId?: string
   pcmDrainedSessionId?: string
   pcmDrainedByte?: number
+  // Only a push that carries the live face sends the copy version + id. A
+  // control-only push (save state, pcm_drained) must leave the Watch copy alone.
+  copySeq?: number
+  copyId?: string
+  copyFailed?: boolean
 }): void {
   if (!isNativeApp()) return
   // The live copy is paged, not clipped: one bridge call carries every page.
@@ -409,8 +446,12 @@ export function pushWatchStatus(face: {
     originalSegments,
     translationSegments,
     previous: (face.previous || '').slice(0, 72),
-    copyId: face.copyId || '',
     history: (face.history || []).slice(0, WATCH_HIST_LIMIT),
+    // Copy identity + version + failure ride the same call; a control-only push
+    // (save, pcm_drained) leaves them undefined so the Watch copy is untouched.
+    copySeq: face.copySeq,
+    copyId: face.copyId,
+    copyFailed: face.copyFailed,
     mode: face.mode,
     langPair: face.langPair,
     save: face.save,

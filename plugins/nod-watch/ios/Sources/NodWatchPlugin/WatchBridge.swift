@@ -19,7 +19,6 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastOriginal = ""
     private var lastTranslation = ""
     private var lastPrevious = ""
-    private var lastCopyId = ""
     /// Pages of the live copy, kept so a re-push (Watch became ready) stays paged
     /// instead of sending the whole text in one oversized application context.
     private var lastOriginalSegments: [String] = []
@@ -34,10 +33,6 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     /// changes (page text or copy id), never on a Watch-ready re-push, so the Watch
     /// can drop a page that arrives after newer content replaced it.
     private var copyPageVersion = 0
-    /// Server copy version (time-monotone across phone app restarts). `copyPageVersion`
-    /// is a per-run counter, so it cannot order two different copies; this one can,
-    /// which is what lets the Watch reject an older copy's page 0.
-    private var lastCopySeq = 0
     private var lastHistory: [[String: String]] = []
     private var lastMode = ""
     private var lastLangPair = ""
@@ -85,6 +80,20 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastPcmSealed = false
     private var lastHandshakeFailed = false
     private var lastHandshakeStatus = 0
+    /// Server copy version: time-monotone, and the only value that can order two
+    /// DIFFERENT copies (the phone's per-run page counter cannot).
+    private var lastCopySeq = 0
+    /// Identity of the copy the Watch is currently showing. Kept so the
+    /// "keep the longer text" tie-break only applies within one copy: a new
+    /// sentence / New / mode switch must replace the older, longer text.
+    private var lastCopyId = ""
+    /// Control session the copy stream belongs to (server-minted).
+    private var lastCopySession = ""
+    /// The copy on the Watch is a failed one (model/quota failure, not a
+    /// cancelled ask). The Watch shows an explicit failure state instead of the
+    /// half sentence looking live.
+    private var lastCopyFailed = false
+    private var copyReplay: [[String: Any]] = []
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
     private var uplinkActive = false
@@ -115,6 +124,13 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         ) { [weak self] note in
             let code = (note.userInfo?["status"] as? Int) ?? 0
             self?.markUplinkHandshakeFailed(status: code)
+        }
+        NotificationCenter.default.addObserver(
+            forName: Notification.Name("nod.uplink.watchCopy"),
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            self?.applyWatchCopy((note.userInfo as? [String: Any]) ?? [:])
         }
         NotificationCenter.default.addObserver(
             forName: Notification.Name("nod.watch.pcm.serverDrained"),
@@ -328,6 +344,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         for chunk in pcm {
             plugin?.notifyListeners("pcm", data: ["data": chunk])
         }
+        let copies = copyReplay
+        for row in copies {
+            plugin?.notifyListeners("watchCopy", data: row)
+        }
         pushStatus(
             capture: lastCapture,
             hint: lastHint,
@@ -340,6 +360,83 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             // The Watch may have relaunched without its queued pages: re-queue them
             // even though the copy itself did not change.
             forceQueue: true
+        )
+    }
+
+    private static func intValue(_ obj: [String: Any], _ key: String) -> Int {
+        if let n = obj[key] as? Int { return n }
+        if let n = obj[key] as? Double { return Int(n) }
+        return Int(obj[key] as? String ?? "") ?? 0
+    }
+
+    func applyWatchCopy(_ obj: [String: Any]) {
+        let seq = Self.intValue(obj, "seq")
+        // A strictly older version is a stale frame: an old row arriving after a
+        // newer one, or after New / switch mode. Versions are monotone in time,
+        // so a fresh session can never read as stale.
+        if seq > 0, seq < lastCopySeq { return }
+        let session = obj["session_id"] as? String ?? obj["sessionId"] as? String ?? ""
+        if !session.isEmpty, !lastCopySession.isEmpty, session != lastCopySession {
+            // New copy session (New / clear / switch mode / Start): the previous
+            // session's rows must not be replayed to the phone, and its text must
+            // not survive into the Watch face when the page it belonged to was
+            // already cleared.
+            copyReplay.removeAll()
+            lastCopyId = ""
+            lastOriginal = ""
+            lastTranslation = ""
+            lastCopyFailed = false
+        }
+        if !session.isEmpty { lastCopySession = session }
+        if seq > lastCopySeq { lastCopySeq = seq }
+        let id = obj["id"] as? String ?? ""
+        if !id.isEmpty { lastCopyId = id }
+        lastCopyFailed = (obj["failed"] as? Bool) ?? ((obj["failed"] as? String) == "true")
+        lastOriginal = obj["original"] as? String ?? lastOriginal
+        lastTranslation = obj["translation"] as? String ?? lastTranslation
+        var row: [String: Any] = [
+            "id": id,
+            "original": lastOriginal,
+            "translation": lastTranslation,
+            "seq": lastCopySeq,
+            // Stable sentence position: the phone orders its recovered rows by this,
+            // never by `seq` (a retry moves the version, not the sentence).
+            "order": Self.intValue(obj, "order"),
+            "failed": lastCopyFailed,
+            "sessionId": obj["session_id"] as? String ?? obj["sessionId"] as? String ?? lastSessionId,
+        ]
+        if let done = obj["done"] as? Bool {
+            row["done"] = done
+        } else if let done = obj["done"] as? String {
+            row["done"] = done == "true"
+        }
+        // Replay holds the last 24 COPIES (sentences), each at its latest text:
+        // appending every streamed update let one long sentence evict several
+        // earlier ones, so the phone could not catch up on everything it missed
+        // while locked (#219).
+        if !id.isEmpty, let at = copyReplay.firstIndex(where: { ($0["id"] as? String) == id }) {
+            copyReplay[at] = row
+        } else {
+            copyReplay.append(row)
+        }
+        if copyReplay.count > 24 {
+            copyReplay.removeFirst(copyReplay.count - 24)
+        }
+        plugin?.notifyListeners("watchCopy", data: row)
+        pushStatus(
+            capture: lastCapture,
+            hint: lastHint,
+            original: lastOriginal,
+            translation: lastTranslation,
+            previous: lastPrevious,
+            copyId: lastCopyId,
+            history: lastHistory,
+            // #219 integration: the server pages a copy that exceeds the per-frame
+            // cap, so the locked phone's native path fans the pages out.
+            originalSegments: (obj["original_pages"] as? [String]) ?? [],
+            translationSegments: (obj["translation_pages"] as? [String]) ?? [],
+            copySeq: lastCopySeq,
+            copyFailed: lastCopyFailed
         )
     }
 
@@ -358,29 +455,62 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         originalSegments: [String] = [],
         translationSegments: [String] = [],
         forceQueue: Bool = false,
-        copySeq: Int? = nil
+        copySeq: Int? = nil,
+        copyFailed: Bool? = nil
     ) {
         if !capture.isEmpty {
             lastCapture = capture
         }
         lastHint = hint
-        if let copySeq { lastCopySeq = max(lastCopySeq, copySeq) }
-        // The live copy is paged, never clipped: keep every page so a re-push
-        // (Watch became ready) can replay the whole copy without one big frame.
-        let originalPages = originalSegments.isEmpty
+        // Only a push that knows the copy state changes the failure marker; a
+        // control-only push (save / pcm_drained) must leave it alone.
+        if let copyFailed { lastCopyFailed = copyFailed }
+        // 1) Which copy is this push allowed to change? (#222 rules; the server
+        //    copy version below is the same one the payload stamps.)
+        var nextOriginalPages = originalSegments.isEmpty
             ? (original.isEmpty ? [] : [original])
             : originalSegments
-        let translationPages = translationSegments.isEmpty
+        var nextTranslationPages = translationSegments.isEmpty
             ? (translation.isEmpty ? [] : [translation])
             : translationSegments
+        var nextOriginal = nextOriginalPages.joined()
+        var nextTranslation = nextTranslationPages.joined()
+        var nextPrevious = previous
+        var keepCopy = false
+        if let seq = copySeq {
+            let sameCopy = (copyId ?? lastCopyId) == lastCopyId
+            if lastCopySeq > 0, seq < lastCopySeq {
+                keepCopy = true
+            } else if seq == lastCopySeq, sameCopy {
+                if nextOriginal.count < lastOriginal.count {
+                    nextOriginal = lastOriginal
+                    nextOriginalPages = lastOriginalSegments
+                }
+                if nextTranslation.count < lastTranslation.count {
+                    nextTranslation = lastTranslation
+                    nextTranslationPages = lastTranslationSegments
+                }
+            } else {
+                lastCopySeq = max(lastCopySeq, seq)
+                if let copyId { lastCopyId = copyId }
+            }
+        } else if lastCopySeq > 0 {
+            keepCopy = true
+        }
+        if keepCopy {
+            nextOriginal = lastOriginal
+            nextTranslation = lastTranslation
+            nextPrevious = lastPrevious
+            nextOriginalPages = lastOriginalSegments
+            nextTranslationPages = lastTranslationSegments
+        }
+        let originalPages = nextOriginalPages
+        let translationPages = nextTranslationPages
+        lastOriginal = nextOriginal
+        lastTranslation = nextTranslation
+        lastPrevious = nextPrevious
         lastOriginalSegments = originalPages
         lastTranslationSegments = translationPages
-        lastOriginal = originalPages.joined()
-        lastTranslation = translationPages.joined()
-        lastPrevious = previous
-        if let copyId {
-            lastCopyId = copyId
-        }
         lastHistory = history
         if !mode.isEmpty {
             lastMode = mode
@@ -436,13 +566,14 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             "hint": hint,
             "original": originalPages.first ?? "",
             "translation": translationPages.first ?? "",
-            "previous": previous,
+            "previous": lastPrevious,
+            // The Watch keys "same sentence", its ordering and its failure state off
+            // these. `copyVersion` orders pages of one phone run; `copySeq` orders
+            // two DIFFERENT copies and survives a phone restart.
             "copyId": lastCopyId,
             "copyVersion": copyPageVersion,
-            // Server copy version (time-monotone across phone restarts): the only
-            // value that can order two different copies, so the Watch can reject an
-            // older copy's page 0.
             "copySeq": lastCopySeq,
+            "copyFailed": lastCopyFailed ? "true" : "false",
             "history": history,
         ]
         if pageCount > 1 {
@@ -761,6 +892,28 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     }
 
     #if PCM_REPLAY_TESTING
+    /// Rows replayed to the phone when the Watch asks (see `handleWatchReady`).
+    func testingCopyReplay() -> [[String: Any]] { copyReplay }
+
+    /// Drop every piece of copy state the bridge keeps. The bridge is a singleton,
+    /// so without this one test block's copy version/session leaks into the next.
+    func testingResetCopyState() {
+        lastCopyId = ""
+        lastCopySeq = 0
+        lastCopySession = ""
+        lastCopyFailed = false
+        lastOriginal = ""
+        lastTranslation = ""
+        lastPrevious = ""
+        lastOriginalSegments = []
+        lastTranslationSegments = []
+        queuedCopyId = ""
+        queuedOriginalPages = []
+        queuedTranslationPages = []
+        copyPageVersion = 0
+        copyReplay.removeAll()
+    }
+
     func testingResetJobs() {
         jobs = [:]
         inflight = []

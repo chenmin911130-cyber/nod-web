@@ -54,6 +54,7 @@ from server.lang import (
     listen_ask_lang,
     matches_locked_speech,
     split_code_switched,
+    translate_should_passthrough,
 )
 from server.meeting_lines import (
     decide as meeting_decide,
@@ -604,6 +605,70 @@ def _translate_line_id(question: str) -> str | None:
     """Extract the line/target id from a translate prompt ``[NOD_TRANSLATE:<id>]``."""
     m = re.match(r"\[NOD_TRANSLATE:([^\]]+)\]", (question or "").strip())
     return m.group(1) if m else None
+
+
+# One page of a Watch copy. The native bridge sends page 0 in the application
+# context and the rest through transferUserInfo, so a copy of any length reaches
+# the Watch without one oversized WCSession dictionary. Mirrors the JS
+# ``WATCH_LIVE_COPY_MAX`` / ``watchLiveCopySegments`` (web/src/watchStatus.ts).
+WATCH_COPY_PAGE_MAX = 12_000
+_COPY_SENTENCE_RE = re.compile(r"[^。！？!?；;\n]*[。！？!?；;\n]+|[^。！？!?；;\n]+$")
+
+
+def _watch_copy_normalize(text: str) -> str:
+    """Mirror `watchKeepParagraphs`: collapse runs, keep paragraph breaks."""
+    compact = re.sub(r"[ \t]+", " ", text or "")
+    return re.sub(r"\n{3,}", "\n\n", compact).strip()
+
+
+def _copy_hard_split(unit: str, cap: int) -> list[str]:
+    out: list[str] = []
+    current = ""
+    for char in unit:
+        if current and len(current) + 1 > cap:
+            out.append(current)
+            current = ""
+        current += char
+    if current:
+        out.append(current)
+    return out
+
+
+def watch_copy_pages(text: str, cap: int = WATCH_COPY_PAGE_MAX) -> list[str]:
+    """Split a Watch copy into pages that re-join to exactly the normalized text.
+
+    Nothing is dropped and no ellipsis is added: the Watch joins the pages back,
+    so the live copy has no total length limit (#219).
+    """
+    cap = max(1, int(cap))
+    normalized = _watch_copy_normalize(text)
+    if not normalized:
+        return []
+    if len(normalized) <= cap:
+        return [normalized]
+    paragraphs = normalized.split("\n\n")
+    pieces: list[str] = []
+    for index, paragraph in enumerate(paragraphs):
+        # Keep the blank line with the paragraph it follows so join() is lossless.
+        unit = paragraph if index == len(paragraphs) - 1 else f"{paragraph}\n\n"
+        if len(unit) <= cap:
+            pieces.append(unit)
+            continue
+        for sentence in _COPY_SENTENCE_RE.findall(unit) or [unit]:
+            if len(sentence) <= cap:
+                pieces.append(sentence)
+            else:
+                pieces.extend(_copy_hard_split(sentence, cap))
+    pages: list[str] = []
+    current = ""
+    for piece in pieces:
+        if current and len(current) + len(piece) > cap:
+            pages.append(current)
+            current = ""
+        current += piece
+    if current:
+        pages.append(current)
+    return pages
 
 
 def assemblyai_ws_url(cfg: dict[str, Any]) -> str:
@@ -3067,6 +3132,31 @@ class Session:
         self._audio_ws = None
         self._closed = False
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._watch_copy_seq = 0
+        # Identity of this control session's Watch copy stream. A reconnect that
+        # adopts the parked session keeps it; New / mode switch / a fresh connect
+        # mint another one, so the phone can tell the streams apart.
+        self._watch_copy_session = uuid.uuid4().hex
+        self._watch_copy_original: dict[str, str] = {}
+        self._watch_copy_buf: dict[str, str] = {}
+        self._watch_copy_failed: dict[str, bool] = {}
+        # Last emitted copy version per row, so a reconnect can replay the session's
+        # rows with the same version the phone would have seen live.
+        self._watch_copy_seq_of: dict[str, int] = {}
+        # Stable sentence order, assigned when a row first appears. The recovery
+        # cursor walks THIS, never the content version: a retry of an early sentence
+        # bumps its version above every later one, so paging by version would drop
+        # it from the walk and permanently lose the sentence (#219 review).
+        self._watch_copy_order: dict[str, int] = {}
+        self._watch_copy_next_order = 0
+        self._watch_copy_pair = ""
+        self._watch_copy_ask = ""
+        self._client_emit: Callable[[dict], None] | None = emit
+        # `emit` is ALWAYS the router. Detach/reattach only swap `_client_emit`,
+        # so Watch copy forwarding keeps riding the native audio socket while the
+        # phone is locked (#219 P1).
+        self.emit = self._routed_emit
+        self.pipeline.emit = self._routed_emit
 
     def _archive_prefix(self) -> str:
         return f"users/{self.user_id}/sessions/{self.usage_session_id}/audio/"
@@ -3191,12 +3281,20 @@ class Session:
         self.emit({"type": "keys_status", "has_llm": st["has_llm"], "has_stt": st["has_stt"]})
         self.emit({"type": "ready"})
         # Reconnecting clients get their first two-axis frame right after ready
-        # so they can render from `capture`.
+        # so they can render from `capture` (a client contract, see test_phase).
         self._emit_phase()
+        self._emit_watch_session()
         self.emit({"type": "status", "text": STATUS_READY})
         token = getattr(self, "audio_token", None)
         if token:
             self.emit({"type": "audio_uplink", "token": token})
+
+    def _emit_watch_session(self) -> None:
+        """Tell the phone which Watch copy session is current (see `_watch_copy_reset`)."""
+        self.emit({
+            "type": "watch_session",
+            "session_id": getattr(self, "_watch_copy_session", "") or "",
+        })
 
     def reattach(self) -> None:
         st = self.pipeline.key_status()
@@ -3204,9 +3302,15 @@ class Session:
         self.emit({"type": "ready"})
         self.emit({"type": "attached", "usage_session_id": self.usage_session_id})
         self._emit_phase()
+        self._emit_watch_session()
         token = getattr(self, "audio_token", None)
         if token:
             self.emit({"type": "audio_uplink", "token": token})
+        # The phone was locked: the native replay holds only the last 24 rows, so
+        # the server fills the rest of this copy session on top of it (#219).
+        batch = self._watch_copy_batch()
+        if batch is not None:
+            self.emit(batch)
         drained = getattr(self, "_pcm_drain_result", None)
         if isinstance(drained, dict) and drained.get("type") == "pcm_drained":
             self.emit(drained)
@@ -3224,14 +3328,18 @@ class Session:
             self.emit(event)
             self._send_audio_text(event)
 
-    def _sink_emit(self, _obj: dict) -> None:
-        return
-
     def _detach_control_emit(self) -> None:
-        self.emit = self._sink_emit
+        """Silence the control socket without silencing the session.
+
+        A park is "the phone locked, the native audio uplink stays up". Swapping
+        ``emit`` for a sink used to stop the whole translate→Watch copy path in
+        exactly the scenario #219 is about, so only the client sink is dropped.
+        """
+        self._client_emit = None
+        self.emit = self._routed_emit
         pipeline = getattr(self, "pipeline", None)
         if pipeline is not None:
-            pipeline.emit = self._sink_emit
+            pipeline.emit = self._routed_emit
 
     def _close_audio_uplink(self) -> None:
         ws = getattr(self, "_audio_ws", None)
@@ -3557,6 +3665,24 @@ class Session:
             self.emit({"type": "status", "text": "Cleared"})
         elif mtype == "cancel_generate":
             self.cancel_generate()
+        elif mtype == "copy_rows":
+            # The phone asks for the session's Translate rows instead of waiting for
+            # a socket re-attach: a suspended webview can miss rows with the socket
+            # still up. `before` is the stable sentence order cursor, so a retried
+            # early sentence cannot fall through the walk.
+            try:
+                before_order = int(msg.get("before") or 0)
+            except (TypeError, ValueError):
+                before_order = 0
+            batch = self._watch_copy_batch(before_order)
+            if batch is None:
+                batch = {
+                    "type": "translate_rows",
+                    "session_id": getattr(self, "_watch_copy_session", "") or "",
+                    "rows": [],
+                    "has_more": False,
+                }
+            self.emit(batch)
         elif mtype == "set_translate_to":
             self.set_translate_to(msg.get("lang") or "zh")
         elif mtype == "ping":
@@ -3999,7 +4125,26 @@ class Session:
                 ev["language"] = piece_heard
             if speaker:
                 ev["speaker"] = speaker
+            ev["server_translate"] = True
+            # The phone builds its row from this event, before any copy frame: give
+            # it the stable sentence position so recovered rows can be ordered (#219).
+            ev["order"] = self._watch_copy_order_for(ev["id"])
+            originals = getattr(self, "_watch_copy_original", None)
+            if originals is None:
+                originals = {}
+                self._watch_copy_original = originals
+            originals[ev["id"]] = piece
+            if translate_should_passthrough(piece, (self.cfg.get("ui") or {}).get("translate_to") or "zh", piece_heard):
+                ev["translation"] = piece
+                # This row is already in the caption language, so it supersedes any
+                # in-flight ask for an earlier row: unhook that ask so its late
+                # chunks cannot drag the Watch back to the older line.
+                self._watch_copy_ask = ""
+                self.emit(ev)
+                self._emit_watch_copy(ev["id"], original=piece, translation=piece, done=True)
+                continue
             self.emit(ev)
+            self._start_voice_translate(ev["id"], piece, piece_heard)
 
     def _flush_translate_carry(self, reason: str) -> None:
         carry = (getattr(self, "_translate_carry", "") or "").strip()
@@ -4486,6 +4631,36 @@ class Session:
             "qa_drop reason=%s trigger=%s cand=%s frags=%s", reason, trigger or "-", cand, n,
         )
 
+    def _watch_copy_reset(self, reason: str) -> None:
+        """Start a new Watch copy session (New / clear / workspace switch / listen).
+
+        The copy identity is minted per content session, not per connection: a
+        reconnect that adopts a parked session keeps it, while a reset mints a new
+        one and drops the old rows, so a queued phone page, a native replay or a
+        late frame from the previous session can never put the old translation back
+        on the Watch or into a page the user just cleared (#219).
+        """
+        self._watch_copy_session = uuid.uuid4().hex
+        for name in (
+            "_watch_copy_original",
+            "_watch_copy_buf",
+            "_watch_copy_failed",
+            "_watch_copy_seq_of",
+            "_watch_copy_order",
+        ):
+            held = getattr(self, name, None)
+            if isinstance(held, dict):
+                held.clear()
+            else:
+                setattr(self, name, {})
+        self._watch_copy_next_order = 0
+        self._watch_copy_pair = ""
+        self._watch_copy_ask = ""
+        logging.getLogger("nod").info("watch_copy_reset reason=%s", reason)
+        # The phone needs the new identity: it cannot tell a fresh session from a
+        # replayed stale row using the row alone.
+        self.emit({"type": "watch_session", "session_id": self._watch_copy_session})
+
     def _qa_reset(self, reason: str, *, reset_think: bool = True) -> None:
         """New / clear / workspace switch: nothing from the old turn may answer.
 
@@ -4495,6 +4670,8 @@ class Session:
         """
         self._qa_init()
         self._qa_cancel_timer()
+        # A reset starts a fresh content session for the Watch copy too.
+        self._watch_copy_reset(reason)
         turned_off = False
         with self._qa_lock():
             had = bool(self._qa_buffer or self._qa_verdict or self._qa_background)
@@ -5318,6 +5495,260 @@ class Session:
                 asyncio.run_coroutine_threadsafe(_send(), loop)
         except Exception:
             pass
+
+    def _routed_emit(self, ev: dict) -> None:
+        # Stage the Watch copy BEFORE the control client sees the event, so the
+        # same event can be stamped with the copy version. The phone consumes the
+        # incremental `chunk` (control socket) and the full `watch_copy` (audio
+        # socket) for one row; without a shared version it duplicates/regresses.
+        row = self._maybe_watch_copy(ev)
+        client = getattr(self, "_client_emit", None)
+        if callable(client):
+            client(ev)
+        # No control client (parked / locked) must still reach the Watch.
+        if row is not None:
+            self._send_audio_text(row)
+
+    def _watch_original_from_prompt(self, text: str) -> str:
+        marker = "Translate only this line:\n"
+        at = (text or "").find(marker)
+        if at >= 0:
+            return text[at + len(marker) :].strip()
+        return ""
+
+    def _next_watch_copy_seq(self) -> int:
+        """Monotone copy version, seeded from the clock.
+
+        Session state is per-session but the phone's native dedupe state is not,
+        so a fresh session's first copy must outrank the previous session's last
+        one — otherwise the new session's copy reads as stale and is dropped, and
+        an equal version could let the old text win the keep-longer tie-break.
+        """
+        now_ms = int(time.time() * 1000)
+        self._watch_copy_seq = max(int(getattr(self, "_watch_copy_seq", 0) or 0) + 1, now_ms)
+        return self._watch_copy_seq
+
+    def _watch_copy_order_for(self, pair_id: str) -> int:
+        """Stable sentence position, assigned the first time a row is seen.
+
+        Every entry point that creates a Translate row (the voice question, the
+        internal ask, the watch copy itself) goes through here, so the phone can
+        order recovered rows even before any copy frame arrives.
+        """
+        pid = (pair_id or "").strip()
+        if not pid:
+            return 0
+        orders = getattr(self, "_watch_copy_order", None)
+        if orders is None:
+            orders = {}
+            self._watch_copy_order = orders
+        held = orders.get(pid)
+        if held:
+            return int(held)
+        self._watch_copy_next_order = int(getattr(self, "_watch_copy_next_order", 0) or 0) + 1
+        orders[pid] = self._watch_copy_next_order
+        return self._watch_copy_next_order
+
+    def _watch_copy_row(
+        self,
+        pair_id: str,
+        *,
+        original: str | None = None,
+        translation: str | None = None,
+        done: bool = False,
+        failed: bool = False,
+        ok: bool | None = None,
+    ) -> dict | None:
+        if getattr(self, "_workspace", "") != "translate":
+            return None
+        pid = (pair_id or "").strip()
+        if not pid:
+            return None
+        src = original if original is not None else (getattr(self, "_watch_copy_original", {}) or {}).get(pid) or ""
+        dst = translation if translation is not None else (getattr(self, "_watch_copy_buf", {}) or {}).get(pid) or ""
+        if original is not None:
+            buf = getattr(self, "_watch_copy_original", None)
+            if buf is None:
+                buf = {}
+                self._watch_copy_original = buf
+            buf[pid] = src
+        if translation is not None:
+            buf = getattr(self, "_watch_copy_buf", None)
+            if buf is None:
+                buf = {}
+                self._watch_copy_buf = buf
+            buf[pid] = dst
+        seq = self._next_watch_copy_seq()
+        row: dict = {
+            "type": "watch_copy",
+            "id": pid,
+            "original": src,
+            "translation": dst,
+            "seq": seq,
+            "session_id": getattr(self, "_watch_copy_session", "") or "",
+            "done": bool(done),
+            # Always present: a successful retry must be able to clear a failure
+            # the Watch is still showing.
+            "failed": bool(failed),
+        }
+        held_seq = getattr(self, "_watch_copy_seq_of", None)
+        if held_seq is None:
+            held_seq = {}
+            self._watch_copy_seq_of = held_seq
+        held_seq[pid] = seq
+        # The sentence's position in the session, for recovery ordering. Never
+        # derived from `seq`: a retry moves `seq`, not the sentence.
+        row["order"] = self._watch_copy_order_for(pid)
+        # A long copy is paged so the locked phone's native path can hand the
+        # Watch joinable pages instead of one oversized dictionary (#219).
+        if len(src) > WATCH_COPY_PAGE_MAX:
+            row["original_pages"] = watch_copy_pages(src)
+        if len(dst) > WATCH_COPY_PAGE_MAX:
+            row["translation_pages"] = watch_copy_pages(dst)
+        if ok is not None:
+            row["ok"] = bool(ok)
+        return row
+
+    WATCH_COPY_BATCH = 200
+
+    def _watch_copy_batch(self, before_order: int = 0) -> dict | None:
+        """A page of this copy session's Translate rows, in sentence order.
+
+        The native replay holds only the last 24 rows, and a suspended webview can
+        miss rows with the socket still up, so the phone asks for them explicitly.
+        ``before_order`` walks back through the STABLE sentence order (not the
+        content version, which a retry can move): the response says `has_more` and
+        `oldest_order` so the phone can keep fetching without skipping a sentence
+        (#219).
+        """
+        if getattr(self, "_workspace", "") != "translate":
+            return None
+        originals = getattr(self, "_watch_copy_original", None) or {}
+        if not originals:
+            return None
+        buf = getattr(self, "_watch_copy_buf", None) or {}
+        failed = getattr(self, "_watch_copy_failed", None) or {}
+        seq_of = getattr(self, "_watch_copy_seq_of", None) or {}
+        order_of = getattr(self, "_watch_copy_order", None) or {}
+        entries = []
+        for pid, src in originals.items():
+            order = int(order_of.get(pid, 0) or 0)
+            if before_order > 0 and order >= before_order:
+                continue
+            entries.append({
+                "id": pid,
+                "original": src,
+                "translation": buf.get(pid, ""),
+                "failed": bool(failed.get(pid)),
+                "seq": int(seq_of.get(pid, 0) or 0),
+                "order": order,
+            })
+        entries.sort(key=lambda row: row["order"])
+        has_more = len(entries) > self.WATCH_COPY_BATCH
+        rows = entries[-self.WATCH_COPY_BATCH:]
+        return {
+            "type": "translate_rows",
+            "session_id": getattr(self, "_watch_copy_session", "") or "",
+            "rows": rows,
+            "has_more": has_more,
+            "oldest_order": rows[0]["order"] if rows else 0,
+        }
+
+    def _emit_watch_copy(self, pair_id: str, *, original: str | None = None, translation: str | None = None, done: bool = False) -> None:
+        row = self._watch_copy_row(pair_id, original=original, translation=translation, done=done)
+        if row is not None:
+            self._send_audio_text(row)
+
+    def _maybe_watch_copy(self, ev: dict) -> dict | None:
+        """Mirror a Translate row onto the audio socket for the locked phone.
+
+        Returns the row to send (staged by ``_routed_emit``) or ``None``.
+        """
+        if getattr(self, "_workspace", "") != "translate":
+            return None
+        kind = ev.get("type")
+        if kind == "question":
+            bind = _translate_line_id(ev.get("text") or "")
+            if bind:
+                self._watch_copy_pair = bind
+                self._watch_copy_ask = str(ev.get("id") or "")
+                # A typed row was created by the client before the server saw it:
+                # stamp the order on the ask so the phone can place it.
+                ev["order"] = self._watch_copy_order_for(bind)
+                if bind not in getattr(self, "_watch_copy_original", {}):
+                    src = self._watch_original_from_prompt(ev.get("text") or "")
+                    if src:
+                        buf = getattr(self, "_watch_copy_original", None)
+                        if buf is None:
+                            buf = {}
+                            self._watch_copy_original = buf
+                        buf[bind] = src
+                # A re-ask of the same row (client retry after a wrong-script /
+                # failed answer) must start a fresh translation, not append the
+                # retry onto the abandoned one — and it clears the failure state.
+                held = getattr(self, "_watch_copy_buf", None)
+                if held is not None:
+                    held[bind] = ""
+                failed = getattr(self, "_watch_copy_failed", None)
+                if failed is not None:
+                    failed.pop(bind, None)
+            return None
+        bind = getattr(self, "_watch_copy_pair", "") or ""
+        ask_id = getattr(self, "_watch_copy_ask", "") or ""
+        if not bind or not ask_id or ev.get("id") != ask_id:
+            return None
+        if kind == "chunk":
+            held = getattr(self, "_watch_copy_buf", None)
+            if held is None:
+                held = {}
+                self._watch_copy_buf = held
+            held[bind] = (held.get(bind) or "") + (ev.get("text") or "")
+            row = self._watch_copy_row(bind, done=False)
+            if row is not None:
+                ev["copy_seq"] = row["seq"]
+                ev["copy_id"] = bind
+            return row
+        if kind == "error":
+            # Only a real model/quota failure names the ask it belongs to. A
+            # cancelled ask (a newer line took over) emits done(ok=False) with no
+            # error, so this is what separates "failed" from "superseded" (#219).
+            failed = getattr(self, "_watch_copy_failed", None)
+            if failed is None:
+                failed = {}
+                self._watch_copy_failed = failed
+            failed[bind] = True
+            return self._watch_copy_row(bind, done=False, failed=True)
+        if kind == "done":
+            failed = bool((getattr(self, "_watch_copy_failed", {}) or {}).get(bind))
+            row = self._watch_copy_row(bind, done=True, failed=failed, ok=bool(ev.get("ok", True)))
+            if row is not None:
+                # The phone consumes this done too; stamp it so a failed row is
+                # marked failed there instead of looking finished.
+                ev["copy_id"] = bind
+                ev["copy_failed"] = failed
+            return row
+        return None
+
+    def _start_voice_translate(self, pair_id: str, piece: str, heard: str | None) -> None:
+        ask = getattr(self, "ask", None)
+        if not callable(ask):
+            return
+        target = _normalize_translate_to((self.cfg.get("ui") or {}).get("translate_to"))
+        target_name = _LANG_NAMES.get(target, "Chinese")
+        source_hint = heard or self._effective_stt_lang()
+        source_line = ""
+        if source_hint:
+            source_line = f"Source language: {_LANG_NAMES.get(source_hint, source_hint)}.\n"
+        prev = [t for t, _ in (getattr(self, "_recent_finals", None) or [])[:-1][-6:]]
+        context = ""
+        if prev:
+            numbered = "\n".join(f"{i}. {line}" for i, line in enumerate(prev, 1))
+            context = f"Previous lines (context only, do not translate):\n{numbered}\n\n"
+        prompt = (
+            f"[NOD_TRANSLATE:{pair_id}]\nTranslate to {target_name}. {source_line}"
+            f"{context}Translate only this line:\n{piece}"
+        )
+        ask(prompt, mode="translate")
 
     def pause_listen(self) -> None:
         """Pause live capture and stop AssemblyAI billing.
@@ -6529,8 +6960,11 @@ async def ws_endpoint(ws: WebSocket):
     attach_tok = (ws.query_params.get("attach") or "").strip()
     old = uplink.adopt(attach_tok, user.id) if attach_tok and user is not None else None
     if old is not None:
-        old.emit = emit
-        old.pipeline.emit = emit
+        # Re-attach only the control client. `emit` stays the router so Watch
+        # copies keep flowing over the audio socket (#219 P1).
+        old._client_emit = emit
+        old.emit = old._routed_emit
+        old.pipeline.emit = old._routed_emit
         old._control_lost_at = 0.0
         attach(old)
         old.reattach()

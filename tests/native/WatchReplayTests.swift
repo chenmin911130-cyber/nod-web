@@ -394,6 +394,134 @@ func waitSend() {
     check(WatchPhoneSession.reduceSaveStatus(doneUi, save: "local").pendingSync == false, "reduce: Done ignores late local")
     check(WatchPhoneSession.reduceSaveStatus(doneUi, save: "failed").saveFailed == false, "reduce: Done ignores late failed")
 
+    bridge.testingResetCopyState()
+    WCSession.default.messages.removeAll()
+    let copyWire: [String: Any] = [
+        "type": "watch_copy",
+        "id": "pair-lock",
+        "original": "Hello there",
+        "translation": "你好",
+        "seq": 3,
+        "session_id": "native-session",
+        "done": true,
+    ]
+    let copyText = String(data: try JSONSerialization.data(withJSONObject: copyWire), encoding: .utf8)!
+    uplink.handleAudioText(copyText)
+    waitSend()
+    let copies = WCSession.default.messages.filter { ($0["translation"] as? String) == "你好" }
+    check(!copies.isEmpty, "audio watch_copy reaches Watch without WKWebView JS")
+    check((copies.last?["original"] as? String) == "Hello there", "watch_copy keeps the spoken line")
+
+    // #219 P1: one copy version stream, shared by the native rows and the JS face
+    // push. The Watch must never roll back to older text, and a new sentence must
+    // not be blocked by a longer older one.
+    func sendCopy(id: String, original: String, translation: String, seq: Int, session: String, failed: Bool = false) {
+        let wire: [String: Any] = [
+            "type": "watch_copy",
+            "id": id,
+            "original": original,
+            "translation": translation,
+            "seq": seq,
+            "session_id": session,
+            "done": false,
+            "failed": failed,
+        ]
+        let text = String(data: try! JSONSerialization.data(withJSONObject: wire), encoding: .utf8)!
+        uplink.handleAudioText(text)
+        waitSend()
+    }
+    WCSession.default.messages.removeAll()
+    sendCopy(id: "pair-a", original: "First", translation: "第一句", seq: 1000, session: "sess-a")
+    sendCopy(id: "pair-b", original: "Second", translation: "第二句", seq: 2000, session: "sess-b")
+    // A late frame of the previous session must not win on arrival order.
+    sendCopy(id: "pair-a2", original: "First again", translation: "还是第一句", seq: 1500, session: "sess-a")
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "第二句")
+
+    // The phone's JS face was suspended while locked: a stale push must not
+    // overwrite the newer native copy.
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "Second", translation: "第二",
+        copyId: "pair-b", copySeq: 1900
+    )
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "第二句")
+    // Current JS face for the SAME copy, same version, shorter text: keep longer.
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "Second", translation: "第二句",
+        copyId: "pair-b", copySeq: 2000
+    )
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "第二句")
+    // Same version but a DIFFERENT copy (New / switch mode / a typed row): the
+    // older, longer text must not survive the switch.
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "Typed", translation: "手打",
+        copyId: "typed-1", copySeq: 2000
+    )
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "手打")
+    eq(WCSession.default.messages.last?["original"] as? String ?? "", "Typed")
+
+    // #219 P2: the replay to the phone holds the last copies (sentences), not the
+    // last streamed updates — one long sentence must not evict several earlier
+    // ones, so the phone can catch up on everything it missed while locked.
+    sendCopy(id: "pair-r1", original: "One", translation: "第一句", seq: 5000, session: "sess-replay")
+    sendCopy(id: "pair-r2", original: "Two", translation: "第二句", seq: 5001, session: "sess-replay")
+    sendCopy(id: "pair-r1", original: "One", translation: "第一句还在长", seq: 5002, session: "sess-replay")
+    var replay = bridge.testingCopyReplay()
+    check(replay.count == 2, "replay keeps one row per copy")
+    eq(replay[0]["id"] as? String ?? "", "pair-r1")
+    check((replay[0]["translation"] as? String ?? "") == "第一句还在长", "the kept row holds its latest text")
+    eq(replay[1]["id"] as? String ?? "", "pair-r2")
+
+    // #219 P2: a failed copy reaches the Watch as a failure, and a later good row
+    // clears it instead of leaving a half sentence looking live.
+    sendCopy(id: "pair-f", original: "Three", translation: "半句", seq: 5003, session: "sess-replay", failed: true)
+    eq(WCSession.default.messages.last?["copyFailed"] as? String ?? "", "true")
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "半句")
+    sendCopy(id: "pair-f", original: "Three", translation: "完整三句", seq: 5004, session: "sess-replay")
+    eq(WCSession.default.messages.last?["copyFailed"] as? String ?? "", "false")
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "完整三句")
+    // The phone's face push carries the same marker (a stale push must not).
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "Three", translation: "半句",
+        copyId: "pair-f", copySeq: 5004, copyFailed: true
+    )
+    eq(WCSession.default.messages.last?["copyFailed"] as? String ?? "", "true")
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "Three", translation: "完整三句",
+        copyId: "pair-f", copySeq: 5004, copyFailed: false
+    )
+    eq(WCSession.default.messages.last?["copyFailed"] as? String ?? "", "false")
+    // A control-only push (no copy state) must not flip the marker.
+    bridge.pushStatus(capture: "listening", hint: "Ready", save: "local", sessionId: "sess-replay")
+    eq(WCSession.default.messages.last?["copyFailed"] as? String ?? "", "false")
+
+    // A new control session clears the replay: rows from a closed session must not
+    // be re-applied to a page the phone already reset.
+    sendCopy(id: "pair-z", original: "Zero", translation: "零", seq: 6000, session: "sess-fresh")
+    replay = bridge.testingCopyReplay()
+    check(replay.count == 1, "a new session starts with an empty replay")
+    eq(replay[0]["id"] as? String ?? "", "pair-z")
+
+    // #219: a new copy session (New / clear / switch mode / Start) must not leave
+    // the previous session's text on the Watch or in the replay, and the payload
+    // must name the copy so the Watch can tell sentences apart.
+    sendCopy(id: "old-row", original: "Old", translation: "旧句", seq: 7000, session: "sess-one")
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "旧句")
+    sendCopy(id: "", original: "", translation: "", seq: 7001, session: "sess-two")
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "")
+    eq(WCSession.default.messages.last?["original"] as? String ?? "", "")
+    check(
+        !bridge.testingCopyReplay().contains { ($0["translation"] as? String) == "旧句" },
+        "a new session clears the previous session's replay"
+    )
+    sendCopy(id: "new-row", original: "New", translation: "新句", seq: 7002, session: "sess-two")
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "新句")
+    eq(WCSession.default.messages.last?["copyId"] as? String ?? "", "new-row")
+    // The server copy version rides the payload: the Watch orders copies with it
+    // (monotone across a phone app restart), not with a per-run counter.
+    check((WCSession.default.messages.last?["copySeq"] as? Int ?? 0) > 0,
+          "the payload carries the server copy version")
+
+    bridge.testingResetCopyState()
     // #219: the live copy is paged end to end — the bridge fans the pages out
     // (application context + transferUserInfo) and the Watch joins them, so a long
     // original/translation is fully readable instead of clipped.
@@ -506,6 +634,7 @@ func waitSend() {
     // #219 P2: the page set carries a content version. An unchanged set keeps the
     // same version and is not re-queued; a changed page bumps it and is re-queued
     // alone; a Watch-ready re-push re-queues everything at the same version.
+    bridge.testingResetCopyState()
     func queuedSegIndexes() -> [Int] {
         // The live sendMessage carries page 0 too; only pages after it are queued.
         WCSession.default.messages.compactMap { $0["copySegIndex"] as? Int }.filter { $0 > 0 }
@@ -1057,6 +1186,90 @@ func waitSend() {
           "the parked-tail cache is bounded, got \(bounded.testingPendingCopyKeys().count)")
     eq(bounded.translation, "keep")
     eq(bounded.copyId, "keep")
+
+    // #219 integration (#221 + #222): the LOCKED phone's native path must be paged
+    // too, and the copy version it carries is what lets the Watch reject an older
+    // copy's page 0 — while a delayed tail of the SAME sentence (queued before the
+    // version advanced) must still join it. Neither PR covers this on its own.
+    bridge.testingResetCopyState()
+    let lockedPageA = String(repeating: "甲", count: 12000)
+    let lockedPageB = "尾页。"
+    func lockedRow(seq: Int) -> [String: Any] {
+        [
+            "type": "watch_copy", "id": "locked-paged", "original": "Locked line",
+            "translation": lockedPageA + lockedPageB, "seq": seq, "session_id": "sess-paged",
+            "done": true, "failed": false, "order": 3,
+            "original_pages": ["Locked line"], "translation_pages": [lockedPageA, lockedPageB],
+        ]
+    }
+    WCSession.default.messages.removeAll()
+    WCSession.default.receivedApplicationContext = [:]
+    uplink.handleAudioText(String(data: try JSONSerialization.data(withJSONObject: lockedRow(seq: 960_000)), encoding: .utf8)!)
+    waitSend()
+    eq(WCSession.default.receivedApplicationContext["copySegTotal"] as? Int ?? -1, 2)
+    eq(WCSession.default.receivedApplicationContext["translation"] as? String ?? "", lockedPageA)
+    eq(WCSession.default.receivedApplicationContext["copySeq"] as? Int ?? -1, 960_000)
+    let lockedTail = WCSession.default.messages.filter { ($0["copySegIndex"] as? Int) == 1 }
+    check(!lockedTail.isEmpty, "the locked path queues the tail page instead of one oversized frame")
+    eq(lockedTail.last?["translation"] as? String ?? "", lockedPageB)
+    eq(lockedTail.last?["copyId"] as? String ?? "", "locked-paged")
+    eq(lockedTail.last?["copySeq"] as? Int ?? -1, 960_000)
+
+    let lockedWatch = WatchPhoneSession(
+        sendBuffer: WatchSendBuffer(),
+        pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("locked-paged")),
+        connect: false
+    )
+    // Cross-channel inversion: the queued tail rides transferUserInfo while the head
+    // rides the application context, so deliver the TAIL first and the head second —
+    // using the REAL payloads the bridge produced, keys included.
+    let lockedHead = WCSession.default.receivedApplicationContext
+    let lockedTailPayload = lockedTail.last ?? [:]
+    deliver(lockedWatch, lockedTailPayload)
+    eq(lockedWatch.translation, "")
+    deliver(lockedWatch, lockedHead)
+    eq(lockedWatch.translation, lockedPageA + lockedPageB)
+    eq(lockedWatch.original, "Locked line")
+    // A done through the native channel raises the copy version with the same text:
+    // the unchanged tail is NOT re-queued (the queue must not grow per push) ...
+    WCSession.default.messages.removeAll()
+    uplink.handleAudioText(String(data: try JSONSerialization.data(withJSONObject: lockedRow(seq: 960_001)), encoding: .utf8)!)
+    waitSend()
+    eq(WCSession.default.receivedApplicationContext["copySeq"] as? Int ?? -1, 960_001)
+    check(
+        WCSession.default.messages.allSatisfy { ($0["copySegIndex"] as? Int) != 1 },
+        "an unchanged tail page is not re-queued by a done"
+    )
+    // ... so a tail stamped with the older server version must still join the
+    // sentence: within one copyId the server version gates nothing.
+    deliver(lockedWatch, [
+        "copyId": "locked-paged", "copySegIndex": 1, "copySegTotal": 2,
+        "copyVersion": 5, "copySeq": 960_000,
+        "original": "Locked tail", "translation": lockedPageB,
+    ])
+    eq(lockedWatch.translation, lockedPageA + lockedPageB)
+
+    // An older COPY (different id, smaller copySeq) still cannot become current.
+    deliver(lockedWatch, [
+        "copyId": "stale-copy", "copySegIndex": 0, "copySegTotal": 1,
+        "copyVersion": 4, "copySeq": 959_000,
+        "original": "Old", "translation": "旧句",
+    ])
+    eq(lockedWatch.translation, lockedPageA + lockedPageB)
+    eq(lockedWatch.copyId, "locked-paged")
+
+    // A short locked copy stays single-frame: no page fields anywhere.
+    WCSession.default.messages.removeAll()
+    WCSession.default.receivedApplicationContext = [:]
+    let shortWire: [String: Any] = [
+        "type": "watch_copy", "id": "locked-short", "original": "Short", "translation": "短句",
+        "seq": 960_002, "session_id": "sess-paged", "done": true, "failed": false,
+    ]
+    uplink.handleAudioText(String(data: try JSONSerialization.data(withJSONObject: shortWire), encoding: .utf8)!)
+    waitSend()
+    eq(WCSession.default.receivedApplicationContext["translation"] as? String ?? "", "短句")
+    check(WCSession.default.receivedApplicationContext["copySegIndex"] == nil, "a short locked copy stays unpaged")
+    check(WCSession.default.messages.allSatisfy { $0["copySegIndex"] == nil }, "a short locked copy queues nothing")
 
     _ = bridge
     print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake and Save tests passed")

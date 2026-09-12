@@ -240,6 +240,8 @@ def _translate_session() -> Session:
             return f"q{next(qid)}"
 
     sess.pipeline = _Pipe()
+    sess.ask = lambda *a, **k: None
+    sess._send_audio_text = lambda *a, **k: None
     return sess
 
 

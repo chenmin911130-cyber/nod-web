@@ -306,6 +306,19 @@ enum WatchCopy {
         ])
     }
 
+    static var translateFailed: String {
+        pick([
+            "zh": "翻译失败",
+            "en": "Translation failed",
+            "it": "Traduzione non riuscita",
+            "es": "La traducción falló",
+            "fr": "Échec de la traduction",
+            "de": "Übersetzung fehlgeschlagen",
+            "pt": "Falha na tradução",
+            "ja": "翻訳に失敗しました",
+        ])
+    }
+
     static var sendingLast: String {
         pick([
             "zh": "正在发送最后一段",
