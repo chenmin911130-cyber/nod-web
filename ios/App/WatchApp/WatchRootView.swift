@@ -81,7 +81,15 @@ struct WatchRootView: View {
                                 .multilineTextAlignment(.center)
                                 .lineLimit(2)
                         }
-                        if !session.translation.isEmpty {
+                        if session.copyFailed {
+                            // A dim preview must not read as if the translation
+                            // were still coming (#219).
+                            Text(WatchCopy.translateFailed)
+                                .font(.caption2)
+                                .foregroundStyle(muted)
+                                .multilineTextAlignment(.center)
+                                .lineLimit(1)
+                        } else if !session.translation.isEmpty {
                             Text(session.translation)
                                 .font(.caption)
                                 .foregroundStyle(ink)
