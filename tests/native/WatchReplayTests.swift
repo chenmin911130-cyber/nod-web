@@ -451,7 +451,7 @@ func waitSend() {
     // #219 P1: a queued tail page carries ONLY the copy. A queued transfer can be
     // delivered long after it was created, so replaying sessionId/save/pcm/hint
     // from that moment would rebind the current recording to an old session.
-    let tailKeys: Set<String> = ["copyId", "copySegIndex", "copySegTotal", "copyVersion", "original", "translation"]
+    let tailKeys: Set<String> = ["copyId", "copySegIndex", "copySegTotal", "copyVersion", "copySeq", "original", "translation"]
     WCSession.default.messages.removeAll()
     WCSession.default.receivedApplicationContext = [:]
     bridge.pushStatus(
@@ -468,6 +468,20 @@ func waitSend() {
         check(row["sessionId"] == nil && row["save"] == nil && row["hint"] == nil && row["history"] == nil,
               "a queued tail page must not carry status/save/pcm fields")
     }
+    // The server copy version rides the context and every queued page, so the
+    // Watch can order two different copies (the per-run counter cannot).
+    WCSession.default.messages.removeAll()
+    WCSession.default.receivedApplicationContext = [:]
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "Lead", translation: longPage,
+        copyId: "seq-1", originalSegments: ["Lead", "Lead tail"], translationSegments: [longPage, tailPage],
+        copySeq: 4242
+    )
+    eq(WCSession.default.receivedApplicationContext["copySeq"] as? Int ?? -1, 4242)
+    let seqTails = WCSession.default.messages.filter { ($0["copySegIndex"] as? Int) == 1 }
+    check(!seqTails.isEmpty, "the tail page is queued")
+    check(seqTails.allSatisfy { ($0["copySeq"] as? Int) == 4242 }, "every queued page carries the server copy version")
+
     // The application context (page 0) still carries the live status.
     eq(WCSession.default.receivedApplicationContext["sessionId"] as? String ?? "", "sess-old")
     eq(WCSession.default.receivedApplicationContext["save"] as? String ?? "", "local")
@@ -654,6 +668,73 @@ func waitSend() {
     eq(versioned.translation, "L0L1")
     deliver(versioned, ["copyId": "v3", "copySegIndex": 1, "copySegTotal": 2, "original": "L1", "translation": "L1-b"])
     eq(versioned.translation, "L0L1-b")
+
+    // #219 review: the paging version guard had two holes. (a) multi -> single:
+    // the unpaged payload replaced the paged copy and cleared every version, so a
+    // late tail of the old multi-page copy was accepted and wiped the text.
+    let holes = WatchPhoneSession(
+        sendBuffer: WatchSendBuffer(),
+        pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("holes")),
+        connect: false
+    )
+    deliver(holes, ["copyId": "h1", "copySeq": 10, "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 3, "original": "h0", "translation": "H0"])
+    deliver(holes, ["copyId": "h1", "copySeq": 10, "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 3, "original": "h1", "translation": "H1"])
+    eq(holes.translation, "H0H1")
+    // The copy shrinks to a single page: an unpaged payload at a newer version.
+    deliver(holes, ["copyId": "h1", "copySeq": 11, "copyVersion": 4, "original": "whole", "translation": "整段"])
+    eq(holes.translation, "整段")
+    // A late tail of the old generation must not clear or overwrite the text.
+    deliver(holes, ["copyId": "h1", "copySeq": 11, "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 3, "original": "h1", "translation": "H1-old"])
+    eq(holes.translation, "整段")
+    eq(holes.original, "whole")
+    // Even a tail claiming the floor version may not switch the copy back to paged
+    // on its own: only page 0 leaves the unpaged representation.
+    deliver(holes, ["copyId": "h1", "copySeq": 11, "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 4, "original": "h2", "translation": "H2-floor"])
+    eq(holes.translation, "整段")
+    eq(holes.original, "whole")
+    // A legitimate page 0 of a newer version leaves the unpaged copy normally.
+    deliver(holes, ["copyId": "h1", "copySeq": 12, "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 5, "original": "n0", "translation": "N0"])
+    eq(holes.translation, "N0")
+    deliver(holes, ["copyId": "h1", "copySeq": 12, "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 5, "original": "n1", "translation": "N1"])
+    eq(holes.translation, "N0N1")
+    // A tail that arrives BEFORE its page 0 is buffered and then joins it.
+    deliver(holes, ["copyId": "h2", "copySeq": 20, "copyVersion": 1, "original": "single", "translation": "单段"])
+    eq(holes.translation, "单段")
+    deliver(holes, ["copyId": "h2", "copySeq": 21, "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 2, "original": "tail", "translation": "尾页"])
+    eq(holes.translation, "单段")
+    deliver(holes, ["copyId": "h2", "copySeq": 21, "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 2, "original": "head", "translation": "头页"])
+    eq(holes.translation, "头页尾页")
+    eq(holes.original, "headtail")
+
+    // (b) an older copy's page 0 must not become current again. The per-run
+    // `copyVersion` cannot see this; the server copy version can.
+    deliver(holes, ["copyId": "h3", "copySeq": 40, "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 1, "original": "new0", "translation": "新0"])
+    eq(holes.translation, "新0")
+    deliver(holes, ["copyId": "h9-old", "copySeq": 39, "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 9, "original": "old0", "translation": "旧0"])
+    eq(holes.translation, "新0")
+    eq(holes.copyId, "h3")
+    // ... including an older UNPAGED frame.
+    deliver(holes, ["copyId": "h9-old", "copySeq": 39, "copyVersion": 9, "original": "old-whole", "translation": "旧整段"])
+    eq(holes.translation, "新0")
+    eq(holes.copyId, "h3")
+    // The same server version is idempotent, and a newer one applies.
+    deliver(holes, ["copyId": "h3", "copySeq": 40, "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 1, "original": "new0", "translation": "新0"])
+    eq(holes.translation, "新0")
+    deliver(holes, ["copyId": "h4", "copySeq": 41, "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 1, "original": "z0", "translation": "零1"])
+    eq(holes.translation, "零1")
+    // A missing / zero server version carries no ordering information (an older
+    // phone, or the server has not stamped one yet): still accepted.
+    deliver(holes, ["copyId": "z1", "copySeq": 0, "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 1, "original": "a0", "translation": "零版本"])
+    eq(holes.translation, "零版本")
+    deliver(holes, ["copyId": "z2", "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 1, "original": "a1", "translation": "无序号"])
+    eq(holes.translation, "无序号")
+
+    check(WatchPhoneSession.copySeqApplies(incoming: 5, high: 4), "a newer server copy version applies")
+    check(WatchPhoneSession.copySeqApplies(incoming: 4, high: 4), "the same server copy version is idempotent")
+    check(!WatchPhoneSession.copySeqApplies(incoming: 3, high: 4), "an older server copy version is dropped")
+    check(WatchPhoneSession.copySeqApplies(incoming: 0, high: 4), "a zero server version carries no ordering")
+    check(WatchPhoneSession.copySeqApplies(incoming: nil, high: 4), "an absent server version carries no ordering")
+    check(WatchPhoneSession.copySeqApplies(incoming: 3, high: 0), "the first server version is accepted")
 
     // A queued tail page carries no session/capture/save fields, so receiving one
     // cannot rebind the recording to the session it was created in.

@@ -34,6 +34,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     /// changes (page text or copy id), never on a Watch-ready re-push, so the Watch
     /// can drop a page that arrives after newer content replaced it.
     private var copyPageVersion = 0
+    /// Server copy version (time-monotone across phone app restarts). `copyPageVersion`
+    /// is a per-run counter, so it cannot order two different copies; this one can,
+    /// which is what lets the Watch reject an older copy's page 0.
+    private var lastCopySeq = 0
     private var lastHistory: [[String: String]] = []
     private var lastMode = ""
     private var lastLangPair = ""
@@ -353,12 +357,14 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         sessionId: String = "",
         originalSegments: [String] = [],
         translationSegments: [String] = [],
-        forceQueue: Bool = false
+        forceQueue: Bool = false,
+        copySeq: Int? = nil
     ) {
         if !capture.isEmpty {
             lastCapture = capture
         }
         lastHint = hint
+        if let copySeq { lastCopySeq = max(lastCopySeq, copySeq) }
         // The live copy is paged, never clipped: keep every page so a re-push
         // (Watch became ready) can replay the whole copy without one big frame.
         let originalPages = originalSegments.isEmpty
@@ -433,6 +439,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             "previous": previous,
             "copyId": lastCopyId,
             "copyVersion": copyPageVersion,
+            // Server copy version (time-monotone across phone restarts): the only
+            // value that can order two different copies, so the Watch can reject an
+            // older copy's page 0.
+            "copySeq": lastCopySeq,
             "history": history,
         ]
         if pageCount > 1 {
@@ -520,6 +530,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
                     "copySegIndex": index,
                     "copySegTotal": pageCount,
                     "copyVersion": copyPageVersion,
+                    "copySeq": lastCopySeq,
                     "original": originalPage,
                     "translation": translationPage,
                 ])

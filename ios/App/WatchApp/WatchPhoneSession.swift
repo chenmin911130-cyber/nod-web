@@ -39,6 +39,18 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     /// onto the current head.
     private var copyGenerationVersion = 0
     private var copyPageTotal = 0
+    /// The displayed copy came from an unpaged payload: its text lives in
+    /// `original`/`translation`, not in the page slots. A tail page may still be
+    /// buffered for it, but must never switch the copy to the paged
+    /// representation on its own — doing so used to clear the whole text when a
+    /// late tail of the previous multi-page copy arrived.
+    private var copyUnpaged = false
+    /// Highest server copy version (`copySeq`) applied. The phone's `copyVersion`
+    /// is a per-app-run counter, so it cannot order two different copies; the
+    /// server's time-monotone `copySeq` can, and therefore rejects an older
+    /// copy's page 0 (it must not become the current content again). Not cleared
+    /// by `resetCopyPages`: it guards across copies.
+    private var copySeqHigh = 0
     @Published var history: [WatchHistItem] = []
     @Published var reachable = false
     @Published var speechLive = false
@@ -810,6 +822,16 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         return incomingOriginal != storedOriginal || incomingTranslation != storedTranslation
     }
 
+    /// Whether a payload's copy fields are new enough to apply, by the server's
+    /// time-monotone copy version. `0`/absent (the server has not stamped a copy
+    /// version yet, e.g. this phone build against an older server) carries no
+    /// ordering information and is accepted, so the first frame after an app
+    /// restart is never rejected.
+    static func copySeqApplies(incoming: Int?, high: Int) -> Bool {
+        guard let incoming, incoming > 0, high > 0 else { return true }
+        return incoming >= high
+    }
+
     /// Whether a page may be applied, by content version. A page older than the
     /// slot it targets loses to the newer content already there; a tail page older
     /// than the copy's current head belongs to a previous generation (stream edit /
@@ -842,6 +864,27 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         copyPageTotal = 0
         copyPage0Version = 0
         copyGenerationVersion = 0
+        copyUnpaged = false
+    }
+
+    /// Leave the unpaged representation with a page 0 of `version`: buffered tail
+    /// pages of that same generation may join it, anything older (or without a
+    /// version) is dropped so an old tail can never be glued onto the new head.
+    private func leaveUnpagedCopy(at version: Int?) {
+        copyUnpaged = false
+        guard let version else {
+            copyOriginalPages.removeAll()
+            copyTranslationPages.removeAll()
+            copyPageVersions.removeAll()
+            return
+        }
+        let stale = copyPageVersions.filter { $0.value < version }.map { $0.key }
+        let unversioned = copyOriginalPages.keys.filter { copyPageVersions[$0] == nil }
+        for index in Set(stale).union(unversioned) {
+            copyOriginalPages.removeValue(forKey: index)
+            copyTranslationPages.removeValue(forKey: index)
+            copyPageVersions.removeValue(forKey: index)
+        }
     }
 
     /// Longest run of pages held from index 0. A missing page shows its prefix
@@ -1308,10 +1351,14 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         let paged = pageTotal > 0 && pageIndex >= 0 && pageIndex < pageTotal
         let pageCopyId = payload["copyId"] as? String ?? copyId
         let pageVersion = Self.intField(payload, "copyVersion")
+        // The server's copy version orders different copies (a phone per-run
+        // counter cannot): an older copy's page 0 must not become current again.
+        let pageSeq = Self.intField(payload, "copySeq")
+        let seqApplies = Self.copySeqApplies(incoming: pageSeq, high: copySeqHigh)
         if paged {
             // A late page of a superseded copy is ignored for the copy fields only:
             // the rest of the payload (capture, hint, save, speech) still applies.
-            if Self.copyPageApplies(incomingId: pageCopyId, currentId: copyId, pageIndex: pageIndex) {
+            if seqApplies, Self.copyPageApplies(incomingId: pageCopyId, currentId: copyId, pageIndex: pageIndex) {
                 let incomingId = pageCopyId
                 let incomingOriginal = payload["original"] as? String ?? ""
                 let incomingTranslation = payload["translation"] as? String ?? ""
@@ -1324,17 +1371,35 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                     storedOriginal: copyOriginalPages[0],
                     storedTranslation: copyTranslationPages[0]
                 )
-                if Self.copyPageVersionApplies(
+                let versionApplies = Self.copyPageVersionApplies(
                     incoming: pageVersion,
                     pageIndex: pageIndex,
                     sameCopyId: incomingId == copyId,
                     slotVersion: copyPageVersions[pageIndex],
                     page0Version: copyPage0Version,
                     generationVersion: copyGenerationVersion
-                ) {
+                )
+                if copyUnpaged, pageIndex != 0 {
+                    // The current content came from an unpaged payload. A tail page
+                    // may be buffered for the generation it belongs to (it joins
+                    // once page 0 of that version lands) but must never switch the
+                    // copy to the paged representation: that is what let a late
+                    // tail of the previous multi-page copy wipe the text.
+                    if versionApplies {
+                        copyOriginalPages[pageIndex] = incomingOriginal
+                        copyTranslationPages[pageIndex] = incomingTranslation
+                        if let pageVersion {
+                            copyPageVersions[pageIndex] = max(copyPageVersions[pageIndex] ?? pageVersion, pageVersion)
+                        }
+                    }
+                } else if versionApplies {
                     if newCopy {
                         resetCopyPages()
                         if incomingId != copyId { copyId = incomingId }
+                    } else if copyUnpaged {
+                        // Only a page 0 leaves the unpaged representation, and only
+                        // pages of its own generation may join it.
+                        leaveUnpagedCopy(at: pageVersion)
                     }
                     copyPageTotal = pageTotal
                     copyOriginalPages[pageIndex] = incomingOriginal
@@ -1347,8 +1412,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                         // A changed head text is a new content generation: pages of
                         // the previous generation stay rejected until re-queued at
                         // this version (the bridge re-queues them all).
-                        if newCopy, let pageVersion { copyGenerationVersion = pageVersion }
+                        if newCopy, let pageVersion {
+                            copyGenerationVersion = pageVersion
+                        }
                     }
+                    if let pageSeq, pageSeq > 0 { copySeqHigh = max(copySeqHigh, pageSeq) }
                     original = joinedCopy(copyOriginalPages)
                     translation = joinedCopy(copyTranslationPages)
                 }
@@ -1356,17 +1424,26 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         } else {
             // Unpaged payload: the whole copy (backwards compatible), so drop any
             // pages a previous paged copy left behind.
-            if payload["original"] != nil || payload["translation"] != nil {
+            if seqApplies, payload["original"] != nil || payload["translation"] != nil {
+                // Keep the content version as this representation's floor: a late
+                // tail of the multi-page copy it replaced is older than it and must
+                // stay rejected, and only a page 0 may switch back to paged.
+                let fallbackFloor = copyPage0Version
+                if let incomingId = payload["copyId"] as? String {
+                    self.copyId = incomingId
+                }
                 resetCopyPages()
-            }
-            if let original = payload["original"] as? String {
-                self.original = original
-            }
-            if let translation = payload["translation"] as? String {
-                self.translation = translation
-            }
-            if let copyId = payload["copyId"] as? String {
-                self.copyId = copyId
+                copyUnpaged = true
+                let floor = pageVersion ?? fallbackFloor
+                copyPage0Version = floor
+                copyGenerationVersion = floor
+                if let original = payload["original"] as? String {
+                    self.original = original
+                }
+                if let translation = payload["translation"] as? String {
+                    self.translation = translation
+                }
+                if let pageSeq, pageSeq > 0 { copySeqHigh = max(copySeqHigh, pageSeq) }
             }
         }
         if let previous = payload["previous"] as? String {
