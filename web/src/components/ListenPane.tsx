@@ -44,6 +44,7 @@ import AskBubble from './AskBubble'
 import ListenRecordBar from './ListenRecordBar'
 import PhoneSheet from './PhoneSheet'
 import SpeakerAvatar from './SpeakerAvatar'
+import ThinkSwitch from './ThinkSwitch'
 
 interface Props {
   scene: ListenScene
@@ -68,6 +69,9 @@ interface Props {
   notesReveal?: number
   qa?: boolean
   qaSlot?: ReactNode
+  /** #219: the phone's Live Q&A Think switch, rendered under End on the mode line. */
+  think?: boolean
+  onThink?: (on: boolean) => void
   onScene: (scene: ListenScene) => void
   speechLang: Lang
   heardLang?: PairLang | null
@@ -1667,20 +1671,50 @@ export default function ListenPane(props: Props) {
           {endedSheetUi ? (
             settingsList(IPHONE_COPY.appliesToNextRecording)
           ) : settingsLockedUi ? (
-            <p className="iphone-meta" aria-label={IPHONE_COPY.settingsReadonlyAria}>
-              {listenMetaLine({
-                scene: props.scene,
-                speakersId: props.meetingSpeakersId,
-                speechLang: props.speechLang,
-                notesLang: props.notesLang,
-                qa: Boolean(props.qa),
-              })}
-            </p>
+            props.qa ? (
+              // #219: the Think switch sits under End, right-aligned on the same
+              // row as the Live Q&A · Auto-detect mode line. It is not repeated
+              // at the bottom of the composer.
+              <div className="iphone-meta-row">
+                <p className="iphone-meta" aria-label={IPHONE_COPY.settingsReadonlyAria}>
+                  {listenMetaLine({
+                    scene: props.scene,
+                    speakersId: props.meetingSpeakersId,
+                    speechLang: props.speechLang,
+                    notesLang: props.notesLang,
+                    qa: Boolean(props.qa),
+                  })}
+                </p>
+                {props.onThink ? (
+                  <ThinkSwitch on={Boolean(props.think)} onToggle={props.onThink} />
+                ) : null}
+              </div>
+            ) : (
+              <p className="iphone-meta" aria-label={IPHONE_COPY.settingsReadonlyAria}>
+                {listenMetaLine({
+                  scene: props.scene,
+                  speakersId: props.meetingSpeakersId,
+                  speechLang: props.speechLang,
+                  notesLang: props.notesLang,
+                  qa: Boolean(props.qa),
+                })}
+              </p>
+            )
           ) : settingsEndedUi ? (
             settingsList(IPHONE_COPY.appliesToNextRecording)
           ) : askPlacement === 'bar' ? null : (
             controls
           )}
+          {/* #219: whenever the phone is not actively listening/paused it shows the
+              editable settings (or nothing) instead of the mode line, while the
+              Live Q&A composer can still be on screen (e.g. a meeting's lines
+              carried into Live Q&A). The switch keeps its own right-aligned row
+              there rather than vanishing with the old composer placement. */}
+          {!settingsLockedUi && props.qa && props.onThink ? (
+            <div className="iphone-meta-row">
+              <ThinkSwitch on={Boolean(props.think)} onToggle={props.onThink} />
+            </div>
+          ) : null}
           {props.showSavedLine ? (
             <div className="iphone-saved-line">
               <span className="iphone-saved-check" aria-hidden="true">✓</span>
