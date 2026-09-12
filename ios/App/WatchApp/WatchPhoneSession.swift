@@ -6,7 +6,7 @@ import WatchConnectivity
 import WatchKit
 #endif
 
-final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WKExtendedRuntimeSessionDelegate, AVAudioPlayerDelegate {
+final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AVAudioPlayerDelegate {
     static let shared = WatchPhoneSession(sendBuffer: WatchSendBuffer(), pcmStore: WatchPcmStore())
 
     @Published var listening = false
@@ -143,7 +143,16 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     private var liveStreamed = false
     private let pcmLock = NSLock()
     private let maxPending = 8 * 1024 * 1024
-    private var runtime: WKExtendedRuntimeSession?
+    // NOTE(#224 follow-up): this class used to start a `WKExtendedRuntimeSession`
+    // to "keep running" after the wrist dropped. That session was never valid:
+    // an app must declare exactly one session type (self care / mindfulness /
+    // physical therapy / smart alarm) in its Background Modes capability, and
+    // none of them describes live Q&A or translation. The WatchKit app instead
+    // declares `WKBackgroundModes: audio`, and `WatchRecorder` activates a real
+    // `AVAudioSession(.playAndRecord)`: per Apple, an app running an active
+    // background audio session stays onscreen and may keep updating its UI. So
+    // the extended session was inert while its expiry handler restarted it from
+    // states the API forbids — it is removed, not re-armed.
     /// True when the Watch's own recorder was running right before a pause, so
     /// a phone-initiated resume reopens the mic only for a session that was
     /// actually recording on the Watch — not for a phone-mic session (which
@@ -301,7 +310,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             elapsedMs = Date().timeIntervalSince(startedAt)
         }
         WatchRecorder.shared.stop()
-        stopRuntime()
         listening = false
         paused = true
         WatchGlanceStore.setPaused(elapsed: elapsedMs)
@@ -341,7 +349,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         let resumeMic = listening && Self.usesWatchMic(localStart: localWatchMic) && WatchRecorder.shared.isRunning
         if resumeMic {
             WatchRecorder.shared.stop()
-            stopRuntime()
         }
         do {
             let session = AVAudioSession.sharedInstance()
@@ -375,7 +382,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         guard !starting else { return }
         paused = false
         WatchRecorder.shared.stop()
-        stopRuntime()
         listening = false
         startedAt = nil
         elapsedMs = 0
@@ -544,7 +550,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         elapsedMs = 0
         phonePcmReady = false
         WatchRecorder.shared.stop()
-        stopRuntime()
         resetPcmBuffer()
         sendBuffer.discardCapture()
         WatchGlanceStore.clear()
@@ -654,7 +659,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let error {
-                    self.stopRuntime()
                     if self.starting {
                         self.failStart()
                         return
@@ -676,7 +680,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                     WatchGlanceStore.setStartedAt(self.startedAt)
                     self.hint = hint
                 }
-                self.startRuntime()
             }
         }
     }
@@ -724,7 +727,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
 
     /// Phone reports the authoritative `capture` (ADR 0001). The Watch mirrors
     /// the session state directly — no latch, no inference — while its own
-    /// recorder / runtime stay controlled by local Start / Pause / Resume.
+    /// recorder stays controlled by local Start / Pause / Resume.
     private func syncFromCapture(_ capture: String) {
         switch capture {
         case "listening", "recording":
@@ -772,7 +775,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 micWasRunningBeforePause = WatchRecorder.shared.isRunning
                 if let startedAt { elapsedMs = Date().timeIntervalSince(startedAt) }
                 WatchRecorder.shared.stop()
-                stopRuntime()
                 listening = false
                 paused = true
                 WatchGlanceStore.setPaused(elapsed: elapsedMs)
@@ -787,7 +789,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             // phone-initiated stop arrives with them already false.
             if listening || paused || WatchRecorder.shared.isRunning {
                 WatchRecorder.shared.stop()
-                stopRuntime()
                 listening = false
                 paused = false
                 startedAt = nil
@@ -1041,7 +1042,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             return
         }
         WatchRecorder.shared.stop()
-        stopRuntime()
         if let startedAt {
             elapsedMs = Date().timeIntervalSince(startedAt)
         }
@@ -1170,7 +1170,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     func leaveIncomplete() {
         guard drainFailed || pcmRejected || storageFailed else { return }
         WatchRecorder.shared.stop()
-        stopRuntime()
         drainWaitWork?.cancel()
         drainWaitWork = nil
         if !pcmRejected { send(action: "stop") }
@@ -1208,42 +1207,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         flushUnacked()
         send(action: "drain")
         maybeCompleteDrain()
-    }
-
-    private func startRuntime() {
-        runtime?.invalidate()
-        let session = WKExtendedRuntimeSession()
-        session.delegate = self
-        session.start()
-        runtime = session
-    }
-
-    private func stopRuntime() {
-        runtime?.invalidate()
-        runtime = nil
-    }
-
-    func extendedRuntimeSessionDidStart(_ extendedRuntimeSession: WKExtendedRuntimeSession) {}
-
-    func extendedRuntimeSessionWillExpire(_ extendedRuntimeSession: WKExtendedRuntimeSession) {
-        DispatchQueue.main.async {
-            guard self.listening else { return }
-            self.startRuntime()
-        }
-    }
-
-    func extendedRuntimeSession(
-        _ extendedRuntimeSession: WKExtendedRuntimeSession,
-        didInvalidateWith reason: WKExtendedRuntimeSessionInvalidationReason,
-        error: Error?
-    ) {
-        DispatchQueue.main.async {
-            if self.runtime === extendedRuntimeSession {
-                self.runtime = nil
-            }
-            guard self.listening, reason == .expired, self.runtime == nil else { return }
-            self.startRuntime()
-        }
     }
 
     func send(action: String) {
@@ -1385,7 +1348,6 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
             pcmRejected = true
             pcmRejectText = payload["pcmRejectText"] as? String ?? WatchCopy.pcmRejected
             WatchRecorder.shared.stop()
-            stopRuntime()
             sendBuffer.freeze()
             listening = false
             paused = false

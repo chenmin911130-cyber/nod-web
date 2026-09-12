@@ -31,85 +31,135 @@ struct WatchRootView: View {
     }
 
     private var alwaysOnPage: some View {
-        let qa = session.mode == "interview"
-        let translate = session.mode == "translate"
+        let visual = aodDisplay
         return Group {
-            if session.draining || session.drainFailed {
-                VStack(spacing: 4) {
-                    Text(session.drainFailed ? WatchCopy.drainFailed : WatchCopy.sendingLast)
-                        .font(.caption)
-                        .foregroundStyle(muted)
-                        .multilineTextAlignment(.center)
-                    if session.pcmStalled {
-                        stallWarning
-                    }
-                }
-            } else if session.offeringSave || session.pendingSync || session.savedAck || (!session.listening && !session.paused) {
-                Color.black
-            } else if session.paused {
-                VStack(spacing: 6) {
-                    Text(WatchCopy.paused)
-                        .font(.caption2)
-                        .foregroundStyle(muted)
-                    Text(clock(session.elapsedMs))
-                        .font(.title3.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(timer)
-                }
-            } else if qa {
-                VStack(spacing: 6) {
-                    dimCapsule("Live Q&A")
-                    if let startedAt = session.startedAt {
-                        Text(startedAt, style: .timer)
-                            .font(.title3.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(timer)
-                    }
-                }
-            } else if translate {
-                // Always-On bilingual: source (muted, small) above target (ink, large),
-                // mirroring the live page but static (no animation — AOD is dim/battery-lean).
-                VStack(spacing: 4) {
-                    if session.original.isEmpty, session.translation.isEmpty {
-                        Text(WatchCopy.listening)
-                            .font(.caption2)
-                            .foregroundStyle(muted)
-                            .multilineTextAlignment(.center)
-                    } else {
-                        if !session.original.isEmpty {
-                            Text(session.original)
-                                .font(.caption2)
-                                .foregroundStyle(muted)
-                                .multilineTextAlignment(.center)
-                                .lineLimit(2)
-                        }
-                        if session.copyFailed {
-                            // A dim preview must not read as if the translation
-                            // were still coming (#219).
-                            Text(WatchCopy.translateFailed)
-                                .font(.caption2)
-                                .foregroundStyle(muted)
-                                .multilineTextAlignment(.center)
-                                .lineLimit(1)
-                        } else if !session.translation.isEmpty {
-                            Text(session.translation)
-                                .font(.caption)
-                                .foregroundStyle(ink)
-                                .multilineTextAlignment(.center)
-                                .lineLimit(3)
-                        }
-                    }
-                }
-            } else {
-                VStack(spacing: 8) {
-                    if let startedAt = session.startedAt {
-                        Text(startedAt, style: .timer)
-                            .font(.title3.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(timer)
-                    }
-                    Circle().fill(Color.red).frame(width: 7, height: 7)
-                }
+            switch visual.kind {
+            case .platform:
+                aodPlatformPage
+            case .content:
+                aodContentPage(active: visual.active, copyFailed: visual.copyFailed)
+            case .idle:
+                // Ready, or a finished session with nothing left to read. The system
+                // dims a plain surface instead of the app drawing a hard black page.
+                Color.clear
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The dimmed screen shows the live question/answer (Live Q&A) or the
+    /// original/translation (Translate) — not just a mode name and a timer.
+    ///
+    /// Always On keeps drawing the frontmost app's UI but at a much lower refresh
+    /// rate, so this page stays static: it reuses the copy the live page already
+    /// holds (no second, drifting source) and adds no animation or subsecond
+    /// update. It deliberately keeps the full text reachable by scrolling, because
+    /// the dim preview is not the whole content on a long answer.
+    @ViewBuilder
+    private func aodContentPage(active: Bool, copyFailed: Bool) -> some View {
+        VStack(spacing: 4) {
+            dimCapsule(WatchPhoneSession.modeLabel(session.mode))
+            if active, let startedAt = session.startedAt {
+                // A static clock, not the live `.timer` style: Always On must not
+                // redraw every second.
+                Text(clock(Date().timeIntervalSince(startedAt)))
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(timer)
+            } else if session.paused {
+                Text(WatchCopy.paused)
+                    .font(.caption2)
+                    .foregroundStyle(muted)
+            }
+            if session.original.isEmpty, session.translation.isEmpty {
+                Text(session.mode == "interview" ? WatchCopy.hearQuestion : WatchCopy.listening)
+                    .font(.caption2)
+                    .foregroundStyle(ink)
+                    .multilineTextAlignment(.center)
+            } else {
+                aodCopyPair(copyFailed: copyFailed)
+            }
+        }
+    }
+
+    /// The platform's own end-of-session surface (Save / saved / sending the tail)
+    /// stays as it was, minus the live-only animation.
+    @ViewBuilder
+    private var aodPlatformPage: some View {
+        if session.draining || session.drainFailed {
+            VStack(spacing: 4) {
+                Text(session.drainFailed ? WatchCopy.drainFailed : WatchCopy.sendingLast)
+                    .font(.caption)
+                    .foregroundStyle(muted)
+                    .multilineTextAlignment(.center)
+                if session.pcmStalled {
+                    stallWarning
+                }
+            }
+        } else if session.savedAck {
+            VStack(spacing: 6) {
+                Text(WatchCopy.savedHistory)
+                    .font(.caption)
+                    .foregroundStyle(muted)
+                    .multilineTextAlignment(.center)
+            }
+        } else {
+            // Save prompt / waiting for the phone to sync.
+            Text(session.saving ? WatchCopy.saving : (session.pendingSync ? WatchCopy.pendingSync : WatchCopy.saveAsk))
+                .font(.caption2)
+                .foregroundStyle(muted)
+                .multilineTextAlignment(.center)
+        }
+    }
+
+    /// A dim preview of the copy: the longest text the screen can hold, scrollable
+    /// so a long answer is still reachable. The live page's `copyPair` is not
+    /// reused here because Always On must not carry its placeholder animation or
+    /// its `focusable()` crown interaction.
+    private func aodCopyPair(copyFailed: Bool) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                if !session.original.isEmpty {
+                    Text(session.original)
+                        .font(.caption2)
+                        .foregroundStyle(muted)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if copyFailed {
+                    copyFailedNote
+                } else if !session.translation.isEmpty {
+                    Text(session.translation)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    // The answer is still coming: say so instead of showing an
+                    // empty dim page.
+                    Text(WatchCopy.drafting)
+                        .font(.caption2)
+                        .foregroundStyle(muted)
+                }
+            }
+        }
+        .id(session.copyId.isEmpty ? "aod" : session.copyId)
+    }
+
+    /// The Always On decision (see `WatchAod`). Pure inputs only, so the display
+    /// branch can be unit-tested without a Watch.
+    private var aodDisplay: WatchAodDisplay {
+        WatchAod.display(
+            draining: session.draining,
+            drainFailed: session.drainFailed,
+            offeringSave: session.offeringSave,
+            pendingSync: session.pendingSync,
+            savedAck: session.savedAck,
+            listening: session.listening,
+            paused: session.paused,
+            hasContent: !session.original.isEmpty || !session.translation.isEmpty,
+            copyFailed: session.copyFailed
+        )
     }
 
     private var livePage: some View {

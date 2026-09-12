@@ -13,6 +13,20 @@ func waitSend() {
 
 @main struct WatchReplayTests {
  static func main() throws {
+    func aod(
+        draining: Bool = false, drainFailed: Bool = false,
+        offeringSave: Bool = false, pendingSync: Bool = false, savedAck: Bool = false,
+        listening: Bool = false, paused: Bool = false,
+        hasContent: Bool = false, copyFailed: Bool = false
+    ) -> WatchAodDisplay {
+        WatchAod.display(
+            draining: draining, drainFailed: drainFailed,
+            offeringSave: offeringSave, pendingSync: pendingSync, savedAck: savedAck,
+            listening: listening, paused: paused,
+            hasContent: hasContent, copyFailed: copyFailed
+        )
+    }
+
     check(!AudioUplink.handshakeMeansSessionExpired(403), "HTTP 403 is not a listen-session expiry")
     check(AudioUplink.shouldStopOnHandshake(403), "HTTP 403 stops reconnect without pretending the capture ended")
     check(!AudioUplink.shouldStopOnHandshake(4404), "websocket 4404 is not classified as HTTP handshake")
@@ -1411,8 +1425,34 @@ func waitSend() {
     eq(WCSession.default.receivedApplicationContext["translation"] as? String ?? "", "after")
     eq(switchedWatch.translation, "after")
 
+    // #224: the dimmed (Always On) screen must keep showing the live question and
+    // answer, not just a mode name and a timer — and it must not fall back to a
+    // black page while a session's copy is still on screen. The decision is pure,
+    // so every branch of the display is checked here without a Watch.
+    // Live Q&A with an answer on screen: the answer stays readable, and the session
+    // still counts as running (mode chip + clock), because generating is not End.
+    eq(aod(listening: true, hasContent: true), WatchAodDisplay(kind: .content, active: true, copyFailed: false))
+    // A failed copy still shows its text plus the failure note.
+    eq(aod(listening: true, hasContent: true, copyFailed: true), WatchAodDisplay(kind: .content, active: true, copyFailed: true))
+    // Paused with content: readable, marked paused, and no running clock.
+    eq(aod(paused: true, hasContent: true), WatchAodDisplay(kind: .content, active: true, copyFailed: false))
+    // The confirmed black-screen bug: session ended (capture off) but its last
+    // question/answer is still the content the user wants to read.
+    eq(aod(hasContent: true), WatchAodDisplay(kind: .content, active: false, copyFailed: false))
+    // Listening but nothing transcribed yet: nothing to read, so stay black rather
+    // than claiming content that does not exist.
+    eq(aod(listening: true), WatchAodDisplay(kind: .idle, active: false, copyFailed: false))
+    // Ready with no session at all.
+    eq(aod(), WatchAodDisplay(kind: .idle, active: false, copyFailed: false))
+    // The platform's own end-of-session surfaces keep the screen, even with content.
+    eq(aod(offeringSave: true, hasContent: true), WatchAodDisplay(kind: .platform, active: false, copyFailed: false))
+    eq(aod(pendingSync: true, hasContent: true), WatchAodDisplay(kind: .platform, active: false, copyFailed: false))
+    eq(aod(savedAck: true, hasContent: true), WatchAodDisplay(kind: .platform, active: false, copyFailed: false))
+    eq(aod(draining: true, listening: true, hasContent: true), WatchAodDisplay(kind: .platform, active: true, copyFailed: false))
+    eq(aod(drainFailed: true, hasContent: true), WatchAodDisplay(kind: .platform, active: false, copyFailed: false))
+
     _ = bridge
-    print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake, Save and locked Live Q&A tests passed")
+    print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake, Save, locked Live Q&A and Always-On display tests passed")
  }
 }
 

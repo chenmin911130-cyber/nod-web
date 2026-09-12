@@ -22,9 +22,10 @@ public final class WCSession {
  func transferUserInfo(_ msg: [String: Any]) { messages.append(msg) }
  @discardableResult func transferFile(_ url: URL, metadata: [String: Any]?) -> WCSessionFileTransfer { let ft = WCSessionFileTransfer(WCSessionFile(url, metadata)); outstandingFileTransfers.append(ft); return ft }
 }
-protocol WKExtendedRuntimeSessionDelegate: AnyObject {}
-enum WKExtendedRuntimeSessionInvalidationReason { case expired, error }
-class WKExtendedRuntimeSession { weak var delegate: WKExtendedRuntimeSessionDelegate?; func start() {}; func invalidate() {} }
+// No `WKExtendedRuntimeSession` double: the Watch app declares no extended runtime
+// session type (none applies to live Q&A / translation) and relies on the real
+// background audio session instead. Dropping the double makes a re-introduced
+// extended runtime session fail to compile in the replay harness.
 public protocol AVAudioPlayerDelegate: AnyObject {}
 public class AVAudioPlayer { var volume: Float = 0; var duration: Double = 1; weak var delegate: AVAudioPlayerDelegate?; init(contentsOf: URL, fileTypeHint: String?) throws {}; func prepareToPlay() {}; func play() -> Bool { true }; func stop() {} }
 enum AVFileType: String { case mp3 }
