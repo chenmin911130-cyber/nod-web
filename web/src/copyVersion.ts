@@ -34,6 +34,7 @@ export function chunkApplies(current: number | undefined, incoming: number | und
 export type CopyRow = {
   translation: string
   copySeq?: number
+  copyOrder?: number
   failed?: boolean
 }
 
@@ -63,6 +64,7 @@ export type CopyBatchRow = {
   translation?: string
   failed?: boolean
   seq?: number
+  order?: number
 }
 
 /**
@@ -84,13 +86,14 @@ export function upsertCopyRows<T extends CopyRow & { id: string; original: strin
     const at = next.findIndex((p) => p.id === row.id)
     if (at < 0) {
       if (!(row.original || '').trim() && !(row.translation || '').trim()) continue
-      // Insert where the row's version says it belongs. Appending would put a
+      // Insert where the SENTENCE ORDER says it belongs. Appending would put a
       // catch-up of the OLDER half (7..30 arrives first, then 1..6) after the
       // newer rows, so the list — and the Watch face, which shows the last row —
-      // would go backwards (#219).
+      // would go backwards. The content version cannot be used for this: a retried
+      // early sentence gets a newer version than every later sentence (#219).
       let insertAt = next.length
-      if (typeof row.seq === 'number') {
-        const after = next.findIndex((p) => typeof p.copySeq === 'number' && (p.copySeq as number) > row.seq!)
+      if (typeof row.order === 'number') {
+        const after = next.findIndex((p) => typeof p.copyOrder === 'number' && (p.copyOrder as number) > row.order!)
         if (after >= 0) insertAt = after
       }
       next = [...next.slice(0, insertAt), make(row), ...next.slice(insertAt)]

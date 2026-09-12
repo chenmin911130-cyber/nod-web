@@ -284,7 +284,7 @@ type Action =
   | { type: 'bind_translate'; id: string; rev?: number }
   | { type: 'release_translate' }
   | { type: 'fill_translate'; id: string; translation: string; passthrough?: boolean }
-  | { type: 'apply_watch_copy'; id: string; original: string; translation: string; seq?: number; failed?: boolean; session?: string }
+  | { type: 'apply_watch_copy'; id: string; original: string; translation: string; seq?: number; order?: number; failed?: boolean; session?: string }
   | { type: 'clear_translation'; id: string }
   | { type: 'retry_translate'; id: string }
   | { type: 'fail_translate'; id: string }
@@ -702,6 +702,7 @@ function reducer(state: AppState, action: Action): AppState {
             translation: row.translation || '',
             to: state.translateTo,
             copySeq: row.seq,
+            copyOrder: row.order,
             failed: Boolean(row.failed),
           }))
           return { ...state, translatePairs, watchSession: session || state.watchSession }
@@ -1052,6 +1053,7 @@ function reducer(state: AppState, action: Action): AppState {
           translation: action.translation,
           to: state.translateTo,
           copySeq: action.seq,
+          copyOrder: action.order,
           // A row that failed while the phone was locked is first created here:
           // dropping the flag would clear the Watch's failure note.
           failed: Boolean(action.failed),
@@ -1684,7 +1686,7 @@ export default function App() {
       },
       onWatchCopy: (ev) => {
         askedTranslate.current.add(ev.id)
-        dispatch({ type: 'apply_watch_copy', id: ev.id, original: ev.original, translation: ev.translation, seq: ev.seq, failed: ev.failed, session: ev.session })
+        dispatch({ type: 'apply_watch_copy', id: ev.id, original: ev.original, translation: ev.translation, seq: ev.seq, order: ev.order, failed: ev.failed, session: ev.session })
       },
     })
   }, [])
@@ -1870,7 +1872,9 @@ export default function App() {
       // a batch that is not empty always makes progress towards the oldest row.
       if (e.type === 'translate_rows' && e.has_more && copyRowsRounds.current < 25) {
         copyRowsRounds.current += 1
-        const before = Number(e.oldest_seq || 0)
+        // The cursor is the stable sentence order, not the content version: a
+        // retried early sentence has the newest version but the oldest position.
+        const before = Number(e.oldest_order || 0)
         queueMicrotask(() => requestCopyRowsRef.current(before))
       }
       if (e.type === 'pcm_drained') {

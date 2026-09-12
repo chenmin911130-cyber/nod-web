@@ -334,7 +334,7 @@ class WatchCopyTests(unittest.TestCase):
         self.assertEqual(first["rows"][-1]["id"], "pair-249")
         # The phone asks for what is older than what it got.
         events.clear()
-        sess.dispatch({"type": "copy_rows", "before": first["oldest_seq"]})
+        sess.dispatch({"type": "copy_rows", "before": first["oldest_order"]})
         older = next(e for e in events if e.get("type") == "translate_rows")
         self.assertEqual([row["id"] for row in older["rows"]], [f"pair-{i}" for i in range(50)])
         self.assertFalse(older["has_more"])
@@ -357,3 +357,75 @@ class WatchCopyTests(unittest.TestCase):
         sess.dispatch({"type": "copy_rows"})
         empty = next(e for e in events if e.get("type") == "translate_rows")
         self.assertEqual(empty["rows"], [])
+
+    def test_the_recovery_cursor_is_stable_when_an_old_sentence_is_retried(self):
+        """A retried early sentence keeps its place in the walk (#219 review).
+
+        The cursor must not use the content version: sentence 1 retried now has the
+        highest version, so paging by version would drop it from the walk forever.
+        """
+        sess, events, audio = self._session()
+        for i in range(201):
+            sess.emit({
+                "type": "question",
+                "id": f"ask-{i}",
+                "text": f"[NOD_TRANSLATE:pair-{i}]\nTranslate only this line:\nline {i}",
+            })
+            sess.emit({"type": "chunk", "id": f"ask-{i}", "text": f"第{i}句"})
+        # Retry sentence 0: same row, new ask, newer version than every later row.
+        sess.emit({
+            "type": "question",
+            "id": "ask-retry",
+            "text": "[NOD_TRANSLATE:pair-0]\nTranslate only this line:\nline 0",
+        })
+        sess.emit({"type": "chunk", "id": "ask-retry", "text": "重译第0句"})
+        self.assertGreater(sess._watch_copy_seq_of["pair-0"], sess._watch_copy_seq_of["pair-200"])
+        # Walk the whole session the way the phone does.
+        seen: list[str] = []
+        before = 0
+        for _ in range(5):
+            events.clear()
+            sess.dispatch({"type": "copy_rows", "before": before} if before else {"type": "copy_rows"})
+            batch = next(e for e in events if e.get("type") == "translate_rows")
+            seen = [row["id"] for row in batch["rows"]] + seen
+            if not batch["has_more"]:
+                break
+            before = batch["oldest_order"]
+        self.assertEqual(len(seen), 201)
+        self.assertEqual(seen[0], "pair-0")
+        self.assertEqual(seen[-1], "pair-200")
+        self.assertEqual(len(set(seen)), 201)
+        self.assertEqual(seen, [f"pair-{i}" for i in range(201)])
+
+    def test_a_row_updated_during_the_walk_keeps_its_place(self):
+        """Content updates while paging must not reorder or duplicate the row."""
+        sess, events, audio = self._session()
+        for i in range(201):
+            sess.emit({
+                "type": "question",
+                "id": f"ask-{i}",
+                "text": f"[NOD_TRANSLATE:pair-{i}]\nTranslate only this line:\nline {i}",
+            })
+            sess.emit({"type": "chunk", "id": f"ask-{i}", "text": f"第{i}句"})
+        events.clear()
+        sess.dispatch({"type": "copy_rows"})
+        first = next(e for e in events if e.get("type") == "translate_rows")
+        self.assertTrue(first["has_more"])
+        # The newest sentence keeps streaming while the phone pages back.
+        sess.emit({"type": "chunk", "id": "ask-200", "text": "！"})
+        events.clear()
+        sess.dispatch({"type": "copy_rows", "before": first["oldest_order"]})
+        older = next(e for e in events if e.get("type") == "translate_rows")
+        ids = [row["id"] for row in older["rows"]] + [row["id"] for row in first["rows"]]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(ids[0], "pair-0")
+        self.assertEqual(ids, [f"pair-{i}" for i in range(201)])
+        # The newest page re-fetched after the update carries the new text, still
+        # last and still versioned above the older sentences.
+        events.clear()
+        sess.dispatch({"type": "copy_rows"})
+        newest_batch = next(e for e in events if e.get("type") == "translate_rows")
+        newest = newest_batch["rows"][-1]
+        self.assertEqual(newest["id"], "pair-200")
+        self.assertEqual(newest["translation"], "第200句！")
+        self.assertGreater(newest["seq"], newest_batch["rows"][0]["seq"])

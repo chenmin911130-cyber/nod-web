@@ -3143,6 +3143,12 @@ class Session:
         # Last emitted copy version per row, so a reconnect can replay the session's
         # rows with the same version the phone would have seen live.
         self._watch_copy_seq_of: dict[str, int] = {}
+        # Stable sentence order, assigned when a row first appears. The recovery
+        # cursor walks THIS, never the content version: a retry of an early sentence
+        # bumps its version above every later one, so paging by version would drop
+        # it from the walk and permanently lose the sentence (#219 review).
+        self._watch_copy_order: dict[str, int] = {}
+        self._watch_copy_next_order = 0
         self._watch_copy_pair = ""
         self._watch_copy_ask = ""
         self._client_emit: Callable[[dict], None] | None = emit
@@ -3662,12 +3668,13 @@ class Session:
         elif mtype == "copy_rows":
             # The phone asks for the session's Translate rows instead of waiting for
             # a socket re-attach: a suspended webview can miss rows with the socket
-            # still up. `before` walks backwards for a session longer than one page.
+            # still up. `before` is the stable sentence order cursor, so a retried
+            # early sentence cannot fall through the walk.
             try:
-                before_seq = int(msg.get("before") or 0)
+                before_order = int(msg.get("before") or 0)
             except (TypeError, ValueError):
-                before_seq = 0
-            batch = self._watch_copy_batch(before_seq)
+                before_order = 0
+            batch = self._watch_copy_batch(before_order)
             if batch is None:
                 batch = {
                     "type": "translate_rows",
@@ -4631,12 +4638,19 @@ class Session:
         on the Watch or into a page the user just cleared (#219).
         """
         self._watch_copy_session = uuid.uuid4().hex
-        for name in ("_watch_copy_original", "_watch_copy_buf", "_watch_copy_failed", "_watch_copy_seq_of"):
+        for name in (
+            "_watch_copy_original",
+            "_watch_copy_buf",
+            "_watch_copy_failed",
+            "_watch_copy_seq_of",
+            "_watch_copy_order",
+        ):
             held = getattr(self, name, None)
             if isinstance(held, dict):
                 held.clear()
             else:
                 setattr(self, name, {})
+        self._watch_copy_next_order = 0
         self._watch_copy_pair = ""
         self._watch_copy_ask = ""
         logging.getLogger("nod").info("watch_copy_reset reason=%s", reason)
@@ -5558,6 +5572,16 @@ class Session:
             held_seq = {}
             self._watch_copy_seq_of = held_seq
         held_seq[pid] = seq
+        orders = getattr(self, "_watch_copy_order", None)
+        if orders is None:
+            orders = {}
+            self._watch_copy_order = orders
+        if pid not in orders:
+            self._watch_copy_next_order = int(getattr(self, "_watch_copy_next_order", 0) or 0) + 1
+            orders[pid] = self._watch_copy_next_order
+        # The sentence's position in the session, for recovery ordering. Never
+        # derived from `seq`: a retry moves `seq`, not the sentence.
+        row["order"] = orders[pid]
         # A long copy is paged so the locked phone's native path can hand the
         # Watch joinable pages instead of one oversized dictionary (#219).
         if len(src) > WATCH_COPY_PAGE_MAX:
@@ -5570,13 +5594,15 @@ class Session:
 
     WATCH_COPY_BATCH = 200
 
-    def _watch_copy_batch(self, before_seq: int = 0) -> dict | None:
-        """A page of this copy session's Translate rows, newest last.
+    def _watch_copy_batch(self, before_order: int = 0) -> dict | None:
+        """A page of this copy session's Translate rows, in sentence order.
 
         The native replay holds only the last 24 rows, and a suspended webview can
         miss rows with the socket still up, so the phone asks for them explicitly.
-        ``before_seq`` walks backwards for a session longer than one page: the
-        response says `has_more` so the phone can keep fetching (#219).
+        ``before_order`` walks back through the STABLE sentence order (not the
+        content version, which a retry can move): the response says `has_more` and
+        `oldest_order` so the phone can keep fetching without skipping a sentence
+        (#219).
         """
         if getattr(self, "_workspace", "") != "translate":
             return None
@@ -5586,18 +5612,21 @@ class Session:
         buf = getattr(self, "_watch_copy_buf", None) or {}
         failed = getattr(self, "_watch_copy_failed", None) or {}
         seq_of = getattr(self, "_watch_copy_seq_of", None) or {}
+        order_of = getattr(self, "_watch_copy_order", None) or {}
         entries = []
         for pid, src in originals.items():
-            seq = int(seq_of.get(pid, 0) or 0)
-            if before_seq > 0 and seq >= before_seq:
+            order = int(order_of.get(pid, 0) or 0)
+            if before_order > 0 and order >= before_order:
                 continue
             entries.append({
                 "id": pid,
                 "original": src,
                 "translation": buf.get(pid, ""),
                 "failed": bool(failed.get(pid)),
-                "seq": seq,
+                "seq": int(seq_of.get(pid, 0) or 0),
+                "order": order,
             })
+        entries.sort(key=lambda row: row["order"])
         has_more = len(entries) > self.WATCH_COPY_BATCH
         rows = entries[-self.WATCH_COPY_BATCH:]
         return {
@@ -5605,7 +5634,7 @@ class Session:
             "session_id": getattr(self, "_watch_copy_session", "") or "",
             "rows": rows,
             "has_more": has_more,
-            "oldest_seq": rows[0]["seq"] if rows else 0,
+            "oldest_order": rows[0]["order"] if rows else 0,
         }
 
     def _emit_watch_copy(self, pair_id: str, *, original: str | None = None, translation: str | None = None, done: bool = False) -> None:

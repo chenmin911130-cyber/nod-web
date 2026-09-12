@@ -378,6 +378,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             "original": lastOriginal,
             "translation": lastTranslation,
             "seq": lastCopySeq,
+            // Stable sentence position: the phone orders its recovered rows by this,
+            // never by `seq` (a retry moves the version, not the sentence).
+            "order": Self.intValue(obj, "order"),
             "failed": lastCopyFailed,
             "sessionId": obj["session_id"] as? String ?? obj["sessionId"] as? String ?? lastSessionId,
         ]

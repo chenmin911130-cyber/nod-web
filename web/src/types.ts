@@ -91,6 +91,9 @@ export interface TranslatePair {
   // Server copy version this row's text is current to (#219). Both the
   // incremental chunk and the full watch_copy snapshot carry it.
   copySeq?: number
+  // Stable sentence position in the copy session: recovery orders by this, never
+  // by `copySeq` (a retry moves the version, not the sentence).
+  copyOrder?: number
 }
 
 export interface AppState {
@@ -183,7 +186,7 @@ export type EngineEvent =
   | { type: 'watch_session'; session_id: string }
   // #219: the copy session's Translate rows, sent on reconnect so a phone that was
   // locked longer than the native replay (24 rows) can fill in the gaps.
-  | { type: 'translate_rows'; session_id?: string; rows: Array<{ id: string; original: string; translation: string; failed?: boolean; seq?: number }>; has_more?: boolean; oldest_seq?: number }
+  | { type: 'translate_rows'; session_id?: string; rows: Array<{ id: string; original: string; translation: string; failed?: boolean; seq?: number; order?: number }>; has_more?: boolean; oldest_order?: number }
   | { type: 'chunk'; id: string; text: string; copy_seq?: number; copy_id?: string }
   | ({ type: 'sources'; id?: string } & AnswerSources)
   // #182: the server's authoritative Think value. Sent when a session reset turns
