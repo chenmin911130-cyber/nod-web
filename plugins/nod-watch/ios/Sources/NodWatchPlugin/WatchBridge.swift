@@ -356,10 +356,15 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         if seq > 0, seq < lastCopySeq { return }
         let session = obj["session_id"] as? String ?? obj["sessionId"] as? String ?? ""
         if !session.isEmpty, !lastCopySession.isEmpty, session != lastCopySession {
-            // New control session: the previous session's rows must not be
-            // replayed to the phone or the Watch after New / switch mode.
+            // New copy session (New / clear / switch mode / Start): the previous
+            // session's rows must not be replayed to the phone, and its text must
+            // not survive into the Watch face when the page it belonged to was
+            // already cleared.
             copyReplay.removeAll()
             lastCopyId = ""
+            lastOriginal = ""
+            lastTranslation = ""
+            lastCopyFailed = false
         }
         if !session.isEmpty { lastCopySession = session }
         if seq > lastCopySeq { lastCopySeq = seq }
@@ -494,6 +499,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             "original": lastOriginal,
             "translation": lastTranslation,
             "previous": lastPrevious,
+            // The Watch keys "same sentence" and its failure state off this id.
+            "copyId": lastCopyId,
             "copyFailed": lastCopyFailed ? "true" : "false",
             "history": history,
         ]

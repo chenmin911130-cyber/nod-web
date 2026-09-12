@@ -129,6 +129,9 @@ export interface AppState {
   meetingEnded: boolean
   composeSessionId: number
   translatePairs: TranslatePair[]
+  // #219: the server's current Watch copy session. A row that names another
+  // session is a replay/frame from a session the phone already cleared.
+  watchSession: string
   translateFrom: Lang
   translateTo: PairLang
   notesLang: Lang
@@ -175,6 +178,12 @@ export type EngineEvent =
   | { type: 'partial'; text: string; language?: string; speaker?: string }
   | { type: 'question'; id: string; text: string; language?: string; speaker?: string; think?: boolean; submit_id?: string; server_translate?: boolean; translation?: string }
   | { type: 'line_update'; id: string; text: string; language?: string; speaker?: string; rev: number }
+  // #219: which Watch copy session is current (New / clear / switch mode / Start
+  // mint a new one). The phone needs it to tell a fresh session from a replay.
+  | { type: 'watch_session'; session_id: string }
+  // #219: the copy session's Translate rows, sent on reconnect so a phone that was
+  // locked longer than the native replay (24 rows) can fill in the gaps.
+  | { type: 'translate_rows'; session_id?: string; rows: Array<{ id: string; original: string; translation: string; failed?: boolean; seq?: number }> }
   | { type: 'chunk'; id: string; text: string; copy_seq?: number; copy_id?: string }
   | ({ type: 'sources'; id?: string } & AnswerSources)
   // #182: the server's authoritative Think value. Sent when a session reset turns

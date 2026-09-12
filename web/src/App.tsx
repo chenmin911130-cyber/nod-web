@@ -60,7 +60,7 @@ import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
 import { currentWatchCopySeq, installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
-import { applyChunk, applySnapshot, snapshotApplies } from './copyVersion'
+import { applyChunk, applySnapshot, snapshotApplies, upsertCopyRows } from './copyVersion'
 import { watchStartListenCommand } from './watchReplay'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
@@ -242,6 +242,7 @@ const initial: AppState = {
   translateAskId: '',
   translateBindId: '',
   translateBindRev: 0,
+  watchSession: '',
   listenScene: 'meeting' as ListenScene,
   translateOn: true,
   catchNotes: [],
@@ -283,7 +284,7 @@ type Action =
   | { type: 'bind_translate'; id: string; rev?: number }
   | { type: 'release_translate' }
   | { type: 'fill_translate'; id: string; translation: string; passthrough?: boolean }
-  | { type: 'apply_watch_copy'; id: string; original: string; translation: string; seq?: number; failed?: boolean }
+  | { type: 'apply_watch_copy'; id: string; original: string; translation: string; seq?: number; failed?: boolean; session?: string }
   | { type: 'clear_translation'; id: string }
   | { type: 'retry_translate'; id: string }
   | { type: 'fail_translate'; id: string }
@@ -685,6 +686,26 @@ function reducer(state: AppState, action: Action): AppState {
             notesAskId: '',
           }
         }
+        case 'watch_session': {
+          if (!ev.session_id || ev.session_id === state.watchSession) return state
+          return { ...state, watchSession: ev.session_id }
+        }
+        case 'translate_rows': {
+          // Reconnect catch-up: upsert the session's rows with the same version rules
+          // the live paths use, so a row the phone already has is never regressed.
+          const session = ev.session_id || state.watchSession
+          if (session && state.watchSession && session !== state.watchSession) return state
+          const translatePairs = upsertCopyRows(state.translatePairs, ev.rows || [], (row) => ({
+            id: row.id,
+            ts: formatClock(),
+            original: row.original || '',
+            translation: row.translation || '',
+            to: state.translateTo,
+            copySeq: row.seq,
+            failed: Boolean(row.failed),
+          }))
+          return { ...state, translatePairs, watchSession: session || state.watchSession }
+        }
         case 'error': {
           const msg = ev.text || 'Generation failed'
           // #182: a failure that names its question is written to THAT card. A
@@ -1004,6 +1025,10 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, translatePairs, meetingLines, translateBindId: '', busy: false }
     }
     case 'apply_watch_copy': {
+      // A row from another copy session is a replay or a late frame of a session
+      // the phone already cleared (New / switch mode / Start): never merge it.
+      if (action.session && state.watchSession && action.session !== state.watchSession) return state
+      const watchSession = state.watchSession || action.session || ''
       const idx = state.translatePairs.findIndex((p) => p.id === action.id)
       if (idx >= 0) {
         // Never regress a row the incremental path already advanced past this
@@ -1014,11 +1039,12 @@ function reducer(state: AppState, action: Action): AppState {
             ? { ...applySnapshot(p, action.translation, action.seq, action.failed), original: action.original || p.original }
             : p,
         )
-        return { ...state, translatePairs }
+        return { ...state, translatePairs, watchSession }
       }
       if (!action.original.trim() && !action.translation.trim()) return state
       return {
         ...state,
+        watchSession,
         translatePairs: [...state.translatePairs, {
           id: action.id,
           ts: formatClock(),
@@ -1026,6 +1052,9 @@ function reducer(state: AppState, action: Action): AppState {
           translation: action.translation,
           to: state.translateTo,
           copySeq: action.seq,
+          // A row that failed while the phone was locked is first created here:
+          // dropping the flag would clear the Watch's failure note.
+          failed: Boolean(action.failed),
         }],
       }
     }
@@ -1648,7 +1677,7 @@ export default function App() {
       },
       onWatchCopy: (ev) => {
         askedTranslate.current.add(ev.id)
-        dispatch({ type: 'apply_watch_copy', id: ev.id, original: ev.original, translation: ev.translation, seq: ev.seq, failed: ev.failed })
+        dispatch({ type: 'apply_watch_copy', id: ev.id, original: ev.original, translation: ev.translation, seq: ev.seq, failed: ev.failed, session: ev.session })
       },
     })
   }, [])

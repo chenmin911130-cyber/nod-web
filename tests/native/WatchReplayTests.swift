@@ -500,6 +500,22 @@ func waitSend() {
     check(replay.count == 1, "a new session starts with an empty replay")
     eq(replay[0]["id"] as? String ?? "", "pair-z")
 
+    // #219: a new copy session (New / clear / switch mode / Start) must not leave
+    // the previous session's text on the Watch or in the replay, and the payload
+    // must name the copy so the Watch can tell sentences apart.
+    sendCopy(id: "old-row", original: "Old", translation: "旧句", seq: 7000, session: "sess-one")
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "旧句")
+    sendCopy(id: "", original: "", translation: "", seq: 7001, session: "sess-two")
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "")
+    eq(WCSession.default.messages.last?["original"] as? String ?? "", "")
+    check(
+        !bridge.testingCopyReplay().contains { ($0["translation"] as? String) == "旧句" },
+        "a new session clears the previous session's replay"
+    )
+    sendCopy(id: "new-row", original: "New", translation: "新句", seq: 7002, session: "sess-two")
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "新句")
+    eq(WCSession.default.messages.last?["copyId"] as? String ?? "", "new-row")
+
     _ = bridge
     print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake and Save tests passed")
  }

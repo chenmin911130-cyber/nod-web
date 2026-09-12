@@ -48,3 +48,42 @@ export function applySnapshot<T extends CopyRow>(row: T, translation: string, se
   if (!snapshotApplies(row.copySeq, seq)) return row
   return { ...row, translation, copySeq: seq ?? row.copySeq, failed: failed ?? row.failed } as T
 }
+
+/** One row of the reconnect batch the server sends on re-attach (#219). */
+export type CopyBatchRow = {
+  id: string
+  original?: string
+  translation?: string
+  failed?: boolean
+  seq?: number
+}
+
+/**
+ * Merge a reconnect batch into the phone's rows.
+ *
+ * The batch exists because the native replay holds only 24 sentences: a longer
+ * lock screen would leave gaps. Rows the phone already has go through the same
+ * version rules as the live paths, so a batch can never regress newer text;
+ * missing rows are created (keeping their failure state) in batch order.
+ */
+export function upsertCopyRows<T extends CopyRow & { id: string; original: string }>(
+  pairs: T[],
+  rows: CopyBatchRow[],
+  make: (row: CopyBatchRow) => T,
+): T[] {
+  let next = pairs
+  for (const row of rows) {
+    if (!row?.id) continue
+    const at = next.findIndex((p) => p.id === row.id)
+    if (at < 0) {
+      if (!(row.original || '').trim() && !(row.translation || '').trim()) continue
+      next = [...next, make(row)]
+      continue
+    }
+    const merged = applySnapshot(next[at], row.translation || '', row.seq, row.failed)
+    const original = row.original || next[at].original
+    if (merged === next[at] && original === next[at].original) continue
+    next = next.map((p, i) => (i === at ? { ...merged, original } : p))
+  }
+  return next
+}

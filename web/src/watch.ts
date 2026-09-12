@@ -43,7 +43,7 @@ type WatchPlugin = {
   addListener(event: 'command', cb: (ev: WatchCommand) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'pcm', cb: (ev: WatchPcm) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'saveResult', cb: (ev: { save?: string; sessionId?: string }) => void): Promise<{ remove: () => Promise<void> }>
-  addListener(event: 'watchCopy', cb: (ev: { id?: string; original?: string; translation?: string; seq?: number; done?: boolean; failed?: boolean }) => void): Promise<{ remove: () => Promise<void> }>
+  addListener(event: 'watchCopy', cb: (ev: { id?: string; original?: string; translation?: string; seq?: number; done?: boolean; failed?: boolean; sessionId?: string }) => void): Promise<{ remove: () => Promise<void> }>
 }
 
 const NodWatch = registerPlugin<WatchPlugin>('NodWatch')
@@ -304,7 +304,7 @@ export function installWatchRemote(handlers: {
   onTtsLive: () => void
   onTtsTap: () => void
   onTtsVoice: (voice: 'male' | 'female') => void
-  onWatchCopy: (ev: { id: string; original: string; translation: string; seq: number; failed: boolean }) => void
+  onWatchCopy: (ev: { id: string; original: string; translation: string; seq: number; failed: boolean; session: string }) => void
 }): () => void {
   if (!isNativeApp()) return () => undefined
   let gone = false
@@ -391,6 +391,7 @@ export function installWatchRemote(handlers: {
         translation: ev.translation || '',
         seq,
         failed: Boolean(ev.failed),
+        session: String(ev.sessionId || ''),
       })
     })
     handles.push(command, pcm, watchCopy)

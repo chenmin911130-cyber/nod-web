@@ -216,3 +216,59 @@ class WatchCopyTests(unittest.TestCase):
         sess.emit({"type": "error", "id": "other-ask", "text": "boom"})
         sess.emit({"type": "error", "text": "Recording buffer full"})
         self.assertEqual(audio, [])
+
+    def test_a_reset_mints_a_new_copy_session(self):
+        """New / clear / switch mode must start a new copy session (#219)."""
+        sess, events, audio = self._session()
+        sess.emit({
+            "type": "question",
+            "id": "ask-1",
+            "text": "[NOD_TRANSLATE:pair-1]\nTranslate only this line:\nHello there",
+        })
+        sess.emit({"type": "chunk", "id": "ask-1", "text": "你好"})
+        before = audio[-1]
+        self.assertTrue(before["session_id"])
+        events.clear()
+        sess._qa_reset("test_reset")
+        announced = [e for e in events if e.get("type") == "watch_session"]
+        self.assertEqual(len(announced), 1)
+        self.assertTrue(announced[0]["session_id"])
+        self.assertNotEqual(announced[0]["session_id"], before["session_id"])
+        self.assertEqual(sess._watch_copy_original, {})
+        self.assertEqual(sess._watch_copy_buf, {})
+        self.assertEqual(sess._watch_copy_failed, {})
+        # A row after the reset carries the new identity, not the old one.
+        sess.emit({"type": "question", "id": "ask-2", "text": "[NOD_TRANSLATE:pair-9]\nTranslate only this line:\nAgain"})
+        sess.emit({"type": "chunk", "id": "ask-2", "text": "再来"})
+        self.assertEqual(audio[-1]["session_id"], announced[0]["session_id"])
+        self.assertEqual(audio[-1]["id"], "pair-9")
+
+    def test_reattach_replays_the_session_rows_for_recovery(self):
+        """The native replay holds 24 rows; the server fills the rest on reconnect."""
+        sess, events, audio = self._session()
+        for i in range(30):
+            sess.emit({
+                "type": "question",
+                "id": f"ask-{i}",
+                "text": f"[NOD_TRANSLATE:pair-{i}]\nTranslate only this line:\nline {i}",
+            })
+            sess.emit({"type": "chunk", "id": f"ask-{i}", "text": f"第{i}句"})
+            sess.emit({"type": "done", "id": f"ask-{i}", "ok": True})
+        events.clear()
+        sess.reattach()
+        batches = [e for e in events if e.get("type") == "translate_rows"]
+        self.assertEqual(len(batches), 1)
+        rows = batches[0]["rows"]
+        self.assertEqual(len(rows), 30)
+        self.assertEqual(rows[0]["id"], "pair-0")
+        self.assertEqual(rows[0]["original"], "line 0")
+        self.assertEqual(rows[0]["translation"], "第0句")
+        self.assertEqual(rows[-1]["id"], "pair-29")
+        self.assertGreater(rows[-1]["seq"], rows[0]["seq"])
+        self.assertEqual(batches[0]["session_id"], audio[-1]["session_id"])
+        self.assertTrue(all("failed" in row for row in rows))
+        # A reconnect in a non-translate workspace sends nothing.
+        sess._workspace = "meeting"
+        events.clear()
+        sess.reattach()
+        self.assertEqual([e for e in events if e.get("type") == "translate_rows"], [])

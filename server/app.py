@@ -3076,6 +3076,9 @@ class Session:
         self._watch_copy_original: dict[str, str] = {}
         self._watch_copy_buf: dict[str, str] = {}
         self._watch_copy_failed: dict[str, bool] = {}
+        # Last emitted copy version per row, so a reconnect can replay the session's
+        # rows with the same version the phone would have seen live.
+        self._watch_copy_seq_of: dict[str, int] = {}
         self._watch_copy_pair = ""
         self._watch_copy_ask = ""
         self._client_emit: Callable[[dict], None] | None = emit
@@ -3208,12 +3211,20 @@ class Session:
         self.emit({"type": "keys_status", "has_llm": st["has_llm"], "has_stt": st["has_stt"]})
         self.emit({"type": "ready"})
         # Reconnecting clients get their first two-axis frame right after ready
-        # so they can render from `capture`.
+        # so they can render from `capture` (a client contract, see test_phase).
         self._emit_phase()
+        self._emit_watch_session()
         self.emit({"type": "status", "text": STATUS_READY})
         token = getattr(self, "audio_token", None)
         if token:
             self.emit({"type": "audio_uplink", "token": token})
+
+    def _emit_watch_session(self) -> None:
+        """Tell the phone which Watch copy session is current (see `_watch_copy_reset`)."""
+        self.emit({
+            "type": "watch_session",
+            "session_id": getattr(self, "_watch_copy_session", "") or "",
+        })
 
     def reattach(self) -> None:
         st = self.pipeline.key_status()
@@ -3221,9 +3232,15 @@ class Session:
         self.emit({"type": "ready"})
         self.emit({"type": "attached", "usage_session_id": self.usage_session_id})
         self._emit_phase()
+        self._emit_watch_session()
         token = getattr(self, "audio_token", None)
         if token:
             self.emit({"type": "audio_uplink", "token": token})
+        # The phone was locked: the native replay holds only the last 24 rows, so
+        # the server fills the rest of this copy session on top of it (#219).
+        batch = self._watch_copy_batch()
+        if batch is not None:
+            self.emit(batch)
         drained = getattr(self, "_pcm_drain_result", None)
         if isinstance(drained, dict) and drained.get("type") == "pcm_drained":
             self.emit(drained)
@@ -4523,6 +4540,29 @@ class Session:
             "qa_drop reason=%s trigger=%s cand=%s frags=%s", reason, trigger or "-", cand, n,
         )
 
+    def _watch_copy_reset(self, reason: str) -> None:
+        """Start a new Watch copy session (New / clear / workspace switch / listen).
+
+        The copy identity is minted per content session, not per connection: a
+        reconnect that adopts a parked session keeps it, while a reset mints a new
+        one and drops the old rows, so a queued phone page, a native replay or a
+        late frame from the previous session can never put the old translation back
+        on the Watch or into a page the user just cleared (#219).
+        """
+        self._watch_copy_session = uuid.uuid4().hex
+        for name in ("_watch_copy_original", "_watch_copy_buf", "_watch_copy_failed", "_watch_copy_seq_of"):
+            held = getattr(self, name, None)
+            if isinstance(held, dict):
+                held.clear()
+            else:
+                setattr(self, name, {})
+        self._watch_copy_pair = ""
+        self._watch_copy_ask = ""
+        logging.getLogger("nod").info("watch_copy_reset reason=%s", reason)
+        # The phone needs the new identity: it cannot tell a fresh session from a
+        # replayed stale row using the row alone.
+        self.emit({"type": "watch_session", "session_id": self._watch_copy_session})
+
     def _qa_reset(self, reason: str, *, reset_think: bool = True) -> None:
         """New / clear / workspace switch: nothing from the old turn may answer.
 
@@ -4532,6 +4572,8 @@ class Session:
         """
         self._qa_init()
         self._qa_cancel_timer()
+        # A reset starts a fresh content session for the Watch copy too.
+        self._watch_copy_reset(reason)
         turned_off = False
         with self._qa_lock():
             had = bool(self._qa_buffer or self._qa_verdict or self._qa_background)
@@ -5417,21 +5459,59 @@ class Session:
                 buf = {}
                 self._watch_copy_buf = buf
             buf[pid] = dst
+        seq = self._next_watch_copy_seq()
         row: dict = {
             "type": "watch_copy",
             "id": pid,
             "original": src,
             "translation": dst,
-            "seq": self._next_watch_copy_seq(),
+            "seq": seq,
             "session_id": getattr(self, "_watch_copy_session", "") or "",
             "done": bool(done),
             # Always present: a successful retry must be able to clear a failure
             # the Watch is still showing.
             "failed": bool(failed),
         }
+        held_seq = getattr(self, "_watch_copy_seq_of", None)
+        if held_seq is None:
+            held_seq = {}
+            self._watch_copy_seq_of = held_seq
+        held_seq[pid] = seq
         if ok is not None:
             row["ok"] = bool(ok)
         return row
+
+    def _watch_copy_batch(self) -> dict | None:
+        """Every Translate row of this copy session, for a phone that missed them.
+
+        The native replay holds only the last 24 rows; a lock screen longer than
+        that would silently drop the earlier sentences. On reconnect the server
+        sends the session's rows (with their versions) so the phone can fill the
+        gaps and end up identical to the Watch (#219).
+        """
+        if getattr(self, "_workspace", "") != "translate":
+            return None
+        originals = getattr(self, "_watch_copy_original", None) or {}
+        if not originals:
+            return None
+        buf = getattr(self, "_watch_copy_buf", None) or {}
+        failed = getattr(self, "_watch_copy_failed", None) or {}
+        seq_of = getattr(self, "_watch_copy_seq_of", None) or {}
+        rows = [
+            {
+                "id": pid,
+                "original": src,
+                "translation": buf.get(pid, ""),
+                "failed": bool(failed.get(pid)),
+                "seq": int(seq_of.get(pid, 0) or 0),
+            }
+            for pid, src in list(originals.items())[-200:]
+        ]
+        return {
+            "type": "translate_rows",
+            "session_id": getattr(self, "_watch_copy_session", "") or "",
+            "rows": rows,
+        }
 
     def _emit_watch_copy(self, pair_id: str, *, original: str | None = None, translation: str | None = None, done: bool = False) -> None:
         row = self._watch_copy_row(pair_id, original=original, translation=translation, done=done)

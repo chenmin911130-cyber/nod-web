@@ -1,4 +1,4 @@
-import { applyChunk, applySnapshot, chunkApplies, snapshotApplies } from './copyVersion'
+import { applyChunk, applySnapshot, chunkApplies, snapshotApplies, upsertCopyRows } from './copyVersion'
 
 // No version on either side: keep the old behaviour (apply).
 if (!snapshotApplies(undefined, undefined)) throw new Error('unversioned snapshot must apply')
@@ -66,4 +66,37 @@ if (applyChunk({ id: 'p2', translation: 'a' }, 'b').translation !== 'ab') {
 }
 if (applySnapshot({ id: 'p2', translation: 'a' }, 'c').translation !== 'c') {
   throw new Error('an unversioned snapshot must still replace')
+}
+
+// Reconnect catch-up (#219): the server sends the copy session's rows because the
+// native replay holds only 24 sentences. Missing rows are created (with their
+// failure state), older rows never regress a newer one.
+type Pair = { id: string; original: string; translation: string; copySeq?: number; failed?: boolean }
+const existing: Pair[] = [
+  { id: 'a', original: 'A', translation: '甲', copySeq: 10 },
+  { id: 'b', original: 'B', translation: '', copySeq: undefined },
+]
+const make = (row: { id: string; original?: string; translation?: string; failed?: boolean; seq?: number }): Pair => ({
+  id: row.id,
+  original: row.original || '',
+  translation: row.translation || '',
+  copySeq: row.seq,
+  failed: Boolean(row.failed),
+})
+const caught = upsertCopyRows(existing, [
+  { id: 'a', original: 'A', translation: '甲', seq: 10 },        // same version: unchanged
+  { id: 'b', original: 'B', translation: '乙', failed: true, seq: 11 }, // fills a gap + failure
+  { id: 'c', original: 'C', translation: '丙', seq: 12 },        // brand new row
+  { id: 'a', original: 'A', translation: '旧', seq: 9 },         // stale: must not regress
+  { id: '', original: '', translation: '', seq: 13 },            // empty id: skipped
+], make)
+if (caught.length !== 3) throw new Error(`batch must add the missing rows, got ${caught.length}`)
+if (caught[0].translation !== '甲' || caught[0].copySeq !== 10) throw new Error('a same-version batch row must not change the row')
+if (caught[1].translation !== '乙' || !caught[1].failed) throw new Error('a newly seen failed row must keep its failure state')
+if (caught[2].id !== 'c' || caught[2].translation !== '丙') throw new Error('missing rows are appended in batch order')
+if (upsertCopyRows(caught, [{ id: 'a', original: 'A', translation: '旧', seq: 9 }], make) !== caught) {
+  throw new Error('a stale batch row must leave the list identical')
+}
+if (upsertCopyRows([], [{ id: 'd', original: '', translation: '' }], make).length !== 0) {
+  throw new Error('an empty row is not a row')
 }
