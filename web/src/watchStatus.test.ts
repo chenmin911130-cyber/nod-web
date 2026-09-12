@@ -16,6 +16,34 @@ if (face.translation !== '你好') throw new Error(`expected translation, got ${
 // #219: the face must name the live copy so the native bridge can tell a new
 // sentence / New / switch mode apart from a new version of the same copy.
 if (face.copyId !== '1') throw new Error(`face must carry the live copy id, got ${face.copyId}`)
+if (face.copyFailed) throw new Error('a translated row is not a failed copy')
+
+const failedFace = buildWatchFace({
+  capture: 'listening',
+  consentOpen: false,
+  notesAskId: '',
+  notesRaw: '',
+  partial: '',
+  workspaceMode: 'translate',
+  translateOn: true,
+  translatePairs: [{ id: '9', original: 'hello there', translation: '半句', failed: true }],
+  meetingLines: [],
+})
+if (!failedFace.copyFailed) throw new Error('a failed row must tell the Watch the copy failed')
+if (failedFace.translation !== '半句') throw new Error('the partial text stays readable next to the failure')
+
+const failedLine = buildWatchFace({
+  capture: 'listening',
+  consentOpen: false,
+  notesAskId: '',
+  notesRaw: '',
+  partial: '',
+  workspaceMode: 'meeting',
+  translateOn: true,
+  translatePairs: [],
+  meetingLines: [{ id: 'm1', text: 'hello', translation: '半句', translateFailed: true }],
+})
+if (!failedLine.copyFailed) throw new Error('a failed meeting line must tell the Watch the copy failed')
 if (face.original !== 'hello there') throw new Error(`Watch Translate must keep bilingual source, got ${face.original}`)
 if (face.previous) throw new Error('the first sentence has no previous line')
 if (face.history[0]?.text !== '你好') throw new Error('expected history text')

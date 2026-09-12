@@ -147,3 +147,72 @@ class WatchCopyTests(unittest.TestCase):
         sess._workspace = "meeting"
         sess._emit_watch_copy("pair-1", original="hi", translation="你好", done=True)
         self.assertEqual(audio, [])
+
+    def test_model_error_marks_the_copy_failed(self):
+        sess, events, audio = self._session()
+        sess.emit({
+            "type": "question",
+            "id": "ask-1",
+            "text": "[NOD_TRANSLATE:pair-1]\nTranslate only this line:\nHello there",
+        })
+        sess.emit({"type": "chunk", "id": "ask-1", "text": "你好"})
+        sess.emit({"type": "error", "id": "ask-1", "text": "Generation failed"})
+        sess.emit({"type": "done", "id": "ask-1", "ok": False})
+        self.assertEqual([row["failed"] for row in audio], [False, True, True])
+        self.assertTrue(audio[-1]["done"])
+        self.assertFalse(audio[-1]["ok"])
+        self.assertEqual(audio[-1]["translation"], "你好")
+        # The phone consumes the same done; the failure must ride along so the row
+        # is not left looking finished.
+        done = [e for e in events if e.get("type") == "done"][0]
+        self.assertEqual(done["copy_id"], "pair-1")
+        self.assertTrue(done["copy_failed"])
+
+    def test_superseded_ask_is_not_a_failure(self):
+        """A cancelled ask emits done(ok=False) with no error; that is not a failure."""
+        sess, events, audio = self._session()
+        sess.emit({
+            "type": "question",
+            "id": "ask-1",
+            "text": "[NOD_TRANSLATE:pair-1]\nTranslate only this line:\nHello there",
+        })
+        sess.emit({"type": "chunk", "id": "ask-1", "text": "你好"})
+        sess.emit({"type": "done", "id": "ask-1", "ok": False})
+        self.assertEqual([row["failed"] for row in audio], [False, False])
+        done = [e for e in events if e.get("type") == "done"][0]
+        self.assertFalse(done["copy_failed"])
+
+    def test_successful_retry_clears_the_failure(self):
+        sess, events, audio = self._session()
+        sess.emit({
+            "type": "question",
+            "id": "ask-1",
+            "text": "[NOD_TRANSLATE:pair-1]\nTranslate only this line:\nHello there",
+        })
+        sess.emit({"type": "error", "id": "ask-1", "text": "Generation failed"})
+        sess.emit({"type": "done", "id": "ask-1", "ok": False})
+        self.assertTrue(audio[-1]["failed"])
+        # Retry of the same row: fresh ask, fresh stream, failure cleared.
+        sess.emit({
+            "type": "question",
+            "id": "ask-2",
+            "text": "[NOD_TRANSLATE:pair-1]\nTranslate only this line:\nHello there",
+        })
+        sess.emit({"type": "chunk", "id": "ask-2", "text": "您好"})
+        sess.emit({"type": "done", "id": "ask-2", "ok": True})
+        # The retry starts from empty (not appended to the abandoned answer) and
+        # the last two rows are the successful ones.
+        self.assertEqual([row["translation"] for row in audio[-2:]], ["您好", "您好"])
+        self.assertEqual([row["failed"] for row in audio[-2:]], [False, False])
+        self.assertTrue(audio[-1]["ok"])
+
+    def test_error_for_another_ask_does_not_touch_the_copy(self):
+        sess, events, audio = self._session()
+        sess.emit({
+            "type": "question",
+            "id": "ask-1",
+            "text": "[NOD_TRANSLATE:pair-1]\nTranslate only this line:\nHello there",
+        })
+        sess.emit({"type": "error", "id": "other-ask", "text": "boom"})
+        sess.emit({"type": "error", "text": "Recording buffer full"})
+        self.assertEqual(audio, [])

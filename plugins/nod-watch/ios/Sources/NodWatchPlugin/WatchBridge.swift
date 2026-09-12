@@ -73,6 +73,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var lastCopyId = ""
     /// Control session the copy stream belongs to (server-minted).
     private var lastCopySession = ""
+    /// The copy on the Watch is a failed one (model/quota failure, not a
+    /// cancelled ask). The Watch shows an explicit failure state instead of the
+    /// half sentence looking live.
+    private var lastCopyFailed = false
     private var copyReplay: [[String: Any]] = []
     private var speechPlayer: AVAudioPlayer?
     private var speechFinish: ((Error?) -> Void)?
@@ -361,6 +365,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         if seq > lastCopySeq { lastCopySeq = seq }
         let id = obj["id"] as? String ?? ""
         if !id.isEmpty { lastCopyId = id }
+        lastCopyFailed = (obj["failed"] as? Bool) ?? ((obj["failed"] as? String) == "true")
         lastOriginal = obj["original"] as? String ?? lastOriginal
         lastTranslation = obj["translation"] as? String ?? lastTranslation
         var row: [String: Any] = [
@@ -368,6 +373,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             "original": lastOriginal,
             "translation": lastTranslation,
             "seq": lastCopySeq,
+            "failed": lastCopyFailed,
             "sessionId": obj["session_id"] as? String ?? obj["sessionId"] as? String ?? lastSessionId,
         ]
         if let done = obj["done"] as? Bool {
@@ -375,7 +381,15 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         } else if let done = obj["done"] as? String {
             row["done"] = done == "true"
         }
-        copyReplay.append(row)
+        // Replay holds the last 24 COPIES (sentences), each at its latest text:
+        // appending every streamed update let one long sentence evict several
+        // earlier ones, so the phone could not catch up on everything it missed
+        // while locked (#219).
+        if !id.isEmpty, let at = copyReplay.firstIndex(where: { ($0["id"] as? String) == id }) {
+            copyReplay[at] = row
+        } else {
+            copyReplay.append(row)
+        }
         if copyReplay.count > 24 {
             copyReplay.removeFirst(copyReplay.count - 24)
         }
@@ -388,7 +402,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             previous: lastPrevious,
             history: lastHistory,
             copySeq: lastCopySeq,
-            copyId: lastCopyId
+            copyId: lastCopyId,
+            copyFailed: lastCopyFailed
         )
     }
 
@@ -404,12 +419,16 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         save: String = "",
         sessionId: String = "",
         copySeq: Int? = nil,
-        copyId: String = ""
+        copyId: String = "",
+        copyFailed: Bool? = nil
     ) {
         if !capture.isEmpty {
             lastCapture = capture
         }
         lastHint = hint
+        // Only a push that knows the copy state changes the failure marker; a
+        // control-only push (save / pcm_drained) must leave it alone.
+        if let copyFailed { lastCopyFailed = copyFailed }
         var nextOriginal = original
         var nextTranslation = translation
         var nextPrevious = previous
@@ -475,6 +494,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             "original": lastOriginal,
             "translation": lastTranslation,
             "previous": lastPrevious,
+            "copyFailed": lastCopyFailed ? "true" : "false",
             "history": history,
         ]
         if !lastMode.isEmpty {
@@ -748,6 +768,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     }
 
     #if PCM_REPLAY_TESTING
+    /// Rows replayed to the phone when the Watch asks (see `handleWatchReady`).
+    func testingCopyReplay() -> [[String: Any]] { copyReplay }
+
     func testingResetJobs() {
         jobs = [:]
         inflight = []

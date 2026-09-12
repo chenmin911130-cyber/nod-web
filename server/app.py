@@ -3075,6 +3075,7 @@ class Session:
         self._watch_copy_session = uuid.uuid4().hex
         self._watch_copy_original: dict[str, str] = {}
         self._watch_copy_buf: dict[str, str] = {}
+        self._watch_copy_failed: dict[str, bool] = {}
         self._watch_copy_pair = ""
         self._watch_copy_ask = ""
         self._client_emit: Callable[[dict], None] | None = emit
@@ -5394,6 +5395,8 @@ class Session:
         original: str | None = None,
         translation: str | None = None,
         done: bool = False,
+        failed: bool = False,
+        ok: bool | None = None,
     ) -> dict | None:
         if getattr(self, "_workspace", "") != "translate":
             return None
@@ -5414,7 +5417,7 @@ class Session:
                 buf = {}
                 self._watch_copy_buf = buf
             buf[pid] = dst
-        return {
+        row: dict = {
             "type": "watch_copy",
             "id": pid,
             "original": src,
@@ -5422,7 +5425,13 @@ class Session:
             "seq": self._next_watch_copy_seq(),
             "session_id": getattr(self, "_watch_copy_session", "") or "",
             "done": bool(done),
+            # Always present: a successful retry must be able to clear a failure
+            # the Watch is still showing.
+            "failed": bool(failed),
         }
+        if ok is not None:
+            row["ok"] = bool(ok)
+        return row
 
     def _emit_watch_copy(self, pair_id: str, *, original: str | None = None, translation: str | None = None, done: bool = False) -> None:
         row = self._watch_copy_row(pair_id, original=original, translation=translation, done=done)
@@ -5452,10 +5461,13 @@ class Session:
                         buf[bind] = src
                 # A re-ask of the same row (client retry after a wrong-script /
                 # failed answer) must start a fresh translation, not append the
-                # retry onto the abandoned one.
+                # retry onto the abandoned one — and it clears the failure state.
                 held = getattr(self, "_watch_copy_buf", None)
                 if held is not None:
                     held[bind] = ""
+                failed = getattr(self, "_watch_copy_failed", None)
+                if failed is not None:
+                    failed.pop(bind, None)
             return None
         bind = getattr(self, "_watch_copy_pair", "") or ""
         ask_id = getattr(self, "_watch_copy_ask", "") or ""
@@ -5472,8 +5484,25 @@ class Session:
                 ev["copy_seq"] = row["seq"]
                 ev["copy_id"] = bind
             return row
+        if kind == "error":
+            # Only a real model/quota failure names the ask it belongs to. A
+            # cancelled ask (a newer line took over) emits done(ok=False) with no
+            # error, so this is what separates "failed" from "superseded" (#219).
+            failed = getattr(self, "_watch_copy_failed", None)
+            if failed is None:
+                failed = {}
+                self._watch_copy_failed = failed
+            failed[bind] = True
+            return self._watch_copy_row(bind, done=False, failed=True)
         if kind == "done":
-            return self._watch_copy_row(bind, done=True)
+            failed = bool((getattr(self, "_watch_copy_failed", {}) or {}).get(bind))
+            row = self._watch_copy_row(bind, done=True, failed=failed, ok=bool(ev.get("ok", True)))
+            if row is not None:
+                # The phone consumes this done too; stamp it so a failed row is
+                # marked failed there instead of looking finished.
+                ev["copy_id"] = bind
+                ev["copy_failed"] = failed
+            return row
         return None
 
     def _start_voice_translate(self, pair_id: str, piece: str, heard: str | None) -> None:

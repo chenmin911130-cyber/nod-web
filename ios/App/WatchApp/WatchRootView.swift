@@ -380,6 +380,9 @@ struct WatchRootView: View {
                         .lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                if session.copyFailed {
+                    copyFailedNote
+                }
                 if !session.translation.isEmpty {
                     copyScroll(session.translation)
                 }
@@ -411,10 +414,15 @@ struct WatchRootView: View {
                         .lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                if session.copyFailed {
+                    copyFailedNote
+                }
                 if session.translation.isEmpty {
-                    Text(WatchCopy.drafting)
-                        .font(.headline)
-                        .foregroundStyle(ink)
+                    if !session.copyFailed {
+                        Text(WatchCopy.drafting)
+                            .font(.headline)
+                            .foregroundStyle(ink)
+                    }
                 } else {
                     copyScroll(session.translation)
                 }
@@ -462,6 +470,22 @@ struct WatchRootView: View {
                     .disabled(session.saving)
             }
         }
+    }
+
+    /// The live copy failed on the phone: say so, instead of leaving a half
+    /// sentence that reads as if it were still translating (#219).
+    private var copyFailedNote: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption2)
+                .foregroundStyle(slate)
+            Text(WatchCopy.translateFailed)
+                .font(.caption2)
+                .foregroundStyle(slate)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 
     private var savedAck: some View {

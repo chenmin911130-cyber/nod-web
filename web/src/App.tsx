@@ -283,7 +283,7 @@ type Action =
   | { type: 'bind_translate'; id: string; rev?: number }
   | { type: 'release_translate' }
   | { type: 'fill_translate'; id: string; translation: string; passthrough?: boolean }
-  | { type: 'apply_watch_copy'; id: string; original: string; translation: string; seq?: number }
+  | { type: 'apply_watch_copy'; id: string; original: string; translation: string; seq?: number; failed?: boolean }
   | { type: 'clear_translation'; id: string }
   | { type: 'retry_translate'; id: string }
   | { type: 'fail_translate'; id: string }
@@ -667,9 +667,17 @@ function reducer(state: AppState, action: Action): AppState {
               turns[i] = { ...turns[i], a: state.status.startsWith('Generation failed') ? state.status : 'Generation stopped. Please try again.' }
             }
           }
+          // #219: a server-side translate row has no client pump to fail it, so
+          // the server stamps the row's failure on its done. Without this the row
+          // (and the Watch face built from it) looked finished on a half answer.
+          let translatePairs = state.translatePairs
+          if (ev.copy_id && ev.copy_failed) {
+            translatePairs = translatePairs.map((p) => (p.id === ev.copy_id ? { ...p, failed: true } : p))
+          }
           return {
             ...state,
             turns,
+            translatePairs,
             busy: waitingAsk,
             status: waitingAsk ? state.status : 'Ready',
             translateAskId: translateAskIdAfterDone(state.translateAskId, ev.id),
@@ -1003,7 +1011,7 @@ function reducer(state: AppState, action: Action): AppState {
         if (!snapshotApplies(state.translatePairs[idx].copySeq, action.seq)) return state
         const translatePairs = state.translatePairs.map((p) =>
           p.id === action.id
-            ? { ...applySnapshot(p, action.translation, action.seq), original: action.original || p.original }
+            ? { ...applySnapshot(p, action.translation, action.seq, action.failed), original: action.original || p.original }
             : p,
         )
         return { ...state, translatePairs }
@@ -1640,7 +1648,7 @@ export default function App() {
       },
       onWatchCopy: (ev) => {
         askedTranslate.current.add(ev.id)
-        dispatch({ type: 'apply_watch_copy', id: ev.id, original: ev.original, translation: ev.translation, seq: ev.seq })
+        dispatch({ type: 'apply_watch_copy', id: ev.id, original: ev.original, translation: ev.translation, seq: ev.seq, failed: ev.failed })
       },
     })
   }, [])
@@ -1693,6 +1701,7 @@ export default function App() {
         // the native audio path already put on the Watch (#219).
         copySeq: currentWatchCopySeq(),
         copyId: face.copyId,
+        copyFailed: face.copyFailed,
         mode: watchStatusMode(state.workspaceMode, state.listenScene),
         langPair: watchLangPair(state.workspaceMode === 'translate' ? state.translateTo : state.notesTranslateTo),
         ...payload,

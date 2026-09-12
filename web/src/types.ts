@@ -180,7 +180,7 @@ export type EngineEvent =
   // #182: the server's authoritative Think value. Sent when a session reset turns
   // the switch back to its default, so the client never shows a stale "on".
   | { type: 'think'; on: boolean }
-  | { type: 'done'; id: string; stt: number; llm: number; ok: boolean }
+  | { type: 'done'; id: string; stt: number; llm: number; ok: boolean; copy_id?: string; copy_failed?: boolean }
   | { type: 'error'; text: string; id?: string }
   | { type: 'listen_taken'; text: string }
   | { type: 'auth_required' }

@@ -27,6 +27,7 @@ type WatchPlugin = {
     pcmDrainedByte?: number
     copySeq?: number
     copyId?: string
+    copyFailed?: boolean
   }): Promise<void>
   shareFile(opts: { data: string; name: string }): Promise<void>
   saveToFiles(opts: {
@@ -42,7 +43,7 @@ type WatchPlugin = {
   addListener(event: 'command', cb: (ev: WatchCommand) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'pcm', cb: (ev: WatchPcm) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'saveResult', cb: (ev: { save?: string; sessionId?: string }) => void): Promise<{ remove: () => Promise<void> }>
-  addListener(event: 'watchCopy', cb: (ev: { id?: string; original?: string; translation?: string; seq?: number; done?: boolean }) => void): Promise<{ remove: () => Promise<void> }>
+  addListener(event: 'watchCopy', cb: (ev: { id?: string; original?: string; translation?: string; seq?: number; done?: boolean; failed?: boolean }) => void): Promise<{ remove: () => Promise<void> }>
 }
 
 const NodWatch = registerPlugin<WatchPlugin>('NodWatch')
@@ -303,7 +304,7 @@ export function installWatchRemote(handlers: {
   onTtsLive: () => void
   onTtsTap: () => void
   onTtsVoice: (voice: 'male' | 'female') => void
-  onWatchCopy: (ev: { id: string; original: string; translation: string; seq: number }) => void
+  onWatchCopy: (ev: { id: string; original: string; translation: string; seq: number; failed: boolean }) => void
 }): () => void {
   if (!isNativeApp()) return () => undefined
   let gone = false
@@ -389,6 +390,7 @@ export function installWatchRemote(handlers: {
         original: ev.original || '',
         translation: ev.translation || '',
         seq,
+        failed: Boolean(ev.failed),
       })
     })
     handles.push(command, pcm, watchCopy)
@@ -422,6 +424,7 @@ export function pushWatchStatus(face: {
   // control-only push (save state, pcm_drained) must leave the Watch copy alone.
   copySeq?: number
   copyId?: string
+  copyFailed?: boolean
 }): void {
   if (!isNativeApp()) return
   void NodWatch.setStatus({
@@ -433,6 +436,7 @@ export function pushWatchStatus(face: {
     history: (face.history || []).slice(0, 8),
     copySeq: face.copySeq,
     copyId: face.copyId,
+    copyFailed: face.copyFailed,
     mode: face.mode,
     langPair: face.langPair,
     save: face.save,

@@ -38,6 +38,7 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
         let previous = call.getString("previous") ?? ""
         let copySeq = call.getInt("copySeq")
         let copyId = call.getString("copyId") ?? ""
+        let copyFailed = call.getBool("copyFailed")
         let mode = call.getString("mode") ?? ""
         let langPair = call.getString("langPair") ?? ""
         let save = call.getString("save") ?? ""
@@ -76,7 +77,8 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
             save: save,
             sessionId: sessionId,
             copySeq: copySeq,
-            copyId: copyId
+            copyId: copyId,
+            copyFailed: copyFailed
         )
         call.resolve()
     }

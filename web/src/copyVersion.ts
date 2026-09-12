@@ -44,7 +44,7 @@ export function applyChunk<T extends CopyRow>(row: T, chunk: string, seq?: numbe
 }
 
 /** Replace the text with the full snapshot. Returns the row unchanged when stale. */
-export function applySnapshot<T extends CopyRow>(row: T, translation: string, seq?: number): T {
+export function applySnapshot<T extends CopyRow>(row: T, translation: string, seq?: number, failed?: boolean): T {
   if (!snapshotApplies(row.copySeq, seq)) return row
-  return { ...row, translation, copySeq: seq ?? row.copySeq } as T
+  return { ...row, translation, copySeq: seq ?? row.copySeq, failed: failed ?? row.failed } as T
 }

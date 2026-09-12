@@ -51,6 +51,15 @@ if (applySnapshot(snapshotted, '你好', 6) !== snapshotted) {
 if (applySnapshot(snapshotted, '你好，世界！', 8).translation !== '你好，世界！') {
   throw new Error('a newer snapshot must apply')
 }
+// A failed snapshot marks the row; a later successful one clears it, and a stale
+// failure cannot mark a row that has already moved on (#219).
+const failedRow2 = applySnapshot(snapshotted, '半句', 8, true)
+if (!failedRow2.failed) throw new Error('a failed snapshot must mark the row failed')
+const recovered = applySnapshot(failedRow2, '完整译文', 9, false)
+if (recovered.failed) throw new Error('a successful retry must clear the failure')
+if (applySnapshot(recovered, '半句', 8, true) !== recovered) {
+  throw new Error('a stale failed snapshot must not mark a newer row')
+}
 // Unversioned rows (older server) keep working.
 if (applyChunk({ id: 'p2', translation: 'a' }, 'b').translation !== 'ab') {
   throw new Error('an unversioned chunk must still append')

@@ -18,6 +18,8 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     @Published var original = ""
     @Published var translation = ""
     @Published var previous = ""
+    /// The current live copy is a failed translation, not a pending one.
+    @Published var copyFailed = false
     @Published var history: [WatchHistItem] = []
     @Published var reachable = false
     @Published var speechLive = false
@@ -234,6 +236,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         original = ""
         translation = ""
         previous = ""
+        copyFailed = false
         elapsedMs = 0
         localModeHeld = phoneModeSeen
         starting = true
@@ -442,6 +445,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         original = ""
         translation = ""
         previous = ""
+        copyFailed = false
         elapsedMs = 0
         offeringSave = false
         pendingSync = false
@@ -1211,6 +1215,14 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         }
         if let previous = payload["previous"] as? String {
             self.previous = previous
+        }
+        // The live copy failed on the phone (model/quota), or the phone cleared
+        // the state: show the explicit failure instead of a half sentence that
+        // looks live (#219).
+        if let failed = payload["copyFailed"] as? String {
+            self.copyFailed = failed == "true"
+        } else if let failed = payload["copyFailed"] as? Bool {
+            self.copyFailed = failed
         }
         if Self.speechShouldPlay(live: live) {
             if let data = payload["speechData"] as? Data, !data.isEmpty {

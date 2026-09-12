@@ -414,7 +414,7 @@ func waitSend() {
     // #219 P1: one copy version stream, shared by the native rows and the JS face
     // push. The Watch must never roll back to older text, and a new sentence must
     // not be blocked by a longer older one.
-    func sendCopy(id: String, original: String, translation: String, seq: Int, session: String) {
+    func sendCopy(id: String, original: String, translation: String, seq: Int, session: String, failed: Bool = false) {
         let wire: [String: Any] = [
             "type": "watch_copy",
             "id": id,
@@ -423,6 +423,7 @@ func waitSend() {
             "seq": seq,
             "session_id": session,
             "done": false,
+            "failed": failed,
         ]
         let text = String(data: try! JSONSerialization.data(withJSONObject: wire), encoding: .utf8)!
         uplink.handleAudioText(text)
@@ -456,6 +457,48 @@ func waitSend() {
     )
     eq(WCSession.default.messages.last?["translation"] as? String ?? "", "手打")
     eq(WCSession.default.messages.last?["original"] as? String ?? "", "Typed")
+
+    // #219 P2: the replay to the phone holds the last copies (sentences), not the
+    // last streamed updates — one long sentence must not evict several earlier
+    // ones, so the phone can catch up on everything it missed while locked.
+    sendCopy(id: "pair-r1", original: "One", translation: "第一句", seq: 5000, session: "sess-replay")
+    sendCopy(id: "pair-r2", original: "Two", translation: "第二句", seq: 5001, session: "sess-replay")
+    sendCopy(id: "pair-r1", original: "One", translation: "第一句还在长", seq: 5002, session: "sess-replay")
+    var replay = bridge.testingCopyReplay()
+    check(replay.count == 2, "replay keeps one row per copy")
+    eq(replay[0]["id"] as? String ?? "", "pair-r1")
+    check((replay[0]["translation"] as? String ?? "") == "第一句还在长", "the kept row holds its latest text")
+    eq(replay[1]["id"] as? String ?? "", "pair-r2")
+
+    // #219 P2: a failed copy reaches the Watch as a failure, and a later good row
+    // clears it instead of leaving a half sentence looking live.
+    sendCopy(id: "pair-f", original: "Three", translation: "半句", seq: 5003, session: "sess-replay", failed: true)
+    eq(WCSession.default.messages.last?["copyFailed"] as? String ?? "", "true")
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "半句")
+    sendCopy(id: "pair-f", original: "Three", translation: "完整三句", seq: 5004, session: "sess-replay")
+    eq(WCSession.default.messages.last?["copyFailed"] as? String ?? "", "false")
+    eq(WCSession.default.messages.last?["translation"] as? String ?? "", "完整三句")
+    // The phone's face push carries the same marker (a stale push must not).
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "Three", translation: "半句",
+        copySeq: 5004, copyId: "pair-f", copyFailed: true
+    )
+    eq(WCSession.default.messages.last?["copyFailed"] as? String ?? "", "true")
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "Three", translation: "完整三句",
+        copySeq: 5004, copyId: "pair-f", copyFailed: false
+    )
+    eq(WCSession.default.messages.last?["copyFailed"] as? String ?? "", "false")
+    // A control-only push (no copy state) must not flip the marker.
+    bridge.pushStatus(capture: "listening", hint: "Ready", save: "local", sessionId: "sess-replay")
+    eq(WCSession.default.messages.last?["copyFailed"] as? String ?? "", "false")
+
+    // A new control session clears the replay: rows from a closed session must not
+    // be re-applied to a page the phone already reset.
+    sendCopy(id: "pair-z", original: "Zero", translation: "零", seq: 6000, session: "sess-fresh")
+    replay = bridge.testingCopyReplay()
+    check(replay.count == 1, "a new session starts with an empty replay")
+    eq(replay[0]["id"] as? String ?? "", "pair-z")
 
     _ = bridge
     print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake and Save tests passed")
