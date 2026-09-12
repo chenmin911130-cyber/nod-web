@@ -556,6 +556,16 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                 object: nil,
                 userInfo: obj
             )
+        case "qa_copy":
+            // Live Q&A has its own server message type but the SAME Watch copy lane:
+            // the bridge keeps one current copy (question -> original, answer ->
+            // translation), so a locked phone keeps streaming answers without a
+            // second, competing copy state on the Watch.
+            NotificationCenter.default.post(
+                name: Notification.Name("nod.uplink.qaCopy"),
+                object: nil,
+                userInfo: obj
+            )
         default:
             break
         }

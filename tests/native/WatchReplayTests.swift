@@ -1271,8 +1271,148 @@ func waitSend() {
     check(WCSession.default.receivedApplicationContext["copySegIndex"] == nil, "a short locked copy stays unpaged")
     check(WCSession.default.messages.allSatisfy { $0["copySegIndex"] == nil }, "a short locked copy queues nothing")
 
+    // Live Q&A (#219 follow-up): the phone is locked, the webview cannot push a
+    // face, so the Q&A answer has to arrive over the native audio socket. The
+    // server sends `qa_copy` with the question/answer named as such; the bridge
+    // maps it onto the shared copy lane and the Watch renders it as question +
+    // answer. Every payload below is produced by the real server shape and fed
+    // through the real receiver (`AudioUplink.handleAudioText`).
+    bridge.testingResetCopyState()
+    let qaWire: (String, String, Int, Bool, Bool) -> [String: Any] = { id, answer, seq, done, failed in
+        [
+            "type": "qa_copy", "id": id,
+            "question": "What is the refund window?", "answer": answer,
+            "seq": seq, "session_id": "qa-session-1", "done": done, "failed": failed,
+        ]
+    }
+    func feedAudio(_ obj: [String: Any]) throws {
+        uplink.handleAudioText(String(data: try JSONSerialization.data(withJSONObject: obj), encoding: .utf8)!)
+        waitSend()
+    }
+    check(
+        WatchBridge.watchCopyRow(fromQa: qaWire("q-1", "It is 30 days.", 970_000, true, false))["original"] as? String
+            == "What is the refund window?",
+        "the Q&A payload maps question -> original"
+    )
+    let qaWatch = WatchPhoneSession(
+        sendBuffer: WatchSendBuffer(),
+        pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("qa-locked")),
+        connect: false
+    )
+    WCSession.default.messages.removeAll()
+    WCSession.default.receivedApplicationContext = [:]
+    try feedAudio(qaWire("q-1", "", 970_000, false, false))
+    eq(WCSession.default.receivedApplicationContext["original"] as? String ?? "", "What is the refund window?")
+    deliver(qaWatch, WCSession.default.receivedApplicationContext)
+    deliver(qaWatch, ["mode": "interview"])
+    eq(qaWatch.original, "What is the refund window?")
+    eq(qaWatch.translation, "")
+    check(qaWatch.mode == "interview", "the Watch is in Live Q&A for the answer")
+
+    // The answer streams while the phone stays locked: each chunk is the whole
+    // answer so far, so the Watch can never show a rolled-back prefix.
+    try feedAudio(qaWire("q-1", "It is ", 970_001, false, false))
+    eq(WCSession.default.receivedApplicationContext["translation"] as? String ?? "", "It is ")
+    try feedAudio(qaWire("q-1", "It is 30 days.", 970_002, false, false))
+    eq(WCSession.default.receivedApplicationContext["translation"] as? String ?? "", "It is 30 days.")
+    try feedAudio(qaWire("q-1", "It is 30 days.", 970_003, true, false))
+    eq(WCSession.default.receivedApplicationContext["copySeq"] as? Int ?? -1, 970_003)
+    deliver(qaWatch, WCSession.default.receivedApplicationContext)
+    eq(qaWatch.translation, "It is 30 days.")
+    eq(qaWatch.original, "What is the refund window?")
+
+    // A long answer is paged; the tail must join the head instead of replacing the
+    // whole answer with one page.
+    bridge.testingResetCopyState()
+    let qaLongA = String(repeating: "答", count: 12000)
+    let qaLongB = "尾页。"
+    var qaPaged: [String: Any] = qaWire("q-long", qaLongA + qaLongB, 970_100, true, false)
+    qaPaged["question_pages"] = ["What is the refund window?"]
+    qaPaged["answer_pages"] = [qaLongA, qaLongB]
+    let pagedWatch = WatchPhoneSession(
+        sendBuffer: WatchSendBuffer(),
+        pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("qa-paged")),
+        connect: false
+    )
+    WCSession.default.messages.removeAll()
+    WCSession.default.receivedApplicationContext = [:]
+    try feedAudio(qaPaged)
+    let qaHead = WCSession.default.receivedApplicationContext
+    let qaTail = WCSession.default.messages.last { ($0["copySegIndex"] as? Int) == 1 } ?? [:]
+    check(!qaTail.isEmpty, "the locked Q&A answer queues its tail page")
+    // Tail first, then head: a page that arrives before its head must not become
+    // the whole answer, and the joined text must be complete once the head lands.
+    deliver(pagedWatch, qaTail)
+    eq(pagedWatch.translation, "")
+    deliver(pagedWatch, qaHead)
+    eq(pagedWatch.translation, qaLongA + qaLongB)
+    eq(pagedWatch.original, "What is the refund window?")
+
+    // Retry / regenerate: the same question gets a fresh answer, and the old
+    // attempt's frames must not roll it back.
+    bridge.testingResetCopyState()
+    let retryWatch = WatchPhoneSession(
+        sendBuffer: WatchSendBuffer(),
+        pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("qa-retry")),
+        connect: false
+    )
+    try feedAudio(qaWire("q-retry", "first attempt", 970_200, false, false))
+    deliver(retryWatch, WCSession.default.receivedApplicationContext)
+    eq(retryWatch.translation, "first attempt")
+    try feedAudio(qaWire("q-retry", "", 970_201, false, false))
+    try feedAudio(qaWire("q-retry", "second attempt", 970_202, true, false))
+    deliver(retryWatch, WCSession.default.receivedApplicationContext)
+    eq(retryWatch.translation, "second attempt")
+    // A late chunk carrying the superseded version is a stale frame.
+    try feedAudio(qaWire("q-retry", "first attempt (late)", 970_200, false, false))
+    eq(WCSession.default.receivedApplicationContext["translation"] as? String ?? "", "second attempt")
+
+    // A late frame from a previous question cannot overwrite the current one.
+    bridge.testingResetCopyState()
+    let orderWatch = WatchPhoneSession(
+        sendBuffer: WatchSendBuffer(),
+        pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("qa-order")),
+        connect: false
+    )
+    try feedAudio(qaWire("q-old", "old answer", 970_300, false, false))
+    try feedAudio(qaWire("q-new", "new answer", 970_301, false, false))
+    deliver(orderWatch, WCSession.default.receivedApplicationContext)
+    eq(orderWatch.translation, "new answer")
+    try feedAudio(qaWire("q-old", "old answer (late)", 970_299, false, false))
+    eq(WCSession.default.receivedApplicationContext["translation"] as? String ?? "", "new answer")
+    eq(WCSession.default.receivedApplicationContext["copyId"] as? String ?? "", "q-new")
+
+    // A failure names its attempt and the Watch can say so instead of showing a
+    // half answer as live.
+    bridge.testingResetCopyState()
+    try feedAudio(qaWire("q-fail", "", 970_400, false, true))
+    eq(WCSession.default.receivedApplicationContext["copyFailed"] as? String ?? "", "true")
+
+    // New / a workspace switch mints a new Q&A stream, so the previous
+    // conversation's late frame is rejected by the session guard.
+    bridge.testingResetCopyState()
+    let switchedWatch = WatchPhoneSession(
+        sendBuffer: WatchSendBuffer(),
+        pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("qa-switch")),
+        connect: false
+    )
+    try feedAudio(qaWire("q-switch", "before", 970_500, false, false))
+    deliver(switchedWatch, WCSession.default.receivedApplicationContext)
+    eq(switchedWatch.translation, "before")
+    var qaAfterSwitch: [String: Any] = qaWire("q-after", "after", 970_501, false, false)
+    qaAfterSwitch["session_id"] = "qa-session-2"
+    try feedAudio(qaAfterSwitch)
+    deliver(switchedWatch, WCSession.default.receivedApplicationContext)
+    eq(switchedWatch.translation, "after")
+    // The previous conversation's late frame must not reopen the copy it belonged
+    // to, even though it names a different session and a different turn.
+    try feedAudio(qaWire("q-switch", "before (very late)", 970_499, false, false))
+    eq(WCSession.default.receivedApplicationContext["copyId"] as? String ?? "", "q-after")
+    eq(WCSession.default.receivedApplicationContext["translation"] as? String ?? "", "after")
+    eq(switchedWatch.translation, "after")
+
     _ = bridge
-    print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake and Save tests passed")
+    print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake, Save and locked Live Q&A tests passed")
  }
 }
 

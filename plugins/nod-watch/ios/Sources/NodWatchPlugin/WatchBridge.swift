@@ -133,6 +133,13 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             self?.applyWatchCopy((note.userInfo as? [String: Any]) ?? [:])
         }
         NotificationCenter.default.addObserver(
+            forName: Notification.Name("nod.uplink.qaCopy"),
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            self?.applyQaCopy((note.userInfo as? [String: Any]) ?? [:])
+        }
+        NotificationCenter.default.addObserver(
             forName: Notification.Name("nod.watch.pcm.serverDrained"),
             object: nil,
             queue: .main
@@ -369,6 +376,33 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         return Int(obj[key] as? String ?? "") ?? 0
     }
 
+    /// Which lane the copy on the Watch belongs to (`translate` | `qa`). Sent with
+    /// every native copy event so the phone can route a Live Q&A row away from the
+    /// Translate pairs instead of guessing from the pane it happens to be on.
+    private static var lastCopyKind = "translate"
+
+    /// Translate a Live Q&A payload onto the shared Watch copy row.
+    ///
+    /// The server sends `qa_copy` with the question / answer named as such so the
+    /// row never has to be read as a Translate pair; the Watch copy lane itself is
+    /// mode-agnostic (a copy is "original" + "translation"), so the mapping happens
+    /// here, in one place, and keeps reusing the version, paging, replay and
+    /// keep-longer rules #219 built for a locked phone.
+    static func watchCopyRow(fromQa obj: [String: Any]) -> [String: Any] {
+        var row = obj
+        if let question = obj["question"] { row["original"] = question }
+        if let answer = obj["answer"] { row["translation"] = answer }
+        if let questionPages = obj["question_pages"] { row["original_pages"] = questionPages }
+        if let answerPages = obj["answer_pages"] { row["translation_pages"] = answerPages }
+        return row
+    }
+
+    func applyQaCopy(_ obj: [String: Any]) {
+        Self.lastCopyKind = "qa"
+        defer { Self.lastCopyKind = "translate" }
+        applyWatchCopy(Self.watchCopyRow(fromQa: obj))
+    }
+
     func applyWatchCopy(_ obj: [String: Any]) {
         let seq = Self.intValue(obj, "seq")
         // A strictly older version is a stale frame: an old row arriving after a
@@ -414,15 +448,19 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         // appending every streamed update let one long sentence evict several
         // earlier ones, so the phone could not catch up on everything it missed
         // while locked (#219).
-        if !id.isEmpty, let at = copyReplay.firstIndex(where: { ($0["id"] as? String) == id }) {
-            copyReplay[at] = row
+        // `kind` rides the replay too: a row queued while the phone was locked must
+        // route into the same pane when the webview wakes up and replays it.
+        var notified = row
+        notified["kind"] = Self.lastCopyKind
+        if let at = copyReplay.firstIndex(where: { ($0["id"] as? String) == id }) {
+            copyReplay[at] = notified
         } else {
-            copyReplay.append(row)
+            copyReplay.append(notified)
         }
         if copyReplay.count > 24 {
             copyReplay.removeFirst(copyReplay.count - 24)
         }
-        plugin?.notifyListeners("watchCopy", data: row)
+        plugin?.notifyListeners("watchCopy", data: notified)
         pushStatus(
             capture: lastCapture,
             hint: lastHint,

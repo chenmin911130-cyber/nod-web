@@ -61,6 +61,7 @@ import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
 import { currentWatchCopySeq, installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
 import { applyChunk, applyCopyRow, applySnapshot, copySessionAccepts, snapshotApplies, upsertCopyRows } from './copyVersion'
+import { mergeQaRows } from './watchQa'
 import { watchStartListenCommand } from './watchReplay'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
@@ -715,6 +716,17 @@ function reducer(state: AppState, action: Action): AppState {
             failed: Boolean(row.failed),
           }))
           return { ...state, translatePairs, watchSession: session || state.watchSession }
+        }
+        case 'qa_rows': {
+          // Reconnect catch-up for Live Q&A: while the phone was locked the answer
+          // was generated and shown on the Watch, and the webview missed it. The
+          // server hands the turns back so the phone pane matches the Watch after
+          // unlock without re-creating a turn the list already has.
+          if (!copySessionAccepts(state.watchSession, ev.session_id)) return state
+          const session = ev.session_id || state.watchSession
+          const merged = mergeQaRows(state.turns, ev.rows || [])
+          if (merged.rows === 0 && session === state.watchSession) return state
+          return { ...state, turns: merged.turns, watchSession: session || state.watchSession }
         }
         case 'error': {
           const msg = ev.text || 'Generation failed'
@@ -1687,6 +1699,10 @@ export default function App() {
         writeTtsVoice(voice)
       },
       onWatchCopy: (ev) => {
+        // A Live Q&A row is not a Translate pair: it must never be merged into
+        // `translatePairs` (the server pages it to the Watch's copy lane, and the
+        // pane renders the same answer from `turns`).
+        if (ev.kind === 'qa') return
         askedTranslate.current.add(ev.id)
         dispatch({ type: 'apply_watch_copy', id: ev.id, original: ev.original, translation: ev.translation, seq: ev.seq, order: ev.order, failed: ev.failed, session: ev.session })
       },
