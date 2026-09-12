@@ -6,15 +6,27 @@ export type WatchFace = {
   original: string
   translation: string
   previous: string
+  copyId: string
   history: WatchHistItem[]
 }
+
+/** One page of the live original/translation. WCSession dictionaries are ~65 KB,
+ *  so a single frame carries at most this many chars; the live copy itself has no
+ *  total cap because it is paged (see `watchLiveCopySegments`) and the Watch joins
+ *  the pages back into the whole text. History stays a bounded preview. */
+export const WATCH_LIVE_COPY_MAX = 12_000
+export const WATCH_HIST_LIMIT = 8
 
 type Pair = { id: string; original: string; translation: string }
 type Line = { id: string; text: string; translation?: string }
 type Turn = { id: string; q: string; a: string }
 
+export function watchKeepParagraphs(text: string): string {
+  return text.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 export function watchVisibleOriginal(original: string, translation: string): string {
-  const src = original.replace(/\s+/g, ' ').trim()
+  const src = watchKeepParagraphs(original)
   const dst = watchVisibleTranslation(translation)
   if (!src || !dst) return src
   if (src.toLowerCase() === dst.toLowerCase()) return ''
@@ -47,6 +59,66 @@ export function clipWatch(text: string, max: number): string {
   return `${t.slice(0, Math.max(1, max - 1))}…`
 }
 
+/** Sentence / line boundaries used when one paragraph alone exceeds a page. */
+const COPY_BREAK_RE = /[^。！？!?；;\n]*[。！？!?；;\n]+|[^。！？!?；;\n]+$/g
+
+/** Split an atomic unit that is still too long, never inside a code point. */
+function copyHardSplit(unit: string, max: number): string[] {
+  const out: string[] = []
+  let current = ''
+  for (const char of unit) {
+    if (current.length + char.length > max) {
+      out.push(current)
+      current = ''
+    }
+    current += char
+  }
+  if (current) out.push(current)
+  return out
+}
+
+/** Pieces that each fit `max` and whose concatenation is exactly `text`. */
+function copyPieces(text: string, max: number): string[] {
+  const pieces: string[] = []
+  const paragraphs = text.split('\n\n')
+  paragraphs.forEach((paragraph, index) => {
+    // Keep the blank line with the paragraph it follows so join() is lossless.
+    const unit = index === paragraphs.length - 1 ? paragraph : `${paragraph}\n\n`
+    if (unit.length <= max) {
+      pieces.push(unit)
+      return
+    }
+    const sentences = unit.match(COPY_BREAK_RE)
+    for (const sentence of sentences ?? [unit]) {
+      if (sentence.length <= max) pieces.push(sentence)
+      else pieces.push(...copyHardSplit(sentence, max))
+    }
+  })
+  return pieces
+}
+
+/**
+ * Page the live Watch copy. Every page fits `max` and the pages re-join to
+ * exactly `watchKeepParagraphs(text)` — nothing is dropped and no ellipsis is
+ * added, so the Watch can read a copy of any length. Empty text yields no page.
+ */
+export function watchLiveCopySegments(text: string, max = WATCH_LIVE_COPY_MAX): string[] {
+  const cap = Math.max(1, Math.floor(max))
+  const normalized = watchKeepParagraphs(text)
+  if (!normalized) return []
+  const segments: string[] = []
+  let current = ''
+  for (const piece of copyPieces(normalized, cap)) {
+    if (current && current.length + piece.length > cap) {
+      segments.push(current)
+      current = ''
+    }
+    current += piece
+  }
+  if (current) segments.push(current)
+  return segments
+}
+
 export function buildWatchFace(input: {
   capture: string
   consentOpen: boolean
@@ -70,19 +142,24 @@ export function buildWatchFace(input: {
 
   let original = ''
   let translation = ''
+  let copyId = ''
   if (input.workspaceMode === 'translate' && lastPair) {
     original = lastPair.original
     translation = lastPair.translation
+    copyId = lastPair.id
   } else if (input.workspaceMode === 'interview' && lastTurn) {
     original = lastTurn.q
     translation = lastTurn.a
+    copyId = lastTurn.id
   } else if (input.workspaceMode !== 'interview' && lastLine) {
     original = lastLine.text
     translation = input.translateOn ? lastLine.translation || '' : ''
+    copyId = lastLine.id
   }
   if (listening && input.partial.trim()) {
     if (input.workspaceMode !== 'interview' || !translation.trim()) {
       original = input.partial.trim()
+      if (!copyId) copyId = 'partial'
     }
   }
   translation = watchVisibleTranslation(translation)
@@ -97,7 +174,7 @@ export function buildWatchFace(input: {
 
   const history: WatchHistItem[] = []
   if (input.workspaceMode === 'translate') {
-    for (const p of input.translatePairs.slice(-8).reverse()) {
+    for (const p of input.translatePairs.slice(-WATCH_HIST_LIMIT).reverse()) {
       const text = (p.translation || p.original).trim()
       if (!text) continue
       history.push({
@@ -107,7 +184,7 @@ export function buildWatchFace(input: {
       })
     }
   } else {
-    for (const ln of input.meetingLines.slice(-8).reverse()) {
+    for (const ln of input.meetingLines.slice(-WATCH_HIST_LIMIT).reverse()) {
       const text = (input.translateOn && ln.translation ? ln.translation : ln.text).trim()
       if (!text) continue
       history.push({
@@ -128,9 +205,11 @@ export function buildWatchFace(input: {
   return {
     listening,
     hint: clipWatch(hint, 140),
-    original: clipWatch(original, 800),
-    translation: clipWatch(translation, 800),
+    // The live copy is returned whole: `pushWatchStatus` pages it for the Watch.
+    original: watchKeepParagraphs(original),
+    translation: watchKeepParagraphs(translation),
     previous,
+    copyId,
     history,
   }
 }

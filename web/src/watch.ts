@@ -2,6 +2,7 @@ import { App } from '@capacitor/app'
 import { registerPlugin } from '@capacitor/core'
 import { getToken } from './auth'
 import { isNativeApp, NATIVE_API_ORIGIN } from './native'
+import { WATCH_HIST_LIMIT, watchLiveCopySegments } from './watchStatus'
 
 type WatchCommand = { action?: string; mode?: string; sessionId?: string }
 type WatchPcm = { data?: string }
@@ -16,6 +17,10 @@ type WatchPlugin = {
     original?: string
     translation?: string
     previous?: string
+    copyId?: string
+    /** Live copy split into ≤ WATCH_LIVE_COPY_MAX pages; the bridge fans them out. */
+    originalSegments?: string[]
+    translationSegments?: string[]
     history?: WatchHistItem[]
     mode?: string
     langPair?: string
@@ -379,6 +384,7 @@ export function pushWatchStatus(face: {
   original?: string
   translation?: string
   previous?: string
+  copyId?: string
   history?: WatchHistItem[]
   mode?: string
   langPair?: string
@@ -390,13 +396,21 @@ export function pushWatchStatus(face: {
   pcmDrainedByte?: number
 }): void {
   if (!isNativeApp()) return
+  // The live copy is paged, not clipped: one bridge call carries every page.
+  // `original`/`translation` stay the first page so a single-page copy (and the
+  // watch's legacy whole-string path) behaves exactly as before.
+  const originalSegments = watchLiveCopySegments(face.original || '')
+  const translationSegments = watchLiveCopySegments(face.translation || '')
   void NodWatch.setStatus({
     capture: face.capture,
     hint: (face.hint || '').slice(0, 140),
-    original: (face.original || '').slice(0, 800),
-    translation: (face.translation || '').slice(0, 800),
+    original: originalSegments[0] || '',
+    translation: translationSegments[0] || '',
+    originalSegments,
+    translationSegments,
     previous: (face.previous || '').slice(0, 72),
-    history: (face.history || []).slice(0, 8),
+    copyId: face.copyId || '',
+    history: (face.history || []).slice(0, WATCH_HIST_LIMIT),
     mode: face.mode,
     langPair: face.langPair,
     save: face.save,

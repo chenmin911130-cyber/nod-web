@@ -10,6 +10,9 @@ export interface NodWatchPlugin {
     original?: string
     translation?: string
     previous?: string
+    copyId?: string
+    originalSegments?: string[]
+    translationSegments?: string[]
     history?: WatchHistItem[]
     mode?: string
     langPair?: string

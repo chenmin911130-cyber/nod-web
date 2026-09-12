@@ -1647,6 +1647,7 @@ export default function App() {
         original: face.original,
         translation: face.translation,
         previous: face.previous,
+        copyId: face.copyId,
         history: face.history,
         mode: watchStatusMode(state.workspaceMode, state.listenScene),
         langPair: watchLangPair(state.workspaceMode === 'translate' ? state.translateTo : state.notesTranslateTo),
