@@ -80,7 +80,6 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
             originalSegments: Self.segments(call, "originalSegments"),
             translationSegments: Self.segments(call, "translationSegments"),
             copySeq: copySeq,
-            copyId: copyId,
             copyFailed: copyFailed
         )
         call.resolve()
