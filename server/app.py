@@ -3151,6 +3151,29 @@ class Session:
         self._watch_copy_next_order = 0
         self._watch_copy_pair = ""
         self._watch_copy_ask = ""
+        # Live Q&A gets its OWN native downlink (#219 follow-up). The Translate
+        # copy is bound to the `[NOD_TRANSLATE:<id>]` prompt marker and its
+        # sentence buffer, neither of which exists for a Q&A turn: a Q&A row is
+        # identified by its real question id and its own stream epoch. Sharing the
+        # translate lane would mean keying the Watch copy on a marker that never
+        # arrives, and would let a late translate tail overwrite a Q&A answer (or
+        # the reverse) after a mode switch.
+        self._qa_copy_session = uuid.uuid4().hex
+        self._qa_copy_id = ""
+        self._qa_copy_question = ""
+        self._qa_copy_buf = ""
+        self._qa_copy_failed = False
+        # Completed Q&A turns of this stream, for the phone's post-unlock recovery.
+        # A suspended webview can miss the whole answer: like `translate_rows`, the
+        # server can hand the rows back instead of the phone only ever seeing what
+        # the native replay happened to keep.
+        self._qa_copy_done: dict[str, bool] = {}
+        self._qa_copy_row_q: dict[str, str] = {}
+        self._qa_copy_row_a: dict[str, str] = {}
+        self._qa_copy_row_failed: dict[str, bool] = {}
+        self._qa_copy_seq_of: dict[str, int] = {}
+        self._qa_copy_order: dict[str, int] = {}
+        self._qa_copy_next_order = 0
         self._client_emit: Callable[[dict], None] | None = emit
         # `emit` is ALWAYS the router. Detach/reattach only swap `_client_emit`,
         # so Watch copy forwarding keeps riding the native audio socket while the
@@ -3311,6 +3334,12 @@ class Session:
         batch = self._watch_copy_batch()
         if batch is not None:
             self.emit(batch)
+        # Same recovery for Live Q&A: the webview was suspended for the whole
+        # answer, and the native lane only put the LAST attempt on the Watch. The
+        # phone gets the turns back so its pane matches the Watch after unlock.
+        qa_batch = self._qa_copy_batch()
+        if qa_batch is not None:
+            self.emit(qa_batch)
         drained = getattr(self, "_pcm_drain_result", None)
         if isinstance(drained, dict) and drained.get("type") == "pcm_drained":
             self.emit(drained)
@@ -4656,6 +4685,7 @@ class Session:
         self._watch_copy_next_order = 0
         self._watch_copy_pair = ""
         self._watch_copy_ask = ""
+        self._qa_copy_reset_state()
         logging.getLogger("nod").info("watch_copy_reset reason=%s", reason)
         # The phone needs the new identity: it cannot tell a fresh session from a
         # replayed stale row using the row alone.
@@ -5502,12 +5532,18 @@ class Session:
         # incremental `chunk` (control socket) and the full `watch_copy` (audio
         # socket) for one row; without a shared version it duplicates/regresses.
         row = self._maybe_watch_copy(ev)
+        # Live Q&A rides its own lane on the same audio socket: the committed
+        # question, the streamed answer, the completion and the failure reach the
+        # Watch even when the parked webview cannot push a face (#219 follow-up).
+        qa_row = self._maybe_qa_copy(ev)
         client = getattr(self, "_client_emit", None)
         if callable(client):
             client(ev)
         # No control client (parked / locked) must still reach the Watch.
         if row is not None:
             self._send_audio_text(row)
+        if qa_row is not None:
+            self._send_audio_text(qa_row)
 
     def _watch_original_from_prompt(self, text: str) -> str:
         marker = "Translate only this line:\n"
@@ -5658,6 +5694,214 @@ class Session:
         row = self._watch_copy_row(pair_id, original=original, translation=translation, done=done)
         if row is not None:
             self._send_audio_text(row)
+
+    # --- Live Q&A native downlink -------------------------------------------------
+    #
+    # The same "phone locked -> the webview is suspended" problem #219 fixed for
+    # Translate applies to Live Q&A, and the answers were generated all along (see
+    # the 2026-09-12 production `qa_judge` / `qa_submit` / `think_answer` lines) --
+    # they just had no native receiver: a Q&A turn only reached the Watch through
+    # the web layer's `buildWatchFace` + `pushWatchStatus`, which stops when the
+    # WebContent process is suspended. This mirrors the committed question, the
+    # streamed answer, the completion and the failure onto the audio socket, which
+    # the native uplink keeps alive while the phone is locked.
+    #
+    # It is a SEPARATE lane from the Translate copy: its rows are keyed by the real
+    # Q&A turn id (not `translatePairs`), and it reuses only the content version
+    # (`_next_watch_copy_seq`) and the lossless pager, which are what make a long
+    # answer readable and an older attempt rejectable.
+
+    def _qa_copy_reset_state(self) -> None:
+        """Drop the Q&A lane's rows and mint its stream identity.
+
+        Same contract as `_watch_copy_reset`: a queued page, a replay or a late
+        frame from the previous conversation must never reappear on the Watch.
+        """
+        self._qa_copy_session = uuid.uuid4().hex
+        self._qa_copy_id = ""
+        self._qa_copy_question = ""
+        self._qa_copy_buf = ""
+        self._qa_copy_failed = False
+        self._qa_copy_done = {}
+        self._qa_copy_row_q: dict[str, str] = {}
+        self._qa_copy_row_a: dict[str, str] = {}
+        self._qa_copy_row_failed: dict[str, bool] = {}
+        self._qa_copy_seq_of: dict[str, int] = {}
+        self._qa_copy_order = {}
+        self._qa_copy_next_order = 0
+
+    QA_COPY_BATCH = 200
+
+    def _qa_copy_order_for(self, qid: str) -> int:
+        """Stable turn position, assigned the first time a turn is seen.
+
+        The recovery walk advances by this, never by `seq`: a retry moves the
+        version, not the turn's place in the conversation.
+        """
+        tid = (qid or "").strip()
+        if not tid:
+            return 0
+        held = self._qa_copy_order.get(tid)
+        if held:
+            return int(held)
+        self._qa_copy_next_order = int(self._qa_copy_next_order or 0) + 1
+        self._qa_copy_order[tid] = self._qa_copy_next_order
+        return self._qa_copy_next_order
+
+    def _qa_copy_remember(self, qid: str, *, seq: int, done: bool) -> None:
+        """Freeze the LAST attempt of a Q&A turn for the phone's recovery."""
+        self._qa_copy_row_q[qid] = self._qa_copy_question
+        self._qa_copy_row_a[qid] = self._qa_copy_buf
+        self._qa_copy_row_failed[qid] = bool(self._qa_copy_failed)
+        self._qa_copy_seq_of[qid] = int(seq or 0)
+        self._qa_copy_done[qid] = bool(done)
+
+    def _qa_copy_batch(self, before_order: int = 0) -> dict | None:
+        """This Q&A stream's turns, so a phone that missed the stream can catch up.
+
+        Only the LAST attempt of a turn is recoverable (an earlier attempt was
+        superseded, and replaying it would overwrite the answer the user saw).
+        `has_more` / `oldest_order` mirror the Translate batch so the phone can keep
+        walking back without skipping a turn.
+        """
+        if getattr(self, "_workspace", "") != "interview":
+            return None
+        orders = self._qa_copy_order
+        if not orders:
+            return None
+        entries = []
+        for tid, order in orders.items():
+            order = int(order or 0)
+            if before_order > 0 and order >= before_order:
+                continue
+            entries.append({
+                "id": tid,
+                "question": self._qa_copy_row_q.get(tid, ""),
+                "answer": self._qa_copy_row_a.get(tid, ""),
+                "failed": bool(self._qa_copy_row_failed.get(tid)),
+                "done": bool(self._qa_copy_done.get(tid)),
+                "seq": int(self._qa_copy_seq_of.get(tid, 0) or 0),
+                "order": order,
+            })
+        if not entries:
+            return None
+        entries.sort(key=lambda row: row["order"])
+        has_more = len(entries) > self.QA_COPY_BATCH
+        rows = entries[-self.QA_COPY_BATCH:]
+        return {
+            "type": "qa_rows",
+            "session_id": self._qa_copy_session,
+            "rows": rows,
+            "has_more": has_more,
+            "oldest_order": rows[0]["order"] if rows else 0,
+        }
+
+    def _qa_copy_row(
+        self,
+        qid: str,
+        *,
+        question: str | None = None,
+        answer: str | None = None,
+        done: bool = False,
+        failed: bool | None = None,
+        ok: bool | None = None,
+    ) -> dict | None:
+        if getattr(self, "_workspace", "") != "interview":
+            return None
+        tid = (qid or "").strip()
+        if not tid:
+            return None
+        src = question if question is not None else self._qa_copy_question
+        dst = answer if answer is not None else self._qa_copy_buf
+        if question is not None:
+            self._qa_copy_question = question
+        if answer is not None:
+            self._qa_copy_buf = answer
+        if failed is not None:
+            self._qa_copy_failed = bool(failed)
+        seq = self._next_watch_copy_seq()
+        row: dict = {
+            "type": "qa_copy",
+            "id": tid,
+            "question": src,
+            "answer": dst,
+            "seq": seq,
+            "session_id": self._qa_copy_session,
+            "done": bool(done),
+            # Stable turn position, so a replayed / late row can be placed even
+            # before its own copy frame arrives (mirrors the Translate `order`).
+            "order": self._qa_copy_order_for(tid),
+            # Always present, like the Translate row: a successful retry must be
+            # able to clear a failure the Watch is still showing.
+            "failed": bool(self._qa_copy_failed),
+        }
+        if ok is not None:
+            row["ok"] = bool(ok)
+        # A long answer is paged so the locked phone's native path hands the Watch
+        # joinable pages instead of one oversized WCSession dictionary (#219).
+        if len(src) > WATCH_COPY_PAGE_MAX:
+            row["question_pages"] = watch_copy_pages(src)
+        if len(dst) > WATCH_COPY_PAGE_MAX:
+            row["answer_pages"] = watch_copy_pages(dst)
+        self._qa_copy_remember(tid, seq=seq, done=done)
+        return row
+
+    def _maybe_qa_copy(self, ev: dict) -> dict | None:
+        """Mirror a Live Q&A turn onto the audio socket for the locked phone.
+
+        Returns the row to send (staged by ``_routed_emit``) or ``None``.
+
+        Only the committed `question` adopts the lane. A chunk / done / failure
+        whose id is not the adopted turn is a late event from an attempt New, a
+        mode switch, a reconnect or a superseded retry has already abandoned, so
+        it is dropped rather than allowed to roll the row back.
+        """
+        if getattr(self, "_workspace", "") != "interview":
+            return None
+        kind = ev.get("type")
+        if kind not in ("question", "chunk", "error", "done"):
+            return None
+        if kind == "question":
+            text = str(ev.get("text") or "")
+            if not text.strip() or self.pipeline._is_internal(text, "ask"):
+                # Internal prompts (translate / notes / report) are not a user
+                # question and must never become the Q&A row on the Watch.
+                return None
+            qid = str(ev.get("id") or "")
+            if not qid:
+                return None
+            # A new question row starts a fresh answer: a re-ask of a superseded
+            # turn must not append onto the previous text (mirrors the Translate
+            # lane's re-ask handling), and a retry of the same turn starts its own
+            # attempt at a newer content version.
+            self._qa_copy_id = qid
+            self._qa_copy_question = text
+            self._qa_copy_buf = ""
+            self._qa_copy_failed = False
+            return self._qa_copy_row(qid, answer="", done=False, failed=False)
+        qid = str(ev.get("id") or "")
+        if not qid or qid != self._qa_copy_id:
+            return None
+        if kind == "chunk":
+            self._qa_copy_buf += str(ev.get("text") or "")
+            self._qa_copy_failed = False
+            return self._qa_copy_row(qid, answer=self._qa_copy_buf, done=False, failed=False)
+        if kind == "error":
+            # A real model/quota failure. Unlike Translate there is no cancelled
+            # ask here: a Q&A answer that never started emits no `question` at all.
+            return self._qa_copy_row(qid, failed=True)
+        done = self._qa_copy_row(
+            qid,
+            done=True,
+            failed=bool(self._qa_copy_failed),
+            ok=bool(ev.get("ok", True)),
+        )
+        if done is not None:
+            # The phone consumes this done on the control socket too; naming the
+            # turn lets it mark the row failed instead of looking finished.
+            ev["qa_id"] = qid
+            ev["qa_failed"] = bool(self._qa_copy_failed)
+        return done
 
     def _maybe_watch_copy(self, ev: dict) -> dict | None:
         """Mirror a Translate row onto the audio socket for the locked phone.

@@ -47,7 +47,7 @@ type WatchPlugin = {
   addListener(event: 'command', cb: (ev: WatchCommand) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'pcm', cb: (ev: WatchPcm) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'saveResult', cb: (ev: { save?: string; sessionId?: string }) => void): Promise<{ remove: () => Promise<void> }>
-  addListener(event: 'watchCopy', cb: (ev: { id?: string; original?: string; translation?: string; seq?: number; order?: number; done?: boolean; failed?: boolean; sessionId?: string }) => void): Promise<{ remove: () => Promise<void> }>
+  addListener(event: 'watchCopy', cb: (ev: { id?: string; original?: string; translation?: string; seq?: number; order?: number; done?: boolean; failed?: boolean; sessionId?: string; kind?: string }) => void): Promise<{ remove: () => Promise<void> }>
 }
 
 const NodWatch = registerPlugin<WatchPlugin>('NodWatch')
@@ -308,7 +308,7 @@ export function installWatchRemote(handlers: {
   onTtsLive: () => void
   onTtsTap: () => void
   onTtsVoice: (voice: 'male' | 'female') => void
-  onWatchCopy: (ev: { id: string; original: string; translation: string; seq: number; order: number; failed: boolean; session: string }) => void
+  onWatchCopy: (ev: { id: string; original: string; translation: string; seq: number; order: number; failed: boolean; session: string; kind: 'translate' | 'qa' }) => void
 }): () => void {
   if (!isNativeApp()) return () => undefined
   let gone = false
@@ -397,6 +397,9 @@ export function installWatchRemote(handlers: {
         order: typeof ev.order === 'number' ? ev.order : Number(ev.order || 0),
         failed: Boolean(ev.failed),
         session: String(ev.sessionId || ''),
+        // `translate` | `qa`: the native lane tags which pane a copy belongs to, so
+        // a Live Q&A row is never merged into the Translate pairs.
+        kind: ev.kind === 'qa' ? 'qa' : 'translate',
       })
     })
     handles.push(command, pcm, watchCopy)

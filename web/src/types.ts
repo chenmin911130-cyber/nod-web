@@ -187,6 +187,9 @@ export type EngineEvent =
   // #219: the copy session's Translate rows, sent on reconnect so a phone that was
   // locked longer than the native replay (24 rows) can fill in the gaps.
   | { type: 'translate_rows'; session_id?: string; rows: Array<{ id: string; original: string; translation: string; failed?: boolean; seq?: number; order?: number }>; has_more?: boolean; oldest_order?: number }
+  // #219 follow-up: the Live Q&A lane's turns, sent on reconnect so the phone pane
+  // matches the answer the locked native path already put on the Watch.
+  | { type: 'qa_rows'; session_id?: string; rows: Array<{ id: string; question: string; answer: string; failed?: boolean; done?: boolean; seq?: number; order?: number }>; has_more?: boolean; oldest_order?: number }
   | { type: 'chunk'; id: string; text: string; copy_seq?: number; copy_id?: string }
   | ({ type: 'sources'; id?: string } & AnswerSources)
   // #182: the server's authoritative Think value. Sent when a session reset turns
