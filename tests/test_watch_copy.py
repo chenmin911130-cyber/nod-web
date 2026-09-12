@@ -429,3 +429,34 @@ class WatchCopyTests(unittest.TestCase):
         self.assertEqual(newest["id"], "pair-200")
         self.assertEqual(newest["translation"], "第200句！")
         self.assertGreater(newest["seq"], newest_batch["rows"][0]["seq"])
+
+    def test_the_voice_question_carries_its_sentence_order(self):
+        """The phone builds its row from the question, before any copy frame."""
+        sess, events, audio = self._session()
+        sess._emit_translate_pieces("Hello there", "en", None)
+        q = next(e for e in events if e.get("type") == "question")
+        self.assertEqual(q["order"], 1)
+        self.assertEqual(q["server_translate"], True)
+        sess._emit_translate_pieces("Again please", "en", None)
+        q2 = [e for e in events if e.get("type") == "question"][-1]
+        self.assertEqual(q2["order"], 2)
+        # A retry of the first row keeps its order.
+        sess.emit({
+            "type": "question",
+            "id": "ask-retry",
+            "text": f"[NOD_TRANSLATE:{q['id']}]\nTranslate only this line:\nHello there",
+        })
+        sess.emit({"type": "chunk", "id": "ask-retry", "text": "重译"})
+        self.assertEqual(sess._watch_copy_order_for(q["id"]), 1)
+        self.assertEqual(sess._watch_copy_order_for(q2["id"]), 2)
+
+    def test_a_typed_row_learns_its_order_from_the_ask(self):
+        sess, events, audio = self._session()
+        sess.emit({
+            "type": "question",
+            "id": "ask-typed",
+            "text": "[NOD_TRANSLATE:typed-1]\nTranslate only this line:\nhello",
+        })
+        q = next(e for e in events if e.get("type") == "question")
+        self.assertEqual(q["order"], 1)
+        self.assertEqual(sess._watch_copy_order_for("typed-1"), 1)

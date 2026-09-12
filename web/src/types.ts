@@ -179,7 +179,7 @@ export type EngineEvent =
   | { type: 'phase'; capture: CaptureState; engine: EngineState }
   | { type: 'status'; text: string }
   | { type: 'partial'; text: string; language?: string; speaker?: string }
-  | { type: 'question'; id: string; text: string; language?: string; speaker?: string; think?: boolean; submit_id?: string; server_translate?: boolean; translation?: string }
+  | { type: 'question'; id: string; text: string; language?: string; speaker?: string; think?: boolean; submit_id?: string; server_translate?: boolean; translation?: string; order?: number }
   | { type: 'line_update'; id: string; text: string; language?: string; speaker?: string; rev: number }
   // #219: which Watch copy session is current (New / clear / switch mode / Start
   // mint a new one). The phone needs it to tell a fresh session from a replay.

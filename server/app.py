@@ -4126,6 +4126,9 @@ class Session:
             if speaker:
                 ev["speaker"] = speaker
             ev["server_translate"] = True
+            # The phone builds its row from this event, before any copy frame: give
+            # it the stable sentence position so recovered rows can be ordered (#219).
+            ev["order"] = self._watch_copy_order_for(ev["id"])
             originals = getattr(self, "_watch_copy_original", None)
             if originals is None:
                 originals = {}
@@ -5525,6 +5528,27 @@ class Session:
         self._watch_copy_seq = max(int(getattr(self, "_watch_copy_seq", 0) or 0) + 1, now_ms)
         return self._watch_copy_seq
 
+    def _watch_copy_order_for(self, pair_id: str) -> int:
+        """Stable sentence position, assigned the first time a row is seen.
+
+        Every entry point that creates a Translate row (the voice question, the
+        internal ask, the watch copy itself) goes through here, so the phone can
+        order recovered rows even before any copy frame arrives.
+        """
+        pid = (pair_id or "").strip()
+        if not pid:
+            return 0
+        orders = getattr(self, "_watch_copy_order", None)
+        if orders is None:
+            orders = {}
+            self._watch_copy_order = orders
+        held = orders.get(pid)
+        if held:
+            return int(held)
+        self._watch_copy_next_order = int(getattr(self, "_watch_copy_next_order", 0) or 0) + 1
+        orders[pid] = self._watch_copy_next_order
+        return self._watch_copy_next_order
+
     def _watch_copy_row(
         self,
         pair_id: str,
@@ -5572,16 +5596,9 @@ class Session:
             held_seq = {}
             self._watch_copy_seq_of = held_seq
         held_seq[pid] = seq
-        orders = getattr(self, "_watch_copy_order", None)
-        if orders is None:
-            orders = {}
-            self._watch_copy_order = orders
-        if pid not in orders:
-            self._watch_copy_next_order = int(getattr(self, "_watch_copy_next_order", 0) or 0) + 1
-            orders[pid] = self._watch_copy_next_order
         # The sentence's position in the session, for recovery ordering. Never
         # derived from `seq`: a retry moves `seq`, not the sentence.
-        row["order"] = orders[pid]
+        row["order"] = self._watch_copy_order_for(pid)
         # A long copy is paged so the locked phone's native path can hand the
         # Watch joinable pages instead of one oversized dictionary (#219).
         if len(src) > WATCH_COPY_PAGE_MAX:
@@ -5655,6 +5672,9 @@ class Session:
             if bind:
                 self._watch_copy_pair = bind
                 self._watch_copy_ask = str(ev.get("id") or "")
+                # A typed row was created by the client before the server saw it:
+                # stamp the order on the ask so the phone can place it.
+                ev["order"] = self._watch_copy_order_for(bind)
                 if bind not in getattr(self, "_watch_copy_original", {}):
                     src = self._watch_original_from_prompt(ev.get("text") or "")
                     if src:

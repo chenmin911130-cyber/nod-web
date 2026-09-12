@@ -60,7 +60,7 @@ import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
 import { currentWatchCopySeq, installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
-import { applyChunk, applySnapshot, copySessionAccepts, snapshotApplies, upsertCopyRows } from './copyVersion'
+import { applyChunk, applyCopyRow, applySnapshot, copySessionAccepts, snapshotApplies, upsertCopyRows } from './copyVersion'
 import { watchStartListenCommand } from './watchReplay'
 import { buildWatchFace } from './watchStatus'
 import { isSpeaking, listenSessionShouldAutoSpeak, nextLiveUtterances, onSpeakingChange, readTtsMode, readTtsVoice, speakTranslation, speechTapShouldStop, stopSpeech, unlockSpeech, writeTtsMode, writeTtsVoice, type TtsMode, type TtsVoice } from './tts'
@@ -466,8 +466,14 @@ function reducer(state: AppState, action: Action): AppState {
           const text = ev.text ?? ''
           if (isTranslatePrompt(text)) {
             const tagged = translateBindFromPrompt(text)
+            // A typed row exists locally before the server saw it; the ask carries
+            // the stable order it was given.
+            const translatePairs = tagged && typeof ev.order === 'number'
+              ? state.translatePairs.map((p) => (p.id === tagged && p.copyOrder === undefined ? { ...p, copyOrder: ev.order } : p))
+              : state.translatePairs
             return {
               ...state,
+              translatePairs,
               translateAskId: qid,
               translateBindId: tagged || state.translateBindId,
               partial: '',
@@ -558,6 +564,9 @@ function reducer(state: AppState, action: Action): AppState {
               to: state.translateTo,
               from: state.translateFrom !== 'auto' ? state.translateFrom : sttTag(ev.language),
               passthrough: Boolean(ev.translation),
+              // The server's stable sentence position, so a later catch-up can be
+              // ordered even before any copy frame updates this row.
+              copyOrder: ev.order,
             }]
             return { ...state, translatePairs, currentQ: text, currentQId: qid, partial: '', heardLang: heard ?? state.heardLang }
           }
@@ -1030,35 +1039,28 @@ function reducer(state: AppState, action: Action): AppState {
       // the phone already cleared (New / switch mode / Start): never merge it.
       if (!copySessionAccepts(state.watchSession, action.session)) return state
       const watchSession = state.watchSession || action.session || ''
-      const idx = state.translatePairs.findIndex((p) => p.id === action.id)
-      if (idx >= 0) {
-        // Never regress a row the incremental path already advanced past this
-        // version (the snapshot can arrive after the chunks it contains).
-        if (!snapshotApplies(state.translatePairs[idx].copySeq, action.seq)) return state
-        const translatePairs = state.translatePairs.map((p) =>
-          p.id === action.id
-            ? { ...applySnapshot(p, action.translation, action.seq, action.failed), original: action.original || p.original }
-            : p,
-        )
-        return { ...state, translatePairs, watchSession }
-      }
-      if (!action.original.trim() && !action.translation.trim()) return state
-      return {
-        ...state,
-        watchSession,
-        translatePairs: [...state.translatePairs, {
-          id: action.id,
-          ts: formatClock(),
-          original: action.original,
-          translation: action.translation,
-          to: state.translateTo,
-          copySeq: action.seq,
-          copyOrder: action.order,
-          // A row that failed while the phone was locked is first created here:
-          // dropping the flag would clear the Watch's failure note.
-          failed: Boolean(action.failed),
-        }],
-      }
+      // One merge for every real path: it fills the stable sentence order, inserts
+      // a missing (replayed / retried / evicted) row where it belongs, and keeps
+      // the version rules for the text.
+      const translatePairs = applyCopyRow(state.translatePairs, {
+        id: action.id,
+        original: action.original,
+        translation: action.translation,
+        seq: action.seq,
+        order: action.order,
+        failed: action.failed,
+      }, (row) => ({
+        id: row.id,
+        ts: formatClock(),
+        original: row.original || '',
+        translation: row.translation || '',
+        to: state.translateTo,
+        copySeq: row.seq,
+        copyOrder: row.order,
+        failed: Boolean(row.failed),
+      }))
+      if (translatePairs === state.translatePairs && watchSession === state.watchSession) return state
+      return { ...state, translatePairs, watchSession }
     }
     case 'clear_translation': {
       // 翻译被取消/中断时清掉半截译文，避免 pump 把它当已完成而跳过

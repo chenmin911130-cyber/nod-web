@@ -1,4 +1,4 @@
-import { applyChunk, applySnapshot, chunkApplies, copySessionAccepts, snapshotApplies, upsertCopyRows } from './copyVersion'
+import { applyChunk, applyCopyRow, applySnapshot, chunkApplies, copySessionAccepts, snapshotApplies, upsertCopyRows } from './copyVersion'
 
 // No version on either side: keep the old behaviour (apply).
 if (!snapshotApplies(undefined, undefined)) throw new Error('unversioned snapshot must apply')
@@ -108,10 +108,10 @@ if (!copySessionAccepts('s1', undefined)) throw new Error('a row without a sessi
 if (!copySessionAccepts('s1', 's1')) throw new Error('the current session is accepted')
 if (copySessionAccepts('s2', 's1')) throw new Error('a row of an older session must be dropped')
 
-// #219 ordering: a catch-up is inserted where its SENTENCE ORDER belongs. The
-// phone can receive the newer half first (native replay) and the older half later
-// (server batch); appending would order the list 7..30, 1..6 and the Watch face —
-// built from the last row — would go backwards.
+// #219 ordering: the REAL reducer paths must not lose the sentence order. The
+// reviewer's cases: rows created by the control `question` (no order yet), then a
+// snapshot update, then a batch with the missing older half; and an evicted old row
+// replayed later. Everything goes through the same `applyCopyRow` merge.
 type OrderedPair = Pair & { copyOrder?: number }
 const orderedMake = (row: { id: string; original?: string; translation?: string; failed?: boolean; seq?: number; order?: number }): OrderedPair => ({
   id: row.id,
@@ -121,60 +121,62 @@ const orderedMake = (row: { id: string; original?: string; translation?: string;
   copyOrder: row.order,
   failed: Boolean(row.failed),
 })
-const newerPairs: OrderedPair[] = [
-  { id: 'p7', original: 'L7', translation: '7', copySeq: 700, copyOrder: 7 },
-  { id: 'p8', original: 'L8', translation: '8', copySeq: 800, copyOrder: 8 },
-]
-const ordered = upsertCopyRows(newerPairs, [
-  { id: 'p5', original: 'L5', translation: '5', seq: 500, order: 5 },
-  { id: 'p6', original: 'L6', translation: '6', seq: 600, order: 6 },
-], orderedMake)
-if (ordered.map((p) => p.id).join(',') !== 'p5,p6,p7,p8') {
-  throw new Error(`a catch-up must be inserted by sentence order, got ${ordered.map((p) => p.id).join(',')}`)
-}
-if (ordered[ordered.length - 1].id !== 'p8') {
-  throw new Error('the newest row must stay last: the Watch face shows the last row')
-}
+const ids = (pairs: OrderedPair[]) => pairs.map((p) => p.id).join(',')
+const batch = (from: number, to: number) =>
+  Array.from({ length: to - from + 1 }, (_, i) => ({
+    id: `q${from + i}`, original: `L${from + i}`, translation: `${from + i}`, seq: 1000 + from + i, order: from + i,
+  }))
 
-// A retried early sentence has the NEWEST version but the OLDEST position: the
-// insertion must use the order, not the version.
-const retried = upsertCopyRows(ordered, [
-  { id: 'p5', original: 'L5', translation: '5 retried', seq: 9999, order: 5 },
-], orderedMake)
-if (retried[0].id !== 'p5' || retried[0].translation !== '5 retried') {
-  throw new Error(`a retried early sentence must keep its place and take the new text, got ${JSON.stringify(retried[0])}`)
-}
-if (retried.map((p) => p.id).join(',') !== 'p5,p6,p7,p8') {
-  throw new Error('a retry must not reorder the list')
-}
-if (retried[retried.length - 1].id !== 'p8') {
-  throw new Error('a retry of an older sentence must not become the current row')
-}
-
-// Replaying them again changes nothing.
-if (upsertCopyRows(ordered, [
-  { id: 'p5', original: 'L5', translation: '5', seq: 500, order: 5 },
-  { id: 'p6', original: 'L6', translation: '6', seq: 600, order: 6 },
-], orderedMake) !== ordered) {
-  throw new Error('a replayed catch-up must leave the list identical')
-}
-// A row with no order still lands (at the end) rather than being dropped.
-const noOrder = upsertCopyRows(newerPairs, [{ id: 'px', original: 'LX', translation: 'X' }], orderedMake)
-if (noOrder.length !== 3 || noOrder[2].id !== 'px') {
-  throw new Error('an ordered-less catch-up row is appended')
-}
-
-// The full wake-up shape: the native replay brought 7..30, the server batch then
-// brings 1..30 — the list ends up 1..30 with the newest row last.
-const replayHalf: OrderedPair[] = Array.from({ length: 24 }, (_, i) => ({
-  id: `q${i + 7}`, original: `L${i + 7}`, translation: `${i + 7}`, copySeq: 1000 + i, copyOrder: i + 7,
+// Rows created from the control channel BEFORE their order is known (this is what
+// the reducer produced for 7..30 while the phone was awake).
+let pairs: OrderedPair[] = Array.from({ length: 24 }, (_, i) => ({
+  id: `q${i + 7}`, original: `L${i + 7}`, translation: `${i + 7}`, copySeq: 1000 + i,
 }))
-const batch = Array.from({ length: 30 }, (_, i) => ({
-  id: `q${i + 1}`, original: `L${i + 1}`, translation: `${i + 1}`, seq: 1000 + i, order: i + 1,
-}))
-const woken = upsertCopyRows(replayHalf, batch, orderedMake)
-if (woken.length !== 30) throw new Error(`the wake-up must end with every sentence, got ${woken.length}`)
-if (woken.map((p) => p.id).join(',') !== Array.from({ length: 30 }, (_, i) => `q${i + 1}`).join(',')) {
-  throw new Error(`the wake-up must keep sentence order, got ${woken.map((p) => p.id).join(',')}`)
+// A native snapshot updates the newest row: still no order.
+pairs = applyCopyRow(pairs, { id: 'q30', original: 'L30', translation: '30 updated', seq: 2000 }, orderedMake)
+// The reconnect batch brings the missing older half AND the rows already present.
+pairs = upsertCopyRows(pairs, batch(1, 30), orderedMake)
+if (ids(pairs) !== Array.from({ length: 30 }, (_, i) => `q${i + 1}`).join(',')) {
+  throw new Error(`the batch must restore sentence order, got ${ids(pairs)}`)
 }
-if (woken[woken.length - 1].id !== 'q30') throw new Error('the current row must still be the newest sentence')
+if (pairs[pairs.length - 1].id !== 'q30') {
+  throw new Error('the current row must be the newest sentence, not the restored old one')
+}
+if (pairs[29].translation !== '30 updated') throw new Error('the batch must not regress newer text')
+if (!pairs.every((p) => typeof p.copyOrder === 'number')) {
+  throw new Error('the batch must fill the order on rows that had none')
+}
+
+// An old row evicted from the native 24-row replay and replayed/retried later must
+// be inserted at its place, not appended after the newest sentence.
+const evicted = upsertCopyRows(pairs.slice(10), [{ id: 'q3', original: 'L3', translation: '3 retried', seq: 9999, order: 3 }], orderedMake)
+if (evicted[0].id !== 'q3' || evicted[0].translation !== '3 retried') {
+  throw new Error(`a replayed old row must be inserted at its place, got ${ids(evicted)}`)
+}
+if (evicted[evicted.length - 1].id !== 'q30') throw new Error('a replay must not become the current row')
+
+// Replaying the same batch changes nothing (same array reference).
+const replay = upsertCopyRows(pairs, batch(1, 30), orderedMake)
+if (replay !== pairs) throw new Error('a replayed batch must leave the list identical')
+
+// A missing row with an order lands between its neighbours.
+const inserted = applyCopyRow(
+  [{ id: 'a', original: 'A', translation: 'A', copyOrder: 1 }, { id: 'c', original: 'C', translation: 'C', copyOrder: 3 }],
+  { id: 'b', original: 'B', translation: 'B', seq: 5, order: 2 },
+  orderedMake,
+)
+if (ids(inserted) !== 'a,b,c') throw new Error(`a missing row must land in order, got ${ids(inserted)}`)
+
+// A retried early sentence keeps its place with the newest version.
+const retried = applyCopyRow(pairs, { id: 'q3', original: 'L3', translation: '3 retried', seq: 9999, order: 3 }, orderedMake)
+if (retried[2].id !== 'q3' || retried[2].translation !== '3 retried') {
+  throw new Error(`a retried sentence keeps its place and takes the new text, got ${ids(retried)}`)
+}
+if (retried[retried.length - 1].id !== 'q30') throw new Error('a retry must not become the current row')
+
+// A row the server has not ordered yet (a locally typed pair) stays last.
+const localRow = applyCopyRow(pairs, { id: 'typed-1', original: 'Typed', translation: 'T', seq: 5000 }, orderedMake)
+if (localRow[localRow.length - 1].id !== 'typed-1') throw new Error('an unordered local row stays last')
+const later = applyCopyRow(localRow, { id: 'typed-1', original: 'Typed', translation: 'T', seq: 5000, order: 31 }, orderedMake)
+if (later[later.length - 1].id !== 'typed-1') throw new Error('learning the order keeps the row last')
+if (later.filter((p) => p.id === 'typed-1').length !== 1) throw new Error('no duplicate row')

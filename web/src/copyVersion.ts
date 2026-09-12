@@ -68,42 +68,77 @@ export type CopyBatchRow = {
 }
 
 /**
- * Merge a reconnect batch into the phone's rows.
+ * Merge one copy row into the phone's rows — the single entry point every real
+ * path uses (the live watchCopy snapshot, the reconnect batch, a replayed row).
  *
- * The batch exists because the native replay holds only 24 sentences: a longer
- * lock screen would leave gaps. Rows the phone already has go through the same
- * version rules as the live paths, so a batch can never regress newer text;
- * missing rows are created (keeping their failure state) in batch order.
+ * It fills the stable sentence order onto rows that lack it, inserts a missing row
+ * where that order says it belongs, applies the version rules to the text, and
+ * re-sorts when the order changed. Ordering never uses `copySeq`: a retried early
+ * sentence has the newest version but the oldest position (#219 review).
  */
+export function applyCopyRow<T extends CopyRow & { id: string; original: string }>(
+  pairs: T[],
+  row: CopyBatchRow,
+  make: (row: CopyBatchRow) => T,
+): T[] {
+  if (!row?.id) return pairs
+  const at = pairs.findIndex((p) => p.id === row.id)
+  let next = pairs
+  let touched = false
+  if (at < 0) {
+    if (!(row.original || '').trim() && !(row.translation || '').trim()) return pairs
+    const created = make(row)
+    let insertAt = next.length
+    if (typeof row.order === 'number') {
+      const after = next.findIndex((p) => typeof p.copyOrder === 'number' && (p.copyOrder as number) > row.order!)
+      if (after >= 0) insertAt = after
+    }
+    next = [...next.slice(0, insertAt), created, ...next.slice(insertAt)]
+    touched = true
+  } else {
+    const current = next[at]
+    const merged = applySnapshot(current, row.translation ?? current.translation, row.seq, row.failed)
+    const original = row.original || current.original
+    const copyOrder = current.copyOrder === undefined && typeof row.order === 'number' ? row.order : current.copyOrder
+    if (merged !== current || original !== current.original || copyOrder !== current.copyOrder) {
+      next = next.map((p, i) => (i === at ? { ...merged, original, copyOrder } : p))
+      touched = true
+    }
+  }
+  return touched ? sortCopyRows(next) : pairs
+}
+
+/**
+ * Stable sort by the immutable sentence order. Rows without one (a locally typed
+ * pair the server has not seen yet) keep their relative position and stay after
+ * the ordered rows. Returns the same array when it is already ordered.
+ */
+export function sortCopyRows<T extends { copyOrder?: number }>(pairs: T[]): T[] {
+  let last = -Infinity
+  let sawUnordered = false
+  for (const p of pairs) {
+    if (typeof p.copyOrder === 'number') {
+      if (sawUnordered || p.copyOrder < last) {
+        const ordered = pairs.filter((q) => typeof q.copyOrder === 'number').sort((a, b) => (a.copyOrder as number) - (b.copyOrder as number))
+        const unordered = pairs.filter((q) => typeof q.copyOrder !== 'number')
+        return [...ordered, ...unordered]
+      }
+      last = p.copyOrder
+    } else {
+      sawUnordered = true
+    }
+  }
+  return pairs
+}
+
+/** Merge a reconnect batch: `applyCopyRow` for each row, in order. */
 export function upsertCopyRows<T extends CopyRow & { id: string; original: string }>(
   pairs: T[],
   rows: CopyBatchRow[],
   make: (row: CopyBatchRow) => T,
 ): T[] {
   let next = pairs
-  for (const row of rows) {
-    if (!row?.id) continue
-    const at = next.findIndex((p) => p.id === row.id)
-    if (at < 0) {
-      if (!(row.original || '').trim() && !(row.translation || '').trim()) continue
-      // Insert where the SENTENCE ORDER says it belongs. Appending would put a
-      // catch-up of the OLDER half (7..30 arrives first, then 1..6) after the
-      // newer rows, so the list — and the Watch face, which shows the last row —
-      // would go backwards. The content version cannot be used for this: a retried
-      // early sentence gets a newer version than every later sentence (#219).
-      let insertAt = next.length
-      if (typeof row.order === 'number') {
-        const after = next.findIndex((p) => typeof p.copyOrder === 'number' && (p.copyOrder as number) > row.order!)
-        if (after >= 0) insertAt = after
-      }
-      next = [...next.slice(0, insertAt), make(row), ...next.slice(insertAt)]
-      continue
-    }
-    const merged = applySnapshot(next[at], row.translation || '', row.seq, row.failed)
-    const original = row.original || next[at].original
-    if (merged === next[at] && original === next[at].original) continue
-    next = next.map((p, i) => (i === at ? { ...merged, original } : p))
-  }
+  for (const row of rows) next = applyCopyRow(next, row, make)
   return next
 }
 
