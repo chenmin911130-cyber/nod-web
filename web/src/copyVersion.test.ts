@@ -180,3 +180,18 @@ if (localRow[localRow.length - 1].id !== 'typed-1') throw new Error('an unordere
 const later = applyCopyRow(localRow, { id: 'typed-1', original: 'Typed', translation: 'T', seq: 5000, order: 31 }, orderedMake)
 if (later[later.length - 1].id !== 'typed-1') throw new Error('learning the order keeps the row last')
 if (later.filter((p) => p.id === 'typed-1').length !== 1) throw new Error('no duplicate row')
+
+// An order of 0 means "unknown" (an older server / a frame without one): the row
+// must not jump to the front, and a later real order still lands it correctly.
+const zeroOrder = applyCopyRow(
+  [{ id: 'z9', original: 'L9', translation: '9', copyOrder: 9 }],
+  { id: 'z0', original: 'L0', translation: '0', seq: 10, order: 0 },
+  orderedMake,
+)
+if (zeroOrder.map((p) => p.id).join(',') !== 'z9,z0') {
+  throw new Error(`an unknown order must append, got ${zeroOrder.map((p) => p.id).join(',')}`)
+}
+const learned = applyCopyRow(zeroOrder, { id: 'z0', original: 'L0', translation: '0', seq: 10, order: 3 }, orderedMake)
+if (learned.map((p) => p.id).join(',') !== 'z0,z9') {
+  throw new Error(`learning a real order must place the row, got ${learned.map((p) => p.id).join(',')}`)
+}

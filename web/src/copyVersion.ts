@@ -82,6 +82,9 @@ export function applyCopyRow<T extends CopyRow & { id: string; original: string 
   make: (row: CopyBatchRow) => T,
 ): T[] {
   if (!row?.id) return pairs
+  // Sentence order is 1-based on the server: 0 means "no order information" (an
+  // older server, or a frame that predates it), never "position zero".
+  const order = typeof row.order === 'number' && row.order > 0 ? row.order : undefined
   const at = pairs.findIndex((p) => p.id === row.id)
   let next = pairs
   let touched = false
@@ -89,8 +92,8 @@ export function applyCopyRow<T extends CopyRow & { id: string; original: string 
     if (!(row.original || '').trim() && !(row.translation || '').trim()) return pairs
     const created = make(row)
     let insertAt = next.length
-    if (typeof row.order === 'number') {
-      const after = next.findIndex((p) => typeof p.copyOrder === 'number' && (p.copyOrder as number) > row.order!)
+    if (order !== undefined) {
+      const after = next.findIndex((p) => typeof p.copyOrder === 'number' && p.copyOrder > 0 && p.copyOrder > order)
       if (after >= 0) insertAt = after
     }
     next = [...next.slice(0, insertAt), created, ...next.slice(insertAt)]
@@ -99,7 +102,7 @@ export function applyCopyRow<T extends CopyRow & { id: string; original: string 
     const current = next[at]
     const merged = applySnapshot(current, row.translation ?? current.translation, row.seq, row.failed)
     const original = row.original || current.original
-    const copyOrder = current.copyOrder === undefined && typeof row.order === 'number' ? row.order : current.copyOrder
+    const copyOrder = current.copyOrder === undefined || current.copyOrder <= 0 ? (order ?? current.copyOrder) : current.copyOrder
     if (merged !== current || original !== current.original || copyOrder !== current.copyOrder) {
       next = next.map((p, i) => (i === at ? { ...merged, original, copyOrder } : p))
       touched = true
@@ -114,16 +117,17 @@ export function applyCopyRow<T extends CopyRow & { id: string; original: string 
  * the ordered rows. Returns the same array when it is already ordered.
  */
 export function sortCopyRows<T extends { copyOrder?: number }>(pairs: T[]): T[] {
+  const ordered = (p: { copyOrder?: number }): boolean => typeof p.copyOrder === 'number' && p.copyOrder > 0
   let last = -Infinity
   let sawUnordered = false
   for (const p of pairs) {
-    if (typeof p.copyOrder === 'number') {
-      if (sawUnordered || p.copyOrder < last) {
-        const ordered = pairs.filter((q) => typeof q.copyOrder === 'number').sort((a, b) => (a.copyOrder as number) - (b.copyOrder as number))
-        const unordered = pairs.filter((q) => typeof q.copyOrder !== 'number')
-        return [...ordered, ...unordered]
+    if (ordered(p)) {
+      if (sawUnordered || (p.copyOrder as number) < last) {
+        const withOrder = pairs.filter(ordered).sort((a, b) => (a.copyOrder as number) - (b.copyOrder as number))
+        const withoutOrder = pairs.filter((q) => !ordered(q))
+        return [...withOrder, ...withoutOrder]
       }
-      last = p.copyOrder
+      last = p.copyOrder as number
     } else {
       sawUnordered = true
     }
