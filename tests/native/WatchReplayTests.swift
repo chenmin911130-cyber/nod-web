@@ -448,6 +448,100 @@ func waitSend() {
     bridge.markJsReady()
     check(queuedPages() == 2, "the Watch-ready re-push re-queues every page")
 
+    // #219 P1: a queued tail page carries ONLY the copy. A queued transfer can be
+    // delivered long after it was created, so replaying sessionId/save/pcm/hint
+    // from that moment would rebind the current recording to an old session.
+    let tailKeys: Set<String> = ["copyId", "copySegIndex", "copySegTotal", "copyVersion", "original", "translation"]
+    WCSession.default.messages.removeAll()
+    WCSession.default.receivedApplicationContext = [:]
+    bridge.pushStatus(
+        capture: "listening", hint: "hint-old", original: "Lead", translation: longPage,
+        previous: "prev-old", copyId: "keys-1",
+        history: [["id": "h", "title": "t", "text": "x"]],
+        mode: "translate", langPair: "en→zh", save: "local", sessionId: "sess-old",
+        originalSegments: ["Lead", "Lead tail"], translationSegments: [longPage, tailPage]
+    )
+    let tailRows = WCSession.default.messages.filter { ($0["copySegIndex"] as? Int) == 1 }
+    check(!tailRows.isEmpty, "the tail page is queued")
+    for row in tailRows {
+        check(Set(row.keys) == tailKeys, "a queued tail page carries only the copy, got \(Set(row.keys).sorted())")
+        check(row["sessionId"] == nil && row["save"] == nil && row["hint"] == nil && row["history"] == nil,
+              "a queued tail page must not carry status/save/pcm fields")
+    }
+    // The application context (page 0) still carries the live status.
+    eq(WCSession.default.receivedApplicationContext["sessionId"] as? String ?? "", "sess-old")
+    eq(WCSession.default.receivedApplicationContext["save"] as? String ?? "", "local")
+    check(WCSession.default.receivedApplicationContext["history"] != nil, "page 0 keeps the history preview")
+
+    // #219 P2: the page set carries a content version. An unchanged set keeps the
+    // same version and is not re-queued; a changed page bumps it and is re-queued
+    // alone; a Watch-ready re-push re-queues everything at the same version.
+    func queuedSegIndexes() -> [Int] {
+        // The live sendMessage carries page 0 too; only pages after it are queued.
+        WCSession.default.messages.compactMap { $0["copySegIndex"] as? Int }.filter { $0 > 0 }
+    }
+    func queuedVersions() -> [Int] {
+        WCSession.default.messages.compactMap { row -> Int? in
+            guard let index = row["copySegIndex"] as? Int, index > 0 else { return nil }
+            return row["copyVersion"] as? Int
+        }
+    }
+    func contextVersion() -> Int {
+        WCSession.default.receivedApplicationContext["copyVersion"] as? Int ?? -1
+    }
+    WCSession.default.messages.removeAll()
+    WCSession.default.receivedApplicationContext = [:]
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "v0", translation: "V0",
+        copyId: "ver-1", originalSegments: ["v0", "v1"], translationSegments: ["V0", "V1"]
+    )
+    let firstVersion = contextVersion()
+    check(firstVersion > 0, "the first paged push carries a content version")
+    eq(queuedSegIndexes(), [1])
+    eq(queuedVersions(), [firstVersion])
+
+    WCSession.default.messages.removeAll()
+    bridge.pushStatus(
+        capture: "listening", hint: "save state", original: "v0", translation: "V0",
+        copyId: "ver-1", originalSegments: ["v0", "v1"], translationSegments: ["V0", "V1"]
+    )
+    eq(contextVersion(), firstVersion)
+    check(queuedSegIndexes().isEmpty, "an unchanged page set is not re-queued")
+
+    // Three pages, only the last changes: one version bump, one queued page.
+    WCSession.default.messages.removeAll()
+    WCSession.default.receivedApplicationContext = [:]
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "w0", translation: "W0",
+        copyId: "ver-2", originalSegments: ["w0", "w1", "w2"], translationSegments: ["W0", "W1", "W2"]
+    )
+    let threePageVersion = contextVersion()
+    WCSession.default.messages.removeAll()
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "w0", translation: "W0",
+        copyId: "ver-2", originalSegments: ["w0", "w1", "w2"], translationSegments: ["W0", "W1", "W2 changed"]
+    )
+    let changedVersion = contextVersion()
+    eq(changedVersion, threePageVersion + 1)
+    eq(queuedSegIndexes(), [2])
+    eq(WCSession.default.messages.last?["copyVersion"] as? Int ?? -1, changedVersion)
+    eq(WCSession.default.messages.last?["copySegTotal"] as? Int ?? -1, 3)
+
+    // A changed head starts a new generation on the Watch, which resets every
+    // slot: all pages are re-queued for it even when a tail text is unchanged.
+    WCSession.default.messages.removeAll()
+    bridge.pushStatus(
+        capture: "listening", hint: "", original: "w0 new", translation: "W0 new",
+        copyId: "ver-2", originalSegments: ["w0 new", "w1", "w2"], translationSegments: ["W0 new", "W1", "W2 changed"]
+    )
+    eq(contextVersion(), changedVersion + 1)
+    eq(queuedSegIndexes(), [1, 2])
+
+    WCSession.default.messages.removeAll()
+    bridge.markJsReady()
+    eq(contextVersion(), changedVersion + 1)
+    eq(queuedSegIndexes(), [1, 2])
+
     // One page behaves exactly as before: no page fields at all.
     WCSession.default.messages.removeAll()
     WCSession.default.receivedApplicationContext = [:]
@@ -515,6 +609,103 @@ func waitSend() {
     eq(watch.translation, "整段替换")
     eq(watch.original, "one shot")
     eq(watch.copyId, "c7")
+
+    // #219 P2: pages carry a content version, so a straggler from an older stream
+    // edit / Retry cannot overwrite a newer slot or glue mixed text onto a new head.
+    let versioned = WatchPhoneSession(
+        sendBuffer: WatchSendBuffer(),
+        pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("versioned")),
+        connect: false
+    )
+    deliver(versioned, ["copyId": "v1", "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 1, "original": "o0", "translation": "t0"])
+    deliver(versioned, ["copyId": "v1", "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 1, "original": "o1", "translation": "t1"])
+    eq(versioned.translation, "t0t1")
+    // A later version of the same copy updates the tail.
+    deliver(versioned, ["copyId": "v1", "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 2, "original": "o0", "translation": "t0"])
+    deliver(versioned, ["copyId": "v1", "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 2, "original": "o1", "translation": "t1-new"])
+    eq(versioned.translation, "t0t1-new")
+    // A late page of the OLDER version must not overwrite the newer slot.
+    deliver(versioned, ["copyId": "v1", "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 1, "original": "o1", "translation": "t1-stale"])
+    eq(versioned.translation, "t0t1-new")
+    // Same version re-delivered is idempotent.
+    deliver(versioned, ["copyId": "v1", "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 2, "original": "o1", "translation": "t1-new"])
+    eq(versioned.translation, "t0t1-new")
+    // A late OLDER page 0 must not become the current content again.
+    deliver(versioned, ["copyId": "v1", "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 1, "original": "o0-stale", "translation": "t0-stale"])
+    eq(versioned.translation, "t0t1-new")
+    eq(versioned.original, "o0o1")
+    // Retry / stream edit: the head text changes at a newer version. The slots
+    // reset, so a straggler of the previous generation is dropped instead of being
+    // glued onto the new head; the re-queued page of this generation then applies.
+    deliver(versioned, ["copyId": "v1", "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 5, "original": "r0", "translation": "r0"])
+    eq(versioned.translation, "r0")
+    deliver(versioned, ["copyId": "v1", "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 2, "original": "o1", "translation": "t1-stale"])
+    eq(versioned.translation, "r0")
+    deliver(versioned, ["copyId": "v1", "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 5, "original": "r1", "translation": "r1"])
+    eq(versioned.translation, "r0r1")
+    // A new copy id starts its own version stream (the phone's counter is per run).
+    deliver(versioned, ["copyId": "v2", "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 1, "original": "n0", "translation": "n0"])
+    eq(versioned.translation, "n0")
+    deliver(versioned, ["copyId": "v2", "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 1, "original": "n1", "translation": "n1"])
+    eq(versioned.translation, "n0n1")
+    // A payload with no version (an older phone) keeps the previous behaviour.
+    deliver(versioned, ["copyId": "v3", "copySegIndex": 0, "copySegTotal": 2, "original": "L0", "translation": "L0"])
+    deliver(versioned, ["copyId": "v3", "copySegIndex": 1, "copySegTotal": 2, "original": "L1", "translation": "L1"])
+    eq(versioned.translation, "L0L1")
+    deliver(versioned, ["copyId": "v3", "copySegIndex": 1, "copySegTotal": 2, "original": "L1", "translation": "L1-b"])
+    eq(versioned.translation, "L0L1-b")
+
+    // A queued tail page carries no session/capture/save fields, so receiving one
+    // cannot rebind the recording to the session it was created in.
+    let boundBuffer = WatchSendBuffer()
+    boundBuffer.bindSession("sess-live")
+    let boundWatch = WatchPhoneSession(
+        sendBuffer: boundBuffer,
+        pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("bound")),
+        connect: false
+    )
+    deliver(boundWatch, ["copyId": "b1", "copySegIndex": 0, "copySegTotal": 2, "copyVersion": 1, "original": "B0", "translation": "B0"])
+    deliver(boundWatch, ["copyId": "b1", "copySegIndex": 1, "copySegTotal": 2, "copyVersion": 1, "original": "B1", "translation": "B1"])
+    eq(boundWatch.translation, "B0B1")
+    eq(boundBuffer.sessionId, "sess-live")
+
+    func versionApplies(
+        incoming: Int?,
+        pageIndex: Int,
+        sameCopyId: Bool = true,
+        slotVersion: Int? = nil,
+        page0Version: Int = 0,
+        generationVersion: Int = 0
+    ) -> Bool {
+        WatchPhoneSession.copyPageVersionApplies(
+            incoming: incoming,
+            pageIndex: pageIndex,
+            sameCopyId: sameCopyId,
+            slotVersion: slotVersion,
+            page0Version: page0Version,
+            generationVersion: generationVersion
+        )
+    }
+    check(versionApplies(incoming: nil, pageIndex: 1, slotVersion: 9, page0Version: 9, generationVersion: 9),
+          "no version keeps the legacy apply")
+    check(!versionApplies(incoming: 3, pageIndex: 1, slotVersion: 4, generationVersion: 2),
+          "an older tail loses to its slot")
+    check(versionApplies(incoming: 4, pageIndex: 1, slotVersion: 4, generationVersion: 2),
+          "the same tail version is idempotent")
+    check(!versionApplies(incoming: 1, pageIndex: 1, generationVersion: 5),
+          "a tail older than the copy generation is dropped")
+    check(versionApplies(incoming: 5, pageIndex: 1, generationVersion: 5),
+          "a tail of the current generation applies")
+    check(!versionApplies(incoming: 4, pageIndex: 0, page0Version: 5),
+          "an older page 0 never becomes current")
+    check(versionApplies(incoming: 5, pageIndex: 0, page0Version: 5),
+          "the same page 0 version is idempotent")
+    check(versionApplies(incoming: 9, pageIndex: 0, page0Version: 5),
+          "a newer page 0 applies")
+    check(versionApplies(incoming: 1, pageIndex: 0, sameCopyId: false, page0Version: 9),
+          "a new copy id starts its own version stream")
+    check(versionApplies(incoming: 1, pageIndex: 1, sameCopyId: false, slotVersion: 9, generationVersion: 9),
+          "a new copy's tail is not compared across copies")
 
     func restart(id: String, index: Int, text: String, stored: String?) -> Bool {
         WatchPhoneSession.copyPageStartsNewCopy(

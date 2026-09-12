@@ -28,6 +28,16 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
     /// prefix it holds (`copyPageTotal` bounds the join).
     private var copyOriginalPages: [Int: String] = [:]
     private var copyTranslationPages: [Int: String] = [:]
+    /// `copyVersion` the phone stamped on each slot. A page older than the slot it
+    /// targets is a straggler from before a stream edit / Retry and is dropped.
+    private var copyPageVersions: [Int: Int] = [:]
+    /// Version of the page 0 currently on screen: an older page 0 must not become
+    /// the current content again.
+    private var copyPage0Version = 0
+    /// Version at which the current copy's head text was queued. Tail pages older
+    /// than this belong to a previous content generation and must not be glued
+    /// onto the current head.
+    private var copyGenerationVersion = 0
     private var copyPageTotal = 0
     @Published var history: [WatchHistItem] = []
     @Published var reachable = false
@@ -800,12 +810,38 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         return incomingOriginal != storedOriginal || incomingTranslation != storedTranslation
     }
 
+    /// Whether a page may be applied, by content version. A page older than the
+    /// slot it targets loses to the newer content already there; a tail page older
+    /// than the copy's current head belongs to a previous generation (stream edit /
+    /// Retry), even when its slot was just reset. A payload with no version (an
+    /// older phone) carries no ordering information and applies as before.
+    static func copyPageVersionApplies(
+        incoming: Int?,
+        pageIndex: Int,
+        sameCopyId: Bool,
+        slotVersion: Int?,
+        page0Version: Int,
+        generationVersion: Int
+    ) -> Bool {
+        guard let incoming else { return true }
+        // A different copy id starts its own version stream: the phone's counter is
+        // per app run, so cross-copy comparison would reject a legitimate new copy.
+        guard sameCopyId else { return true }
+        if pageIndex == 0 { return incoming >= page0Version }
+        if incoming < generationVersion { return false }
+        if let slotVersion, incoming < slotVersion { return false }
+        return true
+    }
+
     /// Drop paged copy state. `copyId`'s didSet calls this on a copy change; the
     /// session reset points (New / Stop) also clear it explicitly.
     private func resetCopyPages() {
         copyOriginalPages.removeAll()
         copyTranslationPages.removeAll()
+        copyPageVersions.removeAll()
         copyPageTotal = 0
+        copyPage0Version = 0
+        copyGenerationVersion = 0
     }
 
     /// Longest run of pages held from index 0. A missing page shows its prefix
@@ -1271,6 +1307,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
         let pageIndex = Self.intField(payload, "copySegIndex") ?? -1
         let paged = pageTotal > 0 && pageIndex >= 0 && pageIndex < pageTotal
         let pageCopyId = payload["copyId"] as? String ?? copyId
+        let pageVersion = Self.intField(payload, "copyVersion")
         if paged {
             // A late page of a superseded copy is ignored for the copy fields only:
             // the rest of the payload (capture, hint, save, speech) still applies.
@@ -1278,7 +1315,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                 let incomingId = pageCopyId
                 let incomingOriginal = payload["original"] as? String ?? ""
                 let incomingTranslation = payload["translation"] as? String ?? ""
-                if Self.copyPageStartsNewCopy(
+                let newCopy = Self.copyPageStartsNewCopy(
                     incomingId: incomingId,
                     currentId: copyId,
                     pageIndex: pageIndex,
@@ -1286,15 +1323,35 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, WK
                     incomingTranslation: incomingTranslation,
                     storedOriginal: copyOriginalPages[0],
                     storedTranslation: copyTranslationPages[0]
+                )
+                if Self.copyPageVersionApplies(
+                    incoming: pageVersion,
+                    pageIndex: pageIndex,
+                    sameCopyId: incomingId == copyId,
+                    slotVersion: copyPageVersions[pageIndex],
+                    page0Version: copyPage0Version,
+                    generationVersion: copyGenerationVersion
                 ) {
-                    resetCopyPages()
-                    copyId = incomingId
+                    if newCopy {
+                        resetCopyPages()
+                        if incomingId != copyId { copyId = incomingId }
+                    }
+                    copyPageTotal = pageTotal
+                    copyOriginalPages[pageIndex] = incomingOriginal
+                    copyTranslationPages[pageIndex] = incomingTranslation
+                    if let pageVersion {
+                        copyPageVersions[pageIndex] = max(copyPageVersions[pageIndex] ?? pageVersion, pageVersion)
+                    }
+                    if pageIndex == 0 {
+                        if let pageVersion { copyPage0Version = max(copyPage0Version, pageVersion) }
+                        // A changed head text is a new content generation: pages of
+                        // the previous generation stay rejected until re-queued at
+                        // this version (the bridge re-queues them all).
+                        if newCopy, let pageVersion { copyGenerationVersion = pageVersion }
+                    }
+                    original = joinedCopy(copyOriginalPages)
+                    translation = joinedCopy(copyTranslationPages)
                 }
-                copyPageTotal = pageTotal
-                copyOriginalPages[pageIndex] = incomingOriginal
-                copyTranslationPages[pageIndex] = incomingTranslation
-                original = joinedCopy(copyOriginalPages)
-                translation = joinedCopy(copyTranslationPages)
             }
         } else {
             // Unpaged payload: the whole copy (backwards compatible), so drop any

@@ -30,6 +30,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private var queuedCopyId = ""
     private var queuedOriginalPages: [String] = []
     private var queuedTranslationPages: [String] = []
+    /// Content version of the paged copy. It increments only when the page set
+    /// changes (page text or copy id), never on a Watch-ready re-push, so the Watch
+    /// can drop a page that arrives after newer content replaced it.
+    private var copyPageVersion = 0
     private var lastHistory: [[String: String]] = []
     private var lastMode = ""
     private var lastLangPair = ""
@@ -399,6 +403,24 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
+        // Content version + per-page queue decision. The version is bumped BEFORE
+        // the payload is built so page 0 and the pages queued with it agree; a
+        // Watch-ready re-push (`forceQueue`) re-sends without bumping, because the
+        // content did not change.
+        let copyIdChanged = queuedCopyId != lastCopyId
+        let pagesChanged = copyIdChanged
+            || queuedOriginalPages != originalPages
+            || queuedTranslationPages != translationPages
+        if pagesChanged {
+            // The Watch compares versions, so a content change must be observable.
+            copyPageVersion += 1
+        }
+        // A changed head text starts a new copy generation on the Watch, which
+        // resets every slot: all pages must be re-queued for it even when a tail
+        // page's own text is unchanged.
+        let headChanged = queuedOriginalPages.first != originalPages.first
+            || queuedTranslationPages.first != translationPages.first
+        let queueAll = forceQueue || copyIdChanged || headChanged
         // Page 0 rides the application context (and the live sendMessage); the
         // remaining pages go through transferUserInfo, which is queued and
         // retried, because updateApplicationContext keeps only the last frame.
@@ -410,6 +432,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             "translation": translationPages.first ?? "",
             "previous": previous,
             "copyId": lastCopyId,
+            "copyVersion": copyPageVersion,
             "history": history,
         ]
         if pageCount > 1 {
@@ -477,35 +500,34 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
         }
         // Pages 1..n. Queue them even when the Watch looks unreachable: the Watch
-        // joins by index and shows the longest prefix it holds meanwhile. Only a
-        // changed page set is queued, so a save/hint push does not re-enqueue it.
-        let pagesChanged = forceQueue
-            || queuedCopyId != lastCopyId
-            || queuedOriginalPages != originalPages
-            || queuedTranslationPages != translationPages
-        if pageCount > 1, pagesChanged {
+        // joins by index and shows the longest prefix it holds meanwhile.
+        //
+        // A queued page carries ONLY the copy (id, page slot, version, text). A
+        // transferUserInfo can be delivered long after it was created, so replaying
+        // the rest of the payload (sessionId, save, pcm*, hint) from that moment
+        // would rebind the current recording to an old session.
+        if pageCount > 1 {
             for index in 1..<pageCount {
-                var page = payload
-                page["copySegIndex"] = index
-                page["original"] = index < originalPages.count ? originalPages[index] : ""
-                page["translation"] = index < translationPages.count ? translationPages[index] : ""
-                // Leave the history preview exactly as page 0 sent it: an empty
-                // array here would wipe the Watch's preview on every queued page.
-                page.removeValue(forKey: "history")
-                session.transferUserInfo(page)
+                let originalPage = index < originalPages.count ? originalPages[index] : ""
+                let translationPage = index < translationPages.count ? translationPages[index] : ""
+                let alreadyQueued = queuedOriginalPages.indices.contains(index)
+                    && queuedTranslationPages.indices.contains(index)
+                    && queuedOriginalPages[index] == originalPage
+                    && queuedTranslationPages[index] == translationPage
+                if !queueAll, alreadyQueued { continue }
+                session.transferUserInfo([
+                    "copyId": lastCopyId,
+                    "copySegIndex": index,
+                    "copySegTotal": pageCount,
+                    "copyVersion": copyPageVersion,
+                    "original": originalPage,
+                    "translation": translationPage,
+                ])
             }
         }
-        if pageCount > 1 {
-            queuedCopyId = lastCopyId
-            queuedOriginalPages = originalPages
-            queuedTranslationPages = translationPages
-        } else {
-            // A single-page copy leaves nothing queued; make the next paged copy
-            // queue again even if it matches an older page set.
-            queuedCopyId = ""
-            queuedOriginalPages = []
-            queuedTranslationPages = []
-        }
+        queuedCopyId = lastCopyId
+        queuedOriginalPages = originalPages
+        queuedTranslationPages = translationPages
     }
 
     static func watchListenMode(_ raw: String) -> String {
