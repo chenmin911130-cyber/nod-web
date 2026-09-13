@@ -31,13 +31,13 @@ const n = (v) => Number(v.toFixed(3))
  * revision of this file dropped the second "o" and drew the t where it belongs. */
 const G = {
   n: { x: 356, stem: 9.5, apex: 778, base: 822, archR: 19.5 },
-  o: { cx: 424.5, cy: 800.5, ro: 22.5, ri: 5.5 },
-  d: { stem: 489, sw: 9.5, top: 762, base: 822, cx: 475.5, cy: 800.5, ro: 22.5, ri: 5.5 },
-  p: { stem: 508, sw: 9.5, cx: 529, cy: 800.5, ro: 22.5, ri: 6.5, desc: 838 },
+  o: { cx: 424.5, cy: 800.25, ro: 22, ri: 12 },
+  d: { stem: 488, sw: 9.5, top: 762, base: 822, cx: 475.5, cy: 800.25, ro: 22, ri: 12 },
+  p: { stem: 508, sw: 9.5, cx: 529, cy: 800.25, ro: 21.5, ri: 12.5, desc: 838 },
   i: { x: 559, w: 10, top: 778, base: 822, dotCy: 768, dotR: 5.5 },
   l: { x: 580, w: 10, top: 762, base: 822 },
-  o2: { cx: 619.5, cy: 800.5, ro: 22.5, ri: 5.5 },
-  t: { stem: 653.75, sw: 10, top: 766, base: 822, cbX: 646, cbW: 27.5, cbY: 778, cbH: 9.5 },
+  o2: { cx: 619.5, cy: 800.25, ro: 22, ri: 12 },
+  t: { stem: 654, sw: 10, top: 766, bendY: 812, barRight: 673.5, base: 822, cbX: 646, cbW: 27.5, cbY: 778, cbH: 9.5 },
 }
 
 const ring = (cx, cy, ro, ri) =>
@@ -94,13 +94,16 @@ function wordSVG(dx) {
   P.push(`<circle cx="${n(g.i.x + g.i.w / 2)}" cy="${g.i.dotCy}" r="${g.i.dotR}"/>`)
   P.push(`<rect x="${g.l.x}" y="${g.l.top}" width="${g.l.w}" height="${g.l.base - g.l.top}"/>`)
   P.push(ring(g.o2.cx, g.o2.cy, g.o2.ro, g.o2.ri))
-  // t -- stem with a rightward baseline tail; the crossbar is its own rounded rect
+  // t -- stem plus a baseline bar hooking right. In the design the bar runs from
+  // the stem's left edge out to x 673.5 with a rounded bottom-left (r 9), and the
+  // stem stops where the bar begins. The old path closed back to the stem's
+  // centreline, which self-intersected and ate the left half of the stem.
   const t = g.t
-  const ax = n(t.stem + t.sw)
-  const R2 = n(t.sw / 2)
-  const ry = n(t.base - R2)
   P.push(
-    `<path d="M${t.stem} ${t.top} h${t.sw} V${ry} A${R2} ${R2} 0 0 0 ${ax} ${n(t.base)} H${n(t.stem + t.sw / 2)} V${ry} Z"/>`,
+    `<path d="M${t.stem} ${t.top} H${n(t.stem + t.sw)} V${t.bendY} H${n(t.barRight - 4)} ` +
+      `A4 4 0 0 1 ${n(t.barRight)} ${n(t.bendY + 4)} V${n(t.base - 4)} ` +
+      `A4 4 0 0 1 ${n(t.barRight - 4)} ${t.base} H${n(t.stem + 9)} ` +
+      `A9 9 0 0 1 ${t.stem} ${n(t.bendY + 1)} Z"/>`,
   )
   P.push(`<rect x="${t.cbX}" y="${t.cbY}" width="${t.cbW}" height="${t.cbH}"/>`)
   return `<g transform="translate(${r(dx)} 0)" fill="${F4}">${P.join('')}</g>`

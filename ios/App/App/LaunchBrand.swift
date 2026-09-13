@@ -230,7 +230,7 @@ enum BrandLaunch {
         p.closeSubpath()
 
         // d stem
-        p.addRect(CGRect(x: 489, y: 762, width: 9.5, height: 60))
+        p.addRect(CGRect(x: 488, y: 762, width: 9.5, height: 60))
         // p stem (the descender reaches 838)
         p.addRect(CGRect(x: 508, y: 778, width: 9.5, height: 60))
         // i and its dot
@@ -238,13 +238,18 @@ enum BrandLaunch {
         p.addEllipse(in: CGRect(x: 564 - 5.5, y: 768 - 5.5, width: 11, height: 11))
         // l
         p.addRect(CGRect(x: 580, y: 762, width: 10, height: 59))
-        // t — a stem with a rounded foot, plus the bar that reads as the "+" of the design
-        p.move(to: CGPoint(x: 659, y: 766))
-        p.addLine(to: CGPoint(x: 668.5, y: 766))
-        p.addLine(to: CGPoint(x: 668.5, y: 817.25))
-        appendArc(p, to: CGPoint(x: 668.5, y: 822), radius: 4.75, largeArc: false, sweep: false)
-        p.addLine(to: CGPoint(x: 663.75, y: 822))
-        p.addLine(to: CGPoint(x: 663.75, y: 817.25))
+        // t — stem plus a baseline bar hooking right: in the design the bar runs
+        // from the stem's left edge out to x 673.5, its bottom-left rounded (r 9),
+        // and the stem stops where the bar begins.
+        p.move(to: CGPoint(x: 654, y: 766))
+        p.addLine(to: CGPoint(x: 664, y: 766))
+        p.addLine(to: CGPoint(x: 664, y: 812))
+        p.addLine(to: CGPoint(x: 669.5, y: 812))
+        appendArc(p, to: CGPoint(x: 673.5, y: 816), radius: 4, largeArc: false, sweep: false)
+        p.addLine(to: CGPoint(x: 673.5, y: 818))
+        appendArc(p, to: CGPoint(x: 669.5, y: 822), radius: 4, largeArc: false, sweep: false)
+        p.addLine(to: CGPoint(x: 663, y: 822))
+        appendArc(p, to: CGPoint(x: 654, y: 813), radius: 9, largeArc: false, sweep: false)
         p.closeSubpath()
         p.addRect(CGRect(x: 646, y: 778, width: 27.5, height: 9.5))
 
@@ -255,10 +260,10 @@ enum BrandLaunch {
     /// Each ring is two concentric circles, so this one needs the **even-odd** rule.
     static let wordmarkRingsPath: CGPath = {
         let p = CGMutablePath()
-        addRing(to: p, centerX: 424.5, centerY: 800.5, outer: 22.5, inner: 5.5)
-        addRing(to: p, centerX: 475.5, centerY: 800.5, outer: 22.5, inner: 5.5)
-        addRing(to: p, centerX: 529, centerY: 800.5, outer: 22.5, inner: 6.5)
-        addRing(to: p, centerX: 619.5, centerY: 800.5, outer: 22.5, inner: 5.5)
+        addRing(to: p, centerX: 424.5, centerY: 800.25, outer: 22, inner: 12)
+        addRing(to: p, centerX: 475.5, centerY: 800.25, outer: 22, inner: 12)
+        addRing(to: p, centerX: 529, centerY: 800.25, outer: 21.5, inner: 12.5)
+        addRing(to: p, centerX: 619.5, centerY: 800.25, outer: 22, inner: 12)
         return p
     }()
 

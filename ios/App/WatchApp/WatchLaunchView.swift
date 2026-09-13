@@ -232,24 +232,26 @@ enum WatchBrandMark {
 
 // MARK: - The wordmark
 
-/// The wordmark, rebuilt geometrically the way the design doc says it was
-/// ("rounded rectangle stems + true circle bowls", not a system font), so the
-/// Watch renders the same letterforms as the phone at any size.
+/// The wordmark, transcribed from `tools/brand/compose.mjs` — the same glyph table
+/// the phone draws from: rounded stems and true circle bowls, not a system font, so
+/// the Watch renders the same letterforms as the phone at any size.
 ///
-/// Local space: x 0..321, y 0..76 — the wordmark's ink box in the design frame.
-/// Vertically 0 = ascender (design 762), 16 = x-height (778), 60 = baseline
-/// (822), 76 = the descender of "p" (838).
+/// Local space (as built in `shapes()`): x 0..317.5, y 0..76 — the glyph ink box in
+/// the design frame (design x 356..673.5, y 762..838), shifted right by one unit at
+/// the end so it sits in the 321-wide asset box (design x 355..676). Vertically
+/// 0 = ascender (762), 16 = x-height (778), 60 = baseline (822), 76 = the descender
+/// of "p" (838).
 ///
-/// NOTE for the design/asset owners: the tracked `wordmark.svg` (and the AI
-/// bitmap behind it) contains only seven glyphs — "nodpil" plus a cross-shaped
-/// "t" — i.e. the second "o" of "nodpilot" is missing, and the drawn ink is 291
-/// units wide inside the 321-unit box the spec measures. A launch page that
-/// spelled "nodpil+" would be a defect, and 321 units is exactly one "o" wider
-/// than what is drawn, so this rebuild draws the eight glyphs of "nodpilot" and
-/// fills the specified box. This is the one place the Watch deliberately does
-/// not copy the tracked vector source.
+/// The glyphs sit at the design's own x positions, so the inter-glyph gaps are the
+/// design's measured 8/7/10/8/11/8/12 rather than one shared advance: a uniform gap
+/// made the letters wider and the gaps tighter than the design. The counters are the
+/// design's r 12 (r 12.5 in "p") — 24 units against a 44-unit x-height; an earlier
+/// revision drew r 5.75 slivers, which made the bowls read as solid blobs.
 enum WatchBrandWordmark {
-    private static let stemWidth: CGFloat = 10.5
+    /// The design's two stem weights and its round dot.
+    private static let thinStem: CGFloat = 9.5 // n, d, p
+    private static let fullStem: CGFloat = 10 // i, l, t
+    private static let dotRadius: CGFloat = 5.5
     /// The design's wordmark metrics in local units, shared with the layout audit.
     /// 0 is the ascender (design 762), `xHeightTop` the x-height (778), `baseline`
     /// the baseline (822) and `descender` the foot of "p" (838).
@@ -257,69 +259,66 @@ enum WatchBrandWordmark {
     static let baseline: CGFloat = 60
     static let descender: CGFloat = 76
     private static let bowlCentreY: CGFloat = 38.25
-    private static let bowlOuter: CGFloat = 22.75
-    private static let bowlInner: CGFloat = 5.75
 
     /// The wordmark's solid ink and its rings. Rings must be filled even-odd (the
     /// counter of each bowl is a second subpath) and solids must be filled
     /// normally, so the two never share a fill call: a bowl and a stem overlap
     /// ("d", "p") and even-odd would punch the overlap out.
     static func shapes() -> (ink: Path, rings: Path) {
-        let glyphs: [(width: CGFloat, ink: Path, rings: Path)] = [
-            (45.5, n(), Path()),
-            (45.5, Path(), bowl(centreX: 22.75, inner: bowlInner)),
-            (48.75, stem(x: 38.25, y: 0, height: baseline), bowl(centreX: 22.75, inner: bowlInner)),
-            (48.75, stem(x: 0, y: bowlCentreY - bowlOuter, height: descender - (bowlCentreY - bowlOuter)),
-             bowl(centreX: 26, inner: 6.25)),
-            (10.5, i(), Path()),
-            (10.5, stem(x: 0, y: 0, height: baseline), Path()),
-            (45.5, Path(), bowl(centreX: 22.75, inner: bowlInner)),
-            (36, t(), Path()),
-        ]
-        // One uniform gap makes the eight glyphs fill the design's ink extent
-        // exactly (317.5 wide, inset one unit into the 321 asset box), so the
-        // composition keeps the phone's geometry rather than drifting ~1% wider.
-        let inkTotal = glyphs.reduce(0) { $0 + $1.width }
-        let gap = (WatchBrandGeometry.wordmarkInkWidth - inkTotal) / CGFloat(glyphs.count - 1)
         var ink = Path()
         var rings = Path()
-        var x: CGFloat = WatchBrandGeometry.wordmarkInkInset
-        for glyph in glyphs {
-            let shift = CGAffineTransform(translationX: x, y: 0)
-            ink.addPath(glyph.ink.applying(shift))
-            rings.addPath(glyph.rings.applying(shift))
-            x += glyph.width + gap
-        }
-        return (ink, rings)
+        ink.addPath(n()) // n      ink x   0..39
+        rings.addPath(bowl(centreX: 68.5, outer: 22, inner: 12)) // o      x  46.5..90.5
+        ink.addPath(stem(x: 132, y: 0, height: baseline, width: thinStem)) // d stem
+        rings.addPath(bowl(centreX: 119.5, outer: 22, inner: 12)) // d      x  97.5..141.5
+        rings.addPath(bowl(centreX: 173, outer: 21.5, inner: 12.5)) // p bowl
+        ink.addPath(stem(
+            x: 152,
+            y: bowlCentreY - 21.5,
+            height: descender - (bowlCentreY - 21.5),
+            width: thinStem
+        )) // p      x 151.5..194.5
+        ink.addPath(i()) // i      x 203..213
+        ink.addPath(stem(x: 224, y: 0, height: baseline, width: fullStem)) // l      x 224..234
+        rings.addPath(bowl(centreX: 263.5, outer: 22, inner: 12)) // o (2)  x 241.5..285.5
+        ink.addPath(t()) // t      x 290..317.5
+        // The asset box is one unit wider than the ink on the left, exactly as the
+        // phone's asset is, so the finished ink carries the same inset.
+        let inset = CGAffineTransform(translationX: WatchBrandGeometry.wordmarkInkInset, y: 0)
+        return (ink.applying(inset), rings.applying(inset))
     }
 
-    /// "n" as a stroked arch: the shoulder's outer radius is the bowl radius, so
-    /// the mark's arch and the wordmark's shoulder share one curve language.
+    /// "n": a 9.5-wide stroke whose arch has the design's outer radius 19.5, so the
+    /// apex lands exactly on the x-height (778) instead of towering over it.
     private static func n() -> Path {
-        let r = bowlOuter - stemWidth / 2
+        let outer: CGFloat = 19.5
+        let r = outer - thinStem / 2 // 14.75: the arch's centreline
+        let centreY = xHeightTop + outer // 35.5
         var centreline = Path()
-        centreline.move(to: CGPoint(x: stemWidth / 2, y: baseline))
-        centreline.addLine(to: CGPoint(x: stemWidth / 2, y: bowlCentreY))
+        centreline.move(to: CGPoint(x: thinStem / 2, y: baseline))
+        centreline.addLine(to: CGPoint(x: thinStem / 2, y: centreY))
         centreline.addRelativeArc(
-            center: CGPoint(x: stemWidth / 2 + r, y: bowlCentreY),
+            center: CGPoint(x: thinStem / 2 + r, y: centreY),
             radius: r,
             startAngle: .degrees(180),
             delta: .degrees(180)
         )
-        centreline.addLine(to: CGPoint(x: stemWidth / 2 + 2 * r, y: baseline))
+        centreline.addLine(to: CGPoint(x: thinStem / 2 + 2 * r, y: baseline))
         return centreline.strokedPath(
-            StrokeStyle(lineWidth: stemWidth, lineCap: .butt, lineJoin: .round)
+            StrokeStyle(lineWidth: thinStem, lineCap: .butt, lineJoin: .round)
         )
     }
 
-    /// A bowl and its counter, as two subpaths for an even-odd fill.
-    private static func bowl(centreX: CGFloat, inner: CGFloat) -> Path {
+    /// A bowl and its counter, as two subpaths for an even-odd fill. The counter is
+    /// the design's r 12 (r 12.5 in "p"), i.e. a ~10-unit stroke, not the sliver an
+    /// earlier revision drew.
+    private static func bowl(centreX: CGFloat, outer: CGFloat, inner: CGFloat) -> Path {
         var path = Path()
         path.addEllipse(in: CGRect(
-            x: centreX - bowlOuter,
-            y: bowlCentreY - bowlOuter,
-            width: bowlOuter * 2,
-            height: bowlOuter * 2
+            x: centreX - outer,
+            y: bowlCentreY - outer,
+            width: outer * 2,
+            height: outer * 2
         ))
         path.addEllipse(in: CGRect(
             x: centreX - inner,
@@ -330,38 +329,69 @@ enum WatchBrandWordmark {
         return path
     }
 
-    private static func stem(x: CGFloat, y: CGFloat, height: CGFloat) -> Path {
+    private static func stem(x: CGFloat, y: CGFloat, height: CGFloat, width: CGFloat) -> Path {
         var path = Path()
-        path.addRect(CGRect(x: x, y: y, width: stemWidth, height: height))
+        path.addRect(CGRect(x: x, y: y, width: width, height: height))
         return path
     }
 
-    /// "i": the stem plus the design's round dot.
+    /// "i": the stem plus the design's round dot, centred on the stem.
     private static func i() -> Path {
-        var path = stem(x: 0, y: xHeightTop, height: baseline - xHeightTop)
-        let dot: CGFloat = 5.75
-        path.addEllipse(in: CGRect(x: 5.25 - dot, y: 6.5 - dot, width: dot * 2, height: dot * 2))
+        var path = stem(x: 203, y: xHeightTop, height: baseline - xHeightTop, width: fullStem)
+        path.addEllipse(in: CGRect(
+            x: 208 - dotRadius,
+            y: 6 - dotRadius,
+            width: dotRadius * 2,
+            height: dotRadius * 2
+        ))
         return path
     }
 
-    /// "t": stem, flat crossbar and a rounded foot, with the bar symmetric about
-    /// the stem so it reads as a "t" and not as the bitmap's cross shape.
+    /// "t": a 10-wide stem and a baseline bar hooking out to the ink's right edge,
+    /// with the design's rounded right end (r 4) and rounded bottom-left (r 9), plus
+    /// the crossbar resting on the x-height. The bar — not the stem — is what makes
+    /// the t as wide as the design; an earlier revision drew it symmetric about the
+    /// stem, which read as a cross.
     private static func t() -> Path {
-        let foot: CGFloat = 5.25
-        let k = foot * 0.5523
-        let left = (36 - stemWidth) / 2
+        let stemLeft: CGFloat = 298
+        let stemRight: CGFloat = 308
+        let bend: CGFloat = 50
+        // The bar ends exactly at the ink box's right edge, so the t defines the
+        // wordmark's horizontal extent.
+        let right = WatchBrandGeometry.wordmarkInkWidth
+        let crossbarLeft: CGFloat = 290
         var path = Path()
-        path.move(to: CGPoint(x: left, y: 8))
-        path.addLine(to: CGPoint(x: left + stemWidth, y: 8))
-        path.addLine(to: CGPoint(x: left + stemWidth, y: baseline - foot))
-        path.addCurve(
-            to: CGPoint(x: left + stemWidth - foot, y: baseline),
-            control1: CGPoint(x: left + stemWidth, y: baseline - foot + k),
-            control2: CGPoint(x: left + stemWidth - foot + k, y: baseline)
+        path.move(to: CGPoint(x: stemLeft, y: 4))
+        path.addLine(to: CGPoint(x: stemRight, y: 4))
+        path.addLine(to: CGPoint(x: stemRight, y: bend))
+        path.addLine(to: CGPoint(x: right - 4, y: bend))
+        path.addRelativeArc(
+            center: CGPoint(x: right - 4, y: bend + 4),
+            radius: 4,
+            startAngle: .degrees(270),
+            delta: .degrees(90)
         )
-        path.addLine(to: CGPoint(x: left, y: baseline))
+        path.addLine(to: CGPoint(x: right, y: baseline - 4))
+        path.addRelativeArc(
+            center: CGPoint(x: right - 4, y: baseline - 4),
+            radius: 4,
+            startAngle: .degrees(0),
+            delta: .degrees(90)
+        )
+        path.addLine(to: CGPoint(x: stemLeft + 9, y: baseline))
+        path.addRelativeArc(
+            center: CGPoint(x: stemLeft + 9, y: bend + 1),
+            radius: 9,
+            startAngle: .degrees(90),
+            delta: .degrees(90)
+        )
         path.closeSubpath()
-        path.addRect(CGRect(x: 0, y: 12, width: 36, height: 10.5))
+        path.addRect(CGRect(
+            x: crossbarLeft,
+            y: xHeightTop,
+            width: right - crossbarLeft,
+            height: 9.5
+        ))
         return path
     }
 }
