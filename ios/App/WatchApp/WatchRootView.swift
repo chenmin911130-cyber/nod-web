@@ -7,6 +7,14 @@ struct WatchRootView: View {
     @State private var listenPage = 0
     @State private var showStorage = false
     @State private var confirmDeleteId = ""
+    /// The Live Q&A card the user opened. Opening a card pins the copy that was
+    /// on screen, so a question that lands while it is being read cannot replace
+    /// it (#218). Cleared by the user, or by leaving the reading state.
+    @State private var openedQA: WatchQAPage.Card?
+    /// Whether the Q&A card shows the full answer instead of the compact summary.
+    /// Opening it is what pins `heldQA`; closing it hands the page back to the
+    /// newest answer.
+    @State private var qaExpanded = false
 
     private let ink = Color(red: 244 / 255, green: 248 / 255, blue: 252 / 255)
     private let muted = Color(red: 142 / 255, green: 163 / 255, blue: 184 / 255)
@@ -57,6 +65,10 @@ struct WatchRootView: View {
     /// bright page it omits the mode chip, and its waveform is held still because
     /// `dimmed` is true here. It deliberately keeps the full text reachable by
     /// scrolling, because the dim preview is not the whole content on a long answer.
+    ///
+    /// It also deliberately keeps the full copy rather than the compact Live Q&A
+    /// summary (#218): this page must stay static, and it is a preview of the
+    /// content the bright page holds, not a second, differently-summarised view.
     @ViewBuilder
     private func aodContentPage(active: Bool, copyFailed: Bool) -> some View {
         VStack(spacing: 4) {
@@ -445,30 +457,140 @@ struct WatchRootView: View {
         }
     }
 
+    /// Live Q&A on the wrist: a compact answer card by default, the full answer
+    /// after a tap (#218).
+    ///
+    /// The compact text is derived on the Watch from the answer already in
+    /// `session` — `WatchQASummary` is the single seam for it, with no phone
+    /// call, prompt or new sync field. If a question arrives while a card is
+    /// open, the open card stays put and a "new answer" hint appears; only the
+    /// user moves the page. Translate keeps its own page and is untouched.
     private var qaPage: some View {
-        VStack(spacing: 6) {
-            if !session.previous.isEmpty {
+        let display = qaDisplay
+        return VStack(spacing: 6) {
+            if display.newer {
+                Button { returnToLatestQA() } label: {
+                    HStack(spacing: 4) {
+                        Text(WatchCopy.newAnswer)
+                            .font(.caption2.weight(.semibold))
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(cyan)
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(WatchCopy.newAnswer)
+            } else if !session.previous.isEmpty {
                 Text(session.previous)
                     .font(.caption2)
                     .foregroundStyle(muted)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if session.original.isEmpty, session.translation.isEmpty {
+            if let card = display.card {
+                qaCard(card, expanded: display.expanded)
+            } else {
                 Text(WatchCopy.hearQuestion)
                     .font(.headline)
                     .foregroundStyle(ink)
                     .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                copyPair(
-                    original: session.original,
-                    translation: session.translation,
-                    placeholder: session.translation.isEmpty ? WatchCopy.drafting : nil
-                )
             }
             Spacer(minLength: 0)
             listeningWaveform(active: true)
         }
+        .onChange(of: session.copyId) { next in
+            // A new question became the live one. Only an open card keeps the
+            // page from following it; anything else follows immediately.
+            if openedQA == nil { qaExpanded = false }
+            // The live copy was cleared (New / restart): nothing left to hold.
+            if next.isEmpty { resetQACard() }
+        }
+        .onChange(of: session.listening) { listening in
+            if !listening { resetQACard() }
+        }
+    }
+
+    /// The pure page decision (see `WatchQAPage`): the live copy, or the card the
+    /// user opened when a newer question has already replaced the live copy.
+    private var qaDisplay: WatchQAPage.Display {
+        WatchQAPage.display(
+            copyId: session.copyId,
+            question: session.original,
+            answer: session.translation,
+            opened: openedQA,
+            expanded: qaExpanded
+        )
+    }
+
+    /// One Q&A card. Collapsed it is the compact summary; expanded it is the full
+    /// answer. Both stay focusable so the crown scrolls a long answer, and the
+    /// card itself is the tap target for the full text.
+    @ViewBuilder
+    private func qaCard(_ card: WatchQAPage.Card, expanded: Bool) -> some View {
+        let summary = WatchQASummary.compact(from: card.answer)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                if !card.question.isEmpty {
+                    Text(card.question)
+                        .font(.caption2)
+                        .foregroundStyle(muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if session.copyFailed, card.copyId == session.copyId {
+                    copyFailedNote
+                }
+                if card.answer.isEmpty {
+                    // Still coming: never leave the previous answer's summary here.
+                    Text(WatchCopy.drafting)
+                        .font(.headline)
+                        .foregroundStyle(ink)
+                } else if expanded {
+                    Text(card.answer)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text(summary.text)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if summary.hasMore {
+                        Text(WatchCopy.fullText)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(cyan)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { toggleQAExpansion() }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            // The crown/tap reading path also has to be reachable without a tap
+            // gesture (issue #218 keeps the accessibility actions available).
+            .accessibilityAction(named: Text(WatchCopy.fullText)) { toggleQAExpansion() }
+        }
+        .id(card.copyId.isEmpty ? "qa-live" : card.copyId)
+        .focusable()
+    }
+
+    private func toggleQAExpansion() {
+        (openedQA, qaExpanded) = WatchQAPage.toggle(qaDisplay)
+    }
+
+    /// User-initiated only: nothing on the session's update path calls this, so a
+    /// new question can never move the page on its own (#218).
+    private func returnToLatestQA() {
+        resetQACard()
+    }
+
+    private func resetQACard() {
+        openedQA = nil
+        qaExpanded = false
     }
 
     private var savePrompt: some View {
