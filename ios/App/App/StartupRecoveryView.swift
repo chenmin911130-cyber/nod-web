@@ -45,15 +45,18 @@ final class StartupRecoveryView: UIView {
     }
 
     static var message: String {
+        // Wording stays neutral about the cause: this page covers a broken bundle
+        // and a failed first load, not only a bad network, so it must not tell the
+        // user to check a connection that may be fine.
         pick([
-            "zh": "无法加载，请检查网络后重试",
-            "en": "Couldn't load. Check your network and try again.",
-            "it": "Impossibile caricare. Controlla la rete e riprova.",
-            "es": "No se pudo cargar. Comprueba la red e inténtalo de nuevo.",
-            "fr": "Impossible de charger. Vérifie le réseau et réessaie.",
-            "de": "Laden fehlgeschlagen. Netzwerk prüfen und erneut versuchen.",
-            "pt": "Não foi possível carregar. Verifique a rede e tente novamente.",
-            "ja": "読み込めません。ネットワークを確認して再試行してください。",
+            "zh": "无法加载，请重试",
+            "en": "Couldn't load. Try again.",
+            "it": "Impossibile caricare. Riprova.",
+            "es": "No se pudo cargar. Inténtalo de nuevo.",
+            "fr": "Échec du chargement. Réessayez.",
+            "de": "Laden fehlgeschlagen. Erneut versuchen.",
+            "pt": "Não foi possível carregar. Tente novamente.",
+            "ja": "読み込めませんでした。もう一度お試しください。",
         ])
     }
 
