@@ -62,7 +62,7 @@ function pluginPathEntries(pbx, podsDir) {
   let m
   while ((m = re.exec(pbx))) {
     const p = m[1]
-    if (!/nod-(mic|watch|auth)/.test(p)) continue
+    if (!/nod-(mic|watch|auth|splash)/.test(p)) continue
     const abs = resolve(podsDir, p)
     hits.push(existsSync(abs) ? realpathSync(abs) : abs)
   }
