@@ -510,9 +510,9 @@ export function buildManifest({ root, args, run = runCapture, now = () => new Da
     }
     const archivePath = resolve(root, args.archivePath || join(out, 'Nod.xcarchive'))
     if (!args.noArchive) {
-      runArchive({ root, run, archivePath, teamId: args.teamId, scheme: args.scheme || 'App' })
+      runArchive({ root, run, archivePath, teamId: args.teamId, scheme: args.scheme || 'App', derivedDataPath: join(out, 'DerivedData') })
       verified.push(`xcodebuild archive -> ${archivePath}`)
-      archive = { path: realpathSync(archivePath), digest: digestTree(archivePath).digest }
+      archive = { path: realpathSync(archivePath), digest: digestTree(archivePath).digest, derivedData: join(out, 'DerivedData') }
       if (args.ipa) {
         const ipaPath = exportIpa({ root, run, out, archivePath, teamId: args.teamId })
         ipa = { path: ipaPath, digest: digestFile(ipaPath) }
@@ -638,7 +638,7 @@ function collectTools(root, run) {
   }
 }
 
-function runArchive({ root, run, archivePath, teamId, scheme }) {
+function runArchive({ root, run, archivePath, teamId, scheme, derivedDataPath }) {
   if (!teamId) throw new DeliveryError('--team-id (or TEAM_ID) is required to archive')
   const workspace = join(root, 'ios/App/App.xcworkspace')
   if (!existsSync(join(workspace, 'contents.xcworkspacedata'))) {
@@ -652,6 +652,9 @@ function runArchive({ root, run, archivePath, teamId, scheme }) {
         '-scheme', scheme,
         '-configuration', 'Release',
         '-destination', 'generic/platform=iOS',
+        // This run's own DerivedData: a shared cache is how a stale object file
+        // from another checkout ends up inside the artifact (issue #213).
+        '-derivedDataPath', derivedDataPath,
         '-archivePath', archivePath,
         `DEVELOPMENT_TEAM=${teamId}`,
         'CODE_SIGN_STYLE=Automatic',
