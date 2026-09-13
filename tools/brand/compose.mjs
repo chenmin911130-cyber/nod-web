@@ -94,16 +94,14 @@ function wordSVG(dx) {
   P.push(`<circle cx="${n(g.i.x + g.i.w / 2)}" cy="${g.i.dotCy}" r="${g.i.dotR}"/>`)
   P.push(`<rect x="${g.l.x}" y="${g.l.top}" width="${g.l.w}" height="${g.l.base - g.l.top}"/>`)
   P.push(ring(g.o2.cx, g.o2.cy, g.o2.ro, g.o2.ri))
-  // t -- stem plus a baseline bar hooking right. In the design the bar runs from
-  // the stem's left edge out to x 673.5 with a rounded bottom-left (r 9), and the
-  // stem stops where the bar begins. The old path closed back to the stem's
-  // centreline, which self-intersected and ate the left half of the stem.
+  // t -- stem drops to the baseline; a stroke-weight exit hooks right to 673.5
+  // with a round cap (r 4). An earlier path rounded the bottom-left with r 9 and
+  // stopped the stem at the bar, which read as a thick shoe instead of a t.
   const t = g.t
   P.push(
     `<path d="M${t.stem} ${t.top} H${n(t.stem + t.sw)} V${t.bendY} H${n(t.barRight - 4)} ` +
       `A4 4 0 0 1 ${n(t.barRight)} ${n(t.bendY + 4)} V${n(t.base - 4)} ` +
-      `A4 4 0 0 1 ${n(t.barRight - 4)} ${t.base} H${n(t.stem + 9)} ` +
-      `A9 9 0 0 1 ${t.stem} ${n(t.bendY + 1)} Z"/>`,
+      `A4 4 0 0 1 ${n(t.barRight - 4)} ${t.base} H${t.stem} Z"/>`,
   )
   P.push(`<rect x="${t.cbX}" y="${t.cbY}" width="${t.cbW}" height="${t.cbH}"/>`)
   return `<g transform="translate(${r(dx)} 0)" fill="${F4}">${P.join('')}</g>`

@@ -238,9 +238,8 @@ enum BrandLaunch {
         p.addEllipse(in: CGRect(x: 564 - 5.5, y: 768 - 5.5, width: 11, height: 11))
         // l
         p.addRect(CGRect(x: 580, y: 762, width: 10, height: 59))
-        // t — stem plus a baseline bar hooking right: in the design the bar runs
-        // from the stem's left edge out to x 673.5, its bottom-left rounded (r 9),
-        // and the stem stops where the bar begins.
+        // t — stem to the baseline, stroke-weight exit to x 673.5 (r 4). The old
+        // r 9 bottom-left round stopped the stem at the bar and read as a shoe.
         p.move(to: CGPoint(x: 654, y: 766))
         p.addLine(to: CGPoint(x: 664, y: 766))
         p.addLine(to: CGPoint(x: 664, y: 812))
@@ -248,8 +247,7 @@ enum BrandLaunch {
         appendArc(p, to: CGPoint(x: 673.5, y: 816), radius: 4, largeArc: false, sweep: false)
         p.addLine(to: CGPoint(x: 673.5, y: 818))
         appendArc(p, to: CGPoint(x: 669.5, y: 822), radius: 4, largeArc: false, sweep: false)
-        p.addLine(to: CGPoint(x: 663, y: 822))
-        appendArc(p, to: CGPoint(x: 654, y: 813), radius: 9, largeArc: false, sweep: false)
+        p.addLine(to: CGPoint(x: 654, y: 822))
         p.closeSubpath()
         p.addRect(CGRect(x: 646, y: 778, width: 27.5, height: 9.5))
 

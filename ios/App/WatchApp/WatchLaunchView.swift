@@ -347,11 +347,9 @@ enum WatchBrandWordmark {
         return path
     }
 
-    /// "t": a 10-wide stem and a baseline bar hooking out to the ink's right edge,
-    /// with the design's rounded right end (r 4) and rounded bottom-left (r 9), plus
-    /// the crossbar resting on the x-height. The bar — not the stem — is what makes
-    /// the t as wide as the design; an earlier revision drew it symmetric about the
-    /// stem, which read as a cross.
+    /// "t": a 10-wide stem to the baseline and a stroke-weight exit to the ink's
+    /// right edge (r 4). The bar — not a centred crossbar — is what makes the t as
+    /// wide as the design; an r 9 bottom-left round used to read as a thick shoe.
     private static func t() -> Path {
         let stemLeft: CGFloat = 298
         let stemRight: CGFloat = 308
@@ -378,13 +376,7 @@ enum WatchBrandWordmark {
             startAngle: .degrees(0),
             delta: .degrees(90)
         )
-        path.addLine(to: CGPoint(x: stemLeft + 9, y: baseline))
-        path.addRelativeArc(
-            center: CGPoint(x: stemLeft + 9, y: bend + 1),
-            radius: 9,
-            startAngle: .degrees(90),
-            delta: .degrees(90)
-        )
+        path.addLine(to: CGPoint(x: stemLeft, y: baseline))
         path.closeSubpath()
         path.addRect(CGRect(
             x: crossbarLeft,
