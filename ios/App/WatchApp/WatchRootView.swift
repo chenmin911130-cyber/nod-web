@@ -532,9 +532,15 @@ struct WatchRootView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
                 if !card.question.isEmpty {
+                    // The collapsed card is a label plus summary: one line of
+                    // question, tail-truncated, so the answer keeps the height.
+                    // Expanding the card restores the whole question, so nothing
+                    // is lost (#218: this is what fits the 41 mm card).
                     Text(card.question)
                         .font(.caption2)
                         .foregroundStyle(muted)
+                        .lineLimit(expanded ? nil : 1)
+                        .truncationMode(.tail)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
