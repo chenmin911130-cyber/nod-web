@@ -6,14 +6,22 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     var window: UIWindow?
 
+    /// The brand mask for this cold launch; nil once it has faded out (or if it was never
+    /// installed). A hot resume must never build another one.
+    private var launchOverlay: LaunchOverlay?
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        DispatchQueue.main.async { self.makeWebViewFeelNative() }
+        DispatchQueue.main.async {
+            self.makeWebViewFeelNative()
+            self.installLaunchOverlay()
+        }
         return true
     }
 
     func applicationWillResignActive(_ application: UIApplication) {
         // Sent when the application is about to move from active to inactive state. This can occur for certain types of temporary interruptions (such as an incoming phone call or SMS message) or when the user quits the application and it begins the transition to the background state.
         // Use this method to pause ongoing tasks, disable timers, and invalidate graphics rendering callbacks. Games should use this method to pause the game.
+        launchOverlay?.applicationWillResignActive()
     }
 
     func applicationDidEnterBackground(_ application: UIApplication) {
@@ -27,6 +35,21 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationDidBecomeActive(_ application: UIApplication) {
         makeWebViewFeelNative()
+        launchOverlay?.applicationDidBecomeActive()
+    }
+
+    /// Cold launch only. The mask covers the gap between the static launch screen and the
+    /// first page the web layer has painted; `hasRevealedInThisProcess` keeps a scene
+    /// restoration or a background relaunch from replaying the brand over live content,
+    /// and `applicationDidBecomeActive` never installs one.
+    private func installLaunchOverlay() {
+        guard launchOverlay == nil, !LaunchOverlay.hasRevealedInThisProcess else { return }
+        guard let window = window else { return }
+        let overlay = LaunchOverlay(frame: window.bounds)
+        // Above the bridge's view, but still inside the app's own window, so a system
+        // permission alert still comes up over it.
+        window.addSubview(overlay)
+        launchOverlay = overlay
     }
 
     private func makeWebViewFeelNative() {
