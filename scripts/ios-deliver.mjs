@@ -281,7 +281,12 @@ export function assertDeliveryRoots(root) {
         throw new DeliveryError(`ios worktree pods: ios/App/Pods resolves to ${podsReal}, outside this checkout ${rootReal}`)
       }
     }
-    return { realpath: rootReal, pods: assertPodsProject(root) }
+    // A fresh checkout has no Pods yet: the guarded cap:sync below installs them.
+    // Verify an existing Pods project here (and require one after the sync) rather
+    // than demanding it before the step that creates it.
+    const podsProject = join(root, 'ios/App/Pods/Pods.xcodeproj')
+    const hasPods = existsSync(podsProject)
+    return { realpath: rootReal, pods: hasPods ? assertPodsProject(root) : null, podsPending: !hasPods }
   } catch (error) {
     // iosWorktreePods.mjs raises plain Errors; surface them as a clean refusal, not a stack trace.
     if (error instanceof DeliveryError) throw error
@@ -495,6 +500,9 @@ export function buildManifest({ root, args, run = runCapture, now = () => new Da
     if (syncPlanned) {
       must(run('npm', ['run', 'cap:sync'], { cwd: root, stdio: 'inherit' }), 'npm run cap:sync')
       verified.push('ran the guarded npm run cap:sync for this checkout')
+      roots.pods = assertPodsProject(root)
+      roots.podsPending = false
+      verified.push('Pods project compiles the local plugins from this checkout')
       const after = currentProjectVersion(root)
       if (after !== String(build)) {
         throw new DeliveryError(`cap:sync left CURRENT_PROJECT_VERSION = ${after}, expected ${build} — refusing to archive an unexpected bundle`)
@@ -563,7 +571,7 @@ export function buildManifest({ root, args, run = runCapture, now = () => new Da
       plugins: Object.fromEntries(
         Object.keys(LOCAL_PLUGIN_PODS).map((name) => [name, existsSync(join(root, 'node_modules', name)) ? realpathSync(join(root, 'node_modules', name)) : null]),
       ),
-      podsProject: roots.pods.plugins,
+      podsProject: roots.pods ? roots.pods.plugins : null,
       podsDir: existsSync(join(root, 'ios/App/Pods')) ? realpathSync(join(root, 'ios/App/Pods')) : null,
     },
     webAssets,
