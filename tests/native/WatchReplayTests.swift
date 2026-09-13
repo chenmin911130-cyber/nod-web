@@ -1451,8 +1451,25 @@ func waitSend() {
     eq(aod(draining: true, listening: true, hasContent: true), WatchAodDisplay(kind: .platform, active: true, copyFailed: false))
     eq(aod(drainFailed: true, hasContent: true), WatchAodDisplay(kind: .platform, active: false, copyFailed: false))
 
+    // #224 confirmed design: the bottom waveform is a status animation, so it may
+    // only move while the Watch is actually listening and visible. Paused, Always On
+    // and Reduce Motion must all hold it still — the animation is never allowed to
+    // be what keeps the screen (or the CPU) awake.
+    check(WatchAod.waveformAnimates(listening: true, paused: false, dimmed: false, reduceMotion: false),
+          "a listening bright screen animates the waveform")
+    check(!WatchAod.waveformAnimates(listening: false, paused: false, dimmed: false, reduceMotion: false),
+          "a stopped session must not animate")
+    check(!WatchAod.waveformAnimates(listening: true, paused: true, dimmed: false, reduceMotion: false),
+          "paused holds the waveform still")
+    check(!WatchAod.waveformAnimates(listening: true, paused: false, dimmed: true, reduceMotion: false),
+          "Always On holds the waveform still")
+    check(!WatchAod.waveformAnimates(listening: true, paused: true, dimmed: true, reduceMotion: false),
+          "Always On and paused hold the waveform still")
+    check(!WatchAod.waveformAnimates(listening: true, paused: false, dimmed: false, reduceMotion: true),
+          "Reduce Motion holds the waveform still")
+
     _ = bridge
-    print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake, Save, locked Live Q&A and Always-On display tests passed")
+    print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake, Save, locked Live Q&A, Always-On display and waveform tests passed")
  }
 }
 

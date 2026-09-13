@@ -30,6 +30,22 @@ struct WatchAodDisplay: Equatable {
 }
 
 enum WatchAod {
+    /// Should the listening waveform animate?
+    ///
+    /// The waveform is status, not a level meter, and it must never be the reason
+    /// the screen or the CPU stays busy: it holds still while paused, in Always On
+    /// (the system already reduces refresh there), and whenever the user asked for
+    /// Reduce Motion.
+    static func waveformAnimates(
+        listening: Bool,
+        paused: Bool,
+        dimmed: Bool,
+        reduceMotion: Bool
+    ) -> Bool {
+        guard listening, !paused, !dimmed, !reduceMotion else { return false }
+        return true
+    }
+
     /// Should the dimmed screen keep the session's current copy?
     ///
     /// `hasContent` is the caller's "either the original or the translation has

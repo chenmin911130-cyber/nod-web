@@ -3,6 +3,7 @@ import SwiftUI
 struct WatchRootView: View {
     @EnvironmentObject private var session: WatchPhoneSession
     @Environment(\.isLuminanceReduced) private var dimmed
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var listenPage = 0
     @State private var showStorage = false
     @State private var confirmDeleteId = ""
@@ -48,17 +49,17 @@ struct WatchRootView: View {
     }
 
     /// The dimmed screen shows the live question/answer (Live Q&A) or the
-    /// original/translation (Translate) — not just a mode name and a timer.
+    /// original/translation (Translate) — not a mode name and a timer.
     ///
     /// Always On keeps drawing the frontmost app's UI but at a much lower refresh
     /// rate, so this page stays static: it reuses the copy the live page already
-    /// holds (no second, drifting source) and adds no animation or subsecond
-    /// update. It deliberately keeps the full text reachable by scrolling, because
-    /// the dim preview is not the whole content on a long answer.
+    /// holds (no second, drifting source) and adds no subsecond update. Like the
+    /// bright page it omits the mode chip, and its waveform is held still because
+    /// `dimmed` is true here. It deliberately keeps the full text reachable by
+    /// scrolling, because the dim preview is not the whole content on a long answer.
     @ViewBuilder
     private func aodContentPage(active: Bool, copyFailed: Bool) -> some View {
         VStack(spacing: 4) {
-            dimCapsule(WatchPhoneSession.modeLabel(session.mode))
             if active, let startedAt = session.startedAt {
                 // A static clock, not the live `.timer` style: Always On must not
                 // redraw every second.
@@ -74,10 +75,15 @@ struct WatchRootView: View {
                 Text(session.mode == "interview" ? WatchCopy.hearQuestion : WatchCopy.listening)
                     .font(.caption2)
                     .foregroundStyle(ink)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 aodCopyPair(copyFailed: copyFailed)
             }
+            Spacer(minLength: 0)
+            // Held still by `dimmed`; it is an indicator of the state, never the
+            // reason the dim screen keeps refreshing.
+            listeningWaveform(active: true)
         }
     }
 
@@ -388,10 +394,11 @@ struct WatchRootView: View {
                     .font(.title3.monospacedDigit().weight(.semibold))
                     .foregroundStyle(timer)
             }
-            recChip
+            // Non-content page (Meeting): it has no copy to read, so the only live
+            // status is the waveform. The REC chip is gone with it.
+            listeningWaveform(active: true)
             Button(WatchCopy.pause) { session.pause() }
                 .tint(panel)
-            listeningWave
         }
     }
 
@@ -416,9 +423,8 @@ struct WatchRootView: View {
 
     private var translatePage: some View {
         VStack(spacing: 6) {
-            Text(session.langPair)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(cyan)
+            // No mode / language chip here: the reading page starts straight at the
+            // copy (confirmed design, #224). The mode stays visible before Start.
             if !session.previous.isEmpty {
                 Text(session.previous)
                     .font(.caption2)
@@ -430,17 +436,17 @@ struct WatchRootView: View {
                 Text(WatchCopy.listening)
                     .font(.headline)
                     .foregroundStyle(ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 copyPair(original: session.original, translation: session.translation)
             }
             Spacer(minLength: 0)
-            listeningWave
+            listeningWaveform(active: true)
         }
     }
 
     private var qaPage: some View {
         VStack(spacing: 6) {
-            capsule("Live Q&A")
             if !session.previous.isEmpty {
                 Text(session.previous)
                     .font(.caption2)
@@ -452,6 +458,7 @@ struct WatchRootView: View {
                 Text(WatchCopy.hearQuestion)
                     .font(.headline)
                     .foregroundStyle(ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 copyPair(
                     original: session.original,
@@ -460,7 +467,7 @@ struct WatchRootView: View {
                 )
             }
             Spacer(minLength: 0)
-            listeningWave
+            listeningWaveform(active: true)
         }
     }
 
@@ -531,21 +538,25 @@ struct WatchRootView: View {
         }
     }
 
-    private var recChip: some View {
-        HStack(spacing: 4) {
-            Circle().fill(Color.red).frame(width: 6, height: 6)
-            Text("REC")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(cyan)
-        }
-    }
-
-    private var listeningWave: some View {
-        Image(systemName: "waveform")
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(cyan)
-            .modifier(ListeningPulse())
-            .accessibilityLabel(WatchCopy.listening)
+    /// Listening status as a small cyan waveform (confirmed design, #224).
+    ///
+    /// It is a status animation, not a level meter: it is driven by the listening
+    /// state only and needs no audio/volume data from the phone. `active` is false
+    /// when the session is not actually running (paused or ended), and `isActive`
+    /// folds in Always On and Reduce Motion so the bars stay still there — the
+    /// animation must never be what keeps the screen awake.
+    private func listeningWaveform(active: Bool) -> some View {
+        ListeningWaveform(
+            isActive: WatchAod.waveformAnimates(
+                listening: session.listening && active,
+                paused: session.paused,
+                dimmed: dimmed,
+                reduceMotion: reduceMotion
+            ),
+            // Failures must not look like a healthy recording: a rejected session
+            // or a stalled audio rail draws the bars flat instead of breathing.
+            healthy: !session.pcmRejected && !session.pcmStalled
+        )
     }
 
     private func copyPair(original: String, translation: String, placeholder: String? = nil) -> some View {
@@ -589,17 +600,6 @@ struct WatchRootView: View {
             )
     }
 
-    private func dimCapsule(_ title: String) -> some View {
-        Text(title)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(muted)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .overlay(
-                Capsule().stroke(muted.opacity(0.6), lineWidth: 1)
-            )
-    }
-
     private func clock(_ seconds: TimeInterval) -> String {
         let sec = max(0, Int(seconds))
         let h = sec / 3600
@@ -609,13 +609,65 @@ struct WatchRootView: View {
     }
 }
 
-private struct ListeningPulse: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(watchOS 10.0, *) {
-            content.symbolEffect(.variableColor.iterative, isActive: true)
-        } else {
-            content
+/// The listening waveform from the confirmed design (#224): a small cyan row of
+/// rounded bars, centred, roughly 55x14 pt.
+///
+/// It replaces the old "Listening" text + red dot. It is a status animation, not a
+/// level meter: there is deliberately no audio-level input and no new phone
+/// protocol behind it. When `isActive` is false (paused, Always On, Reduce Motion)
+/// the bars hold a still frame; `healthy == false` draws the resting frame flat so
+/// a rejected or stalled session never looks like a healthy recording.
+private struct ListeningWaveform: View {
+    let isActive: Bool
+    var healthy: Bool = true
+
+    private let barCount = 9
+    private let barWidth: CGFloat = 3
+    private let barGap: CGFloat = 2.5
+    private let maxHeight: CGFloat = 14
+    private let minHeight: CGFloat = 4
+    private let period: Double = 1.2
+
+    /// Uneven rest shape, so a still frame still looks like a waveform instead of
+    /// a solid block and matches the design at a glance.
+    private static let restShape: [CGFloat] = [0.34, 0.58, 0.82, 1.0, 0.86, 0.64, 0.9, 0.52, 0.32]
+
+    var body: some View {
+        Group {
+            if isActive, healthy {
+                // Only the animated path keeps a timeline alive; a still waveform
+                // is a plain view, so nothing redraws while paused / in Always On.
+                TimelineView(.animation(minimumInterval: 1.0 / 15.0, paused: false)) { timeline in
+                    bars(phase: timeline.date.timeIntervalSinceReferenceDate * 2 * .pi / period)
+                }
+            } else {
+                bars(phase: nil)
+            }
         }
+        .frame(height: maxHeight)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(WatchCopy.listening)
+    }
+
+    private func bars(phase: Double?) -> some View {
+        HStack(alignment: .center, spacing: barGap) {
+            ForEach(0..<barCount, id: \.self) { index in
+                Capsule()
+                    .fill(Color(red: 0, green: 210 / 255, blue: 1))
+                    .frame(width: barWidth, height: height(index, phase: phase))
+            }
+        }
+    }
+
+    private func height(_ index: Int, phase: Double?) -> CGFloat {
+        let rest = Self.restShape[index % Self.restShape.count]
+        guard let phase else {
+            // Still frame: a healthy row rests at its shape; an unhealthy one goes
+            // flat so "not recording properly" is visible even without motion.
+            return healthy ? max(minHeight, maxHeight * rest) : minHeight
+        }
+        let wave = 1 + 0.30 * sin(phase + Double(index) * 0.7)
+        return min(maxHeight, max(minHeight, maxHeight * rest * wave))
     }
 }
 
