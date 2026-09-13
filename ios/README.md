@@ -12,22 +12,60 @@ Xcode only runs on a Mac. This Linux/cloud checkout prepares the project; you co
 4. In this repo on the Mac:
 
 ```bash
-git pull
+git fetch origin
 npm ci
 (cd web && npm ci)
-npm run cap:ios
 ```
 
-That builds `web/dist`, syncs Capacitor, installs pods, and opens Xcode. Select **Team** on both the **App** and **WatchApp** targets, plug in an iPhone, press Run.
-
-To make an archive / IPA after Team is set (10-character Team ID from Xcode → Settings → Accounts):
+5. Open the project for development (no manifest, no install):
 
 ```bash
-TEAM_ID=XXXXXXXXXX npm run cap:ios -- --archive
-TEAM_ID=XXXXXXXXXX npm run cap:ios -- --ipa
+npm run cap:ios -- open
 ```
 
-`cap:sync` (also run by `cap:ios`) builds `web/dist`, points the app at `app.html` (not the marketing site), and copies assets into `ios/`.
+Select **Team** on both the **App** and **WatchApp** targets, plug in an iPhone, press Run.
+
+## Delivery: one pinned entry point
+
+Builds and installs go through `scripts/ios-deliver.mjs`; `npm run cap:ios` is only an
+alias for it (legacy `--open` / `--archive` / `--ipa` flags still parse). Pick the full
+SHA of the reviewed, merged commit and build into a fresh output directory:
+
+```bash
+SHA=$(git rev-parse HEAD)   # must be the reviewed commit and present on origin
+TEAM_ID=XXXXXXXXXX npm run cap:ios -- build --sha "$SHA" --version 1.0 --build 92 --ipa
+```
+
+`--build` is the bundle this run will carry: HEAD's `CURRENT_PROJECT_VERSION` + 1, because
+the guarded `cap:sync` bumps it once. A wrong value refuses before `cap:sync` runs, so the
+checkout is not mutated.
+
+The run refuses to continue unless the worktree HEAD is exactly that SHA, origin really
+has it, the tree is clean outside the generated set, and `node_modules` / `Pods` / the
+local plugins resolve inside this checkout. It then runs the guarded `cap:sync`,
+archives, and writes `<out>/delivery-manifest.json`: target/actual SHA, realpath,
+allowed diff, tool versions, lockfile digests, plugin/Pods paths, web-asset digest,
+archive/App path + digest, embedded framework identifiers, phone/watch versions, and an
+explicit `unverified` list. No key material, tokens, or signing private keys — ever.
+
+Verify a manifest against the exact artifact path (never "the newest file"):
+
+```bash
+npm run cap:ios -- verify --manifest ios/dist/delivery/<sha12>-<build>/delivery-manifest.json
+```
+
+Install only with explicit authorisation, then read the phone and Watch versions back
+from the device into the manifest:
+
+```bash
+npm run cap:ios -- install --manifest <path> --device <udid> --authorize
+```
+
+A locked or unreadable device is recorded as `unverified`, never as success. Add
+`--dry-run` to run every preflight check and stop before touching a device.
+
+`cap:sync` (also run by `cap:ios build`) builds `web/dist`, points the app at
+`app.html` (not the marketing site), and copies assets into `ios/`.
 
 ## Run on a phone + Watch
 
@@ -49,10 +87,13 @@ If lock-screen audio dies, the usual cause is a missing Background Mode. Re-run 
 
 ## TestFlight
 
-1. In Xcode: **Product → Archive** the **App** scheme (Watch is included).
-2. **Distribute App → App Store Connect → Upload**.
-3. In App Store Connect, add the build to a TestFlight group.
-4. Review notes should say: microphone is used only after in-app consent; Watch and lock-screen recording are explicit listen sessions, not silent capture.
+Use the pinned delivery entry point above (`npm run cap:ios -- build --ipa`) to produce
+and verify the archive, then in Xcode **Window → Organizer → Distribute App → App Store
+Connect → Upload** (or use the exported IPA). The Watch app is embedded in the phone
+archive.
+
+1. In App Store Connect, add the build to a TestFlight group.
+2. Review notes should say: microphone is used only after in-app consent; Watch and lock-screen recording are explicit listen sessions, not silent capture.
 
 API and WebSocket traffic always go to `https://nodpilot.com` / `wss://nodpilot.com`. Do not point a store build at localhost.
 
