@@ -443,7 +443,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
         }
         hint = WatchCopy.saving
         armSaveWait()
-        guard Self.saveShouldSend(saveRequestId) else { return }
+        guard Self.saveShouldSend(saveRequestId, captureId: saveRequestCaptureId) else { return }
         send(action: "save")
     }
 
@@ -697,12 +697,12 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
         pinnedId.isEmpty ? phoneSessionId : pinnedId
     }
 
-    static func saveShouldSend(_ pinnedId: String) -> Bool {
-        !pinnedId.isEmpty
+    static func saveShouldSend(_ pinnedId: String, captureId: String = "") -> Bool {
+        !pinnedId.isEmpty || !captureId.isEmpty
     }
 
     static func saveWireMessage(sessionId: String, captureId: String = "") -> (sessionId: String, captureId: String)? {
-        if sessionId.isEmpty { return nil }
+        if sessionId.isEmpty && captureId.isEmpty { return nil }
         return (sessionId, captureId)
     }
 
@@ -1240,7 +1240,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
         }
         if action == "save" {
             guard let wire = Self.saveWireMessage(sessionId: saveRequestId, captureId: saveRequestCaptureId) else { return }
-            payload["sessionId"] = wire.sessionId
+            if !wire.sessionId.isEmpty {
+                payload["sessionId"] = wire.sessionId
+            }
             if !wire.captureId.isEmpty {
                 payload["captureId"] = wire.captureId
             }
