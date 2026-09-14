@@ -41,24 +41,31 @@ public class NodAuthPlugin extends Plugin {
             call.reject("Invalid URL");
             return;
         }
+        Activity host = getActivity();
+        if (host == null) {
+            call.reject("Could not start Google sign-in");
+            return;
+        }
+        if (pending != null && pending != call) {
+            pending.reject("canceled");
+        }
         pending = call;
         call.setKeepAlive(true);
         awaitingReturn = true;
         pausedForAuth = false;
         main.removeCallbacks(cancelAfterResume);
-        getActivity()
-            .runOnUiThread(
-                () -> {
-                    try {
-                        CustomTabsIntent tabs = new CustomTabsIntent.Builder().setShowTitle(true).build();
-                        tabs.launchUrl(getActivity(), uri);
-                    } catch (Exception e) {
-                        Intent sheet = new Intent(getContext(), NodAuthActivity.class);
-                        sheet.putExtra(NodAuthActivity.EXTRA_URL, raw);
-                        startActivityForResult(call, sheet, "onAuthSheet");
-                    }
+        host.runOnUiThread(
+            () -> {
+                try {
+                    CustomTabsIntent tabs = new CustomTabsIntent.Builder().setShowTitle(true).build();
+                    tabs.launchUrl(host, uri);
+                } catch (Exception e) {
+                    Intent sheet = new Intent(getContext(), NodAuthActivity.class);
+                    sheet.putExtra(NodAuthActivity.EXTRA_URL, raw);
+                    startActivityForResult(call, sheet, "onAuthSheet");
                 }
-            );
+            }
+        );
     }
 
     @ActivityCallback
@@ -85,19 +92,7 @@ public class NodAuthPlugin extends Plugin {
     @Override
     protected void handleOnNewIntent(Intent intent) {
         super.handleOnNewIntent(intent);
-        if (intent == null || intent.getData() == null) return;
-        Uri uri = intent.getData();
-        if (!"nodpilot".equals(uri.getScheme())) return;
-        String token = uri.getQueryParameter("token");
-        if (token == null || token.isEmpty()) return;
-        PluginCall call = pending;
-        awaitingReturn = false;
-        pending = null;
-        pausedForAuth = false;
-        main.removeCallbacks(cancelAfterResume);
-        if (call != null) {
-            resolveToken(call, token);
-        }
+        takeAuthToken(intent);
     }
 
     @Override
@@ -110,9 +105,27 @@ public class NodAuthPlugin extends Plugin {
     @Override
     protected void handleOnResume() {
         super.handleOnResume();
+        Activity host = getActivity();
+        if (host != null && takeAuthToken(host.getIntent())) return;
         if (!awaitingReturn || pending == null || !pausedForAuth) return;
         main.removeCallbacks(cancelAfterResume);
-        main.postDelayed(cancelAfterResume, 1200);
+        main.postDelayed(cancelAfterResume, 2500);
+    }
+
+    private boolean takeAuthToken(Intent intent) {
+        if (intent == null || intent.getData() == null) return false;
+        Uri uri = intent.getData();
+        if (!"nodpilot".equals(uri.getScheme())) return false;
+        String token = uri.getQueryParameter("token");
+        if (token == null || token.isEmpty()) return false;
+        PluginCall call = pending;
+        awaitingReturn = false;
+        pending = null;
+        pausedForAuth = false;
+        main.removeCallbacks(cancelAfterResume);
+        intent.setData(null);
+        if (call != null) resolveToken(call, token);
+        return true;
     }
 
     private void resolveToken(PluginCall call, String token) {

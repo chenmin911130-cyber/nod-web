@@ -1,5 +1,8 @@
 package app.nodpilot.plugins.mic;
 
+import android.os.Handler;
+import android.os.HandlerThread;
+import android.os.Looper;
 import java.util.ArrayDeque;
 import java.util.concurrent.TimeUnit;
 import okhttp3.OkHttpClient;
@@ -48,7 +51,14 @@ final class AudioUplink {
     private int pendingBytes;
     private int reconnectAttempt;
     private StartCallback startCb;
-    private final android.os.Handler io = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final HandlerThread ioThread = new HandlerThread("nod-uplink");
+    private final Handler io;
+    private final Handler main = new Handler(Looper.getMainLooper());
+
+    private AudioUplink() {
+        ioThread.start();
+        io = new Handler(ioThread.getLooper());
+    }
     private long lastSendAt;
     private double lastSentAudioSeconds;
     private final Runnable ping = this::sendPing;
@@ -65,7 +75,7 @@ final class AudioUplink {
     void start(String nextUrl, StartCallback cb) {
         synchronized (lock) {
             if (nextUrl.equals(url) && enabled && !stopped) {
-                cb.onDone(null);
+                main.post(() -> cb.onDone(null));
                 return;
             }
             if (startCb != null) {
@@ -210,6 +220,7 @@ final class AudioUplink {
     private void handleDrop(int gen) {
         synchronized (lock) {
             if (stopped || socketGen != gen) return;
+            socketGen++;
             connected = false;
             sending = false;
             if (socket != null) {
@@ -244,7 +255,7 @@ final class AudioUplink {
         StartCallback cb = startCb;
         startCb = null;
         if (cb != null) {
-            io.post(() -> cb.onDone(error));
+            main.post(() -> cb.onDone(error));
         }
     }
 

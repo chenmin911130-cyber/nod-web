@@ -51,7 +51,7 @@ public class MicForegroundService extends Service {
         } else {
             startForeground(NOTE_ID, note);
         }
-        return START_STICKY;
+        return START_NOT_STICKY;
     }
 
     @Override

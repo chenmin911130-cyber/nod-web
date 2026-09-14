@@ -11,6 +11,14 @@ export function isNativeApp(): boolean {
   }
 }
 
+export function isAndroidApp(): boolean {
+  try {
+    return Capacitor.getPlatform() === 'android'
+  } catch {
+    return false
+  }
+}
+
 /** Marketing version plus iOS build, e.g. `1.0 (12)`. */
 export function formatAppBuild(version: string, build: string): string {
   const v = version.trim()

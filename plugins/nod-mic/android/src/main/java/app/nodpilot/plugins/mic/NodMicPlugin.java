@@ -151,12 +151,13 @@ public class NodMicPlugin extends Plugin {
 
     private void beginCapture(PluginCall call) {
         running = true;
+        startService();
         if (!startRecorder()) {
             running = false;
+            stopService();
             call.reject("Microphone is not ready");
             return;
         }
-        startService();
         call.resolve();
     }
 
@@ -181,6 +182,11 @@ public class NodMicPlugin extends Plugin {
                 return false;
             }
             recorder.startRecording();
+            if (recorder.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
+                recorder.release();
+                recorder = null;
+                return false;
+            }
             recThread = new Thread(this::readLoop, "nod-mic");
             recThread.start();
             return true;
@@ -204,7 +210,8 @@ public class NodMicPlugin extends Plugin {
             } catch (Exception e) {
                 break;
             }
-            if (n <= 0) continue;
+            if (n < 0) break;
+            if (n == 0) continue;
             if (AudioUplink.get().isEnabled()) {
                 AudioUplink.get().enqueue(buf, n);
                 continue;
@@ -212,12 +219,16 @@ public class NodMicPlugin extends Plugin {
             String b64 = Base64.encodeToString(buf, 0, n, Base64.NO_WRAP);
             JSObject ev = new JSObject();
             ev.put("data", b64);
-            notifyListeners("pcm", ev);
+            android.app.Activity host = getActivity();
+            if (host != null) {
+                host.runOnUiThread(() -> notifyListeners("pcm", ev));
+            }
         }
     }
 
     private void restartRecorder() {
         if (!running) return;
+        startService();
         startRecorder();
     }
 
@@ -254,10 +265,14 @@ public class NodMicPlugin extends Plugin {
     private void startService() {
         Intent i = new Intent(getContext(), MicForegroundService.class);
         i.setAction(MicForegroundService.ACTION_START);
-        if (Build.VERSION.SDK_INT >= 26) {
-            getContext().startForegroundService(i);
-        } else {
-            getContext().startService(i);
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                getContext().startForegroundService(i);
+            } else {
+                getContext().startService(i);
+            }
+        } catch (Exception ignored) {
+            /* lock-screen keep-alive is best-effort if the OS blocks FGS */
         }
     }
 
