@@ -177,6 +177,15 @@ export function assertGatePreconditions(root) {
     throw new CompileGateError('missing ios/App/App/public — the App target copies that folder; run npm run cap:sync first')
   }
 
+  // These two are gitignored Copy Bundle Resources. Missing either one is the same
+  // "cap:sync never ran" condition as a missing public folder, but xcodebuild reports it as
+  // "The file “config.xml” couldn’t be opened" after tens of seconds of compiling.
+  for (const name of ['capacitor.config.json', 'config.xml']) {
+    if (!existsSync(join(root, 'ios/App/App', name))) {
+      throw new CompileGateError(`missing ios/App/App/${name} — run npm run cap:sync first`)
+    }
+  }
+
   return { workspace }
 }
 
@@ -241,7 +250,7 @@ export function runCompileGate({
 // ---------------------------------------------------------------------------
 
 export function helpText() {
-  return `ios-compile-gate — compile the real iOS + watchOS targets (issue #233).
+  return `ios-compile-gate — compile the real iOS + watchOS targets (issue #234).
 
   node scripts/iosCompileGate.mjs [--device] [--destination <d>] [--configuration <c>]
                                   [--derived-data <dir>] [--log <path>] [--quiet]

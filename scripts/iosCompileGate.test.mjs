@@ -1,5 +1,5 @@
 /**
- * Tests for the iOS/watchOS compile gate (issue #233).
+ * Tests for the iOS/watchOS compile gate (issue #234).
  *
  * Plain node, hand-rolled asserts, no test framework, no xcodebuild, no real checkout:
  * every case uses a temp fixture and an injected command runner. Run with:
@@ -74,6 +74,8 @@ function fixture({ lockMismatch = false } = {}) {
   write(join(root, 'ios/App/Podfile.lock'), 'PODS:\n  - NodWatch\n')
   write(join(root, 'ios/App/Pods/Manifest.lock'), lockMismatch ? 'PODS:\n  - NodWatch\n  - NodSplash\n' : 'PODS:\n  - NodWatch\n')
   write(join(root, 'ios/App/App/public/index.html'), '<html></html>')
+  write(join(root, 'ios/App/App/capacitor.config.json'), '{}')
+  write(join(root, 'ios/App/App/config.xml'), '<widget/>')
   return root
 }
 
@@ -161,6 +163,24 @@ section('assertGatePreconditions')
     ok(false, 'a missing web bundle must refuse')
   } catch (error) {
     ok(error instanceof CompileGateError && /cap:sync/.test(error.message), 'a missing App/public tells you to run cap:sync')
+  }
+
+  const noCapConfig = fixture()
+  rmSync(join(noCapConfig, 'ios/App/App/capacitor.config.json'))
+  try {
+    assertGatePreconditions(noCapConfig)
+    ok(false, 'a missing capacitor.config.json must refuse')
+  } catch (error) {
+    ok(error instanceof CompileGateError && /cap:sync/.test(error.message), 'a missing capacitor.config.json tells you to run cap:sync')
+  }
+
+  const noConfigXml = fixture()
+  rmSync(join(noConfigXml, 'ios/App/App/config.xml'))
+  try {
+    assertGatePreconditions(noConfigXml)
+    ok(false, 'a missing config.xml must refuse')
+  } catch (error) {
+    ok(error instanceof CompileGateError && /cap:sync/.test(error.message), 'a missing config.xml tells you to run cap:sync')
   }
 
   const noPods = fixture()
@@ -272,6 +292,12 @@ section('runCommand — CLI')
   eq(runCommand([], { root: halfPods, run: neverRun.run, stdout, stderr }), 2, 'a missing Pods/Manifest.lock exits 2')
   eq(neverRun.calls.length, 0, 'xcodebuild is never invoked when a precondition is unsatisfied')
   ok(err.some((line) => /pod install/.test(line)), 'the refusal names the command that fixes it')
+
+  const unsynced = fixture()
+  rmSync(join(unsynced, 'ios/App/App/capacitor.config.json'))
+  const neverRunUnsynced = captureRun({ status: 0 })
+  eq(runCommand([], { root: unsynced, run: neverRunUnsynced.run, stdout, stderr }), 2, 'a missing capacitor.config.json exits 2')
+  eq(neverRunUnsynced.calls.length, 0, 'xcodebuild is never invoked when cap:sync outputs are missing')
 
   const device = captureRun({ status: 0 })
   eq(runCommand(['--device'], { root, run: device.run, stdout, stderr }), 0, '--device is accepted')

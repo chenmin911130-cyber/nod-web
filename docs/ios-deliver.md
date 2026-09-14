@@ -60,7 +60,8 @@ worktree 陈旧对象，也不会污染交付的 clean-tree 守卫。
 `ios/App/App/public` 与当前 `web/dist`，也不比对 Podfile 与当前插件集合，所以 web 或插件改完
 跳过 `cap:sync` 不会在这里被拦住（这两件事由交付路径的 `assertWebAssets` /
 `localPodFrameworks` 负责）。workspace / Pods 工程 / `Podfile.lock` / `Pods/Manifest.lock`
-任一半缺失，或后两者内容不一致，都会在调 `xcodebuild` 之前拒绝。
+任一半缺失，或后两者内容不一致，以及 `App/public`、`capacitor.config.json`、`config.xml`
+（`cap:sync` 写入、仓库不跟踪）缺失，都会在调 `xcodebuild` 之前拒绝。
 
 `test-watch-replay.sh` 仍然负责行为测试；这个闸门只回答「真实 target 还能不能编译」。
 退出码：0 编译通过，1 编译失败，2 用法或前置条件不满足（前置条件会直接说清是缺

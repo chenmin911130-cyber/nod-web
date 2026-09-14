@@ -66,8 +66,9 @@ Its precondition checks prove **presence and Pods/lock consistency, not freshnes
 not compare `ios/App/App/public` against the current `web/dist`, nor the Podfile against the
 current plugin set, so a `cap:sync` skipped after a web or plugin change is not caught here
 (the delivery path's `assertWebAssets` / `localPodFrameworks` cover that). A missing workspace,
-Pods project, or either lock half, and a `Podfile.lock` that disagrees with
-`Pods/Manifest.lock`, are all refused before `xcodebuild` runs.
+Pods project, or either lock half, a `Podfile.lock` that disagrees with
+`Pods/Manifest.lock`, and missing `cap:sync` outputs (`App/public`,
+`capacitor.config.json`, `config.xml`) are all refused before `xcodebuild` runs.
 
 ## Division of labor
 
