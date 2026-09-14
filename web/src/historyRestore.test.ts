@@ -1,4 +1,4 @@
-import { applyMeetingResume, elapsedMsFromTranscriptTs, groupHistoryByDay, historyRowWhen, historySessionMatches, mergeLocalCaptures, mergePendingHistory, modeIsSaveEligible, overlayNativeSaveJobs, parseRestoreDismissed, rememberRestoreDismissed, restoreAttachedClock, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsSaveEligible, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, sessionShowsUnsaved, shouldOfferSaveOnce, startMeetingKind, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession } from './historyRestore'
+import { applyMeetingResume, assembleHistoryList, elapsedMsFromTranscriptTs, groupHistoryByDay, historyDurationLabel, historyRowStatus, historyRowTitle, historyRowWhen, historySessionMatches, localCaptureCanAppear, localCaptureHistoryId, mergeLocalCaptures, mergePendingHistory, modeIsSaveEligible, overlayNativeSaveJobs, parseRestoreDismissed, rememberRestoreDismissed, restoreAttachedClock, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsSaveEligible, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, sessionShowsUnsaved, shouldOfferSaveOnce, startMeetingKind, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession } from './historyRestore'
 import type { HistorySession } from './components/HistoryPane'
 
 function at(h: number, m: number, s = 0): string {
@@ -181,6 +181,15 @@ const older = { id: 'o', title: 'Roadmap update', started_at: new Date(2024, 8, 
 eq(historyRowWhen(today.started_at, today.stt_seconds, now), 'Today, 9:41 AM • 48m', 'today row keeps day + clock + duration')
 eq(historyRowWhen(yesterday.started_at, yesterday.stt_seconds, now), 'Yesterday, 3:16 PM • 22m', 'yesterday row keeps day + clock + duration')
 eq(historyRowWhen(older.started_at, older.stt_seconds, now), 'Sep 18, 2024 • 22m', 'older row is the calendar day')
+eq(historyDurationLabel(0), '<1m', 'a few seconds is not 0m')
+eq(historyDurationLabel(29), '<1m', 'sub-minute audio is not rounded away')
+eq(historyRowTitle({ title: 'Unsaved', mode: 'meeting' }), 'Session', 'Unsaved is never the title')
+eq(historyRowTitle({ title: 'Q3 planning' }), 'Q3 planning', 'a real title stays')
+eq(
+  historyRowStatus({ kept: false, mode: 'meeting', nativeSave: 'failed', started_at: today.started_at, stt_seconds: 120 }, now),
+  "Unsaved · Couldn't save. · Today, 9:41 AM • 2m",
+  'Unsaved and Couldn\'t save appear once each, below the title',
+)
 eq(
   restoreOfferBody({ title: 'Standup', startedAt: today.started_at, sttSeconds: today.stt_seconds }, now),
   'Standup · Today, 9:41 AM • 48m',
@@ -448,6 +457,48 @@ if (sessionIsSaveEligible({ mode: 'translate' })) throw new Error('sessionIsSave
     { sessionId: 'cloud-1', captureId: 'cap-a', save: 'local' },
   ])
   eq(overlaid.map((row) => `${row.id}:${row.nativeSave || ''}`).join('|'), 'local:cap-b:|cloud-1:local', 'native local keep still shows on a cloud History row')
+  const liveSkipped = mergeLocalCaptures(
+    [{ id: 'cloud-1', started_at: '2026-09-09T10:00:00.000Z', kept: true }],
+    [{ captureId: 'live', sessionId: 'live-sess', bytes: 64000, sealed: false, intent: 'none', modifiedAt: '2026-09-09T12:00:00.000Z' }],
+    (row) => ({ id: localCaptureHistoryId(row), started_at: row.modifiedAt, kept: false }),
+  )
+  eq(liveSkipped.map((row) => row.id).join('|'), 'cloud-1', 'an in-progress capture is not a finished Unsaved meeting')
+  if (localCaptureCanAppear({ captureId: 'x', sessionId: 'gone', bytes: 3200, sealed: true, intent: 'none', modifiedAt: '' }, ['gone'])) {
+    throw new Error('a discarded session id must not reappear as a local Unsaved row')
+  }
+  const assembledOk = assembleHistoryList({
+    saved: { ok: true, sessions: [{ id: 'cloud-1', started_at: '2026-09-09T10:00:00.000Z' }] },
+    pending: { ok: true, sessions: [] },
+    local: [
+      { captureId: 'cap-a', sessionId: 'cloud-1', bytes: 3200, sealed: true, intent: 'none', modifiedAt: '2026-09-09T11:00:00.000Z' },
+      { captureId: 'cap-b', sessionId: '', bytes: 6400, sealed: true, intent: 'none', modifiedAt: '2026-09-09T12:00:00.000Z' },
+    ],
+    jobs: [{ sessionId: 'cloud-1', captureId: 'cap-a', save: 'failed' }],
+    toLocalRow: (row) => ({ id: localCaptureHistoryId(row), started_at: row.modifiedAt }),
+  })
+  eq(assembledOk.error, '', 'a successful History load has no fetch error')
+  eq(assembledOk.sessions.map((row) => row.id).join('|'), 'local:cap-b|cloud-1', 'local extras still fill gaps when cloud load succeeds')
+  const cloudGone = assembleHistoryList({
+    saved: { ok: false },
+    pending: { ok: false },
+    local: [
+      { captureId: 'cap-a', sessionId: 'cloud-1', bytes: 3200, sealed: true, intent: 'none', modifiedAt: '2026-09-09T11:00:00.000Z' },
+      { captureId: 'orphan', sessionId: '', bytes: 6400, sealed: true, intent: 'none', modifiedAt: '2026-09-09T12:00:00.000Z' },
+    ],
+    jobs: [{ sessionId: 'cloud-1', captureId: 'cap-a', save: 'failed' }],
+    toLocalRow: (row) => ({ id: localCaptureHistoryId(row), started_at: row.modifiedAt }),
+  })
+  if (!cloudGone.error) throw new Error('a failed History fetch must not look like an empty list')
+  eq(cloudGone.sessions.map((row) => row.id).join('|'), 'local:orphan', 'failed cloud load must not resurrect local copies of unknown sessions')
+  const noSaveGone = assembleHistoryList({
+    saved: { ok: true, sessions: [] },
+    pending: { ok: true, sessions: [{ id: 'pending-1', started_at: '2026-09-09T09:00:00.000Z' }] },
+    local: [{ captureId: 'cap-p', sessionId: 'pending-1', bytes: 3200, sealed: true, intent: 'none', modifiedAt: '2026-09-09T09:00:00.000Z' }],
+    jobs: [{ sessionId: 'pending-1', captureId: 'cap-p', save: 'failed' }],
+    discardedIds: ['pending-1'],
+    toLocalRow: (row) => ({ id: localCaptureHistoryId(row), started_at: row.modifiedAt }),
+  })
+  eq(noSaveGone.sessions.length.toString(), '0', 'No Save removes the cloud pending row, local copy, and Retry save job')
 }
 if (JSON.stringify(rememberRestoreDismissed([], 'p1')) !== JSON.stringify(['p1'])) throw new Error('first dismiss is recorded')
 if (JSON.stringify(rememberRestoreDismissed(['p1'], 'p1')) !== JSON.stringify(['p1'])) throw new Error('repeat dismiss does not duplicate')

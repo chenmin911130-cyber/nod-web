@@ -39,4 +39,5 @@ export interface NodWatchPlugin {
   listSaves(): Promise<{ saves: Array<{ sessionId: string; captureId: string; save: string; error?: string }> }>
   retrySave(opts: { sessionId: string }): Promise<void>
   resumeKeeps(): Promise<void>
+  discardSave(opts: { sessionId: string; captureId?: string }): Promise<void>
 }

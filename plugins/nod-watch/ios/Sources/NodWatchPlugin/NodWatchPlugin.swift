@@ -18,6 +18,7 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "listSaves", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "retrySave", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "resumeKeeps", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "discardSave", returnType: CAPPluginReturnPromise),
     ]
 
     override public func load() {
@@ -361,6 +362,14 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func resumeKeeps(_ call: CAPPluginCall) {
         WatchBridge.shared.resumeKeeps()
+        call.resolve()
+    }
+
+    @objc func discardSave(_ call: CAPPluginCall) {
+        WatchBridge.shared.discardSave(
+            sessionId: call.getString("sessionId") ?? "",
+            captureId: call.getString("captureId") ?? ""
+        )
         call.resolve()
     }
 }

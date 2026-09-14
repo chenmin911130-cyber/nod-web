@@ -2,20 +2,20 @@ import { useEffect, useState } from 'react'
 import { api } from '../auth'
 import { saveSessionToFiles } from '../sessionExport'
 import {
-  historyRowWhen,
+  assembleHistoryList,
+  HISTORY_DISCARDED_KEY,
+  historyRowStatus,
+  historyRowTitle,
   historySessionMatches,
-  mergePendingHistory,
-  mergeLocalCaptures,
-  modeIsSaveEligible,
-  overlayNativeSaveJobs,
+  parseRestoreDismissed,
+  rememberHistoryDiscarded,
   sceneOf,
   sessionHasAudio,
-  sessionShowsUnsaved,
 } from '../historyRestore'
 import { copyFlashText, useCopyFlash } from '../copyFeedback'
 import { IPHONE_COPY } from '../iphoneCopy'
 import { isNativeApp } from '../native'
-import { listWatchSaves, retryWatchSave } from '../watch'
+import { discardWatchSave, listWatchSaves, retryWatchSave } from '../watch'
 
 import type { AnswerSources } from '../types'
 
@@ -157,38 +157,49 @@ export default function HistoryPane({
     }
     setLoading(true)
     setErr('')
+    const asFetch = (p: Promise<{ sessions?: HistorySession[] }>): Promise<{ ok: true; sessions: HistorySession[] } | { ok: false }> =>
+      p.then((r) => ({ ok: true as const, sessions: r.sessions || [] }), () => ({ ok: false as const }))
     void Promise.all([
-      api<{ sessions: HistorySession[] }>('/api/account/history').catch(() => ({ sessions: [] as HistorySession[] })),
-      api<{ sessions: HistorySession[] }>('/api/account/history?pending=1').catch(() => ({ sessions: [] as HistorySession[] })),
+      asFetch(api<{ sessions: HistorySession[] }>('/api/account/history')),
+      asFetch(api<{ sessions: HistorySession[] }>('/api/account/history?pending=1')),
       native
         ? import('nod-mic').then(({ NodMic }) => NodMic.listPendingCaptures()).catch(() => ({ captures: [] }))
         : Promise.resolve({ captures: [] as Array<{ captureId: string; sessionId: string; bytes: number; sealed: boolean; intent: string; modifiedAt: string; mode?: string }> }),
       native ? listWatchSaves() : Promise.resolve({ saves: [] }),
     ])
       .then(([saved, pending, local, jobs]) => {
-        const cloud = mergePendingHistory(saved.sessions || [], pending.sessions || [])
-        // #196: a phone-held capture reports the mode it was recorded in. Captures
-        // written before that field existed fall back to the mode of the cloud row
-        // they belong to; a capture that resolves to NEITHER is left without a mode —
-        // unknown is NOT the same as meeting, but it stays recoverable so a real
-        // meeting capture never loses its entry.
-        const cloudModeOf = (sid: string) =>
-          [...(saved.sessions || []), ...(pending.sessions || [])].find((s) => s.id === sid)?.mode || ''
-        const withLocal = mergeLocalCaptures(cloud, local.captures || [], (row) => {
-          const mode = row.mode || cloudModeOf(row.sessionId)
-          return {
-            id: row.sessionId || `local:${row.captureId}`,
-            mode,
-            // "Unsaved" is a Save-side word: a capture in a mode with no Save concept
-            // keeps the neutral "Session" title instead (the row stays deletable).
-            title: modeIsSaveEligible(mode) ? IPHONE_COPY.saveRestoreTitle : '',
-            started_at: row.modifiedAt || null,
-            stt_seconds: Math.max(0, Math.round(row.bytes / 32000)),
-            items: [],
-            kept: false,
-          }
+        const discardedIds = parseRestoreDismissed(
+          typeof window !== 'undefined' ? window.localStorage.getItem(HISTORY_DISCARDED_KEY) : null,
+        )
+        const cloudModeOf = (sid: string) => {
+          const rows = [
+            ...(saved.ok ? saved.sessions : []),
+            ...(pending.ok ? pending.sessions : []),
+          ]
+          return rows.find((s) => s.id === sid)?.mode || ''
+        }
+        const assembled = assembleHistoryList({
+          saved,
+          pending,
+          local: local.captures || [],
+          jobs: jobs.saves || [],
+          discardedIds,
+          toLocalRow: (row) => {
+            const mode = row.mode || cloudModeOf(row.sessionId)
+            return {
+              id: row.sessionId || `local:${row.captureId}`,
+              mode,
+              title: '',
+              started_at: row.modifiedAt || null,
+              stt_seconds: Math.max(0, Math.round(row.bytes / 32000)),
+              items: [],
+              kept: false,
+              captureId: row.captureId,
+            }
+          },
         })
-        setSessions(overlayNativeSaveJobs(withLocal, jobs.saves || []))
+        setSessions(assembled.sessions)
+        setErr(assembled.error)
       })
       .catch((ex: Error) => setErr(ex.message))
       .finally(() => setLoading(false))
@@ -219,19 +230,38 @@ export default function HistoryPane({
     if (!window.confirm(`Delete this ${sceneOf(session)} session? This cannot be undone.`)) return
     setBusyId(session.id)
     setErr('')
+    const captureId = session.captureId || (session.id.startsWith('local:') ? session.id.slice('local:'.length) : '')
+    const localOnly = session.id.startsWith('local:')
+    const problems: string[] = []
     try {
-      if (session.id.startsWith('local:')) {
-        const { NodMic } = await import('nod-mic')
-        await NodMic.deletePendingCapture({ captureId: session.id.slice('local:'.length) })
-      } else {
+      if (!localOnly) {
         await api(`/api/account/history/${session.id}`, { method: 'DELETE' })
       }
-      setSessions((rows) => rows.filter((row) => row.id !== session.id))
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Could not delete session')
-    } finally {
       setBusyId('')
+      return
     }
+    if (native) {
+      try {
+        const { NodMic } = await import('nod-mic')
+        if (captureId) await NodMic.deletePendingCapture({ captureId })
+        if (!localOnly) await NodMic.deletePendingCapture({ sessionId: session.id })
+      } catch {
+        problems.push('local copy')
+      }
+      try {
+        discardWatchSave(session.id, captureId)
+      } catch {
+        problems.push('save task')
+      }
+    }
+    rememberHistoryDiscarded(session.id)
+    setSessions((rows) => rows.filter((row) => row.id !== session.id))
+    if (problems.length) {
+      setErr(`Removed from History, but the ${problems.join(' and ')} may still be on this phone.`)
+    }
+    setBusyId('')
   }
 
   return (
@@ -259,6 +289,9 @@ export default function HistoryPane({
           {!loading && !err && sessions.length === 0 && (
             <p className="hist-empty">No sessions yet. Save a meeting to see it here.</p>
           )}
+          {!loading && err && sessions.length === 0 && (
+            <p className="hist-empty">History could not be refreshed. The list below may be incomplete.</p>
+          )}
           {!loading && !err && sessions.length > 0 && visible.length === 0 && (
             <p className="hist-empty">No sessions match that search.</p>
           )}
@@ -274,13 +307,8 @@ export default function HistoryPane({
                   >
                     <DocIcon />
                     <span className="hist-pick-copy">
-                      <b>{s.title || 'Session'}</b>
-                      <small>
-                        {sessionShowsUnsaved(s) ? `${IPHONE_COPY.saveRestoreTitle} · ` : ''}
-                        {s.nativeSave === 'failed' ? `${IPHONE_COPY.saveFailed} · ` : ''}
-                        {s.nativeSave === 'local' ? `${IPHONE_COPY.saveWaitingSync} · ` : ''}
-                        {historyRowWhen(s.started_at, s.stt_seconds)}
-                      </small>
+                      <b>{historyRowTitle(s)}</b>
+                      <small>{historyRowStatus(s)}</small>
                     </span>
                   </button>
                   <span className="hist-row-side">

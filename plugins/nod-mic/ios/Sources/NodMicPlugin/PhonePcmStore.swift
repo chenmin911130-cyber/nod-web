@@ -283,10 +283,10 @@ final class PhonePcmStore {
 
     /// Explicit user delete of a finished/abandoned capture. Never deletes the
     /// unique live original while it is still the current unsealed capture.
-    func deleteCapture(_ id: String) -> Int {
+    func deleteCapture(_ id: String, force: Bool = false) -> Int {
         lock.lock(); defer { lock.unlock() }
         guard !id.isEmpty else { return 0 }
-        if id == captureId, !sealed { return 0 }
+        if id == captureId, !sealed, !force { return 0 }
         let dir = captureDir(id)
         let pcm = pcmURL(id)
         let size = (try? fm.attributesOfItem(atPath: pcm.path)[.size] as? Int) ?? 0

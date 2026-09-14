@@ -123,6 +123,7 @@ eq(watchSaveRepeatAction({ kept: true, status: 'saved' }), 'echoSaved', 'already
 eq(watchSaveRepeatAction({ kept: false, status: 'failed' }), 'start', 'failed Watch Save may Retry')
 
 eq(watchDiscardCommand(), { type: 'discard_history' }, 'Don\'t save discards on the server')
+eq(watchDiscardCommand('sess-a'), { type: 'discard_history', id: 'sess-a' }, 'Don\'t save pins this session, not the next live one')
 eq(watchSaveCommand().type, 'keep_history', 'Save is not start_listen')
 eq(watchDiscardCommand().type, 'discard_history', 'Discard is not start_listen')
 eq(watchSavedAckMs(), 2000, 'saved ack returns to Ready by itself')

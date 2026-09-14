@@ -1,4 +1,5 @@
 import type { HistoryItem, HistorySession } from './components/HistoryPane'
+import { IPHONE_COPY } from './iphoneCopy'
 import type { ListenScene } from './listen'
 import type { MeetingLine, TranslatePair, Turn, WorkspaceMode } from './types'
 
@@ -153,6 +154,19 @@ export type RestoreOffer = {
 export type RestoreLaunchSurface = 'none' | 'page'
 
 export const RESTORE_DISMISSED_KEY = 'nod.restoreDismissed'
+export const HISTORY_DISCARDED_KEY = 'nod.historyDiscarded'
+
+export function rememberHistoryDiscarded(id: string): string[] {
+  if (!id) return parseRestoreDismissed(typeof window === 'undefined' ? null : window.localStorage.getItem(HISTORY_DISCARDED_KEY))
+  const ids = rememberRestoreDismissed(
+    parseRestoreDismissed(typeof window === 'undefined' ? null : window.localStorage.getItem(HISTORY_DISCARDED_KEY)),
+    id,
+  )
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(HISTORY_DISCARDED_KEY, serializeRestoreDismissed(ids))
+  }
+  return ids
+}
 
 /**
  * Opening the app never asks Save. A crash leftover (pending, never End / Not now)
@@ -265,19 +279,98 @@ export function localCaptureHistoryId(row: Pick<LocalPhoneCapture, 'captureId' |
   return row.sessionId || `local:${row.captureId}`
 }
 
+/** Sealed, non-discarded phone captures. Live in-progress files are not History rows. */
+export function localCaptureCanAppear(
+  row: LocalPhoneCapture,
+  discardedIds: readonly string[] = [],
+): boolean {
+  if (row.intent === 'discard' || row.bytes <= 0 || !row.sealed) return false
+  const discarded = new Set(discardedIds)
+  const hid = localCaptureHistoryId(row)
+  if (discarded.has(hid) || discarded.has(row.captureId)) return false
+  if (row.sessionId && discarded.has(row.sessionId)) return false
+  return true
+}
+
 /** Phone-held Watch captures that are not already a History row. Reuses Unsaved. */
 export function mergeLocalCaptures<T extends { id: string; started_at?: string | null }>(
   sessions: T[],
   local: LocalPhoneCapture[],
   toRow: (row: LocalPhoneCapture) => T,
+  discardedIds: readonly string[] = [],
 ): T[] {
   const ids = new Set(sessions.map((s) => s.id))
   const extra = local
-    .filter((row) => row.intent !== 'discard' && row.bytes > 0)
+    .filter((row) => localCaptureCanAppear(row, discardedIds))
     .filter((row) => !ids.has(localCaptureHistoryId(row)))
     .map(toRow)
   if (!extra.length) return sessions
   return mergePendingHistory(sessions, extra)
+}
+
+export type HistoryFetchResult<T> = { ok: true; sessions: T[] } | { ok: false }
+
+/**
+ * Combine saved / pending / local / native jobs. A failed saved fetch is not an
+ * empty cloud list: local copies of unknown sessions must not resurrect as Unsaved.
+ */
+export function assembleHistoryList<T extends { id: string; started_at?: string | null }>(input: {
+  saved: HistoryFetchResult<T>
+  pending: HistoryFetchResult<T>
+  local: LocalPhoneCapture[]
+  jobs: NativeSaveJob[]
+  discardedIds?: string[]
+  toLocalRow: (row: LocalPhoneCapture) => T
+}): {
+  sessions: Array<T & { kept: boolean; nativeSave?: string; captureId?: string; nativeError?: string }>
+  error: string
+} {
+  const errors: string[] = []
+  if (!input.saved.ok) errors.push('Could not load saved History. Pull to retry.')
+  if (!input.pending.ok) errors.push('Could not load unsaved History. Pull to retry.')
+  const saved = input.saved.ok ? input.saved.sessions : []
+  const pending = input.pending.ok ? input.pending.sessions : []
+  const discardedIds = input.discardedIds || []
+  const discarded = new Set(discardedIds)
+  const cloud = mergePendingHistory(saved, pending).filter((row) => !discarded.has(row.id))
+  const local = input.saved.ok
+    ? input.local
+    : input.local.filter((row) => !row.sessionId)
+  const withLocal = mergeLocalCaptures(cloud, local, input.toLocalRow, discardedIds)
+  const jobs = input.jobs.filter((job) => !discarded.has(job.sessionId) && !discarded.has(job.captureId || ''))
+  return { sessions: overlayNativeSaveJobs(withLocal, jobs), error: errors.join(' ') }
+}
+
+/** Unsaved is a status, never the stored/displayed title. */
+export function historyRowTitle(session: {
+  title?: string | null
+  mode?: string | null
+  scene?: string | null
+}): string {
+  const raw = (session.title || '').trim()
+  if (raw && raw !== IPHONE_COPY.saveRestoreTitle) return raw
+  return 'Session'
+}
+
+export function historyDurationLabel(sttSeconds: number): string {
+  const seconds = Math.max(0, Math.round(sttSeconds || 0))
+  if (seconds < 60) return '<1m'
+  return `${Math.round(seconds / 60)}m`
+}
+
+export function historyRowStatus(session: {
+  kept?: boolean
+  mode?: string | null
+  nativeSave?: string
+  started_at?: string | null
+  stt_seconds?: number
+}, nowMs = Date.now()): string {
+  const bits: string[] = []
+  if (sessionShowsUnsaved(session)) bits.push(IPHONE_COPY.saveRestoreTitle)
+  if (session.nativeSave === 'failed') bits.push(IPHONE_COPY.saveFailed)
+  if (session.nativeSave === 'local') bits.push(IPHONE_COPY.saveWaitingSync)
+  bits.push(historyRowWhen(session.started_at || null, session.stt_seconds || 0, nowMs))
+  return bits.join(' · ')
 }
 
 export type NativeSaveJob = {
@@ -495,7 +588,7 @@ export function historyDayLabel(startedAt: string | null, nowMs = Date.now()): s
 }
 
 export function historyRowWhen(startedAt: string | null, sttSeconds: number, nowMs = Date.now()): string {
-  const dur = `${Math.max(0, Math.round(sttSeconds / 60))}m`
+  const dur = historyDurationLabel(sttSeconds)
   const day = historyDayLabel(startedAt, nowMs)
   const t = startedAt ? Date.parse(startedAt) : NaN
   if (day === 'Today' || day === 'Yesterday') return `${day}, ${clock12(t)} • ${dur}`
