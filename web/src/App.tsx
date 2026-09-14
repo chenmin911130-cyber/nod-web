@@ -31,6 +31,7 @@ import {
   bindLiveId,
   bumpGeneration,
   cancelCollect,
+  saveBookOnNewListen,
   decideNewSession,
   emptySaveBook,
   keepAfterNotesStillValid,
@@ -1325,7 +1326,7 @@ export default function App() {
     // purges the pending row after 24h rather than letting it shadow this one.
     setSavePrompt(false)
     pendingRestoreId.current = null
-    commitBook({ ...saveBookRef.current, offered: false })
+    commitBook(saveBookOnNewListen(saveBookRef.current))
     setSaveBannerOpen(false)
     seenRestoreIds.current.clear()
     if (!watchAutoNotes.current && !autoReport.current) {
