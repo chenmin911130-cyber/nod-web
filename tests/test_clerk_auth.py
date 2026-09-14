@@ -13,11 +13,13 @@ from server.clerk_auth import (
     clerk_browser_hosts,
     clerk_client_ip,
     clerk_fapi_target,
+    clerk_js_filename_allowed,
     clerk_js_source_url,
     clerk_proxy_public_url,
     enable_clerk_fapi_proxy,
     forward_clerk_fapi,
     load_clerk_browser_js,
+    load_clerk_js_asset,
     reset_clerk_js_cache,
     rewrite_clerk_location,
 )
@@ -53,6 +55,18 @@ class ClerkCustomDomainTests(unittest.TestCase):
             clerk_js_source_url(),
             "https://clerk.nodpilot.com/npm/@clerk/clerk-js@5/dist/clerk.browser.js",
         )
+        self.assertEqual(
+            clerk_js_source_url("ui-common_clerk.browser_0cc2cc_5.127.2.js"),
+            "https://clerk.nodpilot.com/npm/@clerk/clerk-js@5/dist/ui-common_clerk.browser_0cc2cc_5.127.2.js",
+        )
+
+    def test_clerk_js_filename_allowlist(self):
+        self.assertTrue(clerk_js_filename_allowed("clerk.browser.js"))
+        self.assertTrue(clerk_js_filename_allowed("framework_clerk.browser_0cc2cc_5.127.2.js"))
+        self.assertTrue(clerk_js_filename_allowed("ui-common_clerk.browser_0cc2cc_5.127.2.js"))
+        self.assertFalse(clerk_js_filename_allowed("../clerk.browser.js"))
+        self.assertFalse(clerk_js_filename_allowed("evil.js"))
+        self.assertFalse(clerk_js_filename_allowed("framework_clerk.browser_0cc2cc_5.127.2.js/../x"))
 
 
 class ClerkJsProxyTests(unittest.TestCase):
@@ -70,6 +84,11 @@ class ClerkJsProxyTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as raised:
                 load_clerk_browser_js()
         self.assertEqual(raised.exception.status_code, 502)
+
+    def test_rejects_unknown_clerk_js_file(self):
+        with self.assertRaises(HTTPException) as raised:
+            load_clerk_js_asset("not-clerk.js")
+        self.assertEqual(raised.exception.status_code, 404)
 
     def test_caches_javascript(self):
         body = b"!" + (b"clerk" * 3000)

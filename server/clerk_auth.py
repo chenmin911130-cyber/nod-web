@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 import sys
 import time
 from functools import lru_cache
@@ -69,37 +70,52 @@ def clerk_browser_hosts() -> list[str]:
     return hosts
 
 
-CLERK_JS_PATH = "/npm/@clerk/clerk-js@5/dist/clerk.browser.js"
+CLERK_JS_DIST = "/npm/@clerk/clerk-js@5/dist"
+CLERK_JS_ENTRY = "clerk.browser.js"
+CLERK_JS_PATH = f"{CLERK_JS_DIST}/{CLERK_JS_ENTRY}"
+CLERK_JS_DIR = "/clerk-js"
 CLERK_JS_MIN_BYTES = 10_000
 CLERK_JS_TTL_S = 3600
-_clerk_js_cache: tuple[bytes, str, float] | None = None
+# webpack names: framework_clerk.browser_<6hex>_<semver>.js
+_CLERK_JS_FILE_RE = re.compile(
+    r"^(?:clerk\.browser\.js|[a-z0-9-]+_clerk\.browser_[a-f0-9]{6,16}_\d+\.\d+\.\d+\.js)$"
+)
+_clerk_js_assets: dict[str, tuple[bytes, str, float]] = {}
 
 
 def reset_clerk_js_cache() -> None:
-    global _clerk_js_cache
-    _clerk_js_cache = None
+    _clerk_js_assets.clear()
 
 
-def clerk_js_source_url() -> str:
-    """Absolute URL of clerk.browser.js on this instance's Frontend API host."""
+def clerk_js_filename_allowed(name: str) -> bool:
+    return bool(name) and "/" not in name and ".." not in name and bool(_CLERK_JS_FILE_RE.fullmatch(name))
+
+
+def clerk_js_source_url(name: str = CLERK_JS_ENTRY) -> str:
+    """Absolute URL of a clerk-js file on this instance's Frontend API host."""
+    if not clerk_js_filename_allowed(name):
+        return ""
     host = _frontend_api()
     if not host:
         return ""
-    return f"https://{host}{CLERK_JS_PATH}"
+    return f"https://{host}{CLERK_JS_DIST}/{name}"
 
 
-def load_clerk_browser_js() -> tuple[bytes, str]:
-    """Fetch clerk-js from the instance Frontend API and cache it.
+def load_clerk_js_asset(name: str) -> tuple[bytes, str]:
+    """Fetch one clerk-js file from the Frontend API and cache it.
 
-    Browsers were failing to execute the third-party script on
-    clerk.nodpilot.com (0-byte blocked loads). Serving the same file from
-    this origin keeps script-src 'self'.
+    The entry script is served from this origin so script-src 'self' can
+    run it. Webpack then loads framework/vendors/ui-common chunks from the
+    same directory as the entry. Serving only clerk.browser.js left those
+    chunks as 404s on nodpilot.com.
     """
-    global _clerk_js_cache
+    if not clerk_js_filename_allowed(name):
+        raise HTTPException(status_code=404, detail="Not found")
     now = time.monotonic()
-    if _clerk_js_cache and now - _clerk_js_cache[2] < CLERK_JS_TTL_S:
-        return _clerk_js_cache[0], _clerk_js_cache[1]
-    url = clerk_js_source_url()
+    cached = _clerk_js_assets.get(name)
+    if cached and now - cached[2] < CLERK_JS_TTL_S:
+        return cached[0], cached[1]
+    url = clerk_js_source_url(name)
     if not url:
         raise HTTPException(status_code=503, detail="Google sign-in is not configured")
     host = urlparse(url).hostname or ""
@@ -113,16 +129,21 @@ def load_clerk_browser_js() -> tuple[bytes, str]:
             headers={"Accept": "application/javascript,*/*"},
         )
     except httpx.HTTPError as ex:
-        log.warning("clerk-js fetch failed err=%s", ex)
+        log.warning("clerk-js fetch failed file=%s err=%s", name, ex)
         raise HTTPException(status_code=502, detail="Could not load Google sign-in") from ex
     body = res.content or b""
     ctype = (res.headers.get("content-type") or "application/javascript").split(";", 1)[0].strip()
-    if res.status_code != 200 or len(body) < CLERK_JS_MIN_BYTES or body.lstrip()[:1] == b"<" or "html" in ctype.lower():
-        log.warning("clerk-js rejected status=%s type=%s bytes=%s", res.status_code, ctype, len(body))
+    min_bytes = CLERK_JS_MIN_BYTES if name == CLERK_JS_ENTRY else 32
+    if res.status_code != 200 or len(body) < min_bytes or body.lstrip()[:1] == b"<" or "html" in ctype.lower():
+        log.warning("clerk-js rejected file=%s status=%s type=%s bytes=%s", name, res.status_code, ctype, len(body))
         raise HTTPException(status_code=502, detail="Could not load Google sign-in")
     media = ctype or "application/javascript"
-    _clerk_js_cache = (body, media, now)
+    _clerk_js_assets[name] = (body, media, now)
     return body, media
+
+
+def load_clerk_browser_js() -> tuple[bytes, str]:
+    return load_clerk_js_asset(CLERK_JS_ENTRY)
 
 
 CLERK_PROXY_PATH = "/__clerk"

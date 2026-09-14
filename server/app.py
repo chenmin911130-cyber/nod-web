@@ -7582,4 +7582,19 @@ if WEB_DIST.exists():
                 return FileResponse(dest, media_type=media) if media else FileResponse(dest)
         if kind == "site":
             return _html_page("index.html")
+        # webpack publicPath for /clerk.browser.js is "/", so leftover
+        # clients request framework_clerk.browser_*.js at the site root.
+        from server.clerk_auth import clerk_js_filename_allowed, load_clerk_js_asset
+
+        name = full_path.rsplit("/", 1)[-1]
+        if name == full_path and clerk_js_filename_allowed(name):
+            try:
+                body, media = load_clerk_js_asset(name)
+            except HTTPException:
+                return _not_found_html()
+            return Response(
+                content=body,
+                media_type=media,
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
         return _not_found_html()

@@ -1,4 +1,4 @@
-export const CLERK_JS_URL = '/clerk.browser.js'
+export const CLERK_JS_URL = '/clerk-js/clerk.browser.js'
 
 export const CLERK_SIGN_IN_URL = '/login'
 
