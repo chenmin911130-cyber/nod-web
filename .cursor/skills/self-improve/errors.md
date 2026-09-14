@@ -2,6 +2,20 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-14 · #232 锁屏 Watch Save 等打开手机
+
+- 我以为：原生 `URLSession.shared` POST keep 已经不依赖 WKWebView，锁屏后台也能完成，Watch 会收到 `saved`。
+- 实际：End 停录后 `audio` 后台结束，手机被挂起。`startNativeKeep` 没有 `beginBackgroundTask`，HTTP 要等 `didBecomeActive` → `resumeKeeps` 才跑完。用户必须打开手机，Watch 才能结束保存等待。`local` 不是成功。
+- 规则：锁屏时 Watch Save 必须在收到 drain/save 时立刻 `beginBackgroundTask`，原生 keep HTTP 在该窗口内完成；云端 200 才通知 Watch `saved`。禁止用假音频保活，也不得把 JS 前台恢复当成锁屏修复。
+- 涉及：#232 · `WatchBridge.startNativeKeep` / `holdKeepBackground` / `resumeKeeps`
+
+## 2026-09-14 · #232 首次 End 只看手表 freeze lastByte
+
+- 我以为：`finish()` 时 Watch `lastByte > 0` 才出 Save / No Save；`lastByte == 0` 就是空场，可以直接 Ready。bundle 103 能 Save 就表示 End 选择界面没问题。
+- 实际：手表 freeze 时 `lastByte` 可以为 0，手机已经 hold 了本场 PCM（`heldByte` 几十万）。`maybeCompleteDrain` 见 `lastByte == 0` 立刻 Ready；迟到的 persist ack 到达时用户已在主界面。这不是用户点了 No Save。
+- 规则：Meeting End 是否出 Save 不能只看手表 freeze 那一瞬间的 `lastByte`；本场 `persistAckByte > 0` 也要出。迟到 persist 在未选择时补出 Save / No Save。`declineSave` 必须 `saveDismissed = true`，挡住迟到 ack 把 No Save 再打开。
+- 涉及：#232 · `WatchPhoneSession.finish` / `completeDrain` / `persistAckByte` / `offerSaveFromPersist`
+
 ## 2026-09-11 · 装完 iPhone 就当手表也更新了（表还停在 82）
 
 - 我以为：`devicectl device install app` 把手机装到 84 后，内嵌的 `App.app/Watch/Nod.app` 会和 Xcode Run 一样由 iOS 推到已配对手表。
