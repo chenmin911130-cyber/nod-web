@@ -306,6 +306,38 @@ enum WatchCopy {
         ])
     }
 
+    /// The tap affordance on a compact Live Q&A card: opens the full answer
+    /// (issue #218). There is deliberately no "answer summary" label to go with
+    /// it — the card itself is the summary, and a second badge would only
+    /// repeat it.
+    static var fullText: String {
+        pick([
+            "zh": "全文",
+            "en": "Full text",
+            "it": "Testo completo",
+            "es": "Texto completo",
+            "fr": "Texte complet",
+            "de": "Volltext",
+            "pt": "Texto completo",
+            "ja": "全文",
+        ])
+    }
+
+    /// Shown when a new question landed while the user had an older card open.
+    /// Tapping it is the only thing that moves the page (issue #218).
+    static var newAnswer: String {
+        pick([
+            "zh": "新回答",
+            "en": "New answer",
+            "it": "Nuova risposta",
+            "es": "Nueva respuesta",
+            "fr": "Nouvelle réponse",
+            "de": "Neue Antwort",
+            "pt": "Nova resposta",
+            "ja": "新しい回答",
+        ])
+    }
+
     static var translateFailed: String {
         pick([
             "zh": "翻译失败",
