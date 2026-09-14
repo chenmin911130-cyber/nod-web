@@ -7,12 +7,18 @@ cd "$ROOT"
 
 export ANDROID_HOME="${ANDROID_HOME:-${HOME}/Library/Android/sdk}"
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
+# Gradle 8.11 cannot load on Studio JBR 25 (class file 69). Prefer a JDK 21.
+JBR21="${HOME}/Library/Java/JavaVirtualMachines/jbr-21.0.11/Contents/Home"
 STUDIO_JBR="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 BREW_21="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
-if [[ -d "$STUDIO_JBR" ]]; then
-  export JAVA_HOME="$STUDIO_JBR"
-elif [[ -d "$BREW_21" ]]; then
+if [[ -x "$JBR21/bin/java" ]]; then
+  export JAVA_HOME="$JBR21"
+elif JAVA21="$(/usr/libexec/java_home -v 21 2>/dev/null)" && [[ -x "$JAVA21/bin/java" ]]; then
+  export JAVA_HOME="$JAVA21"
+elif [[ -x "$BREW_21/bin/java" ]]; then
   export JAVA_HOME="$BREW_21"
+elif [[ -x "$STUDIO_JBR/bin/java" ]]; then
+  export JAVA_HOME="$STUDIO_JBR"
 elif [[ -z "${JAVA_HOME:-}" && -d /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ]]; then
   export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
 fi
@@ -20,7 +26,7 @@ export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
 
 usage() {
   cat <<'EOF'
-Package Nodpilot for Android (foreground JS mic, no Watch).
+Package Nodpilot for Android (phone features, no Watch).
 
   npm run cap:android
       Sync web assets and write android/app/build/outputs/apk/debug/app-debug.apk
@@ -31,7 +37,7 @@ Package Nodpilot for Android (foreground JS mic, no Watch).
   npm run cap:android -- --install
       adb install -r on the first connected device.
 
-This does not bump the iOS bundle. Lock-screen recording and Apple Watch are not in this build.
+This does not bump the iOS bundle. Apple Watch / Wear OS are not in this build.
 EOF
 }
 

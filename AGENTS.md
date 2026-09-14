@@ -52,4 +52,4 @@ Record confirmed agent misses in `.cursor/skills/self-improve/errors.md`. Read t
 
 ## Android
 
-Foreground debug APK: [docs/android.md](docs/android.md) (`npm run cap:android`). Isolation worktrees go in `.worktrees/<id>/`, not `/private/tmp`. This does not bump the iOS bundle, install Watch, or enable lock-screen native uplink.
+Phone debug APK: [docs/android.md](docs/android.md) (`npm run cap:android`). Isolation worktrees go in `.worktrees/<id>/`, not `/private/tmp`. Matches iPhone phone features (Google, Listen uplink, save/play); no Watch; does not bump the iOS bundle.

@@ -22,6 +22,9 @@ function ensurePermission(name) {
 ensurePermission('android.permission.INTERNET')
 ensurePermission('android.permission.RECORD_AUDIO')
 ensurePermission('android.permission.MODIFY_AUDIO_SETTINGS')
+ensurePermission('android.permission.FOREGROUND_SERVICE')
+ensurePermission('android.permission.FOREGROUND_SERVICE_MICROPHONE')
+ensurePermission('android.permission.POST_NOTIFICATIONS')
 
 const intent = `            <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -38,4 +41,4 @@ if (!xml.includes('android:scheme="nodpilot"')) {
 }
 
 writeFileSync(manifestPath, xml)
-process.stdout.write('patch-android-manifest: RECORD_AUDIO, INTERNET, nodpilot://\n')
+process.stdout.write('patch-android-manifest: RECORD_AUDIO, INTERNET, FGS microphone, nodpilot://\n')

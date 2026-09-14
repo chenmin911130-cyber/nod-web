@@ -21,7 +21,7 @@ cd web && npm install && npm run build && cd ..
 
 iOS App（Capacitor 套现有网页，Apple Watch 表麦录音）见 **[ios/README.md](ios/README.md)**。必须在 Mac 上封装：`npm run cap:ios`。
 
-Android 调试包（前台网页麦，无手表）见 **[docs/android.md](docs/android.md)**：`npm run cap:android`。
+Android 调试包（手机功能与 iPhone 对齐，无手表）见 **[docs/android.md](docs/android.md)**：`npm run cap:android`。
 
 开发热更新：先起后端 `9320`，再 `cd web && npm run dev`（Vite `5174`，会把 `/ws` `/api` 代理到后端）。
 

@@ -3,7 +3,7 @@ import type { NodMicPlugin } from './definitions'
 
 export class NodMicWeb extends WebPlugin implements NodMicPlugin {
   async start(): Promise<void> {
-    throw this.unimplemented('NodMic is iOS-only; the browser uses getUserMedia.')
+    throw this.unimplemented('NodMic is native-only; the browser uses getUserMedia.')
   }
 
   async stop(): Promise<void> {
@@ -27,7 +27,7 @@ export class NodMicWeb extends WebPlugin implements NodMicPlugin {
   }
 
   async startUplink(_options: { url: string }): Promise<void> {
-    throw this.unimplemented('Audio uplink is iOS-only')
+    throw this.unimplemented('Audio uplink is native-only')
   }
 
   async stopUplink(): Promise<void> {

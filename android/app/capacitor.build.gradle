@@ -13,6 +13,10 @@ dependencies {
     implementation project(':capacitor-browser')
     implementation project(':capacitor-keyboard')
     implementation project(':capacitor-status-bar')
+    implementation project(':nod-auth')
+    implementation project(':nod-mic')
+    implementation project(':nod-splash')
+    implementation project(':nod-watch')
 
 }
 

@@ -13,3 +13,15 @@ project(':capacitor-keyboard').projectDir = new File('../node_modules/@capacitor
 
 include ':capacitor-status-bar'
 project(':capacitor-status-bar').projectDir = new File('../node_modules/@capacitor/status-bar/android')
+
+include ':nod-auth'
+project(':nod-auth').projectDir = new File('../plugins/nod-auth/android')
+
+include ':nod-mic'
+project(':nod-mic').projectDir = new File('../plugins/nod-mic/android')
+
+include ':nod-splash'
+project(':nod-splash').projectDir = new File('../plugins/nod-splash/android')
+
+include ':nod-watch'
+project(':nod-watch').projectDir = new File('../plugins/nod-watch/android')
