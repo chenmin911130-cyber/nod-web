@@ -277,6 +277,7 @@ def keep_usage_session(
         if not row or row.user_id != user_id:
             return
         row.kept = True
+        mode = row.mode or ""
         if not keep_audio:
             delete_prefix(f"users/{user_id}/sessions/{session_id}/audio/")
             row.audio_key = ""
@@ -285,6 +286,10 @@ def keep_usage_session(
             if row.notes_key:
                 delete_prefix(f"users/{user_id}/sessions/{session_id}/")
             row.notes_key = ""
+    if keep_content and mode != "translate":
+        from server.history_title import schedule_history_title
+
+        schedule_history_title(user_id, session_id)
 
 
 def discard_usage_session(user_id: str | None, session_id: str | None) -> None:
@@ -471,9 +476,13 @@ def save_history(
         )
         row = db.get(UsageSession, session_id)
         if row and kind in ("question", "transcript") and not row.title.startswith("Q ·"):
-            preview = text.strip().split("\n")[0][:80]
-            if preview:
-                row.title = preview
+            from server.history_title import should_overwrite_title, title_source_of
+
+            if should_overwrite_title(title_source_of(row)):
+                preview = text.strip().split("\n")[0][:80]
+                if preview:
+                    row.title = preview
+                    row.title_source = "preview"
 
 
 def update_history_text(user_id: str, session_id: str | None, qid: str, text: str, kind: str = "transcript", speaker: str = "") -> None:

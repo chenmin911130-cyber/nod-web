@@ -10,6 +10,7 @@ extension Notification.Name {
     static let nodWatchPcmHeld = Notification.Name("nod.watch.pcm.held")
     static let nodWatchPcmIntent = Notification.Name("nod.watch.pcm.intent")
     static let nodWatchPcmPendingKeeps = Notification.Name("nod.watch.pcm.pendingKeeps")
+    static let nodWatchPcmLookup = Notification.Name("nod.watch.pcm.lookup")
 }
 
 /// Phone ingest of Watch PCM. Persist the contiguous prefix first, then stream
@@ -130,6 +131,18 @@ final class WatchPcmIngest {
                 return ["sessionId": info.sessionId, "captureId": info.captureId]
             } ?? []
             reply["rows"] = rows
+        })
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .nodWatchPcmLookup,
+            object: nil,
+            queue: nil
+        ) { [weak self] note in
+            guard let reply = note.userInfo?["reply"] as? NSMutableDictionary else { return }
+            let capture = note.userInfo?["captureId"] as? String ?? ""
+            if let found = self?.lookupConfirmed(captureId: capture) {
+                reply["captureId"] = found.captureId
+                reply["sessionId"] = found.sessionId
+            }
         })
         observers.append(NotificationCenter.default.addObserver(
             forName: Notification.Name("nod.uplink.consumed"),
@@ -280,6 +293,18 @@ final class WatchPcmIngest {
         var rows: [PhonePcmStore.CaptureInfo] = []
         queue.sync { rows = self.store.listCaptures() }
         return rows
+    }
+
+    /// Confirmed store pair for a named capture. Never the live session of another capture.
+    func lookupConfirmed(captureId: String) -> (captureId: String, sessionId: String)? {
+        var found: (String, String)?
+        queue.sync {
+            guard !captureId.isEmpty else { return }
+            guard let row = self.store.listCaptures().first(where: { $0.captureId == captureId }),
+                  !row.sessionId.isEmpty else { return }
+            found = (row.captureId, row.sessionId)
+        }
+        return found.map { ($0.0, $0.1) }
     }
 
     func deleteCapture(_ id: String) -> Int {
