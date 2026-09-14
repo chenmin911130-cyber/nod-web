@@ -3,15 +3,22 @@ import os
 import unittest
 from unittest import mock
 
+import httpx
+
 from fastapi import HTTPException
 
 from server.clerk_auth import (
     _frontend_api,
     _issuer_allowed,
     clerk_browser_hosts,
+    clerk_client_ip,
+    clerk_fapi_target,
     clerk_js_source_url,
+    clerk_proxy_public_url,
+    forward_clerk_fapi,
     load_clerk_browser_js,
     reset_clerk_js_cache,
+    rewrite_clerk_location,
 )
 
 
@@ -73,3 +80,94 @@ class ClerkJsProxyTests(unittest.TestCase):
         self.assertEqual(second, body)
         self.assertEqual(media, "application/javascript")
         self.assertEqual(get.call_count, 1)
+
+
+class ClerkFapiProxyTests(unittest.TestCase):
+    def setUp(self):
+        os.environ["CLERK_PUBLISHABLE_KEY"] = _live_key("clerk.nodpilot.com")
+        os.environ["PUBLIC_URL"] = "https://nodpilot.com"
+        os.environ["CLERK_SECRET_KEY"] = "sk_test_proxy"
+
+    def tearDown(self):
+        for key in ("CLERK_PUBLISHABLE_KEY", "PUBLIC_URL", "CLERK_SECRET_KEY"):
+            os.environ.pop(key, None)
+
+    def test_target_url(self):
+        self.assertEqual(
+            clerk_fapi_target("v1/client/sign_ins"),
+            "https://clerk.nodpilot.com/v1/client/sign_ins",
+        )
+        self.assertEqual(clerk_proxy_public_url(), "https://nodpilot.com/__clerk")
+
+    def test_rejects_dotdot_and_absolute_url(self):
+        with self.assertRaises(HTTPException) as raised:
+            clerk_fapi_target("../v1/client")
+        self.assertEqual(raised.exception.status_code, 400)
+        with self.assertRaises(HTTPException) as raised:
+            clerk_fapi_target("https://evil.example/v1")
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_client_ip_prefers_cloudflare(self):
+        ip = clerk_client_ip(
+            {"X-Forwarded-For": "1.1.1.1, 2.2.2.2", "CF-Connecting-IP": "203.0.113.9"},
+            "10.0.0.1",
+        )
+        self.assertEqual(ip, "203.0.113.9")
+
+    def test_client_ip_ignores_spoofed_xff(self):
+        ip = clerk_client_ip({"X-Forwarded-For": "1.1.1.1"}, "10.0.0.1")
+        self.assertEqual(ip, "10.0.0.1")
+
+    def test_location_rewrite(self):
+        self.assertEqual(
+            rewrite_clerk_location(
+                "https://clerk.nodpilot.com/v1/client",
+                "clerk.nodpilot.com",
+                "https://nodpilot.com/__clerk",
+            ),
+            "https://nodpilot.com/__clerk/v1/client",
+        )
+        self.assertEqual(
+            rewrite_clerk_location(
+                "https://frontend-api.clerk.dev/v1/oauth",
+                "clerk.nodpilot.com",
+                "https://nodpilot.com/__clerk",
+            ),
+            "https://nodpilot.com/__clerk/v1/oauth",
+        )
+
+    def test_forwards_required_headers(self):
+        captured: dict = {}
+        fake = mock.Mock()
+        fake.status_code = 200
+        fake.content = b'{"ok":true}'
+        fake.headers = httpx.Headers(
+            {
+                "content-type": "application/json",
+                "location": "https://clerk.nodpilot.com/v1/x",
+            }
+        )
+
+        def capture(_method, url, **kwargs):
+            captured["url"] = url
+            captured["headers"] = kwargs["headers"]
+            return fake
+
+        with mock.patch("server.clerk_auth.httpx.request", side_effect=capture):
+            res = forward_clerk_fapi(
+                "POST",
+                "v1/client/sign_ins",
+                "__clerk_api_version=2025-11-10",
+                b"{}",
+                {"cf-connecting-ip": "203.0.113.9", "content-type": "application/json"},
+                "10.0.0.1",
+            )
+        self.assertEqual(
+            captured["url"],
+            "https://clerk.nodpilot.com/v1/client/sign_ins?__clerk_api_version=2025-11-10",
+        )
+        self.assertEqual(captured["headers"]["Clerk-Proxy-Url"], "https://nodpilot.com/__clerk")
+        self.assertEqual(captured["headers"]["Clerk-Secret-Key"], "sk_test_proxy")
+        self.assertEqual(captured["headers"]["X-Forwarded-For"], "203.0.113.9")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.headers["location"], "https://nodpilot.com/__clerk/v1/x")
