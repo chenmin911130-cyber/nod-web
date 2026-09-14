@@ -342,7 +342,8 @@ section('happy path: manifest is produced and validated')
   expectAccept('install dry run', fixture.root, ['install', '--manifest', manifestPath, '--authorize', '--dry-run'])
   const afterDryRun = readManifest(fixture)
   eq(afterDryRun.readback.status, 'unverified', 'dry run marks read-back unverified')
-  eq(afterDryRun.readback.phone, null, 'dry run records no phone read-back')
+  eq(afterDryRun.readback.phone.install.status, 'skipped', 'dry run records a skipped phone install')
+  eq(afterDryRun.readback.watch.install.status, 'skipped', 'dry run records a skipped watch install')
   ok(afterDryRun.unverified.some((line) => line.includes('device read-back')), 'dry run records unverified read-back reason')
 }
 
@@ -579,63 +580,167 @@ section('unit: install target resolution never guesses')
 
 section('install + read-back against a fake devicectl (no real device)')
 {
-  // A fake `xcrun devicectl` so the install/read-back path is exercised end to end
-  // without a device, a signing identity, or the network.
-  const fakeDeviceRun = ({ apps = [], devices = [], readStatus = 0, installStatus = 0 } = {}) => (cmd, cmdArgs, opts = {}) => {
-    if (cmd === 'xcrun' && cmdArgs[0] === 'devicectl') {
+  const dump = (label, value) => {
+    if (process.env.IOS_DELIVER_VERBOSE) process.stdout.write(`  ${label}: ${JSON.stringify(value)}\n`)
+  }
+  const PHONE = 'FAKE-PHONE'
+  const WATCH = 'FAKE-WATCH'
+  const phoneApp = { bundleIdentifier: 'com.nodpilot.app', shortVersion: '1.0', bundleVersion: '91' }
+  const watchApp = { bundleIdentifier: 'com.nodpilot.app.watchkitapp', shortVersion: '1.0', bundleVersion: '91' }
+
+  // A fake `xcrun devicectl` so the two-step install and the two read-backs are
+  // exercised end to end without a device, a signing identity, or the network.
+  const fakeDeviceRun = ({
+    phoneApps = [phoneApp],
+    watchApps = [watchApp],
+    devices = [
+      { identifier: PHONE, hardwareProperties: { platform: 'iOS', deviceType: 'iPhone' }, deviceProperties: { name: 'Fake iPhone' }, connectionProperties: { pairingState: 'paired' } },
+      { identifier: WATCH, hardwareProperties: { platform: 'watchOS', deviceType: 'appleWatch' }, deviceProperties: { name: 'Fake Watch' }, connectionProperties: { pairingState: 'paired' } },
+    ],
+    phoneReadStatus = 0,
+    watchReadStatus = 0,
+    phoneInstallStatus = 0,
+    watchInstallStatus = 0,
+  } = {}) => {
+    const calls = []
+    const run = (cmd, cmdArgs, opts = {}) => {
+      if (cmd !== 'xcrun' || cmdArgs[0] !== 'devicectl') return runCapture(cmd, cmdArgs, opts)
+      const device = cmdArgs[cmdArgs.indexOf('--device') + 1]
       if (cmdArgs[1] === 'list' && cmdArgs[2] === 'devices') {
         const flag = cmdArgs.indexOf('--json-output')
         writeFileSync(cmdArgs[flag + 1], JSON.stringify({ result: { devices } }))
         return { status: 0, stdout: '', stderr: '', error: null }
       }
       if (cmdArgs[1] === 'device' && cmdArgs[2] === 'install') {
-        return { status: installStatus, stdout: '', stderr: installStatus ? 'install refused by device' : '', error: null }
+        calls.push({ kind: 'install', device, path: cmdArgs[cmdArgs.length - 1] })
+        const status = device === WATCH ? watchInstallStatus : phoneInstallStatus
+        return { status, stdout: '', stderr: status ? `install refused on ${device}` : '', error: null }
       }
       if (cmdArgs[1] === 'device' && cmdArgs[2] === 'info' && cmdArgs[3] === 'apps') {
-        if (readStatus !== 0) return { status: readStatus, stdout: '', stderr: 'device is locked', error: null }
+        calls.push({ kind: 'apps', device })
+        const status = device === WATCH ? watchReadStatus : phoneReadStatus
+        if (status !== 0) return { status, stdout: '', stderr: 'device is locked', error: null }
         const flag = cmdArgs.indexOf('--json-output')
-        writeFileSync(cmdArgs[flag + 1], JSON.stringify({ result: { apps } }))
+        writeFileSync(cmdArgs[flag + 1], JSON.stringify({ result: { apps: device === WATCH ? watchApps : phoneApps } }))
         return { status: 0, stdout: '', stderr: '', error: null }
       }
+      return runCapture(cmd, cmdArgs, opts)
     }
-    return runCapture(cmd, cmdArgs, opts)
+    return { run, calls }
   }
-  const phoneApp = { bundleIdentifier: 'com.nodpilot.app', shortVersion: '1.0', bundleVersion: '91' }
-  const watchApp = { bundleIdentifier: 'com.nodpilot.app.watchkitapp', shortVersion: '1.0', bundleVersion: '91' }
+  const installCalls = (calls) => calls.filter((call) => call.kind === 'install')
+  const appsCalls = (calls) => calls.filter((call) => call.kind === 'apps')
+  const installArgs = (fixture, manifestPath, extra = []) => [
+    'install', '--manifest', manifestPath, '--device', PHONE, '--watch-device', WATCH, '--authorize', ...extra,
+  ]
 
   const fixture = makeFixture()
   expectAccept('build before install', fixture.root, buildArgs(fixture))
   const manifestPath = join(fixture.base, 'out', 'delivery-manifest.json')
+  const watchAppPath = readManifest(fixture).deviceTargets.watch.appPath
 
-  const good = runInProcess(fixture.root, ['install', '--manifest', manifestPath, '--device', 'FAKE-UDID', '--authorize'], fakeDeviceRun({ apps: [phoneApp, watchApp], devices: [{ identifier: 'FAKE-UDID', hardwareProperties: { platform: 'iOS', deviceType: 'iPhone' }, deviceProperties: { name: 'Fake iPhone' } }] }))
-  eq(good.status, 0, `install + matching read-back exits 0\n${good.stdout}\n${good.stderr}`)
+  // 1) Both halves installed and matching -> verified, exit 0.
+  const fake = fakeDeviceRun()
+  const both = runInProcess(fixture.root, installArgs(fixture, manifestPath), fake.run)
+  eq(both.status, 0, `install + both read-backs match exits 0\n${both.stdout}\n${both.stderr}`)
   let manifest = readManifest(fixture)
-  eq(manifest.readback.status, 'verified', 'matching read-back is recorded as verified')
-  eq(manifest.readback.phone.status, 'verified', 'phone read-back verified')
-  eq(manifest.readback.watch.status, 'verified', 'watch read-back verified')
-  eq(manifest.readback.phone.observed.build, '91', 'read-back records the observed build')
-  eq(manifest.readback.device, 'FAKE-UDID', 'read-back records the device')
-  eq(manifest.readback.devices.length, 1, 'read-back records the devicectl device list')
-
-  const stale = runInProcess(
-    fixture.root,
-    ['install', '--manifest', manifestPath, '--device', 'FAKE-UDID', '--authorize'],
-    fakeDeviceRun({ apps: [{ ...phoneApp, bundleVersion: '77' }, watchApp] }),
+  eq(manifest.readback.status, 'verified', 'both halves verified')
+  eq(manifest.readback.scope, 'phone+watch', 'the delivery scope is both halves')
+  eq(manifest.readback.phone.install.status, 'installed', 'phone install recorded')
+  eq(manifest.readback.watch.install.status, 'installed', 'watch install recorded')
+  eq(manifest.readback.device, PHONE, 'phone device recorded')
+  eq(manifest.readback.watchDevice, WATCH, 'watch device recorded separately')
+  ok(manifest.readback.phone.install.appPath.endsWith('App.app'), 'phone install used the app bundle path')
+  eq(
+    installCalls(fake.calls).find((call) => call.device === WATCH)?.path,
+    watchAppPath,
+    'the watch install used the embedded watch app path from deviceTargets.watch.appPath',
   )
-  eq(stale.status, 3, 'installed-but-older build exits non-zero')
-  manifest = readManifest(fixture)
-  eq(manifest.readback.status, 'mismatch', 'older installed build is recorded as mismatch')
-  ok(manifest.unverified.some((line) => line.includes('device read-back')), 'mismatch is also listed under unverified')
+  eq(installCalls(fake.calls).length, 2, 'exactly two install steps ran')
+  ok(appsCalls(fake.calls).some((call) => call.device === WATCH), 'the watch was read back on its own device, not the phone')
+  eq(manifest.readback.watch.observed.build, '91', 'watch read-back records the observed build')
+  dump('readback both-verified', manifest.readback)
 
-  const locked = runInProcess(
-    fixture.root,
-    ['install', '--manifest', manifestPath, '--device', 'FAKE-UDID', '--authorize'],
-    fakeDeviceRun({ readStatus: 70 }),
-  )
-  eq(locked.status, 3, 'locked device exits non-zero')
+  // 2) Watch install fails -> phone still installed, watch recorded failed, non-success.
+  const failedWatch = fakeDeviceRun({ watchInstallStatus: 1 })
+  const watchFailed = runInProcess(fixture.root, installArgs(fixture, manifestPath), failedWatch.run)
+  eq(watchFailed.status, 3, 'a failed watch install is non-success')
   manifest = readManifest(fixture)
-  eq(manifest.readback.status, 'unverified', 'locked device is recorded as unverified, never success')
-  ok(manifest.readback.phone.reason.includes('locked or unreadable'), 'locked device records the reason')
+  eq(manifest.readback.status, 'unverified', 'failed watch install never reports verified')
+  eq(manifest.readback.watch.install.status, 'failed', 'watch install failure is recorded')
+  eq(manifest.readback.phone.install.status, 'installed', 'the phone install was not rolled back by the watch failure')
+  eq(manifest.readback.phone.status, 'verified', 'the phone half still read back')
+  ok(manifest.unverified.some((line) => line.includes('watch install:')), 'watch install failure is listed under unverified')
+  ok(manifest.readback.watch.install.detail.includes('install refused'), 'the watch install failure keeps the device message')
+  dump('readback watch-install-failed', manifest.readback)
+
+  // 3) Watch installed but unreadable (locked / tunnel disconnected) -> unverified.
+  const lockedWatch = fakeDeviceRun({ watchReadStatus: 70 })
+  const watchLocked = runInProcess(fixture.root, installArgs(fixture, manifestPath), lockedWatch.run)
+  eq(watchLocked.status, 3, 'an unreadable watch is non-success')
+  manifest = readManifest(fixture)
+  eq(manifest.readback.watch.install.status, 'installed', 'the watch install still succeeded')
+  eq(manifest.readback.watch.status, 'unverified', 'unreadable watch is unverified, not success')
+  ok(manifest.readback.watch.reason.includes('locked or unreadable'), 'the unreadable reason is recorded')
+
+  // 4) Watch read back with an older build -> mismatch.
+  const staleWatch = fakeDeviceRun({ watchApps: [{ ...watchApp, bundleVersion: '77' }] })
+  const watchStale = runInProcess(fixture.root, installArgs(fixture, manifestPath), staleWatch.run)
+  eq(watchStale.status, 3, 'a stale watch build is non-success')
+  manifest = readManifest(fixture)
+  eq(manifest.readback.status, 'mismatch', 'stale watch build is recorded as mismatch')
+  eq(manifest.readback.watch.status, 'mismatch', 'the watch half is the mismatch')
+
+  // 5) Phone-only without --watch-device: the watch is unverified and never read on the phone id.
+  const phoneOnly = fakeDeviceRun()
+  const only = runInProcess(fixture.root, ['install', '--manifest', manifestPath, '--device', PHONE, '--authorize'], phoneOnly.run)
+  eq(only.status, 3, 'a phone-only delivery without --no-watch is non-success')
+  manifest = readManifest(fixture)
+  eq(manifest.readback.watchDevice, null, 'the phone id is NOT reused as the watch device')
+  eq(manifest.readback.watch.install.status, 'skipped', 'the watch install is recorded as skipped')
+  eq(manifest.readback.watch.status, 'unverified', 'the watch half is unverified')
+  ok(manifest.readback.watch.reason.includes('no --watch-device given'), 'the reason names the missing --watch-device')
+  eq(installCalls(phoneOnly.calls).length, 1, 'only the phone was installed')
+  ok(!appsCalls(phoneOnly.calls).some((call) => call.device === WATCH), 'the watch was not read on any device')
+  eq(appsCalls(phoneOnly.calls)[0].device, PHONE, 'only the phone app list was read')
+  dump('readback phone-only-unverified', manifest.readback)
+
+  // 6) --no-watch explicitly acknowledges a phone-only delivery.
+  const ack = fakeDeviceRun()
+  const phoneOnlyAck = runInProcess(fixture.root, ['install', '--manifest', manifestPath, '--device', PHONE, '--authorize', '--no-watch'], ack.run)
+  eq(phoneOnlyAck.status, 0, '--no-watch + verified phone exits 0')
+  manifest = readManifest(fixture)
+  eq(manifest.readback.status, 'verified', '--no-watch verified phone')
+  eq(manifest.readback.scope, 'phone-only', 'the scope is recorded as phone-only')
+  eq(manifest.readback.watch.install.status, 'skipped', 'the watch install is skipped')
+  eq(manifest.readback.watch.status, 'skipped', 'the watch is skipped, not failed')
+  ok(manifest.unverified.some((line) => line.includes('--no-watch')), 'the skipped watch half is listed under unverified')
+  dump('readback phone-only-acknowledged', manifest.readback)
+
+  // 7) --no-watch with --watch-device is contradictory and refused.
+  expectReject(
+    '--no-watch conflicts with --watch-device',
+    fixture.root,
+    ['install', '--manifest', manifestPath, '--device', PHONE, '--watch-device', WATCH, '--authorize', '--no-watch'],
+    'cannot be combined',
+  )
+
+  // 8) Phone read-back still drives mismatch on its own.
+  const stalePhone = fakeDeviceRun({ phoneApps: [{ ...phoneApp, bundleVersion: '77' }] })
+  const phoneStale = runInProcess(fixture.root, installArgs(fixture, manifestPath), stalePhone.run)
+  eq(phoneStale.status, 3, 'an older installed phone build is non-success')
+  manifest = readManifest(fixture)
+  eq(manifest.readback.status, 'mismatch', 'older phone build is recorded as mismatch')
+  ok(manifest.unverified.some((line) => line.includes('device read-back (phone)')), 'the phone mismatch is listed under unverified')
+
+  // 9) A phone install failure aborts before the watch is touched.
+  const failedPhone = fakeDeviceRun({ phoneInstallStatus: 1 })
+  const phoneFailed = runInProcess(fixture.root, installArgs(fixture, manifestPath), failedPhone.run)
+  ok(phoneFailed.status !== 0, 'a failed phone install is non-success')
+  manifest = readManifest(fixture)
+  eq(manifest.readback.phone.install.status, 'failed', 'the phone install failure is recorded')
+  eq(installCalls(failedPhone.calls).length, 1, 'the watch install is not attempted after a phone install failure')
+  ok(manifest.unverified.some((line) => line.includes('phone install:')), 'the phone install failure is listed under unverified')
 }
 
 section('reject: output directory must be unique')

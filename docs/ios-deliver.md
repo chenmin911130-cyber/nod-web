@@ -45,14 +45,24 @@ npm run cap:ios -- verify --manifest <out>/delivery-manifest.json
 
 ```bash
 npm run cap:ios -- install --manifest <out>/delivery-manifest.json \
-  --device <phone-udid> [--watch-device <watch-udid>] --authorize [--dry-run]
+  --device <phone-udid> --watch-device <watch-udid> --authorize [--dry-run]
 ```
 
 - 未显式授权（`--authorize` 或 `IOS_DELIVER_INSTALL=1`）**不会**调用任何安装命令。
-- 先按清单校验产物，再安装，然后用 `devicectl` 读回手机（和手表）上的
-  bundle id / 版本 / build，并写回清单的 `readback`。
-- 读不到（设备锁屏、隧道断开）记 `unverified`；读到的版本与清单不符记 `mismatch`；
-  **两种都不算成功**，进程非零退出。
+- 先按清单校验产物，然后**分两步安装**：手机 App 装到 `--device`；嵌入的手表 App
+  （清单里的 `deviceTargets.watch.appPath`，即 archive 内 `<App.app>/Watch/…`）装到
+  `--watch-device`。**装手机不会更新手表**（已在真机证实），所以手表必须单独装。
+- 两步各自记录在 `readback.phone.install` / `readback.watch.install`（`installed` /
+  `failed` / `skipped` + `device` / `appPath` / `detail`）。手表安装失败不回滚手机安装，
+  但一定写进 `unverified[]`，整体也一定非成功。
+- 再读回两边：手机与手表的 bundle id / 版本 / build 都应与清单一致，才记
+  `readback.status: "verified"` 并退出 0。读不到（锁屏、隧道断开）记 `unverified`，
+  读到的版本不符记 `mismatch`；**两者都不算成功**，退出码 3。
+- 不传 `--watch-device` 时**不会**拿手机当成手表来读：`readback.watch.status` 记
+  `unverified`，原因写明 `no --watch-device given; the watch half of the delivery was not
+  installed or verified`。只想交付手机时必须用 `--no-watch` 显式声明（此时手表记
+  `skipped`，`readback.scope: "phone-only"`，手机验证通过即退出 0）。`--no-watch` 与
+  `--watch-device` 不能同时使用。
 
 ## open — 只开发用
 
@@ -68,7 +78,9 @@ npm run cap:ios -- open [--sha <40-char-sha>]
 两个锁文件摘要、插件与 Pods 路径、web 资产三段摘要（dist / cap:sync / app 内）、
 archive 与 IPA 路径与摘要、App 的 bundle id/版本/build 与摘要（含 `buildSource`：
 `pinned` 表示本次用 `NOD_IOS_BUNDLE` 固定，`artifact` 表示复用已有产物）、嵌入框架标识、
-手机与手表目标、部署 SHA 与测试证据槽位、`readback`、`verified[]`、`unverified[]`。
+手机与手表目标、部署 SHA 与测试证据槽位、`readback`（`scope`、`device` / `watchDevice`、
+`phone.install` / `watch.install` 的状态、两边的 `status` 与 `observed`）、`verified[]`、
+`unverified[]`。
 
 不含任何 key、token 或签名私钥（`secretsIncluded: false`，origin 的 userinfo 打码）。
 凡未检查的项一律进 `unverified[]`，不猜测。

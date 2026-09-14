@@ -965,20 +965,35 @@ export function cmdInstall(args, deps) {
       'refusing to install without explicit authorisation: pass --authorize (or set IOS_DELIVER_INSTALL=1). Nothing was installed.',
     )
   }
+  if (args.noWatch && args.watchDevice) {
+    throw new DeliveryError('--no-watch cannot be combined with --watch-device: choose a phone-only delivery or a watch target')
+  }
   const manifestPath = resolve(root, requireArg(args, 'manifest'))
   const manifest = loadManifest(manifestPath)
   const { artifactPath } = verifyManifest({ root, manifest, manifestPath, artifact: args.artifact, run })
+  const phoneExpected = manifest.deviceTargets?.phone || null
+  const watchExpected = manifest.deviceTargets?.watch || null
+  const watchDeviceId = args.watchDevice || null
 
   if (args.dryRun) {
-    deps.stdout(`dry run: would install ${artifactPath}`)
-    deps.stdout(`  xcrun devicectl device install app --device <${args.device || 'device'}> ${artifactPath}`)
+    const watchPlan = args.noWatch
+      ? 'skipped (--no-watch)'
+      : watchDeviceId
+        ? `xcrun devicectl device install app --device ${watchDeviceId} ${watchExpected?.appPath ?? '<manifest deviceTargets.watch.appPath>'}`
+        : 'skipped (no --watch-device given)'
+    deps.stdout('dry run: nothing was installed')
+    deps.stdout(`  phone: xcrun devicectl device install app --device <${args.device || 'device'}> ${artifactPath}`)
+    deps.stdout(`  watch: ${watchPlan}`)
     manifest.readback = {
       at: new Date().toISOString(),
       status: 'unverified',
       reason: 'dry run: install was not executed',
-      phone: null,
-      watch: null,
+      device: args.device || null,
+      watchDevice: watchDeviceId,
+      scope: args.noWatch ? 'phone-only' : 'phone+watch',
       authorizedBy: 'dry-run',
+      phone: { install: { status: 'skipped', reason: 'dry run' }, status: 'unverified' },
+      watch: { install: { status: 'skipped', reason: 'dry run' }, status: 'unverified' },
     }
     if (!manifest.unverified.some((line) => line.startsWith('device read-back'))) {
       manifest.unverified.push('device read-back was not performed (dry run)')
@@ -999,46 +1014,108 @@ export function cmdInstall(args, deps) {
     deviceId = found.id
   }
 
-  const install = run('xcrun', ['devicectl', 'device', 'install', 'app', '--device', deviceId, artifactPath], { cwd: root, stdio: 'inherit' })
-  const readback = { at: new Date().toISOString(), device: deviceId, authorizedBy: args.authorize ? '--authorize' : 'IOS_DELIVER_INSTALL=1', status: 'unverified', devices: null, phone: null, watch: null }
-  if (install.status !== 0) {
-    readback.reason = sanitizeError(install.stderr || install.stdout || install.error || `devicectl install app failed (${install.status})`)
-    manifest.readback = readback
-    manifest.unverified.push(`device read-back: ${readback.reason}`)
-    writeManifest(manifestPath, manifest)
-    throw new DeliveryError(`install failed on ${deviceId}: ${readback.reason}`)
+  const readback = {
+    at: new Date().toISOString(),
+    device: deviceId,
+    watchDevice: watchDeviceId,
+    authorizedBy: args.authorize ? '--authorize' : 'IOS_DELIVER_INSTALL=1',
+    scope: args.noWatch ? 'phone-only' : 'phone+watch',
+    status: 'unverified',
+    devices: null,
+    phone: { install: null, status: 'unverified' },
+    watch: { install: null, status: 'unverified' },
   }
+
+  // Step 1: the phone app. A phone install failure aborts before the watch half.
+  const phoneInstall = run('xcrun', ['devicectl', 'device', 'install', 'app', '--device', deviceId, artifactPath], { cwd: root, stdio: 'inherit' })
+  if (phoneInstall.status !== 0) {
+    const detail = sanitizeError(phoneInstall.stderr || phoneInstall.stdout || phoneInstall.error || `devicectl install app failed (${phoneInstall.status})`)
+    readback.phone.install = { status: 'failed', device: deviceId, appPath: artifactPath, detail }
+    readback.reason = `phone install failed: ${detail}`
+    manifest.readback = readback
+    manifest.unverified.push(`phone install: ${detail}`)
+    writeManifest(manifestPath, manifest)
+    throw new DeliveryError(`phone install failed on ${deviceId}: ${detail}`)
+  }
+  readback.phone.install = { status: 'installed', device: deviceId, appPath: artifactPath }
 
   const listed = listDevices(run)
   readback.devices = listed.ok ? listDeviceRecords(listed.data) : { error: listed.reason }
   if (!listed.ok) manifest.unverified.push(`device list could not be read: ${listed.reason}`)
 
-  const phoneExpected = manifest.deviceTargets?.phone || null
-  const watchExpected = manifest.deviceTargets?.watch || null
-  const watchDeviceId = args.watchDevice || deviceId
-  readback.watchDevice = watchDeviceId
+  // Step 2: the embedded watch app is a separate install on its own device. Installing
+  // the phone app does NOT update the watch (proven on hardware), so this step is what
+  // makes the watch carry this build. Its failure is recorded, never hidden.
+  if (args.noWatch) {
+    readback.watch.install = { status: 'skipped', reason: '--no-watch: phone-only delivery acknowledged' }
+  } else if (!watchDeviceId) {
+    readback.watch.install = { status: 'skipped', reason: 'no --watch-device given; the watch was not installed' }
+  } else {
+    const watchAppPath = watchExpected?.appPath || null
+    if (!watchAppPath) {
+      readback.watch.install = { status: 'failed', detail: 'the manifest has no deviceTargets.watch.appPath to install' }
+    } else if (!existsSync(watchAppPath)) {
+      readback.watch.install = { status: 'failed', device: watchDeviceId, appPath: watchAppPath, detail: `embedded watch app does not exist: ${watchAppPath}` }
+    } else if (manifest.app?.path && watchAppPath !== manifest.app.path && !watchAppPath.startsWith(`${manifest.app.path}${sep}`)) {
+      readback.watch.install = { status: 'failed', device: watchDeviceId, appPath: watchAppPath, detail: `watch app ${watchAppPath} is not inside the verified app ${manifest.app.path}` }
+    } else {
+      const watchInstall = run('xcrun', ['devicectl', 'device', 'install', 'app', '--device', watchDeviceId, watchAppPath], { cwd: root, stdio: 'inherit' })
+      readback.watch.install = watchInstall.status === 0
+        ? { status: 'installed', device: watchDeviceId, appPath: watchAppPath }
+        : {
+            status: 'failed',
+            device: watchDeviceId,
+            appPath: watchAppPath,
+            detail: sanitizeError(watchInstall.stderr || watchInstall.stdout || watchInstall.error || `devicectl install app failed (${watchInstall.status})`),
+          }
+    }
+  }
+  if (readback.watch.install.status === 'failed') {
+    manifest.unverified.push(`watch install: ${readback.watch.install.detail}`)
+  }
 
+  // Step 3: read both halves back and only report verified when both match the manifest.
   const phoneApps = readDeviceApps(deviceId, run)
-  const watchApps = watchDeviceId === deviceId ? phoneApps : readDeviceApps(watchDeviceId, run)
-
   const phone = phoneExpected
     ? phoneApps.ok
       ? compareReadback(phoneExpected, findInstalledApp(phoneApps.data, phoneExpected.bundleId))
       : { status: 'unverified', reason: `device locked or unreadable (${deviceId}): ${phoneApps.reason}` }
     : { status: 'unverified', reason: 'no phone target in manifest' }
-  const watch = watchExpected
-    ? watchApps.ok
+
+  let watch
+  if (args.noWatch) {
+    watch = { status: 'skipped', reason: '--no-watch: phone-only delivery acknowledged' }
+  } else if (!watchDeviceId) {
+    // Never fall back to the phone id: that compares the phone's app list against the
+    // watch bundle id and can only produce a bogus mismatch.
+    watch = { status: 'unverified', reason: 'no --watch-device given; the watch half of the delivery was not installed or verified' }
+  } else if (!watchExpected) {
+    watch = { status: 'unverified', reason: 'manifest has no watch target to verify' }
+  } else {
+    const watchApps = readDeviceApps(watchDeviceId, run)
+    const compared = watchApps.ok
       ? compareReadback(watchExpected, findInstalledApp(watchApps.data, watchExpected.bundleId))
       : { status: 'unverified', reason: `device locked or unreadable (${watchDeviceId}): ${watchApps.reason}` }
-    : { status: 'unverified', reason: 'no watch target in manifest' }
-  readback.phone = phone
-  readback.watch = watch
-  const problems = [phone, watch].filter((r) => r.status !== 'verified')
-  readback.status = problems.length ? (problems.some((r) => r.status === 'mismatch') ? 'mismatch' : 'unverified') : 'verified'
+    watch =
+      readback.watch.install.status === 'failed' && compared.status === 'verified'
+        ? { ...compared, status: 'unverified', reason: `watch install failed: ${readback.watch.install.detail}` }
+        : compared
+  }
+
+  readback.phone = { ...phone, install: readback.phone.install }
+  readback.watch = { ...watch, install: readback.watch.install }
+
+  const problems = []
+  if (phone.status !== 'verified') problems.push({ scope: 'phone', result: phone })
+  if (!args.noWatch && watch.status !== 'verified') problems.push({ scope: 'watch', result: watch })
+  readback.status = problems.some((problem) => problem.result.status === 'mismatch') ? 'mismatch' : problems.length ? 'unverified' : 'verified'
   manifest.readback = readback
-  for (const problem of problems) manifest.unverified.push(`device read-back: ${problem.reason || `${problem.status} ${JSON.stringify(problem.observed ?? {})}`}`)
+  for (const problem of problems) {
+    manifest.unverified.push(`device read-back (${problem.scope}): ${problem.result.reason || `${problem.result.status} ${JSON.stringify(problem.result.observed ?? {})}`}`)
+  }
+  if (args.noWatch) manifest.unverified.push('watch half skipped (--no-watch): not installed or verified by this run')
   writeManifest(manifestPath, manifest)
-  deps.stdout(`read-back: ${readback.status}`)
+  deps.stdout(`read-back: ${readback.status} (phone: ${phone.status}, watch: ${args.noWatch ? 'skipped' : watch.status})`)
   return readback.status === 'verified' ? 0 : 3
 }
 
@@ -1051,12 +1128,13 @@ export const VALUE_FLAGS = new Set([
   'team-id', 'device', 'watch-device', 'deployment-sha', 'test-evidence', 'allow-dirty',
   'require-framework', 'scheme', 'root',
 ])
-export const BOOL_FLAGS = new Set(['help', 'skip-fetch', 'skip-sync', 'no-archive', 'ipa', 'archive', 'open', 'authorize', 'dry-run'])
+export const BOOL_FLAGS = new Set(['help', 'skip-fetch', 'skip-sync', 'no-archive', 'ipa', 'archive', 'open', 'authorize', 'dry-run', 'no-watch'])
 
 const CAMEL = {
   'archive-path': 'archivePath',
   'team-id': 'teamId',
   'watch-device': 'watchDevice',
+  'no-watch': 'noWatch',
   'deployment-sha': 'deploymentSha',
   'test-evidence': 'testEvidence',
   'allow-dirty': 'allowDirty',
@@ -1106,9 +1184,13 @@ export function helpText() {
   npm run cap:ios -- verify  --manifest <path> [--artifact <exact path>]
       Re-checks a manifest against the exact artifact on disk. No device needed.
 
-  npm run cap:ios -- install --manifest <path> [--artifact <exact path>] --device <udid> --authorize
-      Verifies manifest-vs-artifact, installs, reads the phone (and --watch-device) back
-      and records the result in the manifest. --dry-run stops before touching a device.
+  npm run cap:ios -- install --manifest <path> [--artifact <exact path>] --device <phone-udid> [--watch-device <watch-udid>] --authorize
+      Verifies manifest-vs-artifact, installs the phone app, and (with --watch-device)
+      installs the embedded watch app to that watch as a separate recorded step, because
+      installing the phone app does NOT update the watch. Reads both back and only reports
+      verified when both match. Without --watch-device the watch half is unverified and the
+      run is non-zero; pass --no-watch to acknowledge a phone-only delivery explicitly.
+      --dry-run stops before touching a device.
 
   npm run cap:ios -- open    [--sha <40-hex>]
       Development only (opens Xcode). Not a delivery: no manifest, no install.
