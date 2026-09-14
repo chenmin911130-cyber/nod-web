@@ -41,20 +41,34 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private static let accountTokenKey = "nod.watch.accountToken"
     private static let accountOriginKey = "nod.watch.accountOrigin"
     private static let jobsKey = "nod.watch.saveJobs"
+    private static let discardedKey = "nod.watch.discardedIds"
     private static let maxKeepAttempts = 8
     private var jobs: [String: SaveJob] = [:]
     private var inflight: Set<String> = []
     private var jobsLoaded = false
+    private var discardedIds: Set<String> = []
+    private var discardedLoaded = false
     #if PCM_REPLAY_TESTING
     static var testingKeep: ((String) -> (Int, Data?))?
     static var testingKeepAsync: ((String, @escaping (Int, Data?) -> Void) -> Void)?
+    static var testingDiscard: ((String) -> (Int, Data?))?
     static var testingNow: (() -> TimeInterval)?
     static var testingKeepCalls = 0
+    static var testingDiscardCalls = 0
     static var testingUserDefaults: UserDefaults?
+    static var testingBackgroundBegins = 0
+    static var testingBackgroundEnds = 0
+    static var testingBackgroundHeld = false
+    #endif
+    #if os(iOS) && !PCM_REPLAY_TESTING
+    private var keepBgTask = UIBackgroundTaskIdentifier.invalid
     #endif
     private var lastPcmAckByte = 0
     private var lastPcmCaptureId = ""
     private var lastPcmAckSessionId = ""
+    private var lastSaveReplySession = ""
+    private var lastSaveReplyCapture = ""
+    private var lastSaveReplyFace = ""
     private var ackTimer: DispatchWorkItem?
     /// Coalesced-ack rate limit: ordinary progress is pushed at most once per
     /// second (the latest cursor), but the LAST consumed progress is always sent
@@ -195,7 +209,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         )
         let ack = reply["ackByte"] as? Int ?? 0
         let capture = reply["captureId"] as? String ?? lastPcmCaptureId
-        let session = reply["sessionId"] as? String ?? lastSessionId
+        let session = reply["sessionId"] as? String ?? ""
         lastPcmReady = (reply["pcmReady"] as? Bool) ?? lastPcmReady
         lastPcmSealed = (reply["pcmSealed"] as? Bool) ?? lastPcmSealed
         if !capture.isEmpty {
@@ -242,12 +256,33 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         if !pendingAckCapture.isEmpty {
             msg["pcmAckCaptureId"] = pendingAckCapture
         }
-        if !pendingAckSession.isEmpty {
-            msg["pcmAckSessionId"] = pendingAckSession
+        let ackSession = confirmedAckSession(pending: pendingAckSession)
+        if !ackSession.isEmpty {
+            msg["sessionId"] = ackSession
+            msg["pcmAckSessionId"] = ackSession
         }
         msg["pcmReady"] = lastPcmReady ? "true" : "false"
         msg["pcmSealed"] = lastPcmSealed ? "true" : "false"
         wc.sendMessage(msg, replyHandler: nil, errorHandler: nil)
+    }
+
+    /// Top-level sessionId Watch apply can bind. Prefer the just-acked pair, then
+    /// the last confirmed ingest session, then the store pair for lastPcmCaptureId.
+    private func confirmedAckSession(pending: String = "") -> String {
+        if !pending.isEmpty { return pending }
+        if !lastPcmAckSessionId.isEmpty { return lastPcmAckSessionId }
+        return lookupConfirmedSession(captureId: lastPcmCaptureId)
+    }
+
+    private func lookupConfirmedSession(captureId: String) -> String {
+        guard !captureId.isEmpty else { return "" }
+        let reply = NSMutableDictionary()
+        NotificationCenter.default.post(
+            name: Notification.Name("nod.watch.pcm.lookup"),
+            object: nil,
+            userInfo: ["captureId": captureId, "reply": reply]
+        )
+        return reply["sessionId"] as? String ?? ""
     }
 
     func markUplinkHandshakeFailed(status: Int) {
@@ -569,11 +604,29 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         if !sessionId.isEmpty {
             lastSessionId = sessionId
-            NotificationCenter.default.post(
-                name: Notification.Name("nod.watch.pcm.bind"),
-                object: nil,
-                userInfo: ["captureId": "", "sessionId": sessionId, "mode": lastMode]
-            )
+            if !lastPcmCaptureId.isEmpty {
+                NotificationCenter.default.post(
+                    name: Notification.Name("nod.watch.pcm.bind"),
+                    object: nil,
+                    userInfo: ["captureId": lastPcmCaptureId, "sessionId": sessionId, "mode": lastMode]
+                )
+                let ack = NSMutableDictionary()
+                NotificationCenter.default.post(
+                    name: Notification.Name("nod.watch.pcm.ack"),
+                    object: nil,
+                    userInfo: ["reply": ack]
+                )
+                let ackCap = ack["captureId"] as? String ?? ""
+                let ackSess = ack["sessionId"] as? String ?? ""
+                if ackCap == lastPcmCaptureId, ackSess == sessionId, !ackSess.isEmpty {
+                    lastPcmAckSessionId = ackSess
+                    lastPcmReady = (ack["pcmReady"] as? Bool) ?? lastPcmReady
+                    lastPcmSealed = (ack["pcmSealed"] as? Bool) ?? lastPcmSealed
+                    if let ackByte = ack["ackByte"] as? Int {
+                        lastPcmAckByte = ackByte
+                    }
+                }
+            }
         }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
@@ -625,17 +678,18 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             payload["langPair"] = lastLangPair
         }
         payload["save"] = lastSave
-        if !lastSessionId.isEmpty {
+        let statusSession = confirmedAckSession()
+        if !statusSession.isEmpty {
+            payload["sessionId"] = statusSession
+        } else if lastPcmCaptureId.isEmpty, !lastSessionId.isEmpty {
             payload["sessionId"] = lastSessionId
         }
         payload["pcmAckByte"] = String(lastPcmAckByte)
         if !lastPcmCaptureId.isEmpty {
             payload["pcmAckCaptureId"] = lastPcmCaptureId
         }
-        if !lastPcmAckSessionId.isEmpty {
-            payload["pcmAckSessionId"] = lastPcmAckSessionId
-        } else if !lastSessionId.isEmpty {
-            payload["pcmAckSessionId"] = lastSessionId
+        if !statusSession.isEmpty {
+            payload["pcmAckSessionId"] = statusSession
         }
         payload["pcmDrained"] = lastPcmDrained ? "true" : "false"
         if lastPcmDrained {
@@ -746,6 +800,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let at = message["at"] as? Double
         let now = Date().timeIntervalSince1970
         guard Self.shouldRunWatchCommand(action, at: at, live: live, now: now) else { return }
+        let holdMode = mode.isEmpty ? lastMode : mode
+        if Self.keepBackgroundHold(action: action, mode: holdMode) {
+            holdKeepBackground()
+        }
         if (action == "start" || action == "record"), !captureId.isEmpty {
             if captureId != lastPcmCaptureId {
                 lastPcmAckByte = 0
@@ -778,8 +836,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             NotificationCenter.default.post(
                 name: Notification.Name("nod.watch.pcm.bind"),
                 object: nil,
-                userInfo: ["captureId": captureId, "sessionId": lastSessionId, "mode": lastMode]
+                userInfo: ["captureId": captureId, "sessionId": "", "mode": lastMode]
             )
+            NSLog("nod.watch.bind capture=%@ session= reason=start_new", captureId)
             let readyReply = NSMutableDictionary()
             NotificationCenter.default.post(
                 name: Notification.Name("nod.watch.pcm.ack"),
@@ -792,14 +851,14 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             }
         }
         if action == "discard" {
-            NotificationCenter.default.post(
-                name: Notification.Name("nod.watch.pcm.discard"),
-                object: nil,
-                userInfo: ["captureId": captureId.isEmpty ? lastPcmCaptureId : captureId]
-            )
+            let cap = captureId.isEmpty ? lastPcmCaptureId : captureId
+            nativeWatchDiscard(sessionId: sessionId, captureId: cap)
         }
         if action == "save" {
-            _ = nativeWatchSave(sessionId: sessionId, captureId: captureId)
+            let result = nativeWatchSave(sessionId: sessionId, captureId: captureId)
+            lastSaveReplyFace = result.save
+            lastSaveReplySession = result.sessionId
+            lastSaveReplyCapture = result.captureId
         }
         if action == "drain" {
             NotificationCenter.default.post(
@@ -808,7 +867,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
                 userInfo: [
                     "lastByte": Self.intField(message, "lastByte"),
                     "captureId": captureId,
-                    "sessionId": sessionId.isEmpty ? lastSessionId : sessionId,
+                    "sessionId": sessionId.isEmpty ? lastPcmAckSessionId : sessionId,
                 ]
             )
             return
@@ -867,6 +926,67 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         if code == 404 { return ("failed", "gone") }
         if code == 405 { return ("failed", "mismatch") }
         return ("local", "retryable")
+    }
+
+    /// Meeting End/Save on a locked phone is only runnable while iOS still grants
+    /// background time. Translate has no Save, so it must not take that window.
+    static func keepBackgroundHold(action: String, mode: String) -> Bool {
+        if action == "save" || action == "discard" { return true }
+        if action == "drain" || action == "stop" {
+            return mode.lowercased() != "translate"
+        }
+        return false
+    }
+
+    private func holdKeepBackground() {
+        #if PCM_REPLAY_TESTING
+        if Self.testingBackgroundHeld {
+            endKeepBackground()
+        }
+        Self.testingBackgroundBegins += 1
+        Self.testingBackgroundHeld = true
+        return
+        #else
+        #if os(iOS)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.keepBgTask != .invalid {
+                UIApplication.shared.endBackgroundTask(self.keepBgTask)
+                self.keepBgTask = .invalid
+            }
+            self.keepBgTask = UIApplication.shared.beginBackgroundTask(withName: "nod.watch.keep") { [weak self] in
+                NSLog("nod.watch.keep bg expire")
+                self?.endKeepBackground()
+            }
+            NSLog("nod.watch.keep bg begin")
+        }
+        #endif
+        #endif
+    }
+
+    #if PCM_REPLAY_TESTING
+    func testingExpireKeepBackground() {
+        NSLog("nod.watch.keep bg expire")
+        endKeepBackground()
+    }
+    #endif
+
+    private func endKeepBackground() {
+        #if PCM_REPLAY_TESTING
+        if Self.testingBackgroundHeld {
+            Self.testingBackgroundEnds += 1
+            Self.testingBackgroundHeld = false
+        }
+        return
+        #else
+        #if os(iOS)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.keepBgTask != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(self.keepBgTask)
+            self.keepBgTask = .invalid
+        }
+        #endif
+        #endif
     }
 
     static func keepShouldRetry(save: String, error: String, attempts: Int, now: Double, nextAttemptAt: Double) -> Bool {
@@ -950,13 +1070,30 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         queuedTranslationPages = []
         copyPageVersion = 0
         copyReplay.removeAll()
+        lastSessionId = ""
+        lastSave = "none"
+        lastPcmCaptureId = ""
+        lastPcmAckSessionId = ""
+        lastPcmAckByte = 0
+        ackTimer?.cancel()
+        ackTimer = nil
+        ackTimerActive = false
+        pendingAckByte = 0
+        pendingAckCapture = ""
+        pendingAckSession = ""
     }
 
     func testingResetJobs() {
         jobs = [:]
         inflight = []
         jobsLoaded = true
+        discardedIds = []
+        discardedLoaded = true
         defaults.removeObject(forKey: Self.jobsKey)
+        defaults.removeObject(forKey: Self.discardedKey)
+        Self.testingBackgroundBegins = 0
+        Self.testingBackgroundEnds = 0
+        Self.testingBackgroundHeld = false
     }
 
     func testingUnloadJobs() {
@@ -968,14 +1105,31 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
 
     /// Watch Save must not wait for WKWebView. Persist the keep intent, reply
     /// immediately, then POST History from native if a token exists.
-    private func nativeWatchSave(sessionId: String, captureId: String) -> String {
+    private func nativeWatchSave(sessionId: String, captureId: String) -> (save: String, sessionId: String, captureId: String) {
         ensureJobsLoaded()
-        if sessionId.isEmpty { return "failed" }
-        if let existing = jobs[sessionId], existing.save == "saved" {
-            publishSave(sessionId: sessionId, save: "saved")
-            return "saved"
+        NSLog("nod.watch.save recv session=%@ capture=%@", sessionId, captureId)
+        var targetSession = sessionId
+        var targetCapture = captureId
+        if !captureId.isEmpty {
+            let confirmed = lookupConfirmedSession(captureId: captureId)
+            if !confirmed.isEmpty {
+                targetSession = confirmed
+                targetCapture = captureId
+            }
         }
-        let cap = captureForSave(sessionId: sessionId, captureId: captureId)
+        NSLog("nod.watch.save target session=%@ capture=%@", targetSession, targetCapture)
+        if targetSession.isEmpty {
+            return ("failed", "", targetCapture)
+        }
+        ensureDiscardedLoaded()
+        if discardedIds.contains(targetSession) {
+            return ("failed", targetSession, targetCapture)
+        }
+        if let existing = jobs[targetSession], existing.save == "saved" {
+            publishSave(sessionId: targetSession, save: "saved")
+            return ("saved", targetSession, targetCapture)
+        }
+        let cap = captureForSave(sessionId: targetSession, captureId: targetCapture)
         let reply = NSMutableDictionary()
         NotificationCenter.default.post(
             name: Notification.Name("nod.watch.pcm.intent"),
@@ -983,24 +1137,24 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             userInfo: [
                 "intent": "keep",
                 "captureId": cap,
-                "sessionId": sessionId,
+                "sessionId": targetSession,
                 "reply": reply,
             ]
         )
         guard (reply["ok"] as? Bool) == true else {
-            upsertJob(sessionId: sessionId, captureId: cap, save: "failed", error: "gone")
-            publishSave(sessionId: sessionId, save: "failed")
-            return "failed"
+            upsertJob(sessionId: targetSession, captureId: cap, save: "failed", error: "gone")
+            publishSave(sessionId: targetSession, save: "failed")
+            return ("failed", targetSession, cap)
         }
         let resolved = (reply["captureId"] as? String) ?? cap
-        upsertJob(sessionId: sessionId, captureId: resolved, save: "local", error: "")
-        enqueueKeep(sessionId)
-        let face = jobs[sessionId]?.save ?? "failed"
+        upsertJob(sessionId: targetSession, captureId: resolved, save: "local", error: "")
+        enqueueKeep(targetSession)
+        let face = jobs[targetSession]?.save ?? "failed"
         if face == "saved" || face == "failed" {
-            return face
+            return (face, targetSession, resolved)
         }
-        publishSave(sessionId: sessionId, save: "local")
-        return "local"
+        publishSave(sessionId: targetSession, save: "local")
+        return ("local", targetSession, resolved)
     }
 
     private func captureForSave(sessionId: String, captureId: String) -> String {
@@ -1019,10 +1173,12 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let rows = reply["rows"] as? [[String: String]] ?? []
         let account = accountToken()
         var changed = false
+        ensureDiscardedLoaded()
         for row in rows {
             let sid = row["sessionId"] ?? ""
             let cap = row["captureId"] ?? ""
             guard !sid.isEmpty else { continue }
+            if discardedIds.contains(sid) { continue }
             if jobs[sid]?.save == "saved" { continue }
             if jobs[sid] == nil {
                 jobs[sid] = SaveJob(
@@ -1038,6 +1194,76 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             }
         }
         if changed { persistJobs() }
+    }
+
+    /// No Save / History delete: drop the keep job, persist the discard, delete
+    /// the phone capture, and DELETE the cloud session even if WKWebView is parked.
+    func discardSave(sessionId: String, captureId: String) {
+        nativeWatchDiscard(sessionId: sessionId, captureId: captureId)
+    }
+
+    private func nativeWatchDiscard(sessionId: String, captureId: String) {
+        ensureJobsLoaded()
+        ensureDiscardedLoaded()
+        var sid = sessionId
+        var cap = captureId
+        if sid.isEmpty, !cap.isEmpty {
+            sid = jobs.first(where: { $0.value.captureId == cap })?.key
+                ?? (cap == lastPcmCaptureId ? lastPcmAckSessionId : "")
+            if sid.isEmpty { sid = lastSessionId }
+        }
+        if cap.isEmpty, !sid.isEmpty {
+            cap = captureForSave(sessionId: sid, captureId: "")
+        }
+        if !sid.isEmpty {
+            discardedIds.insert(sid)
+            jobs.removeValue(forKey: sid)
+        }
+        if !cap.isEmpty {
+            discardedIds.insert(cap)
+        }
+        persistDiscarded()
+        persistJobs()
+        NotificationCenter.default.post(
+            name: Notification.Name("nod.watch.pcm.discard"),
+            object: nil,
+            userInfo: ["captureId": cap]
+        )
+        if !sid.isEmpty {
+            startNativeDiscard(sid)
+        }
+    }
+
+    private func ensureDiscardedLoaded() {
+        guard !discardedLoaded else { return }
+        discardedLoaded = true
+        discardedIds = Set(defaults.stringArray(forKey: Self.discardedKey) ?? [])
+    }
+
+    private func persistDiscarded() {
+        let rows = Array(discardedIds.prefix(200))
+        defaults.set(rows, forKey: Self.discardedKey)
+    }
+
+    private func startNativeDiscard(_ sessionId: String) {
+        #if PCM_REPLAY_TESTING
+        if let hook = Self.testingDiscard {
+            Self.testingDiscardCalls += 1
+            _ = hook(sessionId)
+        }
+        return
+        #else
+        let token = accountToken()
+        var origin = defaults.string(forKey: Self.accountOriginKey) ?? ""
+        if origin.isEmpty { origin = "https://nodpilot.com" }
+        let root = origin.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !token.isEmpty, let url = URL(string: "\(root)/api/account/history/\(sessionId)") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: req).resume()
+        #endif
     }
 
     private func enqueueKeep(_ sessionId: String) {
@@ -1056,6 +1282,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     }
 
     private func startNativeKeep(_ sessionId: String, captureId: String) {
+        holdKeepBackground()
+        NSLog("nod.watch.keep http start session=%@", sessionId)
         #if PCM_REPLAY_TESTING
         if let asyncHook = Self.testingKeepAsync {
             Self.testingKeepCalls += 1
@@ -1086,6 +1314,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
+        req.timeoutInterval = 20
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         URLSession.shared.dataTask(with: req) { [weak self] data, resp, _ in
@@ -1102,7 +1331,15 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let result = Self.keepHttpFace(code: code, body: body, sessionId: sessionId)
         NSLog("nod.watch.keep session=%@ status=%d face=%@ error=%@", sessionId, code, result.save, result.error)
         ensureJobsLoaded()
-        if jobs[sessionId]?.save == "saved" { return }
+        ensureDiscardedLoaded()
+        if discardedIds.contains(sessionId) {
+            endKeepBackground()
+            return
+        }
+        if jobs[sessionId]?.save == "saved" {
+            endKeepBackground()
+            return
+        }
         var job = jobs[sessionId] ?? SaveJob(
             sessionId: sessionId,
             captureId: "",
@@ -1131,6 +1368,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         jobs[sessionId] = job
         persistJobs()
         publishSave(sessionId: sessionId, save: job.save)
+        if job.save == "saved" || job.save == "failed" {
+            endKeepBackground()
+        }
         #if !PCM_REPLAY_TESTING
         if job.save == "local", job.error == "retryable" {
             let delay = max(0.5, job.nextAttemptAt - nowTs())
@@ -1200,12 +1440,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let session = WCSession.default
         guard session.activationState == .activated else { return }
         var msg: [String: Any] = ["ok": true, "save": save, "sessionId": sessionId]
+        try? session.updateApplicationContext(msg)
         if session.isReachable {
-            session.sendMessage(msg, replyHandler: nil, errorHandler: { _ in
-                try? session.updateApplicationContext(msg)
-            })
-        } else {
-            try? session.updateApplicationContext(msg)
+            session.sendMessage(msg, replyHandler: nil, errorHandler: nil)
         }
         #endif
     }
@@ -1338,7 +1575,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         if captureId.isEmpty {
             return
         }
-        let sessionId = message["sessionId"] as? String ?? lastSessionId
+        let sessionId = message["sessionId"] as? String ?? ""
         let offset = Self.intField(message, "byteOffset")
         if uplinkActive {
             let reply = NSMutableDictionary()
@@ -1424,15 +1661,16 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         reply["save"] = lastSave
         if (message["action"] as? String) == "save" {
-            let sid = message["sessionId"] as? String ?? ""
-            if sid.isEmpty {
-                reply["save"] = "failed"
-            } else {
-                reply["sessionId"] = sid
-                reply["save"] = jobs[sid]?.save ?? "failed"
+            reply["save"] = lastSaveReplyFace.isEmpty ? "failed" : lastSaveReplyFace
+            if !lastSaveReplySession.isEmpty {
+                reply["sessionId"] = lastSaveReplySession
             }
-        } else if !lastSessionId.isEmpty {
-            reply["sessionId"] = lastSessionId
+            if !lastSaveReplyCapture.isEmpty {
+                reply["captureId"] = lastSaveReplyCapture
+                reply["pcmAckCaptureId"] = lastSaveReplyCapture
+            }
+        } else if !lastPcmAckSessionId.isEmpty {
+            reply["sessionId"] = lastPcmAckSessionId
         }
         reply["pcmAckByte"] = String(lastPcmAckByte)
         if !lastPcmCaptureId.isEmpty {
@@ -1440,8 +1678,6 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         if !lastPcmAckSessionId.isEmpty {
             reply["pcmAckSessionId"] = lastPcmAckSessionId
-        } else if !lastSessionId.isEmpty {
-            reply["pcmAckSessionId"] = lastSessionId
         }
         reply["pcmDrained"] = lastPcmDrained ? "true" : "false"
         if lastPcmDrained {
@@ -1468,7 +1704,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         if kind == "speech" { return }
         let captureId = (meta["captureId"] as? String) ?? ""
         guard !captureId.isEmpty else { return }
-        let sessionId = (meta["sessionId"] as? String) ?? lastSessionId
+        let sessionId = (meta["sessionId"] as? String) ?? ""
         let seq = Self.intField(meta, "seq")
         let offset = Self.intField(meta, "byteOffset")
         let reply = NSMutableDictionary()

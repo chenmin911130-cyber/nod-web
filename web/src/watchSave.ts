@@ -230,8 +230,9 @@ export function keepHistoryMessage(opts: {
   return { type: 'keep_history', content: opts.content, audio: opts.audio }
 }
 
-/** Don't save deletes the current usage session on the server. */
-export function watchDiscardCommand(): Extract<EngineMsg, { type: 'discard_history' }> {
+/** Don't save deletes that usage session on the server. Pin the id when known. */
+export function watchDiscardCommand(id?: string): Extract<EngineMsg, { type: 'discard_history' }> {
+  if (id) return { type: 'discard_history', id }
   return { type: 'discard_history' }
 }
 

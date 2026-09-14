@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client'
 import { PRODUCT_NAME } from './brand'
 import { ensureLocalGuest, fetchMe, getToken, isLocalHost } from './auth'
+import { nativeColdStartSurface } from './nativeColdStart'
 import { installNativeShell, isNativeApp, maybeReturnToNativeApp, nativeGo, rememberNativeReturn } from './native'
 import { signalSplashReady } from './splashReady'
 
@@ -17,6 +18,24 @@ async function mountWorkspace() {
   void signalSplashReady()
 }
 
+async function mountNativeSignIn() {
+  if (!rootEl) return
+  document.documentElement.classList.add('nod-web')
+  document.title = PRODUCT_NAME
+  await import('./App.css')
+  const { default: NativeSignIn } = await import('./components/NativeSignIn')
+  const root = createRoot(rootEl)
+  root.render(
+    <NativeSignIn
+      onSignedIn={() => {
+        root.unmount()
+        void mountWorkspace()
+      }}
+    />,
+  )
+  void signalSplashReady()
+}
+
 async function boot() {
   if (!rootEl) return
   rememberNativeReturn()
@@ -30,28 +49,16 @@ async function boot() {
     void signalSplashReady()
     return
   }
-  const path = window.location.pathname + window.location.search
-  let me = await fetchMe()
-  if (!isNativeApp() && me && maybeReturnToNativeApp(getToken())) return
-  if (isLocalHost()) me = (await ensureLocalGuest()) || me
-  else if (!me && !isNativeApp()) me = await ensureLocalGuest()
-  if (!me && isNativeApp()) {
-    document.documentElement.classList.add('nod-web')
-    document.title = PRODUCT_NAME
-    await import('./App.css')
-    const { default: NativeSignIn } = await import('./components/NativeSignIn')
-    const root = createRoot(rootEl)
-    root.render(
-      <NativeSignIn
-        onSignedIn={() => {
-          root.unmount()
-          void mountWorkspace()
-        }}
-      />,
-    )
-    void signalSplashReady()
+  if (isNativeApp()) {
+    if (nativeColdStartSurface(getToken()) === 'workspace') await mountWorkspace()
+    else await mountNativeSignIn()
     return
   }
+  const path = window.location.pathname + window.location.search
+  let me = await fetchMe()
+  if (me && maybeReturnToNativeApp(getToken())) return
+  if (isLocalHost()) me = (await ensureLocalGuest()) || me
+  else if (!me) me = await ensureLocalGuest()
   if (!me) {
     nativeGo(`/login?next=${encodeURIComponent(path || '/app')}`, true)
     return

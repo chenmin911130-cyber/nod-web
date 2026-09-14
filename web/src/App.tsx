@@ -8,7 +8,7 @@ import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
-import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, modeIsSaveEligible, sessionIsSaveEligible, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
+import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberHistoryDiscarded, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, modeIsSaveEligible, sessionIsSaveEligible, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
 import { flushPendingKeepMessage, keepHistoryMessage, watchDiscardCommand, watchFailKeepNativeFace, watchJsFailMayApply, watchKeepNotesWait, watchNativeSaveReduce, watchPhoneStatusMayPush, watchSaveCommand, watchSaveKeepTarget, watchSaveRepeatAction, watchSaveShouldSendKeepHistory, watchSaveStatusPayload, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave, type NativeWatchSaveFace } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
@@ -31,6 +31,7 @@ import {
   bindLiveId,
   bumpGeneration,
   cancelCollect,
+  saveBookOnNewListen,
   decideNewSession,
   emptySaveBook,
   keepAfterNotesStillValid,
@@ -59,7 +60,7 @@ import { api as authApi, deleteAccount, fetchMe, logout, type Me } from './auth'
 import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
-import { currentWatchCopySeq, installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
+import { currentWatchCopySeq, discardWatchSave, installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
 import { applyChunk, applyCopyRow, applySnapshot, copySessionAccepts, snapshotApplies, upsertCopyRows } from './copyVersion'
 import { mergeQaRows } from './watchQa'
 import { watchStartListenCommand } from './watchReplay'
@@ -1325,7 +1326,7 @@ export default function App() {
     // purges the pending row after 24h rather than letting it shadow this one.
     setSavePrompt(false)
     pendingRestoreId.current = null
-    commitBook({ ...saveBookRef.current, offered: false })
+    commitBook(saveBookOnNewListen(saveBookRef.current))
     setSaveBannerOpen(false)
     seenRestoreIds.current.clear()
     if (!watchAutoNotes.current && !autoReport.current) {
@@ -1669,8 +1670,13 @@ export default function App() {
       onSaveResult: (ev) => {
         applyNativeWatchSaveRef.current(ev)
       },
-      onDiscard: () => {
-        window.api.send(watchDiscardCommand())
+      onDiscard: (sessionId) => {
+        const id = sessionId || saveBookRef.current.liveId || ''
+        window.api.send(watchDiscardCommand(id || undefined))
+        if (id) {
+          rememberHistoryDiscarded(id)
+          discardWatchSave(id)
+        }
         markHistoryKept(false)
       },
       onSpeak: () => {
@@ -2655,7 +2661,12 @@ export default function App() {
       stopListen()
     }
     markHistoryKept(false)
-    window.api.send({ type: 'discard_history' })
+    const liveId = saveBookRef.current.liveId || ''
+    if (liveId) {
+      rememberHistoryDiscarded(liveId)
+      discardWatchSave(liveId)
+    }
+    window.api.send(watchDiscardCommand(liveId || undefined))
     doClear()
     dispatch({ type: 'engine', ev: { type: 'status', text: 'New session' } })
   }
@@ -4064,13 +4075,20 @@ export default function App() {
           if (restoredId) {
             // Recovered session: discard it by id (not the live usage id).
             markHistoryKept(false)
+            rememberHistoryDiscarded(restoredId)
+            discardWatchSave(restoredId)
             window.api.send({ type: 'discard_history', id: restoredId })
             return
           }
           const leavingSignOut = saveBookRef.current.pendingAfterSave === 'signout'
           const leavingDelete = saveBookRef.current.pendingAfterSave === 'delete'
           markHistoryKept(false)
-          window.api.send({ type: 'discard_history' })
+          const liveId = saveBookRef.current.liveId || ''
+          if (liveId) {
+            rememberHistoryDiscarded(liveId)
+            discardWatchSave(liveId)
+          }
+          window.api.send(watchDiscardCommand(liveId || undefined))
           commitBook(setPendingAfterSave(saveBookRef.current, 'none'))
           if (pendingNewAfterSave.current) {
             pendingNewAfterSave.current = false
