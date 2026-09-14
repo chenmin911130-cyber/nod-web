@@ -34,6 +34,18 @@ log = logging.getLogger("nod.api")
 router = APIRouter()
 
 
+@router.get("/clerk.browser.js")
+def clerk_browser_js():
+    from server.clerk_auth import load_clerk_browser_js
+
+    body, media = load_clerk_browser_js()
+    return RawResponse(
+        content=body,
+        media_type=media,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 class RegisterIn(BaseModel):
     email: str
     password: str

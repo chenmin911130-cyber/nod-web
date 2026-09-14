@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client'
 import Site from './site/Site'
 import { fetchMe, getToken } from './auth'
+import { CLERK_JS_URL } from './googleAuth'
 import { apiUrl, installNativeShell, isNativeApp, maybeReturnToNativeApp, rememberNativeReturn } from './native'
 
 const rootEl = document.getElementById('root')
@@ -23,6 +24,7 @@ async function boot() {
     root.render(
       <ClerkProvider
         publishableKey={clerkKey}
+        clerkJSUrl={CLERK_JS_URL}
         afterSignOutUrl="/"
         signInFallbackRedirectUrl="/login"
         signUpFallbackRedirectUrl="/signup"

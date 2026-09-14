@@ -1,4 +1,5 @@
 import {
+  CLERK_JS_URL,
   CLERK_LOAD_TIMEOUT_MS,
   GOOGLE_LOAD_ERROR,
   googleButtonDisabled,
@@ -28,6 +29,7 @@ eq(googleButtonDisabled({ ...idle, busy: true }), true, 'busy disabled')
 eq(googleButtonLabel({ ...idle, isLoaded: false, loadFailed: true }), 'Continue with Google', 'failed label')
 eq(googleButtonDisabled({ ...idle, isLoaded: false, loadFailed: true }), true, 'failed disabled')
 eq(googleLoadError(true), GOOGLE_LOAD_ERROR, 'failed error copy')
-eq(CLERK_LOAD_TIMEOUT_MS, 12_000, 'load timeout')
+eq(CLERK_JS_URL, '/clerk.browser.js', 'same-origin clerk-js')
+eq(CLERK_LOAD_TIMEOUT_MS, 20_000, 'load timeout')
 
 console.log('googleAuth.test.ts ok')

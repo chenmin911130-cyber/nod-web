@@ -1,4 +1,6 @@
-export const CLERK_LOAD_TIMEOUT_MS = 12_000
+export const CLERK_JS_URL = '/clerk.browser.js'
+
+export const CLERK_LOAD_TIMEOUT_MS = 20_000
 
 export const GOOGLE_LOAD_ERROR = "Google sign-in didn't load. Refresh the page, or use an email code."
 

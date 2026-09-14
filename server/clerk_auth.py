@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import time
 from functools import lru_cache
 from urllib.parse import urlparse
 
@@ -64,6 +65,62 @@ def clerk_browser_hosts() -> list[str]:
             if host not in hosts:
                 hosts.append(host)
     return hosts
+
+
+CLERK_JS_PATH = "/npm/@clerk/clerk-js@5/dist/clerk.browser.js"
+CLERK_JS_MIN_BYTES = 10_000
+CLERK_JS_TTL_S = 3600
+_clerk_js_cache: tuple[bytes, str, float] | None = None
+
+
+def reset_clerk_js_cache() -> None:
+    global _clerk_js_cache
+    _clerk_js_cache = None
+
+
+def clerk_js_source_url() -> str:
+    """Absolute URL of clerk.browser.js on this instance's Frontend API host."""
+    host = _frontend_api()
+    if not host:
+        return ""
+    return f"https://{host}{CLERK_JS_PATH}"
+
+
+def load_clerk_browser_js() -> tuple[bytes, str]:
+    """Fetch clerk-js from the instance Frontend API and cache it.
+
+    Browsers were failing to execute the third-party script on
+    clerk.nodpilot.com (0-byte blocked loads). Serving the same file from
+    this origin keeps script-src 'self'.
+    """
+    global _clerk_js_cache
+    now = time.monotonic()
+    if _clerk_js_cache and now - _clerk_js_cache[2] < CLERK_JS_TTL_S:
+        return _clerk_js_cache[0], _clerk_js_cache[1]
+    url = clerk_js_source_url()
+    if not url:
+        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
+    host = urlparse(url).hostname or ""
+    if host != _frontend_api():
+        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
+    try:
+        res = httpx.get(
+            url,
+            timeout=20.0,
+            follow_redirects=True,
+            headers={"Accept": "application/javascript,*/*"},
+        )
+    except httpx.HTTPError as ex:
+        log.warning("clerk-js fetch failed err=%s", ex)
+        raise HTTPException(status_code=502, detail="Could not load Google sign-in") from ex
+    body = res.content or b""
+    ctype = (res.headers.get("content-type") or "application/javascript").split(";", 1)[0].strip()
+    if res.status_code != 200 or len(body) < CLERK_JS_MIN_BYTES or body.lstrip()[:1] == b"<" or "html" in ctype.lower():
+        log.warning("clerk-js rejected status=%s type=%s bytes=%s", res.status_code, ctype, len(body))
+        raise HTTPException(status_code=502, detail="Could not load Google sign-in")
+    media = ctype or "application/javascript"
+    _clerk_js_cache = (body, media, now)
+    return body, media
 
 
 def _origin(url: str) -> str:
