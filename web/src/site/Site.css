@@ -185,6 +185,15 @@
   background: #ffffff !important;
 }
 
+.google-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.google-btn:disabled:hover {
+  background: #f4f8fc !important;
+}
+
 .site-or {
   display: flex;
   align-items: center;

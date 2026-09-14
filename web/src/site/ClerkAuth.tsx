@@ -7,6 +7,12 @@ import {
   useSignIn,
 } from '@clerk/clerk-react'
 import { getToken, setToken } from '../auth'
+import {
+  CLERK_LOAD_TIMEOUT_MS,
+  googleButtonDisabled,
+  googleButtonLabel,
+  googleLoadError,
+} from '../googleAuth'
 import { apiUrl, maybeReturnToNativeApp, nativeGo, wantsNativeReturn } from '../native'
 import { track } from './track'
 import './Site.css'
@@ -134,6 +140,16 @@ export function GoogleButton({ next = '/app' }: { next?: string }) {
   const { signIn } = useSignIn()
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [loadFailed, setLoadFailed] = useState(false)
+
+  useEffect(() => {
+    if (isLoaded) {
+      setLoadFailed(false)
+      return
+    }
+    const timer = window.setTimeout(() => setLoadFailed(true), CLERK_LOAD_TIMEOUT_MS)
+    return () => window.clearTimeout(timer)
+  }, [isLoaded])
 
   const start = async () => {
     setBusy(true)
@@ -179,14 +195,23 @@ export function GoogleButton({ next = '/app' }: { next?: string }) {
     }
   }
 
+  const state = { isLoaded, busy, isSignedIn: Boolean(isSignedIn), loadFailed }
+  const loadErr = googleLoadError(loadFailed)
+
   return (
     <div className="google-auth">
-      <button className="button google-btn" type="button" onClick={() => void start()} disabled={!isLoaded || busy}>
+      <button
+        className="button google-btn"
+        type="button"
+        onClick={() => void start()}
+        disabled={googleButtonDisabled(state)}
+        aria-busy={!isLoaded && !loadFailed}
+      >
         <GoogleMark />
-        {busy ? 'Opening workspace…' : isSignedIn ? 'Open workspace' : 'Continue with Google'}
+        {googleButtonLabel(state)}
       </button>
-      {isSignedIn && !err && <div className="site-ok">You're already signed in with Google.</div>}
-      {err && <div className="site-err">{err}</div>}
+      {isSignedIn && !err && !loadFailed && <div className="site-ok">You're already signed in with Google.</div>}
+      {(err || loadErr) && <div className="site-err">{err || loadErr}</div>}
     </div>
   )
 }
