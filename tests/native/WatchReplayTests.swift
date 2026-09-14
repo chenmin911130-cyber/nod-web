@@ -424,6 +424,10 @@ func waitSend() {
     check(WatchBridge.keepShouldRetry(save: "failed", error: "auth", attempts: 1, now: 10, nextAttemptAt: 0) == false, "401 is not retried")
     check(WatchBridge.keepShouldRetry(save: "local", error: "retryable", attempts: 1, now: 10, nextAttemptAt: 5) == true, "retryable keep retries after backoff")
     check(WatchBridge.keepShouldRetry(save: "local", error: "retryable", attempts: 1, now: 3, nextAttemptAt: 5) == false, "retryable keep waits for nextAttemptAt")
+    check(WatchBridge.keepBackgroundHold(action: "save", mode: "meeting") == true, "Watch Save holds background time")
+    check(WatchBridge.keepBackgroundHold(action: "drain", mode: "meeting") == true, "Meeting End drain holds background time for Save")
+    check(WatchBridge.keepBackgroundHold(action: "drain", mode: "translate") == false, "Translate End must not take the Save background window")
+    check(WatchBridge.keepBackgroundHold(action: "start", mode: "meeting") == false, "Start does not hold the Save background window")
 
     ingest.reset()
     bridge.testingResetJobs()
@@ -446,6 +450,30 @@ func waitSend() {
     held?(200, keepBody("sess-hold"))
     waitSend()
     check(bridge.listSaves().contains(where: { $0["sessionId"] == "sess-hold" && $0["save"] == "saved" }), "in-flight keep completes once")
+    WatchBridge.testingKeepAsync = nil
+
+    ingest.reset()
+    bridge.testingResetJobs()
+    bindCapture("cap-lock", session: "sess-lock")
+    var lockHeld: ((Int, Data?) -> Void)?
+    WatchBridge.testingKeepAsync = { sid, done in
+        if sid == "sess-lock" { lockHeld = done; return }
+        done(401, nil)
+    }
+    bridge.session(WCSession.default, didReceiveMessage: [
+        "action": "drain", "mode": "meeting", "captureId": "cap-lock", "sessionId": "sess-lock", "lastByte": "1",
+    ]) { _ in }
+    check(WatchBridge.testingBackgroundBegins >= 1, "Meeting drain holds background time before Save")
+    check(WatchBridge.testingBackgroundHeld, "drain background hold stays open until keep finishes")
+    eq(postSave("sess-lock", captureId: "cap-lock")["save"] as? String ?? "", "local")
+    check(WatchBridge.testingBackgroundHeld, "in-flight keep keeps the lock-screen background task")
+    check(!bridge.listSaves().contains(where: { $0["sessionId"] == "sess-lock" && $0["save"] == "saved" }), "expiring background time must not mark saved")
+    bridge.testingExpireKeepBackground()
+    check(!WatchBridge.testingBackgroundHeld, "expired background task is ended")
+    check(!bridge.listSaves().contains(where: { $0["sessionId"] == "sess-lock" && $0["save"] == "saved" }), "background expire is not a successful keep")
+    lockHeld?(200, keepBody("sess-lock"))
+    waitSend()
+    check(bridge.listSaves().contains(where: { $0["sessionId"] == "sess-lock" && $0["save"] == "saved" }), "keep 200 after a background expire still saves and can notify Watch")
     WatchBridge.testingKeepAsync = nil
 
     ingest.reset()

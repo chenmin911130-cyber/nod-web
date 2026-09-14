@@ -2,6 +2,13 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-14 · #232 锁屏 Watch Save 等打开手机
+
+- 我以为：原生 `URLSession.shared` POST keep 已经不依赖 WKWebView，锁屏后台也能完成，Watch 会收到 `saved`。
+- 实际：End 停录后 `audio` 后台结束，手机被挂起。`startNativeKeep` 没有 `beginBackgroundTask`，HTTP 要等 `didBecomeActive` → `resumeKeeps` 才跑完。用户必须打开手机，Watch 才能结束保存等待。`local` 不是成功。
+- 规则：锁屏时 Watch Save 必须在收到 drain/save 时立刻 `beginBackgroundTask`，原生 keep HTTP 在该窗口内完成；云端 200 才通知 Watch `saved`。禁止用假音频保活，也不得把 JS 前台恢复当成锁屏修复。
+- 涉及：#232 · `WatchBridge.startNativeKeep` / `holdKeepBackground` / `resumeKeeps`
+
 ## 2026-09-14 · #232 首次 End 只看手表 freeze lastByte
 
 - 我以为：`finish()` 时 Watch `lastByte > 0` 才出 Save / No Save；`lastByte == 0` 就是空场，可以直接 Ready。bundle 103 能 Save 就表示 End 选择界面没问题。

@@ -56,6 +56,12 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     static var testingKeepCalls = 0
     static var testingDiscardCalls = 0
     static var testingUserDefaults: UserDefaults?
+    static var testingBackgroundBegins = 0
+    static var testingBackgroundEnds = 0
+    static var testingBackgroundHeld = false
+    #endif
+    #if os(iOS) && !PCM_REPLAY_TESTING
+    private var keepBgTask = UIBackgroundTaskIdentifier.invalid
     #endif
     private var lastPcmAckByte = 0
     private var lastPcmCaptureId = ""
@@ -794,6 +800,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let at = message["at"] as? Double
         let now = Date().timeIntervalSince1970
         guard Self.shouldRunWatchCommand(action, at: at, live: live, now: now) else { return }
+        let holdMode = mode.isEmpty ? lastMode : mode
+        if Self.keepBackgroundHold(action: action, mode: holdMode) {
+            holdKeepBackground()
+        }
         if (action == "start" || action == "record"), !captureId.isEmpty {
             if captureId != lastPcmCaptureId {
                 lastPcmAckByte = 0
@@ -918,6 +928,67 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         return ("local", "retryable")
     }
 
+    /// Meeting End/Save on a locked phone is only runnable while iOS still grants
+    /// background time. Translate has no Save, so it must not take that window.
+    static func keepBackgroundHold(action: String, mode: String) -> Bool {
+        if action == "save" || action == "discard" { return true }
+        if action == "drain" || action == "stop" {
+            return mode.lowercased() != "translate"
+        }
+        return false
+    }
+
+    private func holdKeepBackground() {
+        #if PCM_REPLAY_TESTING
+        if Self.testingBackgroundHeld {
+            endKeepBackground()
+        }
+        Self.testingBackgroundBegins += 1
+        Self.testingBackgroundHeld = true
+        return
+        #else
+        #if os(iOS)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.keepBgTask != .invalid {
+                UIApplication.shared.endBackgroundTask(self.keepBgTask)
+                self.keepBgTask = .invalid
+            }
+            self.keepBgTask = UIApplication.shared.beginBackgroundTask(withName: "nod.watch.keep") { [weak self] in
+                NSLog("nod.watch.keep bg expire")
+                self?.endKeepBackground()
+            }
+            NSLog("nod.watch.keep bg begin")
+        }
+        #endif
+        #endif
+    }
+
+    #if PCM_REPLAY_TESTING
+    func testingExpireKeepBackground() {
+        NSLog("nod.watch.keep bg expire")
+        endKeepBackground()
+    }
+    #endif
+
+    private func endKeepBackground() {
+        #if PCM_REPLAY_TESTING
+        if Self.testingBackgroundHeld {
+            Self.testingBackgroundEnds += 1
+            Self.testingBackgroundHeld = false
+        }
+        return
+        #else
+        #if os(iOS)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.keepBgTask != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(self.keepBgTask)
+            self.keepBgTask = .invalid
+        }
+        #endif
+        #endif
+    }
+
     static func keepShouldRetry(save: String, error: String, attempts: Int, now: Double, nextAttemptAt: Double) -> Bool {
         if save == "saved" { return false }
         if error == "auth" || error == "gone" || error == "mismatch" { return false }
@@ -1020,6 +1091,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         discardedLoaded = true
         defaults.removeObject(forKey: Self.jobsKey)
         defaults.removeObject(forKey: Self.discardedKey)
+        Self.testingBackgroundBegins = 0
+        Self.testingBackgroundEnds = 0
+        Self.testingBackgroundHeld = false
     }
 
     func testingUnloadJobs() {
@@ -1211,6 +1285,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     }
 
     private func startNativeKeep(_ sessionId: String, captureId: String) {
+        holdKeepBackground()
+        NSLog("nod.watch.keep http start session=%@", sessionId)
         #if PCM_REPLAY_TESTING
         if let asyncHook = Self.testingKeepAsync {
             Self.testingKeepCalls += 1
@@ -1241,6 +1317,7 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
+        req.timeoutInterval = 20
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         URLSession.shared.dataTask(with: req) { [weak self] data, resp, _ in
@@ -1258,8 +1335,14 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         NSLog("nod.watch.keep session=%@ status=%d face=%@ error=%@", sessionId, code, result.save, result.error)
         ensureJobsLoaded()
         ensureDiscardedLoaded()
-        if discardedIds.contains(sessionId) { return }
-        if jobs[sessionId]?.save == "saved" { return }
+        if discardedIds.contains(sessionId) {
+            endKeepBackground()
+            return
+        }
+        if jobs[sessionId]?.save == "saved" {
+            endKeepBackground()
+            return
+        }
         var job = jobs[sessionId] ?? SaveJob(
             sessionId: sessionId,
             captureId: "",
@@ -1288,6 +1371,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         jobs[sessionId] = job
         persistJobs()
         publishSave(sessionId: sessionId, save: job.save)
+        if job.save == "saved" || job.save == "failed" {
+            endKeepBackground()
+        }
         #if !PCM_REPLAY_TESTING
         if job.save == "local", job.error == "retryable" {
             let delay = max(0.5, job.nextAttemptAt - nowTs())
@@ -1357,12 +1443,9 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let session = WCSession.default
         guard session.activationState == .activated else { return }
         var msg: [String: Any] = ["ok": true, "save": save, "sessionId": sessionId]
+        try? session.updateApplicationContext(msg)
         if session.isReachable {
-            session.sendMessage(msg, replyHandler: nil, errorHandler: { _ in
-                try? session.updateApplicationContext(msg)
-            })
-        } else {
-            try? session.updateApplicationContext(msg)
+            session.sendMessage(msg, replyHandler: nil, errorHandler: nil)
         }
         #endif
     }
