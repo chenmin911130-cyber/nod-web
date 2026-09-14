@@ -171,6 +171,78 @@ func waitSend() {
     deliver(endWatch, ["save": "failed", "sessionId": "live-end"])
     check(!endWatch.saveFailed && !endWatch.offeringSave, "Saved stays after the 2s Ready flash")
 
+    check(
+        WatchPhoneSession.endShouldOfferSave(mode: "meeting", watchLastByte: 0, persistAckByte: 0) == false,
+        "a true empty Meeting End does not offer Save"
+    )
+    check(
+        WatchPhoneSession.endShouldOfferSave(mode: "meeting", watchLastByte: 0, persistAckByte: 575762),
+        "phone persist for this capture is enough to offer Save when Watch lastByte is 0"
+    )
+    check(
+        WatchPhoneSession.endShouldOfferSave(mode: "translate", watchLastByte: 640, persistAckByte: 640) == false,
+        "Translate End still has no Save"
+    )
+
+    // #232: first End skipped Save/No Save when Watch freeze saw lastByte=0
+    // while the phone already held this capture. Late persist ack must offer,
+    // not leave Ready; No Save stays dismissed; a new capture ignores the old ack.
+    let phoneHeldBuf = WatchSendBuffer()
+    phoneHeldBuf.beginCapture()
+    let phoneHeld = WatchPhoneSession(sendBuffer: phoneHeldBuf, pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("end-phone-held")), connect: false)
+    phoneHeld.listening = true
+    phoneHeld.finish()
+    waitSend()
+    check(!phoneHeld.draining && !phoneHeld.offeringSave && phoneHeld.hint == WatchCopy.ready, "Watch-local zero bytes complete End without guessing Save")
+    deliver(phoneHeld, [
+        "pcmAckByte": "575762",
+        "pcmAckCaptureId": phoneHeldBuf.captureId,
+        "pcmSealed": "true",
+        "pcmReady": "true",
+    ])
+    check(phoneHeld.offeringSave, "late phone persist for this capture offers Save / No Save")
+    check(phoneHeld.hint == WatchCopy.savedLocal, "late persist shows the local save choice, not Ready")
+    deliver(phoneHeld, ["capture": "off"])
+    check(phoneHeld.offeringSave, "late capture:off must not dismiss an offered Save")
+
+    phoneHeld.declineSave()
+    waitSend()
+    deliver(phoneHeld, [
+        "pcmAckByte": "678074",
+        "pcmAckCaptureId": phoneHeldBuf.captureId,
+        "pcmSealed": "true",
+    ])
+    check(!phoneHeld.offeringSave, "No Save stays dismissed when a later persist ack arrives")
+
+    let persistDuringBuf = WatchSendBuffer()
+    persistDuringBuf.beginCapture()
+    let persistDuring = WatchPhoneSession(sendBuffer: persistDuringBuf, pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("end-persist-during")), connect: false)
+    persistDuring.listening = true
+    deliver(persistDuring, [
+        "pcmAckByte": "882698",
+        "pcmAckCaptureId": persistDuringBuf.captureId,
+        "pcmReady": "true",
+    ])
+    persistDuring.finish()
+    waitSend()
+    check(persistDuring.offeringSave, "End offers Save when phone persist for this capture arrived before freeze")
+
+    let staleAckBuf = WatchSendBuffer()
+    staleAckBuf.beginCapture()
+    let staleAck = WatchPhoneSession(sendBuffer: staleAckBuf, pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("end-stale-ack")), connect: false)
+    staleAck.listening = true
+    staleAck.finish()
+    waitSend()
+    let oldCap = staleAckBuf.captureId
+    staleAck.startSession()
+    waitSend()
+    deliver(staleAck, [
+        "pcmAckByte": "575762",
+        "pcmAckCaptureId": oldCap,
+        "pcmSealed": "true",
+    ])
+    check(!staleAck.offeringSave, "persist ack for a previous capture must not offer Save on the new one")
+
     let ingest = WatchPcmIngest.shared
     let uplink = AudioUplink.shared
     let bridge = WatchBridge.shared

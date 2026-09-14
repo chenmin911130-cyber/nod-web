@@ -126,6 +126,9 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
     private var saveAfterDrain = false
     private var pcmHeld = false
     private var phonePcmReady = false
+    /// Phone persist held for THIS capture. Watch freeze lastByte can be 0
+    /// when the recording lived on the phone; this is the content signal.
+    private var persistAckByte = 0
     private let pcmStore: WatchPcmStore
     private let sendBuffer: WatchSendBuffer
     private let sendQueue = DispatchQueue(label: "nod.watch.pcm.send")
@@ -413,7 +416,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
                 // session must not offer Save on the wrist either — same rule
                 // the phone's More sheet now applies. Meeting / Lecture /
                 // Interview keep the existing offer.
-                self.pendingSaveOffer = last > 0 && self.mode != "translate"
+                self.pendingSaveOffer = Self.endShouldOfferSave(
+                    mode: self.mode,
+                    watchLastByte: last,
+                    persistAckByte: self.persistAckByte
+                )
                 self.armDrainWait()
                 self.send(action: "drain")
                 self.maybeCompleteDrain()
@@ -458,7 +465,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
         saveRequestId = ""
         saveRequestCaptureId = ""
         saveTerminal = ""
-        saveDismissed = false
+        saveDismissed = true
         hint = WatchCopy.ready
         send(action: "discard")
     }
@@ -513,6 +520,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
         saveRequestCaptureId = ""
         saveTerminal = ""
         saveDismissed = false
+        persistAckByte = 0
         localModeHeld = phoneModeSeen
         starting = true
         startBeganAt = Date()
@@ -692,6 +700,14 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
         listening && !reachable
     }
 
+    /// Watch-local freeze bytes are not the only content signal. Phone persist
+    /// for this capture (pcmAckByte) also means this Meeting has something to
+    /// Save / No Save. Translate still never offers.
+    static func endShouldOfferSave(mode: String, watchLastByte: Int, persistAckByte: Int) -> Bool {
+        if mode == "translate" { return false }
+        return watchLastByte > 0 || persistAckByte > 0
+    }
+
     /// First Save pins phoneSessionId. Retry keeps that pin even if the phone moved on.
     static func savePinnedId(pinnedId: String, phoneSessionId: String) -> String {
         pinnedId.isEmpty ? phoneSessionId : pinnedId
@@ -787,6 +803,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
             // Session is over. Stop the Watch side, but leave offeringSave /
             // savedAck alone — the Watch's own Stop->Save flow owns them, and a
             // phone-initiated stop arrives with them already false.
+            if draining { return }
             if listening || paused || WatchRecorder.shared.isRunning {
                 WatchRecorder.shared.stop()
                 listening = false
@@ -798,7 +815,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
                 localWatchMic = false
                 flushUnsent()
                 resetPcmBuffer()
-                if !offeringSave, !savedAck, !pendingSync {
+                if !offeringSave, !savedAck, !pendingSync, !saving, !saveFailed {
                     hint = WatchCopy.ready
                 }
             }
@@ -1168,7 +1185,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
         draining = false
         drainFailed = false
         send(action: "stop")
-        let offer = pendingSaveOffer && mode != "translate"
+        let offer = Self.endShouldOfferSave(
+            mode: mode,
+            watchLastByte: sendBuffer.lastByte,
+            persistAckByte: persistAckByte
+        )
         pendingSaveOffer = false
         if saveAfterDrain {
             saveAfterDrain = false
@@ -1178,6 +1199,24 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
         }
         offeringSave = offer
         hint = offer ? WatchCopy.savedLocal : WatchCopy.ready
+    }
+
+    /// Persist ack can arrive after Watch freeze lastByte=0 already went Ready.
+    /// Re-offer Save for this capture unless the user already chose or moved on.
+    private func offerSaveFromPersist() {
+        guard Self.endShouldOfferSave(
+            mode: mode,
+            watchLastByte: sendBuffer.lastByte,
+            persistAckByte: persistAckByte
+        ) else { return }
+        guard !saveDismissed, !savedAck, !saving, !pendingSync, !starting else { return }
+        if draining {
+            pendingSaveOffer = true
+            return
+        }
+        if listening || paused { return }
+        offeringSave = true
+        hint = WatchCopy.savedLocal
     }
 
     /// User chooses to leave an incomplete capture. Keep its files, detach it
@@ -1340,11 +1379,13 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
                 ackCaptureId: ackCapture.isEmpty ? sendBuffer.captureId : ackCapture,
                 ackSessionId: ackSession
             ) || (ackCapture == sendBuffer.captureId) {
+                if ack > persistAckByte { persistAckByte = ack }
                 sendBuffer.ack(ack, captureId: sendBuffer.captureId, sessionId: ackSession)
                 if sendBuffer.snapshot().frozen, ack >= sendBuffer.lastByte {
                     pcmHeld = true
                     maybeCompleteDrain()
                 }
+                offerSaveFromPersist()
             }
         }
         if Self.flag(payload, "pcmSealed") {
@@ -1354,6 +1395,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
             if sealCapture == sendBuffer.captureId {
                 pcmHeld = true
                 maybeCompleteDrain()
+                offerSaveFromPersist()
             }
         }
         if Self.flag(payload, "pcmDrained") {
