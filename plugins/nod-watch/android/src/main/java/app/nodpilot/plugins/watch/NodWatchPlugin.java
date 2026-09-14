@@ -1,5 +1,6 @@
 package app.nodpilot.plugins.watch;
 
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.media.MediaPlayer;
@@ -110,16 +111,25 @@ public class NodWatchPlugin extends Plugin {
                 getActivity()
                     .runOnUiThread(
                         () -> {
+                            android.app.Activity host = getActivity();
+                            if (host == null) {
+                                call.reject("No view");
+                                return;
+                            }
                             Intent send = new Intent(uris.size() == 1 ? Intent.ACTION_SEND : Intent.ACTION_SEND_MULTIPLE);
                             send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                            send.setType("*/*");
+                            ClipData clip = ClipData.newRawUri(uris.get(0).getLastPathSegment(), uris.get(0));
+                            for (int i = 1; i < uris.size(); i++) {
+                                clip.addItem(new ClipData.Item(uris.get(i)));
+                            }
+                            send.setClipData(clip);
                             if (uris.size() == 1) {
-                                send.setType("*/*");
                                 send.putExtra(Intent.EXTRA_STREAM, uris.get(0));
                             } else {
-                                send.setType("*/*");
                                 send.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
                             }
-                            getActivity().startActivity(Intent.createChooser(send, "Save"));
+                            host.startActivity(Intent.createChooser(send, "Save"));
                             call.resolve();
                         }
                     );
@@ -150,7 +160,7 @@ public class NodWatchPlugin extends Plugin {
         }
         try {
             stopPlayer();
-            File tmp = new File(getContext().getCacheDir(), "nod-speech.bin");
+            File tmp = new File(getContext().getCacheDir(), "nod-speech" + speechExt(data));
             FileOutputStream out = new FileOutputStream(tmp);
             out.write(data);
             out.close();
@@ -231,6 +241,23 @@ public class NodWatchPlugin extends Plugin {
         copyOut.write(data);
         copyOut.close();
         return file;
+    }
+
+    private static String speechExt(byte[] data) {
+        if (data.length >= 12 && data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F') {
+            return ".wav";
+        }
+        if (data.length >= 8) {
+            String head = new String(data, 4, Math.min(8, data.length - 4));
+            if (head.contains("ftyp")) return ".m4a";
+        }
+        if (data.length >= 3 && (data[0] & 0xFF) == 0xFF && (data[1] & 0xE0) == 0xE0) {
+            return ".mp3";
+        }
+        if (data.length >= 3 && data[0] == 'I' && data[1] == 'D' && data[2] == '3') {
+            return ".mp3";
+        }
+        return ".m4a";
     }
 
     private Uri uriFor(File file) {

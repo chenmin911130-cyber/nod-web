@@ -224,7 +224,6 @@ public class NodMicPlugin extends Plugin {
     private void teardown() {
         running = false;
         haltRecorder();
-        AudioUplink.get().stop();
         stopService();
     }
 
@@ -263,9 +262,7 @@ public class NodMicPlugin extends Plugin {
     }
 
     private void stopService() {
-        Intent i = new Intent(getContext(), MicForegroundService.class);
-        i.setAction(MicForegroundService.ACTION_STOP);
-        getContext().startService(i);
+        getContext().stopService(new Intent(getContext(), MicForegroundService.class));
     }
 
     @Override

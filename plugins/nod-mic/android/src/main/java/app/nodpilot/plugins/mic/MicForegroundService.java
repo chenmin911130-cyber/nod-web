@@ -55,6 +55,12 @@ public class MicForegroundService extends Service {
     }
 
     @Override
+    public void onDestroy() {
+        stopForeground(STOP_FOREGROUND_REMOVE);
+        super.onDestroy();
+    }
+
+    @Override
     public IBinder onBind(Intent intent) {
         return null;
     }

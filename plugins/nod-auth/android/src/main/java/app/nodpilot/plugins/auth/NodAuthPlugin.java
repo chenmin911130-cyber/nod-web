@@ -20,6 +20,7 @@ public class NodAuthPlugin extends Plugin {
     private final Handler main = new Handler(Looper.getMainLooper());
     private PluginCall pending;
     private boolean awaitingReturn;
+    private boolean pausedForAuth;
     private final Runnable cancelAfterResume = new Runnable() {
         @Override
         public void run() {
@@ -27,6 +28,7 @@ public class NodAuthPlugin extends Plugin {
             if (!awaitingReturn || call == null) return;
             awaitingReturn = false;
             pending = null;
+            pausedForAuth = false;
             call.reject("canceled");
         }
     };
@@ -42,6 +44,7 @@ public class NodAuthPlugin extends Plugin {
         pending = call;
         call.setKeepAlive(true);
         awaitingReturn = true;
+        pausedForAuth = false;
         main.removeCallbacks(cancelAfterResume);
         getActivity()
             .runOnUiThread(
@@ -62,6 +65,7 @@ public class NodAuthPlugin extends Plugin {
     private void onAuthSheet(PluginCall call, ActivityResult result) {
         awaitingReturn = false;
         pending = null;
+        pausedForAuth = false;
         main.removeCallbacks(cancelAfterResume);
         if (call == null) return;
         Intent data = result.getData();
@@ -89,6 +93,7 @@ public class NodAuthPlugin extends Plugin {
         PluginCall call = pending;
         awaitingReturn = false;
         pending = null;
+        pausedForAuth = false;
         main.removeCallbacks(cancelAfterResume);
         if (call != null) {
             resolveToken(call, token);
@@ -98,13 +103,14 @@ public class NodAuthPlugin extends Plugin {
     @Override
     protected void handleOnPause() {
         super.handleOnPause();
+        if (awaitingReturn) pausedForAuth = true;
         main.removeCallbacks(cancelAfterResume);
     }
 
     @Override
     protected void handleOnResume() {
         super.handleOnResume();
-        if (!awaitingReturn || pending == null) return;
+        if (!awaitingReturn || pending == null || !pausedForAuth) return;
         main.removeCallbacks(cancelAfterResume);
         main.postDelayed(cancelAfterResume, 1200);
     }

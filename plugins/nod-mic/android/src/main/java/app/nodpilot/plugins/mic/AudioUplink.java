@@ -43,6 +43,7 @@ final class AudioUplink {
     private boolean sending;
     private String url = "";
     private WebSocket socket;
+    private int socketGen;
     private byte[] stash = new byte[0];
     private int pendingBytes;
     private int reconnectAttempt;
@@ -67,6 +68,9 @@ final class AudioUplink {
                 cb.onDone(null);
                 return;
             }
+            if (startCb != null) {
+                finishStartLocked("Audio uplink restarted");
+            }
             url = nextUrl;
             stopped = false;
             reconnectAttempt = 0;
@@ -89,6 +93,7 @@ final class AudioUplink {
             stash = new byte[0];
             lastSendAt = 0;
             lastSentAudioSeconds = 0;
+            socketGen++;
             io.removeCallbacks(ping);
             io.removeCallbacks(timeout);
             io.removeCallbacks(pump);
@@ -115,9 +120,12 @@ final class AudioUplink {
     }
 
     private void open() {
+        final int gen;
         String target;
         synchronized (lock) {
             if (stopped || url.isEmpty()) return;
+            socketGen++;
+            gen = socketGen;
             if (socket != null) {
                 socket.cancel();
                 socket = null;
@@ -126,70 +134,88 @@ final class AudioUplink {
             target = url;
         }
         Request req = new Request.Builder().url(target).build();
-        client.newWebSocket(req, new WebSocketListener() {
-            @Override
-            public void onOpen(WebSocket webSocket, Response response) {
-                synchronized (lock) {
-                    socket = webSocket;
-                    connected = true;
-                    enabled = true;
-                    reconnectAttempt = 0;
-                    finishStartLocked(null);
-                }
-                io.removeCallbacks(ping);
-                io.postDelayed(ping, 20_000);
-                schedulePump();
-            }
-
-            @Override
-            public void onMessage(WebSocket webSocket, String text) {
-                /* pcm_end / watch copy are Watch-side; phone listen ignores. */
-            }
-
-            @Override
-            public void onClosing(WebSocket webSocket, int code, String reason) {
-                webSocket.close(code, reason);
-            }
-
-            @Override
-            public void onClosed(WebSocket webSocket, int code, String reason) {
-                if (code == 4404) {
+        client.newWebSocket(
+            req,
+            new WebSocketListener() {
+                private boolean current(WebSocket webSocket) {
                     synchronized (lock) {
-                        stopped = true;
-                        enabled = false;
-                        connected = false;
-                        socket = null;
-                        finishStartLocked("Listen session ended");
+                        return socketGen == gen && socket == webSocket;
                     }
-                    return;
                 }
-                handleDrop();
-            }
 
-            @Override
-            public void onFailure(WebSocket webSocket, Throwable t, Response response) {
-                int status = response != null ? response.code() : 0;
-                if (status >= 400 && status < 500) {
+                @Override
+                public void onOpen(WebSocket webSocket, Response response) {
                     synchronized (lock) {
-                        stopped = true;
-                        enabled = false;
-                        connected = false;
-                        socket = null;
-                        finishStartLocked("Audio uplink did not connect");
+                        if (stopped || socketGen != gen) {
+                            webSocket.cancel();
+                            return;
+                        }
+                        socket = webSocket;
+                        connected = true;
+                        enabled = true;
+                        reconnectAttempt = 0;
+                        finishStartLocked(null);
                     }
-                    return;
+                    io.removeCallbacks(ping);
+                    io.postDelayed(ping, 20_000);
+                    schedulePump();
                 }
-                handleDrop();
+
+                @Override
+                public void onMessage(WebSocket webSocket, String text) {
+                    /* pcm_end / watch copy are Watch-side; phone listen ignores. */
+                }
+
+                @Override
+                public void onClosing(WebSocket webSocket, int code, String reason) {
+                    if (current(webSocket)) webSocket.close(code, reason);
+                }
+
+                @Override
+                public void onClosed(WebSocket webSocket, int code, String reason) {
+                    synchronized (lock) {
+                        if (socketGen != gen) return;
+                        if (code == 4404) {
+                            stopped = true;
+                            enabled = false;
+                            connected = false;
+                            socket = null;
+                            finishStartLocked("Listen session ended");
+                            return;
+                        }
+                    }
+                    handleDrop(gen);
+                }
+
+                @Override
+                public void onFailure(WebSocket webSocket, Throwable t, Response response) {
+                    synchronized (lock) {
+                        if (socketGen != gen) return;
+                        int status = response != null ? response.code() : 0;
+                        if (status >= 400 && status < 500) {
+                            stopped = true;
+                            enabled = false;
+                            connected = false;
+                            socket = null;
+                            finishStartLocked("Audio uplink did not connect");
+                            return;
+                        }
+                    }
+                    handleDrop(gen);
+                }
             }
-        });
+        );
     }
 
-    private void handleDrop() {
+    private void handleDrop(int gen) {
         synchronized (lock) {
-            if (stopped) return;
+            if (stopped || socketGen != gen) return;
             connected = false;
             sending = false;
-            socket = null;
+            if (socket != null) {
+                socket.cancel();
+                socket = null;
+            }
             io.removeCallbacks(ping);
             int delay = (int) Math.min(30_000, 1000 * Math.pow(2, reconnectAttempt));
             reconnectAttempt = Math.min(reconnectAttempt + 1, 5);
@@ -204,6 +230,7 @@ final class AudioUplink {
             stopped = true;
             enabled = false;
             connected = false;
+            socketGen++;
             if (socket != null) {
                 socket.cancel();
                 socket = null;
@@ -261,7 +288,7 @@ final class AudioUplink {
         synchronized (lock) {
             sending = false;
             if (!ok) {
-                handleDrop();
+                handleDrop(socketGen);
                 return;
             }
             byte[] queued = pending.pollFirst();
