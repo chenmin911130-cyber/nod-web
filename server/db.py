@@ -68,6 +68,7 @@ class UsageSession(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     mode: Mapped[str] = mapped_column(String(32), default="interview")
     title: Mapped[str] = mapped_column(String(200), default="")
+    title_source: Mapped[str] = mapped_column(String(16), default="preview")
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     stt_seconds: Mapped[float] = mapped_column(Float, default=0)
@@ -254,6 +255,7 @@ def init_db() -> None:
     _add_column_if_missing("usage_sessions", "kept", "INTEGER DEFAULT 1")
     _add_column_if_missing("usage_sessions", "scene", "VARCHAR(32) DEFAULT ''")
     _add_column_if_missing("usage_sessions", "discarded_at", "TIMESTAMP")
+    _add_column_if_missing("usage_sessions", "title_source", "VARCHAR(16) DEFAULT 'preview'")
     _add_column_if_missing("history_items", "speaker", "VARCHAR(64) DEFAULT ''")
 
 
