@@ -4,12 +4,15 @@
   "license": "UNLICENSED",
   "scripts": {
     "cap:sync": "node scripts/iosWorktreePods.mjs assert-roots && npm run build --prefix web && node scripts/prepare-ios-web.mjs && npx cap sync ios && node scripts/patch-ios-plist.mjs && node scripts/iosWorktreePods.mjs pin",
+    "cap:sync:android": "npm run build --prefix web && node scripts/prepare-native-web.mjs && npx cap sync android && node scripts/patch-android-manifest.mjs",
     "cap:open": "npx cap open ios",
     "cap:ios": "node scripts/ios-deliver.mjs",
+    "cap:android": "bash scripts/package-android.sh",
     "deliver:ios": "node scripts/ios-deliver.mjs",
     "test:ios-deliver": "node scripts/ios-deliver.test.mjs"
   },
   "dependencies": {
+    "@capacitor/android": "^7.6.9",
     "@capacitor/app": "^7.1.0",
     "@capacitor/browser": "^7.0.2",
     "@capacitor/core": "^7.4.3",

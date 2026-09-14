@@ -49,3 +49,7 @@ no network). Details: `ios/README.md`.
 ### Self-improve
 
 Record confirmed agent misses in `.cursor/skills/self-improve/errors.md`. Read that log before Watch / listen / Translate / phone-sync work. After a miss, append one entry. See `.cursor/skills/self-improve/SKILL.md`.
+
+## Android
+
+Foreground debug APK: [docs/android.md](docs/android.md) (`npm run cap:android`). Isolation worktrees go in `.worktrees/<id>/`, not `/private/tmp`. This does not bump the iOS bundle, install Watch, or enable lock-screen native uplink.

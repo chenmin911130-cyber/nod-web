@@ -27,6 +27,13 @@ web/playwright-report/
 web/test-results/
 web/blob-report/
 .worktrees/
+android/.gradle
+android/build
+android/app/build
+android/app/.cxx
+android/captures
+android/local.properties
+android/*.iml
 # Finder "name 2.ts" copies and local secrets
 * [0-9].*
 web/data/

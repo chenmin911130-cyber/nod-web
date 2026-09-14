@@ -21,6 +21,8 @@ cd web && npm install && npm run build && cd ..
 
 iOS App（Capacitor 套现有网页，Apple Watch 表麦录音）见 **[ios/README.md](ios/README.md)**。必须在 Mac 上封装：`npm run cap:ios`。
 
+Android 调试包（前台网页麦，无手表）见 **[docs/android.md](docs/android.md)**：`npm run cap:android`。
+
 开发热更新：先起后端 `9320`，再 `cd web && npm run dev`（Vite `5174`，会把 `/ws` `/api` 代理到后端）。
 
 Key 读取顺序：环境变量 → Hermes `.env` → 本机 secrets。也可以在页面里填写。
