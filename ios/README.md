@@ -36,9 +36,11 @@ SHA=$(git rev-parse HEAD)   # must be the reviewed commit and present on origin
 TEAM_ID=XXXXXXXXXX npm run cap:ios -- build --sha "$SHA" --version 1.0 --build 92 --ipa
 ```
 
-`--build` is the bundle this run will carry: HEAD's `CURRENT_PROJECT_VERSION` + 1, because
-the guarded `cap:sync` bumps it once. A wrong value refuses before `cap:sync` runs, so the
-checkout is not mutated.
+`--build` is the bundle this delivery carries, given explicitly as a non-negative integer. The
+run pins it by passing `NOD_IOS_BUNDLE` to the guarded `cap:sync` (which writes exactly that
+value instead of incrementing), then asserts `CURRENT_PROJECT_VERSION == --build` before
+archiving — if the pin did not take effect it refuses. A missing or non-integer `--build` is
+refused. See `docs/ios-deliver.md`.
 
 The run refuses to continue unless the worktree HEAD is exactly that SHA, origin really
 has it, the tree is clean outside the generated set, and `node_modules` / `Pods` / the

@@ -57,6 +57,7 @@ export const DEFAULT_ALLOWED_DIRTY = [
   'ios/App/Podfile.lock',
   'ios/App/App.xcodeproj/project.pbxproj',
   'ios/App/App.xcodeproj/project.xcworkspace/**',
+  'ios/App/App.xcworkspace/**',
   'ios/App/Pods/**',
   'ios/App/App/public/**',
   'ios/App/App/capacitor.config.json',
@@ -447,12 +448,30 @@ function sanitizeError(text) {
   return String(text).replace(/\b(Bearer|token|password)=\S+/gi, '$1=<redacted>').slice(0, 400)
 }
 
+/**
+ * The bundle is an explicit delivery input, never derived. `--build` is the
+ * CFBundleVersion this delivery carries; it must be a non-negative integer.
+ */
+function pinBundleBuild(value) {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    throw new DeliveryError(
+      '--build is required: pass the bundle number this delivery carries, as a non-negative integer (e.g. --build 92)',
+    )
+  }
+  const text = String(value).trim()
+  if (!/^\d+$/.test(text)) {
+    throw new DeliveryError(
+      `--build must be a non-negative integer (got ${JSON.stringify(value)}) — it is the CFBundleVersion this delivery carries`,
+    )
+  }
+  return String(Number(text))
+}
+
 export function buildManifest({ root, args, run = runCapture, now = () => new Date() }) {
   const sha = args.sha
   const version = args.version
-  const build = args.build
+  const build = pinBundleBuild(args.build)
   if (!version) throw new DeliveryError('--version is required (expected CFBundleShortVersionString)')
-  if (!build) throw new DeliveryError('--build is required (expected CFBundleVersion)')
   if (!args.bundle) throw new DeliveryError('--bundle is required (expected CFBundleIdentifier)')
 
   const out = resolve(root, args.out || join('ios/dist/delivery', `${sha.slice(0, 12)}-${build}`))
@@ -465,21 +484,7 @@ export function buildManifest({ root, args, run = runCapture, now = () => new Da
   const tree = checkCleanTree({ root, allowed: [...DEFAULT_ALLOWED_DIRTY, ...(args.allowDirty || [])], run })
   const roots = assertDeliveryRoots(root)
 
-  // scripts/prepare-ios-web.mjs bumps CURRENT_PROJECT_VERSION by one on every
-  // cap:sync. Validate --build against that known outcome BEFORE creating anything,
-  // so a wrong number refuses without mutating the checkout.
   const syncPlanned = !args.app && !args.skipSync
-  if (syncPlanned) {
-    const before = currentProjectVersion(root)
-    const next = String(Number(before) + 1)
-    if (String(build) !== next) {
-      throw new DeliveryError(
-        `--build ${build} is not this run's bundle: HEAD carries CURRENT_PROJECT_VERSION = ${before} and the ` +
-          `guarded cap:sync bumps it to ${next} before the archive is built. Re-run with --build ${next}. ` +
-          `(Nothing was changed — this check runs before cap:sync.)`,
-      )
-    }
-  }
 
   mkdirSync(out, { recursive: true })
   const verified = [`HEAD is the target SHA ${sha}`, 'working tree clean outside the allowed generated set', 'node_modules / Pods / local plugins resolve inside this checkout']
@@ -494,19 +499,29 @@ export function buildManifest({ root, args, run = runCapture, now = () => new Da
 
   let archive = null
   let ipa = null
+  let buildSource = 'artifact'
   if (args.app) {
     unverified.push(`archive/IPA not produced: this run reused the supplied app at ${resolve(root, args.app)}`)
   } else {
     if (syncPlanned) {
-      must(run('npm', ['run', 'cap:sync'], { cwd: root, stdio: 'inherit' }), 'npm run cap:sync')
-      verified.push('ran the guarded npm run cap:sync for this checkout')
+      // Pin the bundle explicitly instead of predicting cap:sync's auto-increment.
+      must(
+        run('npm', ['run', 'cap:sync'], { cwd: root, stdio: 'inherit', env: { ...process.env, NOD_IOS_BUNDLE: build } }),
+        'npm run cap:sync',
+      )
+      verified.push(`ran the guarded npm run cap:sync with NOD_IOS_BUNDLE=${build}`)
       roots.pods = assertPodsProject(root)
       roots.podsPending = false
       verified.push('Pods project compiles the local plugins from this checkout')
       const after = currentProjectVersion(root)
-      if (after !== String(build)) {
-        throw new DeliveryError(`cap:sync left CURRENT_PROJECT_VERSION = ${after}, expected ${build} — refusing to archive an unexpected bundle`)
+      if (after !== build) {
+        throw new DeliveryError(
+          `NOD_IOS_BUNDLE=${build} did not take effect: cap:sync left CURRENT_PROJECT_VERSION = ${after}. ` +
+            `Refusing to archive an unexpected bundle.`,
+        )
       }
+      buildSource = 'pinned'
+      verified.push(`bundle pinned explicitly: CURRENT_PROJECT_VERSION=${build}`)
     }
     const archivePath = resolve(root, args.archivePath || join(out, 'Nod.xcarchive'))
     if (!args.noArchive) {
@@ -577,7 +592,7 @@ export function buildManifest({ root, args, run = runCapture, now = () => new Da
     webAssets,
     archive,
     ipa,
-    app: { ...digestSummary(digestTree(appPath), appPath), ...appInfo },
+    app: { ...digestSummary(digestTree(appPath), appPath), ...appInfo, buildSource },
     artifact,
     frameworks,
     declaredPods: Object.keys(requiredFrameworks),
@@ -1063,9 +1078,10 @@ export function helpText() {
 
   npm run cap:ios -- build   --sha <40-hex> --version <short> --build <n> [--ipa] [--team-id <ID>]
       Guard (SHA/clean tree/realpaths) -> cap:sync -> archive -> export -> manifest.
-      --build is the bundle this run will carry: HEAD's CURRENT_PROJECT_VERSION + 1,
-      because the guarded cap:sync bumps it once. A wrong value refuses before syncing.
-      Writes <out>/${MANIFEST_NAME}; refuses to reuse an existing --out directory.
+      --build is the bundle this delivery carries, given explicitly as a non-negative
+      integer; it is pinned by passing NOD_IOS_BUNDLE to the guarded cap:sync, never
+      derived from an auto-increment. If the pin does not take effect the run refuses
+      to archive. Writes <out>/${MANIFEST_NAME}; --out must be a fresh directory.
 
   npm run cap:ios -- verify  --manifest <path> [--artifact <exact path>]
       Re-checks a manifest against the exact artifact on disk. No device needed.

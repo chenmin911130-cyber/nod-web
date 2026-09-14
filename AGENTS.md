@@ -24,9 +24,11 @@ npm run cap:ios -- install --manifest <path> --device <udid> --authorize        
 npm run cap:ios -- open    # development only (Xcode); not a delivery
 ```
 
-`--build` is the bundle that run will carry: HEAD's `CURRENT_PROJECT_VERSION` + 1, because
-the guarded `cap:sync` bumps it once. A wrong value refuses before `cap:sync`, so nothing is
-mutated.
+`--build` is the bundle this delivery carries, **given explicitly** as a non-negative integer;
+the tool pins it by passing `NOD_IOS_BUNDLE` to the guarded `cap:sync` (`prepare-ios-web.mjs`
+writes that value instead of incrementing). After `cap:sync` the run asserts
+`CURRENT_PROJECT_VERSION == --build`; if the pin did not take effect it refuses to archive.
+A missing or non-integer `--build` is refused. See `docs/ios-deliver.md`.
 
 It refuses to build unless HEAD is the requested SHA (present on origin), the tree is
 clean outside the generated set, and `node_modules` / `Pods` / local plugins resolve

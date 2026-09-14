@@ -22,8 +22,12 @@ TEAM_ID=XXXXXXXXXX npm run cap:ios -- build \
 ```
 
 - `--sha` 必须是完整的 40 位小写 commit SHA，且本 worktree 的 HEAD 就是它、`origin` 也有它。
-- `--build` 必须是**本次**要携带的 bundle：HEAD 的 `CURRENT_PROJECT_VERSION` + 1，
-  因为受保护的 `cap:sync` 会自增一次。写错会在 `cap:sync` **之前**就拒绝，checkout 不被改动。
+- `--build` 必须是**显式指定**的本次交付 bundle（非负整数，缺或非整数直接拒绝）。交付入口把
+  它通过 `NOD_IOS_BUNDLE` 固定进受保护的 `cap:sync`：`prepare-ios-web.mjs` 在有该环境变量时
+  原样写入该值，**不再自增**（未设置时保持原来的自增行为，手工 `cap:sync` 与其他流程不变）。
+  同步后仍断言 `CURRENT_PROJECT_VERSION == --build`；没固定住就拒绝 archive，绝不会把非预期
+  bundle 打进去。清单里 `app.buildSource` 为 `"pinned"`（本次由 `NOD_IOS_BUNDLE` 固定）或
+  `"artifact"`（`--app` 复用已有产物，bundle 读自该 App，未经本次固定）。
 - `--out` 必须是一个尚不存在的目录：交付不允许复用上一次的输出。
 - 构建使用本次运行自己的 `DerivedData`（在 `--out` 下），archive 与 IPA 也在其下。
 
@@ -62,7 +66,8 @@ npm run cap:ios -- open [--sha <40-char-sha>]
 
 目标/实际 SHA、checkout realpath 与 origin、允许的生成文件差异、工具版本、
 两个锁文件摘要、插件与 Pods 路径、web 资产三段摘要（dist / cap:sync / app 内）、
-archive 与 IPA 路径与摘要、App 的 bundle id/版本/build 与摘要、嵌入框架标识、
+archive 与 IPA 路径与摘要、App 的 bundle id/版本/build 与摘要（含 `buildSource`：
+`pinned` 表示本次用 `NOD_IOS_BUNDLE` 固定，`artifact` 表示复用已有产物）、嵌入框架标识、
 手机与手表目标、部署 SHA 与测试证据槽位、`readback`、`verified[]`、`unverified[]`。
 
 不含任何 key、token 或签名私钥（`secretsIncluded: false`，origin 的 userinfo 打码）。

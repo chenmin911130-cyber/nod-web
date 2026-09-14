@@ -20,6 +20,7 @@ import { findDeviceId, matchGlob, parseArgs, parsePorcelain, runCapture, runComm
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SCRIPT = join(HERE, 'ios-deliver.mjs')
+const PREPARE = join(HERE, 'prepare-ios-web.mjs')
 
 const REAL_TMP = realpathSync(tmpdir())
 
@@ -73,6 +74,46 @@ function git(cwd, args, { allowFail = false } = {}) {
 function cli(root, args) {
   const res = spawnSync(process.execPath, [SCRIPT, ...args], { cwd: root, encoding: 'utf8' })
   return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '' }
+}
+
+/** Run the CLI in-process with an injected command runner (no child processes). */
+function runInProcess(root, argv, run) {
+  const out = []
+  const err = []
+  const status = runCommand(argv, { root, run, stdout: (t) => out.push(t), stderr: (t) => err.push(t) })
+  return { status, stdout: out.join('\n'), stderr: err.join('\n') }
+}
+
+/**
+ * A stub `run` for the pinned-bundle flow: it observes the environment of
+ * `npm run cap:sync`, optionally lets NOD_IOS_BUNDLE take effect, and fabricates the
+ * archive app so the rest of the delivery path can run. No npm/xcodebuild executes.
+ */
+function pinnedRun(fixture, { honorPin = true } = {}) {
+  const state = { syncCalls: [], archiveCalls: 0, pinned: null }
+  state.run = (cmd, cmdArgs, opts = {}) => {
+    if (cmd === 'npm' && cmdArgs[0] === 'run' && cmdArgs[1] === 'cap:sync') {
+      state.syncCalls.push({ argv: cmdArgs, env: opts.env || {} })
+      write(join(fixture.root, 'ios/App/App.xcworkspace/contents.xcworkspacedata'), '<?xml version="1.0"?><Workspace/>\n')
+      if (honorPin) {
+        const pbxPath = join(fixture.root, 'ios/App/App.xcodeproj/project.pbxproj')
+        const src = readFileSync(pbxPath, 'utf8')
+        state.pinned = opts.env.NOD_IOS_BUNDLE
+        writeFileSync(pbxPath, src.replace(/CURRENT_PROJECT_VERSION = \d+;/g, `CURRENT_PROJECT_VERSION = ${state.pinned};`))
+      }
+      return { status: 0, stdout: '', stderr: '', error: null }
+    }
+    if (cmd === 'xcodebuild' && cmdArgs.includes('archive')) {
+      state.archiveCalls += 1
+      const archivePath = cmdArgs[cmdArgs.indexOf('-archivePath') + 1]
+      const appDir = join(archivePath, 'Products/Applications/App.app')
+      cpSync(fixture.appPath, appDir, { recursive: true })
+      writeFileSync(join(appDir, 'Info.plist'), PLIST('com.nodpilot.app', '1.0', state.pinned ?? '91'))
+      return { status: 0, stdout: '', stderr: '', error: null }
+    }
+    return runCapture(cmd, cmdArgs, opts)
+  }
+  return state
 }
 
 function expectReject(label, root, args, needle) {
@@ -270,6 +311,7 @@ section('happy path: manifest is produced and validated')
   eq(manifest.app.build, '91', 'app build recorded')
   eq(manifest.app.version, '1.0', 'app version recorded')
   eq(manifest.app.bundleId, 'com.nodpilot.app', 'app bundle id recorded')
+  eq(manifest.app.buildSource, 'artifact', 'a reused --app reports buildSource=artifact, not pinned')
   eq(manifest.artifact.path, fixture.appPath, 'artifact resolved by exact path')
   eq(manifest.artifact.digest, manifest.app.digest, 'artifact digest equals app digest')
   eq(manifest.webAssets.embedded.digest, manifest.webAssets.synced.digest, 'embedded web assets equal cap:sync output')
@@ -356,20 +398,101 @@ section('reject: build version mismatch')
   expectReject('app build does not match --build', fixture.root, buildArgs(fixture, ['--build', '999'], 'out-build'), 'CFBundleVersion')
   expectReject('app version does not match --version', fixture.root, buildArgs(fixture, ['--version', '9.9'], 'out-version'), 'CFBundleShortVersionString')
   expectReject('bundle id does not match --bundle', fixture.root, buildArgs(fixture, ['--bundle', 'com.example.other'], 'out-bundle'), 'CFBundleIdentifier')
+}
 
-  // Without --app/--skip-sync the build number is checked before cap:sync runs, so a
-  // wrong value refuses without mutating the checkout.
+section('bundle is explicitly specified and pinned (NOD_IOS_BUNDLE)')
+{
+  const fixture = makeFixture()
+
+  // 1) --build itself is a required, explicit non-negative integer.
   expectReject(
-    'wrong --build refuses before cap:sync',
+    'missing --build is refused',
     fixture.root,
-    ['build', '--sha', fixture.baseSha, '--bundle', 'com.nodpilot.app', '--version', '1.0', '--build', '91', '--out', join(fixture.base, 'out-presync')],
-    '--build 92',
+    ['build', '--sha', fixture.baseSha, '--bundle', 'com.nodpilot.app', '--version', '1.0', '--out', join(fixture.base, 'out-missing'), '--app', fixture.appPath, '--skip-sync'],
+    '--build is required',
   )
-  ok(!existsSync(join(fixture.base, 'out-presync')), 'no output directory created before the bundle check')
-  ok(
-    readFileSync(join(fixture.root, 'ios/App/App.xcodeproj/project.pbxproj'), 'utf8').includes('CURRENT_PROJECT_VERSION = 91;'),
-    'the checkout is not mutated when --build is wrong',
+  expectReject(
+    'non-integer --build is refused',
+    fixture.root,
+    buildArgs(fixture, ['--build', 'abc'], 'out-abc'),
+    'non-negative integer',
   )
+  expectReject(
+    'fractional --build is refused',
+    fixture.root,
+    buildArgs(fixture, ['--build', '1.5'], 'out-frac'),
+    'non-negative integer',
+  )
+  expectReject(
+    'negative --build is refused',
+    fixture.root,
+    buildArgs(fixture, ['--build', '-1'], 'out-neg'),
+    'non-negative integer',
+  )
+
+  // 2) The guarded build passes NOD_IOS_BUNDLE to cap:sync and archives exactly that
+  //    bundle. The stub run observes the env; it is not a real npm/xcodebuild call.
+  const pinned = pinnedRun(fixture)
+  const built = runInProcess(
+    fixture.root,
+    ['build', '--sha', fixture.baseSha, '--bundle', 'com.nodpilot.app', '--version', '1.0', '--build', '300', '--out', join(fixture.base, 'out-pinned'), '--team-id', 'TESTTEAM'],
+    pinned.run,
+  )
+  eq(built.status, 0, `pinned build succeeds\n${built.stdout}\n${built.stderr}`)
+  eq(pinned.syncCalls.length, 1, 'cap:sync was invoked exactly once')
+  eq(pinned.syncCalls[0].env.NOD_IOS_BUNDLE, '300', 'cap:sync receives the requested bundle in its environment')
+  const pinnedManifest = JSON.parse(readFileSync(join(fixture.base, 'out-pinned', 'delivery-manifest.json'), 'utf8'))
+  eq(pinnedManifest.app.build, '300', 'the manifest records the requested bundle')
+  eq(pinnedManifest.app.buildSource, 'pinned', 'the manifest says the bundle was pinned, not incremented')
+  ok(pinnedManifest.verified.some((line) => line.includes('NOD_IOS_BUNDLE=300')), 'verified[] records the pin')
+  eq(pinnedManifest.target.sha, fixture.baseSha, 'pinned build keeps the SHA provenance')
+
+  // 3) If the pin does not take effect, the post-sync assertion refuses before archive.
+  //    A fresh fixture keeps the "left behind" value unambiguous.
+  const ignoredFixture = makeFixture()
+  const ignored = pinnedRun(ignoredFixture, { honorPin: false })
+  const refused = runInProcess(
+    ignoredFixture.root,
+    ['build', '--sha', ignoredFixture.baseSha, '--bundle', 'com.nodpilot.app', '--version', '1.0', '--build', '301', '--out', join(ignoredFixture.base, 'out-unpinned'), '--team-id', 'TESTTEAM'],
+    ignored.run,
+  )
+  eq(refused.status, 2, `a sync that ignores the pin is refused\n${refused.stderr}`)
+  ok(refused.stderr.includes('NOD_IOS_BUNDLE=301 did not take effect'), `refusal names the pin\n${refused.stderr}`)
+  ok(refused.stderr.includes('CURRENT_PROJECT_VERSION = 91'), `refusal shows the value that was left behind\n${refused.stderr}`)
+  eq(ignored.archiveCalls, 0, 'no archive is attempted when the pin did not take effect')
+}
+
+section('prepare-ios-web pins NOD_IOS_BUNDLE instead of incrementing')
+{
+  const fixture = makeFixture()
+  const pbxPath = join(fixture.root, 'ios/App/App.xcodeproj/project.pbxproj')
+  const readBundle = () => /CURRENT_PROJECT_VERSION = (\d+);/.exec(readFileSync(pbxPath, 'utf8'))[1]
+  const runPrepare = (env) => {
+    const merged = { ...process.env }
+    if (env === undefined) delete merged.NOD_IOS_BUNDLE
+    else merged.NOD_IOS_BUNDLE = env
+    return spawnSync(process.execPath, [PREPARE], { cwd: fixture.root, env: merged, encoding: 'utf8' })
+  }
+
+  const unset = runPrepare(undefined)
+  eq(unset.status, 0, 'prepare-ios-web succeeds with no NOD_IOS_BUNDLE')
+  eq(readBundle(), '92', 'without the env var the historical increment is kept')
+
+  const pinnedPrepare = runPrepare('300')
+  eq(pinnedPrepare.status, 0, 'prepare-ios-web succeeds with NOD_IOS_BUNDLE')
+  eq(readBundle(), '300', 'NOD_IOS_BUNDLE writes exactly the requested bundle')
+  ok(pinnedPrepare.stdout.includes('pinned by NOD_IOS_BUNDLE'), 'the pinned write is stated in the output')
+
+  eq(runPrepare('0').status, 0, 'a zero bundle is allowed')
+  eq(readBundle(), '0', 'zero is written exactly, not treated as unset')
+
+  const bad = runPrepare('1.5')
+  ok(bad.status !== 0, 'a non-integer NOD_IOS_BUNDLE is refused')
+  ok(`${bad.stderr}${bad.stdout}`.includes('NOD_IOS_BUNDLE must be a non-negative integer'), 'the refusal explains the requirement')
+  eq(readBundle(), '0', 'a refused pin leaves the project untouched')
+
+  const negative = runPrepare('-1')
+  ok(negative.status !== 0, 'a negative NOD_IOS_BUNDLE is refused')
 }
 
 section('reject: missing embedded framework')
@@ -467,12 +590,6 @@ section('install + read-back against a fake devicectl (no real device)')
       }
     }
     return runCapture(cmd, cmdArgs, opts)
-  }
-  const runInProcess = (root, argv, run) => {
-    const out = []
-    const err = []
-    const status = runCommand(argv, { root, run, stdout: (t) => out.push(t), stderr: (t) => err.push(t) })
-    return { status, stdout: out.join('\n'), stderr: err.join('\n') }
   }
   const phoneApp = { bundleIdentifier: 'com.nodpilot.app', shortVersion: '1.0', bundleVersion: '91' }
   const watchApp = { bundleIdentifier: 'com.nodpilot.app.watchkitapp', shortVersion: '1.0', bundleVersion: '91' }
