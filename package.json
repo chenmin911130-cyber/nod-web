@@ -7,7 +7,9 @@
     "cap:open": "npx cap open ios",
     "cap:ios": "node scripts/ios-deliver.mjs",
     "deliver:ios": "node scripts/ios-deliver.mjs",
-    "test:ios-deliver": "node scripts/ios-deliver.test.mjs"
+    "test:ios-deliver": "node scripts/ios-deliver.test.mjs",
+    "check:ios": "node scripts/iosCompileGate.mjs",
+    "test:ios-compile-gate": "node scripts/iosCompileGate.test.mjs"
   },
   "dependencies": {
     "@capacitor/app": "^7.1.0",

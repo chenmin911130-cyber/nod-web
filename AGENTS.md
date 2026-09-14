@@ -38,11 +38,33 @@ the exact artifact path + digest; a locked or unreadable device is recorded as
 `npm run test:ios-deliver` (`node scripts/ios-deliver.test.mjs`, fixtures only — no device,
 no network). Details: `ios/README.md`.
 
+### Native compile gate (before archive / install)
+
+`npm run check:ios` (`node scripts/iosCompileGate.mjs`) compiles the **real** `App` scheme,
+which builds the App target, the WatchApp target and the local pods (NodAuth / NodMic /
+NodSplash / NodWatch) for iOS Simulator and watchOS Simulator in one pass. Run it after any
+Swift change and before `cap:ios build`:
+
+```bash
+npm run check:ios                                       # ~3 s warm, ~25 s cold, ~65 s empty module cache
+npm run check:ios -- --device --configuration Release    # device / Release variant
+npm run check:ios -- --help
+```
+
+It exists because the hand-written file lists in `scripts/test-watch-replay.sh` and the
+watchOS `swiftc -typecheck` both omitted
+`plugins/nod-watch/ios/Sources/NodWatchPlugin/NodWatchPlugin.swift`: a duplicate `copyId:`
+argument passed both gates and only failed at the first real `xcodebuild`, i.e. at install
+time on an already merged `main`. A hand-kept file list drifts whenever a file or a plugin is
+added; the scheme does not. `test-watch-replay.sh` still owns behaviour tests — this gate only
+answers "do the real targets still compile?", needs no signing identity, and never writes
+inside the checkout.
+
 ## Division of labor
 
 - **Fable**（规划 / 审查）：写 GitHub issue 执行单；读 PR diff 对照 issue；核 CI 与 Railway `/api/health`。不改产品代码，不合并。审查时不要跑本地 pytest / tsc / npm test / e2e、不要起本地服务器或搭复现 harness 来「证明修好了」——实现代理已经跑过；看 diff、CI（`gh run list`）、Railway SHA、以及还要不要 `cap:sync` / bundle bump。只有 diff 与执行单矛盾、CI 红、或用户报了真机问题时才往下查，并且从生产日志（Railway MCP `get-logs`）开始，不要先本地复现。
 - **Grok**（实现）：按指定 issue 从 `origin/main` 开隔离 worktree 实现；跑该单要求的测试；开 PR；不合并。不要用当前脏工作区。不要把两张产品单塞进同一个 PR。
-- **装包 / 交付**：唯一入口是 `npm run cap:ios -- …`，见 `docs/ios-deliver.md`；不要手工拼 `cap sync` / `xcodebuild`。
+- **装包 / 交付**：唯一入口是 `npm run cap:ios -- …`，见 `docs/ios-deliver.md`；不要手工拼 `cap sync` / `xcodebuild`。动过 `plugins/nod-*/ios/**` 或 `ios/**/*.swift` 的交付，archive 前必须先跑 `npm run check:ios`（它编译真实 `App` scheme，`test-watch-replay.sh` 的文件清单覆盖不到 `NodWatchPlugin.swift` 一类文件）。
 - 用户说「规划 / 写单 / 验收」→ 按 Fable 职责。用户说「执行 / 按清单做 / 开 PR」→ 按 Grok 职责。
 - Hermes 工作台不再承担 nod-web 实现，除非用户当场点名。`#33` / `#35` / `#36` 已结束。
 

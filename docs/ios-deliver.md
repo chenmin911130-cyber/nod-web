@@ -33,6 +33,29 @@ TEAM_ID=XXXXXXXXXX npm run cap:ios -- build \
 
 产出：`<out>/delivery-manifest.json`、`<out>/Nod.xcarchive`、`<out>/ipa/App.ipa`。
 
+## 编译闸门 — archive 之前先编译真实 target
+
+```bash
+npm run check:ios                                        # 约 3 秒（暖）/ 约 25 秒（冷）/ 约 65 秒（模块缓存全空）
+npm run check:ios -- --device --configuration Release     # 设备 / Release 变体
+```
+
+它编译**真实 `App` scheme**：App + WatchApp + 本地 pods（NodAuth / NodMic / NodSplash /
+NodWatch），iOS 与 watchOS 模拟器一次编完。不需要签名证书或 Team，也不在 checkout 里写
+任何文件——DerivedData 缓存在系统临时目录、按 worktree realpath 隔离，既避免 #213 的跨
+worktree 陈旧对象，也不会污染交付的 clean-tree 守卫。
+
+为什么不是「检查所有 Swift 文件」的脚本：`scripts/test-watch-replay.sh` 与 watchOS
+`swiftc -typecheck` 各自维护一份**手写文件清单**，两份都漏了
+`plugins/nod-watch/ios/Sources/NodWatchPlugin/NodWatchPlugin.swift`；该文件里重复的
+`copyId:` 实参能同时通过这两个闸门，直到第一次真实 `xcodebuild`（也就是装机时刻，而且已经
+在合并后的 `main` 上）才报错。手写清单会随文件与插件增加而漂移，scheme 不会。单独对那个
+文件跑 `swiftc -typecheck` 也不行：它没有 pod 模块路径，只会报 `no such module 'Capacitor'`。
+
+`test-watch-replay.sh` 仍然负责行为测试；这个闸门只回答「真实 target 还能不能编译」。
+退出码：0 编译通过，1 编译失败，2 用法或前置条件不满足（前置条件会直接说清是缺
+`cap:sync` 还是缺 `pod install`）。
+
 ## verify — 用清单校验确切产物
 
 ```bash
