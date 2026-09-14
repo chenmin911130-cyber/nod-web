@@ -252,7 +252,7 @@ final class WatchPcmIngest {
         queue.sync {
             guard !captureId.isEmpty else { return }
             _ = self.store.markIntent("discard", captureId: captureId)
-            _ = self.store.deleteCapture(captureId)
+            _ = self.store.deleteCapture(captureId, force: true)
             if captureId == self.captureId {
                 self.rejected = false
                 self.uploadByte = 0
@@ -311,6 +311,15 @@ final class WatchPcmIngest {
         var n = 0
         queue.sync { n = self.store.deleteCapture(id) }
         return n
+    }
+
+    func deleteCaptures(sessionId: String) -> Int {
+        guard !sessionId.isEmpty else { return 0 }
+        var freed = 0
+        for info in listCaptures() where info.sessionId == sessionId {
+            freed += deleteCapture(info.captureId)
+        }
+        return freed
     }
 
     func markIntent(_ intent: String, captureId: String, sessionId: String = "") -> Bool {

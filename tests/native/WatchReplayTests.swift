@@ -495,6 +495,32 @@ func waitSend() {
 
     ingest.reset()
     bridge.testingResetJobs()
+    bindCapture("cap-nosave", session: "sess-nosave")
+    WatchBridge.testingKeep = { sid in (200, keepBody(sid)) }
+    eq(postSave("sess-nosave")["save"] as? String ?? "", "saved")
+    check(bridge.listSaves().contains(where: { $0["sessionId"] == "sess-nosave" }), "Save job exists before No Save")
+    WatchBridge.testingKeep = nil
+    WatchBridge.testingDiscardCalls = 0
+    WatchBridge.testingDiscard = { sid in
+      check(sid == "sess-nosave", "native discard DELETEs this session")
+      return (200, Data())
+    }
+    bridge.session(WCSession.default, didReceiveMessage: [
+        "action": "discard",
+        "sessionId": "sess-nosave",
+        "captureId": "cap-nosave",
+    ]) { _ in }
+    waitSend()
+    check(WatchBridge.testingDiscardCalls == 1, "No Save DELETEs History without WKWebView")
+    check(!bridge.listSaves().contains(where: { $0["sessionId"] == "sess-nosave" }), "No Save drops the Retry save job")
+    check(!ingest.listCaptures().contains(where: { $0.captureId == "cap-nosave" }), "No Save removes the phone capture")
+    WatchBridge.testingKeep = { sid in (200, keepBody(sid)) }
+    eq(postSave("sess-nosave")["save"] as? String ?? "", "failed")
+    check(!bridge.listSaves().contains(where: { $0["sessionId"] == "sess-nosave" && $0["save"] == "saved" }), "a late keep must not resurrect a discarded session")
+    WatchBridge.testingKeep = nil
+    WatchBridge.testingDiscard = nil
+    ingest.reset()
+    bridge.testingResetJobs()
     bindCapture("cap-500", session: "sess-500")
     var n500 = 0
     WatchBridge.testingKeep = { sid in

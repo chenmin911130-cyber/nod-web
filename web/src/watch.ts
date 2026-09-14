@@ -44,6 +44,7 @@ type WatchPlugin = {
   listSaves(): Promise<{ saves: Array<{ sessionId: string; captureId: string; save: string; error?: string }> }>
   retrySave(opts: { sessionId: string }): Promise<void>
   resumeKeeps(): Promise<void>
+  discardSave(opts: { sessionId: string; captureId?: string }): Promise<void>
   addListener(event: 'command', cb: (ev: WatchCommand) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'pcm', cb: (ev: WatchPcm) => void): Promise<{ remove: () => Promise<void> }>
   addListener(event: 'saveResult', cb: (ev: { save?: string; sessionId?: string }) => void): Promise<{ remove: () => Promise<void> }>
@@ -71,6 +72,11 @@ function storeWatchAccount(): void {
 export function retryWatchSave(sessionId: string): void {
   if (!isNativeApp() || !sessionId) return
   void NodWatch.retrySave({ sessionId }).catch(() => undefined)
+}
+
+export function discardWatchSave(sessionId: string, captureId = ''): void {
+  if (!isNativeApp() || (!sessionId && !captureId)) return
+  void NodWatch.discardSave({ sessionId, captureId }).catch(() => undefined)
 }
 
 export function resumeWatchKeeps(): void {
@@ -304,7 +310,7 @@ export function installWatchRemote(handlers: {
   onSpeak: () => void
   onSave: (sessionId: string) => void
   onSaveResult: (ev: { save: string; sessionId: string }) => void
-  onDiscard: () => void
+  onDiscard: (sessionId: string) => void
   onTtsLive: () => void
   onTtsTap: () => void
   onTtsVoice: (voice: 'male' | 'female') => void
@@ -372,7 +378,7 @@ export function installWatchRemote(handlers: {
       }
       if (action === 'speak') handlers.onSpeak()
       if (action === 'save') handlers.onSave(sessionId)
-      if (action === 'discard') handlers.onDiscard()
+      if (action === 'discard') handlers.onDiscard(sessionId)
       if (action === 'tts_live') handlers.onTtsLive()
       if (action === 'tts_tap') handlers.onTtsTap()
       if (action === 'tts_female') handlers.onTtsVoice('female')
