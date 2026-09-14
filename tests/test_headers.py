@@ -101,6 +101,15 @@ class SecurityHeadersTests(unittest.TestCase):
         self.assertIn("https://accounts.google.com", style)
         self.assertIn("https://cloudflareinsights.com", connect)
 
+    def test_csp_allows_clerk_protect_hosts(self):
+        csp = content_security_policy()
+        script = csp.split("script-src", 1)[1].split(";", 1)[0]
+        connect = csp.split("connect-src", 1)[1].split(";", 1)[0]
+        frame = csp.split("frame-src", 1)[1].split(";", 1)[0]
+        self.assertIn("https://*.protect.clerk.com", script)
+        self.assertIn("https://*.protect.clerk.com:*", connect)
+        self.assertIn("https://*.protect.clerk.com", frame)
+
 
 if __name__ == "__main__":
     unittest.main()

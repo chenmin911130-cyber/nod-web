@@ -29,6 +29,8 @@ def content_security_policy() -> str:
     # Tight default, plus the third parties this build actually loads.
     # Custom Clerk domains (clerk.example.com / accounts.example.com) come
     # from the live publishable key — without them Clerk never loads.
+    # *.protect.clerk.com is Clerk's abuse/fraud host; connect-src needs :*
+    # because those endpoints are served on ports other than 443.
     extra = _clerk_csp_hosts()
     extra_https = " ".join(f"https://{h}" for h in extra)
     extra_wss = " ".join(f"wss://{h}" for h in extra)
@@ -37,7 +39,7 @@ def content_security_policy() -> str:
     return (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev https://*.clerk.com "
-        f"https://challenges.cloudflare.com https://static.cloudflareinsights.com https://accounts.google.com https://apis.google.com{extra_h}; "
+        f"https://challenges.cloudflare.com https://static.cloudflareinsights.com https://accounts.google.com https://apis.google.com https://*.protect.clerk.com{extra_h}; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; "
         "font-src 'self' data: https://fonts.gstatic.com; "
         "img-src 'self' data: blob: https://img.clerk.com https://*.clerk.com https://www.google.com "
@@ -45,9 +47,9 @@ def content_security_policy() -> str:
         "connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com wss://*.clerk.accounts.dev "
         "https://accounts.google.com https://www.googleapis.com https://cloudflareinsights.com "
         "https://static.cloudflareinsights.com https://streaming.assemblyai.com "
-        f"wss://streaming.assemblyai.com https://*.sentry.io https://*.ingest.sentry.io{extra_h}{extra_w}; "
+        f"wss://streaming.assemblyai.com https://*.sentry.io https://*.ingest.sentry.io https://*.protect.clerk.com:*{extra_h}{extra_w}; "
         "frame-src https://*.clerk.accounts.dev https://*.clerk.com https://challenges.cloudflare.com "
-        f"https://accounts.google.com{extra_h}; "
+        f"https://accounts.google.com https://*.protect.clerk.com{extra_h}; "
         "worker-src 'self' blob:; "
         "media-src 'self' blob:; "
         "object-src 'none'; "
