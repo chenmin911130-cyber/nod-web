@@ -10,14 +10,20 @@
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		50379B232058CBB4000EE86E /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 50379B222058CBB4000EE86E /* capacitor.config.json */; };
 		504EC3081FED79650016851F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504EC3071FED79650016851F /* AppDelegate.swift */; };
+		D0D1227000000000000000B2 /* LaunchBrand.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D1227000000000000000B1 /* LaunchBrand.swift */; };
+		D0D1227000000000000000B3 /* LaunchBrand.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D1227000000000000000B1 /* LaunchBrand.swift */; };
+		D0D1227000000000000000B5 /* LaunchOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D1227000000000000000B4 /* LaunchOverlay.swift */; };
+		D0D1227000000000000000B6 /* StartupRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D1227000000000000000B7 /* StartupRecoveryView.swift */; };
+		D0D1227000000000000000B8 /* StartupRecoveryGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D1227000000000000000B9 /* StartupRecoveryGate.swift */; };
 		D0D10000000000000000001E /* WatchConnectivity.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0D10000000000000000001D /* WatchConnectivity.framework */; };
 		D0D100000000000000000033 /* ClockKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000034 /* ClockKit.framework */; };
 		D0D100000000000000000014 /* NodWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000002 /* NodWatchApp.swift */; };
 		D0D100000000000000000015 /* WatchRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000003 /* WatchRootView.swift */; };
 		D0D100000000000000000040 /* WatchCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000041 /* WatchCopy.swift */; };
 		D0D100000000000000000046 /* WatchAod.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000047 /* WatchAod.swift */; };
-		D0D100000000000000000048 /* WatchQASummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000049 /* WatchQASummary.swift */; };
-		D0D10000000000000000004A /* WatchQAPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D10000000000000000004B /* WatchQAPage.swift */; };
+		D0D100000000000000000048 /* WatchLaunchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000049 /* WatchLaunchView.swift */; };
+		D0D10000000000000000004A /* WatchQASummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D10000000000000000004B /* WatchQASummary.swift */; };
+		D0D10000000000000000004C /* WatchQAPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D10000000000000000004D /* WatchQAPage.swift */; };
 		D0D100000000000000000016 /* WatchPhoneSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000004 /* WatchPhoneSession.swift */; };
 		D0D100000000000000000042 /* WatchPcmStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000043 /* WatchPcmStore.swift */; };
 		D0D100000000000000000044 /* WatchSendBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000045 /* WatchSendBuffer.swift */; };
@@ -38,6 +44,10 @@
 		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		504EC3041FED79650016851F /* App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		504EC3071FED79650016851F /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		D0D1227000000000000000B1 /* LaunchBrand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchBrand.swift; sourceTree = "<group>"; };
+		D0D1227000000000000000B4 /* LaunchOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchOverlay.swift; sourceTree = "<group>"; };
+		D0D1227000000000000000B7 /* StartupRecoveryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupRecoveryView.swift; sourceTree = "<group>"; };
+		D0D1227000000000000000B9 /* StartupRecoveryGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupRecoveryGate.swift; sourceTree = "<group>"; };
 		D0D10000000000000000001D /* WatchConnectivity.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WatchConnectivity.framework; path = System/Library/Frameworks/WatchConnectivity.framework; sourceTree = SDKROOT; };
 		D0D100000000000000000034 /* ClockKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ClockKit.framework; path = System/Library/Frameworks/ClockKit.framework; sourceTree = SDKROOT; };
 		D0D100000000000000000001 /* WatchApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WatchApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -45,8 +55,9 @@
 		D0D100000000000000000003 /* WatchRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRootView.swift; sourceTree = "<group>"; };
 		D0D100000000000000000041 /* WatchCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchCopy.swift; sourceTree = "<group>"; };
 		D0D100000000000000000047 /* WatchAod.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAod.swift; sourceTree = "<group>"; };
-		D0D100000000000000000049 /* WatchQASummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchQASummary.swift; sourceTree = "<group>"; };
-		D0D10000000000000000004B /* WatchQAPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchQAPage.swift; sourceTree = "<group>"; };
+		D0D100000000000000000049 /* WatchLaunchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchLaunchView.swift; sourceTree = "<group>"; };
+		D0D10000000000000000004B /* WatchQASummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchQASummary.swift; sourceTree = "<group>"; };
+		D0D10000000000000000004D /* WatchQAPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchQAPage.swift; sourceTree = "<group>"; };
 		D0D100000000000000000004 /* WatchPhoneSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchPhoneSession.swift; sourceTree = "<group>"; };
 		D0D100000000000000000043 /* WatchPcmStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchPcmStore.swift; sourceTree = "<group>"; };
 		D0D100000000000000000045 /* WatchSendBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSendBuffer.swift; sourceTree = "<group>"; };
@@ -121,6 +132,10 @@
 			children = (
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
+				D0D1227000000000000000B1 /* LaunchBrand.swift */,
+				D0D1227000000000000000B4 /* LaunchOverlay.swift */,
+				D0D1227000000000000000B7 /* StartupRecoveryView.swift */,
+				D0D1227000000000000000B9 /* StartupRecoveryGate.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -147,8 +162,9 @@
 				D0D100000000000000000003 /* WatchRootView.swift */,
 				D0D100000000000000000041 /* WatchCopy.swift */,
 				D0D100000000000000000047 /* WatchAod.swift */,
-				D0D100000000000000000049 /* WatchQASummary.swift */,
-				D0D10000000000000000004B /* WatchQAPage.swift */,
+				D0D100000000000000000049 /* WatchLaunchView.swift */,
+				D0D10000000000000000004B /* WatchQASummary.swift */,
+				D0D10000000000000000004D /* WatchQAPage.swift */,
 				D0D100000000000000000004 /* WatchPhoneSession.swift */,
 				D0D100000000000000000043 /* WatchPcmStore.swift */,
 				D0D100000000000000000045 /* WatchSendBuffer.swift */,
@@ -343,6 +359,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
+				D0D1227000000000000000B2 /* LaunchBrand.swift in Sources */,
+				D0D1227000000000000000B5 /* LaunchOverlay.swift in Sources */,
+				D0D1227000000000000000B6 /* StartupRecoveryView.swift in Sources */,
+				D0D1227000000000000000B8 /* StartupRecoveryGate.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -351,11 +371,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				D0D100000000000000000014 /* NodWatchApp.swift in Sources */,
+				D0D1227000000000000000B3 /* LaunchBrand.swift in Sources */,
 				D0D100000000000000000015 /* WatchRootView.swift in Sources */,
 				D0D100000000000000000040 /* WatchCopy.swift in Sources */,
 				D0D100000000000000000046 /* WatchAod.swift in Sources */,
-				D0D100000000000000000048 /* WatchQASummary.swift in Sources */,
-				D0D10000000000000000004A /* WatchQAPage.swift in Sources */,
+				D0D100000000000000000048 /* WatchLaunchView.swift in Sources */,
+				D0D10000000000000000004A /* WatchQASummary.swift in Sources */,
+				D0D10000000000000000004C /* WatchQAPage.swift in Sources */,
 				D0D100000000000000000016 /* WatchPhoneSession.swift in Sources */,
 				D0D100000000000000000042 /* WatchPcmStore.swift in Sources */,
 				D0D100000000000000000044 /* WatchSendBuffer.swift in Sources */,
@@ -501,7 +523,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 91;
+				CURRENT_PROJECT_VERSION = 96;
 				DEVELOPMENT_TEAM = 5DG3M898Z2;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
@@ -523,7 +545,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 91;
+				CURRENT_PROJECT_VERSION = 96;
 				DEVELOPMENT_TEAM = 5DG3M898Z2;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
@@ -543,7 +565,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 91;
+				CURRENT_PROJECT_VERSION = 96;
 				DEVELOPMENT_TEAM = 5DG3M898Z2;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WatchApp/Info.plist;
@@ -568,7 +590,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 91;
+				CURRENT_PROJECT_VERSION = 96;
 				DEVELOPMENT_TEAM = 5DG3M898Z2;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WatchApp/Info.plist;

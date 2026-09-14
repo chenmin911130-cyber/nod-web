@@ -14,6 +14,8 @@ PODS:
     - Capacitor
   - NodMic (0.1.0):
     - Capacitor
+  - NodSplash (0.1.0):
+    - Capacitor
   - NodWatch (0.1.0):
     - Capacitor
 
@@ -26,6 +28,7 @@ DEPENDENCIES:
   - "CapacitorStatusBar (from `../../node_modules/@capacitor/status-bar`)"
   - NodAuth (from `../../plugins/nod-auth`)
   - NodMic (from `../../plugins/nod-mic`)
+  - NodSplash (from `../../plugins/nod-splash`)
   - NodWatch (from `../../plugins/nod-watch`)
 
 EXTERNAL SOURCES:
@@ -45,6 +48,8 @@ EXTERNAL SOURCES:
     :path: "../../plugins/nod-auth"
   NodMic:
     :path: "../../plugins/nod-mic"
+  NodSplash:
+    :path: "../../plugins/nod-splash"
   NodWatch:
     :path: "../../plugins/nod-watch"
 
@@ -57,8 +62,9 @@ SPEC CHECKSUMS:
   CapacitorStatusBar: 416e9e53fd6397e668d4a181cd2131617d949bd6
   NodAuth: 2afc322b8c884e841ff98063e839d998fade88b5
   NodMic: fcf143e18f3f5cac0d7a94913b9dfc51fab9b144
+  NodSplash: 2ef41db7a4cd8986f2458f548c4a1018e5196bac
   NodWatch: 2fb8c7994229deda4c81ed61e57b7ec66b8b0190
 
-PODFILE CHECKSUM: ba3150a23d09e5e9700d332b034d77f5a643934a
+PODFILE CHECKSUM: 45cc7848cc0f6c13e9047dfb08954268e83ebc76
 
 COCOAPODS: 1.17.0

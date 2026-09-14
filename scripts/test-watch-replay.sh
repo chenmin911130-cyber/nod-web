@@ -16,3 +16,9 @@ xcrun swiftc -D PCM_REPLAY_TESTING -o "$replay_test_dir/watch-replay-tests" \
  tests/native/WatchReplayTests.swift \
  tests/native/WatchQASummaryTests.swift
 "$replay_test_dir/watch-replay-tests"
+
+# The #227 startup gate: the slow-vs-dead rule and the recovery/retry transitions. Its
+# source file is Foundation-only, so it compiles for the host like the replay tests do.
+xcrun swiftc -o "$replay_test_dir/startup-recovery-tests" \
+ ios/App/App/StartupRecoveryGate.swift tests/native/StartupRecoveryTests.swift
+"$replay_test_dir/startup-recovery-tests"

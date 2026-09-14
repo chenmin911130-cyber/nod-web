@@ -1,4 +1,5 @@
 import SwiftUI
+import WatchConnectivity
 
 struct WatchRootView: View {
     @EnvironmentObject private var session: WatchPhoneSession
@@ -7,6 +8,25 @@ struct WatchRootView: View {
     @State private var listenPage = 0
     @State private var showStorage = false
     @State private var confirmDeleteId = ""
+    /// The brand page is a cold-start surface. `launched` is view state, so it is
+    /// set at most once for the life of this view: a wrist raise, a return from
+    /// the background or an Always-On transition re-enters this view without
+    /// recreating it, and can therefore never re-show the overlay.
+    ///
+    /// It starts true when the launch already had a session on the wrist. The
+    /// glance store the complication reads is this app's own persistent record of
+    /// "recording / paused", and it is the only such signal available before
+    /// `WCSession` activates — too late to keep the brand page from covering a
+    /// session that is already running.
+    @State private var launched = !WatchLaunchGate.overlayShows(
+        startedAt: WatchGlanceStore.startedAt(),
+        pausedElapsed: WatchGlanceStore.pausedElapsed()
+    )
+    /// True once `WCSession` finished activating. Read here instead of taking it
+    /// from `WatchPhoneSession`, which publishes only the part of the activation
+    /// result it needs (`reachable`) — and that is false whenever the iPhone app
+    /// is not running, so it would keep the overlay up on an offline Watch.
+    @State private var linkActivated = false
     /// The Live Q&A card the user opened. Opening a card pins the copy that was
     /// on screen, so a question that lands while it is being read cannot replace
     /// it (#218). Cleared by the user, or by leaving the reading state.
@@ -25,18 +45,71 @@ struct WatchRootView: View {
     private let timer = Color(red: 245 / 255, green: 197 / 255, blue: 66 / 255)
 
     var body: some View {
-        Group {
-            if dimmed {
-                alwaysOnPage
-            } else {
-                livePage
+        ZStack {
+            Group {
+                if dimmed {
+                    alwaysOnPage
+                } else {
+                    livePage
+                }
+            }
+            // The launch page covers the real content only while that content has
+            // nothing to show yet; it is never a separate screen.
+            if !launched {
+                WatchLaunchView()
+                    .transition(.opacity)
+                    .zIndex(1)
             }
         }
+        .task { await revealWhenReady() }
         .onAppear {
             if ProcessInfo.processInfo.arguments.contains("--probe-mic") {
                 session.toggle()
             }
         }
+    }
+
+    /// Take the brand page away as soon as the app's real state is usable, and at
+    /// the latest after `WatchLaunchGate.deadlineSeconds`.
+    ///
+    /// Two things can make the page behind the overlay usable: a session that is
+    /// already live (restored from the phone's application context, or the
+    /// Watch's own recorder) or `WCSession`'s activation state — the app's only
+    /// asynchronous cold-start step, and a local handshake that does not wait for
+    /// the phone to answer. That is deliberately not `reachable` and not a
+    /// network round trip; the deadline is the exit for a Watch that never
+    /// finishes the handshake at all.
+    private func revealWhenReady() async {
+        guard !launched else { return }
+        let deadline = Date().addingTimeInterval(WatchLaunchGate.deadlineSeconds)
+        while !launchReady {
+            if Date() >= deadline { break }
+            linkActivated = WCSession.isSupported()
+                && WCSession.default.activationState == .activated
+            // The sleep doubles as the grace period: activation and the phone's
+            // application context are applied in the same main-queue turn, so the
+            // release is acted on one pass later and a restored session can never
+            // flash the Ready page before its own content.
+            try? await Task.sleep(nanoseconds: WatchLaunchGate.pollNanoseconds)
+            if Task.isCancelled { return }
+        }
+        withAnimation(.easeOut(duration: 0.2)) {
+            launched = true
+        }
+    }
+
+    /// Is the page the user would otherwise see able to hold its own state?
+    ///
+    /// The session flags are the same ones `alwaysOnPage`/`livePage` branch on, so
+    /// "live" here means exactly "there is something of the session to show".
+    private var launchReady: Bool {
+        WatchLaunchGate.contentReady(
+            sessionLive: session.listening || session.paused || session.starting
+                || session.draining || session.drainFailed
+                || session.offeringSave || session.pendingSync || session.savedAck
+                || !session.original.isEmpty || !session.translation.isEmpty,
+            linkActivated: linkActivated
+        )
     }
 
     private var alwaysOnPage: some View {
