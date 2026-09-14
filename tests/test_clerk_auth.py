@@ -15,6 +15,7 @@ from server.clerk_auth import (
     clerk_fapi_target,
     clerk_js_source_url,
     clerk_proxy_public_url,
+    enable_clerk_fapi_proxy,
     forward_clerk_fapi,
     load_clerk_browser_js,
     reset_clerk_js_cache,
@@ -159,7 +160,13 @@ class ClerkFapiProxyTests(unittest.TestCase):
                 "v1/client/sign_ins",
                 "__clerk_api_version=2025-11-10",
                 b"{}",
-                {"cf-connecting-ip": "203.0.113.9", "content-type": "application/json"},
+                {
+                    "cf-connecting-ip": "203.0.113.9",
+                    "content-type": "application/json",
+                    "cdn-loop": "cloudflare; loops=1",
+                    "cf-ray": "abc123",
+                    "cf-visitor": '{"scheme":"https"}',
+                },
                 "10.0.0.1",
             )
         self.assertEqual(
@@ -169,5 +176,52 @@ class ClerkFapiProxyTests(unittest.TestCase):
         self.assertEqual(captured["headers"]["Clerk-Proxy-Url"], "https://nodpilot.com/__clerk")
         self.assertEqual(captured["headers"]["Clerk-Secret-Key"], "sk_test_proxy")
         self.assertEqual(captured["headers"]["X-Forwarded-For"], "203.0.113.9")
+        self.assertNotIn("cdn-loop", {k.lower() for k in captured["headers"]})
+        self.assertNotIn("cf-ray", {k.lower() for k in captured["headers"]})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.headers["location"], "https://nodpilot.com/__clerk/v1/x")
+
+    def test_clears_dashboard_proxy_url(self):
+        listed = mock.Mock()
+        listed.raise_for_status = mock.Mock()
+        listed.json.return_value = {
+            "data": [
+                {
+                    "id": "dmn_1",
+                    "name": "nodpilot.com",
+                    "frontend_api_url": "https://clerk.nodpilot.com",
+                    "proxy_url": "https://nodpilot.com/__clerk",
+                }
+            ]
+        }
+        patched = mock.Mock(status_code=200, text="{}")
+        with (
+            mock.patch("server.clerk_auth.clerk_proxy_enable_allowed", return_value=True),
+            mock.patch("server.clerk_auth.httpx.get", return_value=listed) as get,
+            mock.patch("server.clerk_auth.httpx.patch", return_value=patched) as patch,
+        ):
+            enable_clerk_fapi_proxy()
+        get.assert_called_once()
+        patch.assert_called_once()
+        self.assertIsNone(patch.call_args.kwargs["json"]["proxy_url"])
+
+    def test_leaves_unrelated_proxy_url(self):
+        listed = mock.Mock()
+        listed.raise_for_status = mock.Mock()
+        listed.json.return_value = {
+            "data": [
+                {
+                    "id": "dmn_1",
+                    "name": "nodpilot.com",
+                    "frontend_api_url": "https://clerk.nodpilot.com",
+                    "proxy_url": "https://other.example/proxy",
+                }
+            ]
+        }
+        with (
+            mock.patch("server.clerk_auth.clerk_proxy_enable_allowed", return_value=True),
+            mock.patch("server.clerk_auth.httpx.get", return_value=listed),
+            mock.patch("server.clerk_auth.httpx.patch") as patch,
+        ):
+            enable_clerk_fapi_proxy()
+        patch.assert_not_called()

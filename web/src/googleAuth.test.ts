@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs'
 import {
+  CLERK_CAPTCHA_ELEMENT_ID,
   CLERK_JS_URL,
-  CLERK_PROXY_URL,
   CLERK_LOAD_TIMEOUT_MS,
+  CLERK_SIGN_IN_URL,
+  CLERK_SIGN_UP_URL,
   GOOGLE_LOAD_ERROR,
   googleButtonDisabled,
   googleButtonLabel,
@@ -31,7 +34,21 @@ eq(googleButtonLabel({ ...idle, isLoaded: false, loadFailed: true }), 'Continue 
 eq(googleButtonDisabled({ ...idle, isLoaded: false, loadFailed: true }), true, 'failed disabled')
 eq(googleLoadError(true), GOOGLE_LOAD_ERROR, 'failed error copy')
 eq(CLERK_JS_URL, '/clerk.browser.js', 'same-origin clerk-js')
-eq(CLERK_PROXY_URL, '/__clerk', 'same-origin clerk fapi proxy')
+eq(CLERK_SIGN_IN_URL, '/login', 'hosted sign-in stays on this origin')
+eq(CLERK_SIGN_UP_URL, '/signup', 'hosted sign-up stays on this origin')
+eq(CLERK_CAPTCHA_ELEMENT_ID, 'clerk-captcha', 'oauth callback captcha mount')
 eq(CLERK_LOAD_TIMEOUT_MS, 20_000, 'load timeout')
+
+const provider = readFileSync(new URL('./site-main.tsx', import.meta.url), 'utf8')
+if (provider.includes('proxyUrl')) {
+  throw new Error('ClerkProvider must not send FAPI through /__clerk (production 403)')
+}
+if (!provider.includes('signInUrl={CLERK_SIGN_IN_URL}')) {
+  throw new Error('ClerkProvider must pin sign-in to this origin')
+}
+const callback = readFileSync(new URL('./site/ClerkAuth.tsx', import.meta.url), 'utf8')
+if (!callback.includes('CLERK_CAPTCHA_ELEMENT_ID')) {
+  throw new Error('OAuth callback must mount #clerk-captcha')
+}
 
 console.log('googleAuth.test.ts ok')

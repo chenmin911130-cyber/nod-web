@@ -7086,7 +7086,7 @@ async def lifespan(_app: FastAPI):
                 return
             enable_clerk_fapi_proxy()
         except Exception:
-            log.exception("clerk proxy enable failed")
+            log.exception("clerk proxy clear failed")
 
     from server.clerk_auth import clerk_proxy_enable_allowed
 

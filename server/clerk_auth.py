@@ -138,6 +138,16 @@ _HOP_HEADERS = frozenset(
         "upgrade",
         "host",
         "content-length",
+        # nodpilot.com is itself on Cloudflare. Forwarding these to
+        # clerk.nodpilot.com (also Cloudflare) produces a 403 challenge and
+        # breaks every Clerk fetch that went through /__clerk.
+        "cdn-loop",
+        "cf-ray",
+        "cf-visitor",
+        "cf-ew-via",
+        "cf-worker",
+        "cf-warp-tag-id",
+        "true-client-ip",
     }
 )
 
@@ -253,13 +263,34 @@ def clerk_proxy_enable_allowed() -> bool:
     return "unittest" not in joined and "pytest" not in joined
 
 
+def _clerk_domain_row(rows: list, wanted: str) -> dict | None:
+    chosen = None
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        hay = " ".join(str(row.get(k) or "") for k in ("name", "frontend_api_url", "accounts_url"))
+        if wanted and wanted in hay:
+            return row
+        if "nodpilot.com" in hay.lower() and chosen is None:
+            chosen = row
+    if chosen is None and len(rows) == 1 and isinstance(rows[0], dict):
+        return rows[0]
+    return chosen
+
+
 def enable_clerk_fapi_proxy() -> None:
-    """Tell Clerk's Dashboard the production domain uses /__clerk. Best-effort."""
+    """Clear a /__clerk Dashboard proxy so browsers use the clerk.* CNAME.
+
+    #250 set proxy_url to https://nodpilot.com/__clerk and pointed Clerk JS
+    at that path. Production /__clerk returns Cloudflare 403 (the app sits
+    on Cloudflare and was forwarding cdn-loop to Clerk's Cloudflare), so
+    every Google sign-in fetch failed. The publishable key already encodes
+    clerk.nodpilot.com, which serves the Frontend API directly.
+    """
     if not clerk_proxy_enable_allowed():
         return
     secret = (os.environ.get("CLERK_SECRET_KEY") or CLERK_SECRET_KEY or "").strip()
-    proxy = clerk_proxy_public_url()
-    if not secret or not proxy or "127.0.0.1" in proxy or "localhost" in proxy:
+    if not secret:
         return
     auth = {"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     try:
@@ -272,39 +303,31 @@ def enable_clerk_fapi_proxy() -> None:
     rows = payload if isinstance(payload, list) else (payload.get("data") or payload.get("domains") or [])
     if not isinstance(rows, list):
         return
-    wanted = _frontend_api()
-    chosen = None
-    for row in rows:
-        if not isinstance(row, dict) or not row.get("id"):
-            continue
-        hay = " ".join(str(row.get(k) or "") for k in ("name", "frontend_api_url", "accounts_url"))
-        if wanted and wanted in hay:
-            chosen = row
-            break
-        if "nodpilot.com" in hay.lower() and chosen is None:
-            chosen = row
-    if chosen is None and len(rows) == 1 and isinstance(rows[0], dict):
-        chosen = rows[0]
+    chosen = _clerk_domain_row(rows, _frontend_api())
     if not chosen:
         log.warning("clerk proxy_url skipped: no matching domain")
         return
     current = str(chosen.get("proxy_url") or "").rstrip("/")
-    if current == proxy:
+    if not current:
+        return
+    ours = clerk_proxy_public_url().rstrip("/")
+    if current != ours and not current.endswith("/__clerk"):
+        log.warning("clerk proxy_url left untouched: %s", current)
         return
     domain_id = chosen["id"]
     try:
         patched = httpx.patch(
             f"https://api.clerk.com/v1/domains/{domain_id}",
             headers=auth,
-            json={"proxy_url": proxy},
+            json={"proxy_url": None},
             timeout=20.0,
         )
         if patched.status_code >= 400:
-            log.warning("clerk proxy_url patch status=%s body=%s", patched.status_code, patched.text[:300])
+            log.warning("clerk proxy_url clear status=%s body=%s", patched.status_code, patched.text[:300])
             return
-        log.info("clerk proxy_url set domain=%s", domain_id)
+        log.info("clerk proxy_url cleared domain=%s", domain_id)
     except Exception as ex:
-        log.warning("clerk proxy_url patch failed err=%s", ex)
+        log.warning("clerk proxy_url clear failed err=%s", ex)
 
 
 def _origin(url: str) -> str:

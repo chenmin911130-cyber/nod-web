@@ -1,6 +1,11 @@
 export const CLERK_JS_URL = '/clerk.browser.js'
 
-export const CLERK_PROXY_URL = '/__clerk'
+export const CLERK_SIGN_IN_URL = '/login'
+
+export const CLERK_SIGN_UP_URL = '/signup'
+
+/** Clerk bot protection looks up this exact id on OAuth sign-up transfer. */
+export const CLERK_CAPTCHA_ELEMENT_ID = 'clerk-captcha'
 
 export const CLERK_LOAD_TIMEOUT_MS = 20_000
 
