@@ -1117,6 +1117,21 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
         return true
     }
 
+    /// A leftover Start reply / context cannot bind by carrying only a sessionId.
+    /// First bind of this capture requires the payload to name it.
+    static func sessionBindApplies(
+        liveCaptureId: String,
+        liveSessionId: String,
+        incomingSessionId: String,
+        incomingCaptureId: String
+    ) -> Bool {
+        if incomingSessionId.isEmpty { return false }
+        if liveCaptureId.isEmpty { return false }
+        if incomingCaptureId.isEmpty || incomingCaptureId != liveCaptureId { return false }
+        if !liveSessionId.isEmpty, incomingSessionId != liveSessionId { return false }
+        return true
+    }
+
     static func pcmDrainApplies(
         liveCaptureId: String,
         liveSessionId: String,
@@ -1280,16 +1295,26 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
                   sid == sendBuffer.sessionId, cap == sendBuffer.captureId else { return }
         }
         if let sessionId = payload["sessionId"] as? String, !sessionId.isEmpty {
-            phoneSessionId = sessionId
-            sendBuffer.bindSession(sessionId)
-            pcmStore.bindSession(sessionId)
-            let pin = Self.savePinIncoming(saving: saving, pinnedId: saveRequestId, incomingSessionId: sessionId)
-            if pin.send {
-                saveRequestId = pin.pinnedId
-                if saveRequestCaptureId.isEmpty {
-                    saveRequestCaptureId = sendBuffer.captureId
+            let incomingCapture = (payload["pcmAckCaptureId"] as? String)
+                ?? (payload["captureId"] as? String)
+                ?? ""
+            if Self.sessionBindApplies(
+                liveCaptureId: sendBuffer.captureId,
+                liveSessionId: sendBuffer.sessionId,
+                incomingSessionId: sessionId,
+                incomingCaptureId: incomingCapture
+            ) {
+                phoneSessionId = sessionId
+                sendBuffer.bindSession(sessionId)
+                pcmStore.bindSession(sessionId)
+                let pin = Self.savePinIncoming(saving: saving, pinnedId: saveRequestId, incomingSessionId: sessionId)
+                if pin.send {
+                    saveRequestId = pin.pinnedId
+                    if saveRequestCaptureId.isEmpty {
+                        saveRequestCaptureId = sendBuffer.captureId
+                    }
+                    send(action: "save")
                 }
-                send(action: "save")
             }
         }
         if Self.flag(payload, "pcmReady") {

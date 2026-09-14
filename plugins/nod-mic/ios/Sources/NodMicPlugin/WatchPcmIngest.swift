@@ -159,6 +159,22 @@ final class WatchPcmIngest {
         })
     }
 
+    /// New capture must not inherit a leftover session. Empty captureId cannot
+    /// attach a session onto whatever is live. A session already owned by another
+    /// capture cannot rebind.
+    static func sessionBindApplies(
+        liveCaptureId: String,
+        liveSessionId: String,
+        incomingSessionId: String,
+        incomingCaptureId: String
+    ) -> Bool {
+        if incomingSessionId.isEmpty { return false }
+        if incomingCaptureId.isEmpty { return false }
+        if liveCaptureId.isEmpty || incomingCaptureId != liveCaptureId { return false }
+        if !liveSessionId.isEmpty, incomingSessionId != liveSessionId { return false }
+        return true
+    }
+
     func bind(captureId: String, sessionId: String, mode: String = "") {
         queue.sync { [weak self] in
             guard let self else { return }
@@ -170,6 +186,7 @@ final class WatchPcmIngest {
                 self.drainCapture = ""
                 self.drainSession = ""
                 self.pcmEndSent = false
+                self.sessionId = ""
             }
             if !captureId.isEmpty {
                 if captureId != self.captureId || !self.store.isReady(captureId: captureId) {
@@ -180,8 +197,19 @@ final class WatchPcmIngest {
                 self.captureId = captureId
             }
             if !sessionId.isEmpty {
-                self.sessionId = sessionId
-                self.store.bindSession(sessionId)
+                let targetCapture = captureId.isEmpty ? self.captureId : captureId
+                let ownedElsewhere = self.store.listCaptures().contains {
+                    $0.sessionId == sessionId && $0.captureId != targetCapture && !targetCapture.isEmpty
+                }
+                if Self.sessionBindApplies(
+                    liveCaptureId: self.captureId,
+                    liveSessionId: self.sessionId,
+                    incomingSessionId: sessionId,
+                    incomingCaptureId: captureId
+                ), !ownedElsewhere {
+                    self.sessionId = sessionId
+                    self.store.bindSession(sessionId)
+                }
             }
             // #196: persist the recorded mode with the capture so History can tell a
             // Translate capture from a Meeting one after a restart / offline upload.
@@ -283,7 +311,7 @@ final class WatchPcmIngest {
         let rows = self.store.listCaptures()
         if !captureId.isEmpty {
             guard let found = rows.first(where: { $0.captureId == captureId }) else { return "" }
-            if !sessionId.isEmpty, !found.sessionId.isEmpty, found.sessionId != sessionId {
+            if !sessionId.isEmpty, found.sessionId != sessionId {
                 return ""
             }
             return captureId

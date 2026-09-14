@@ -7,6 +7,7 @@ import {
   beginSave,
   bindLiveId,
   bumpGeneration,
+  saveBookOnNewListen,
   decideNewSession,
   emptySaveBook,
   keepAfterNotesStillValid,
@@ -158,6 +159,9 @@ eq(
   const unknown = bindLiveId({ ...fresh, sessionMode: '' }, 's1', undefined)
   eq(unknown.sessionMode || '', '', 'an unknown book stays unknown')
   eq(bindLiveId(fresh, undefined, 'translate').liveId, null, 'no id binds nothing')
+  const leftover = saveBookOnNewListen({ ...beginSave(fresh, 'live-a'), offered: true })
+  eq(leftover.liveId, null, 'a new listen must drop the previous liveId so Watch status cannot keep session A')
+  eq(leftover.offered, false, 'a new listen is not an offered save of the previous session')
 }
 
 // keepAfterNotes with old generation discarded

@@ -86,7 +86,7 @@ func waitSend() {
     buf.bindSession("live")
     let liveStore = WatchPcmStore(rootURL: root.appendingPathComponent("watch-live"))
     let session = WatchPhoneSession(sendBuffer: buf, pcmStore: liveStore, connect: false)
-    deliver(session, ["sessionId": "live", "pcmReady": "true"])
+    deliver(session, ["sessionId": "live", "pcmReady": "true", "pcmAckCaptureId": buf.captureId, "captureId": buf.captureId])
     session.draining = true
     deliver(session, ["sessionId": "old", "pcmRejected": "true", "pcmRejectSessionId": "old", "pcmRejectCaptureId": "old-capture"])
     check(!session.pcmRejected && session.draining, "old rejection must not terminate a new capture")
@@ -148,7 +148,7 @@ func waitSend() {
     check(endWatch.hint == WatchCopy.savedLocal, "End shows phone-local save, not History")
     deliver(endWatch, ["save": "saved", "sessionId": "other"])
     check(endWatch.offeringSave, "wrong-session History ack does not claim Saved to History")
-    deliver(endWatch, ["sessionId": "live-end"])
+    deliver(endWatch, ["sessionId": "live-end", "pcmAckCaptureId": endBuf.captureId, "captureId": endBuf.captureId])
     endWatch.confirmSave()
     check(endWatch.saving, "Save waits for a matching phone ack")
     deliver(endWatch, ["ok": true, "save": "local", "sessionId": "live-end"])
@@ -399,6 +399,101 @@ func waitSend() {
     bridge.resumeKeeps()
     eq(n500, 2)
     WatchBridge.testingNow = nil
+    WatchBridge.testingKeep = nil
+
+    check(
+        WatchPhoneSession.sessionBindApplies(
+            liveCaptureId: "cap-b", liveSessionId: "",
+            incomingSessionId: "sess-a", incomingCaptureId: ""
+        ) == false,
+        "a leftover sessionId cannot self-authenticate onto a new capture"
+    )
+    check(
+        WatchPhoneSession.sessionBindApplies(
+            liveCaptureId: "cap-b", liveSessionId: "",
+            incomingSessionId: "sess-a", incomingCaptureId: "cap-a"
+        ) == false,
+        "session A naming capture A must not bind live capture B"
+    )
+    check(
+        WatchPhoneSession.sessionBindApplies(
+            liveCaptureId: "cap-b", liveSessionId: "",
+            incomingSessionId: "sess-b", incomingCaptureId: "cap-b"
+        ) == true,
+        "first bind of B requires this capture plus B's session"
+    )
+    check(
+        WatchPhoneSession.sessionBindApplies(
+            liveCaptureId: "cap-b", liveSessionId: "sess-b",
+            incomingSessionId: "sess-a", incomingCaptureId: "cap-b"
+        ) == false,
+        "once B is bound, A cannot replace it even if the capture field matches"
+    )
+    check(WatchPhoneSession.saveShouldSend("") == false, "Save with no confirmed session must not guess an id")
+    check(
+        WatchBridge.keepShouldRetry(save: "failed", error: "gone", attempts: 1, now: 10, nextAttemptAt: 0) == false,
+        "HTTP 404 gone is not retried"
+    )
+
+    // #232: A End+discard, B Start→End→Save. The Start reply / bind of B must not
+    // carry A's cached session; keep HTTP must name B; A's late saved cannot ack B.
+    ingest.reset()
+    bridge.testingResetJobs()
+    bindCapture("cap-232-a", session: "sess-232-a")
+    eq(ingest.ingestLive(data: Data(repeating: 8, count: 1600), captureId: "cap-232-a", sessionId: "sess-232-a", offset: 0), "accept")
+    WatchBridge.testingKeep = { sid in (404, nil) }
+    eq(postSave("sess-232-a", captureId: "cap-232-a")["save"] as? String ?? "", "failed")
+    var startB: [String: Any] = [:]
+    bridge.session(WCSession.default, didReceiveMessage: ["action": "start", "captureId": "cap-232-b"]) { startB = $0 }
+    waitSend()
+    let startBSession = startB["sessionId"] as? String ?? ""
+    let startBAckSession = startB["pcmAckSessionId"] as? String ?? ""
+    check(startBSession != "sess-232-a", "Start of B must not echo A's sessionId")
+    check(startBAckSession != "sess-232-a", "Start of B must not echo A's pcmAckSessionId")
+    check(
+        ingest.listCaptures().first { $0.captureId == "cap-232-b" }?.sessionId != "sess-232-a",
+        "new capture B must not bind leftover session A"
+    )
+    eq(ingest.ingestLive(data: Data(repeating: 9, count: 3200), captureId: "cap-232-b", sessionId: "", offset: 0), "accept")
+    bindCapture("cap-232-b", session: "sess-232-b")
+    var keepPosted: [String] = []
+    WatchBridge.testingKeep = { sid in
+        keepPosted.append(sid)
+        if sid == "sess-232-b" { return (200, keepBody(sid)) }
+        return (404, nil)
+    }
+    eq(postSave("sess-232-b", captureId: "cap-232-b")["save"] as? String ?? "", "saved")
+    check(keepPosted == ["sess-232-b"], "B's Save keep HTTP is B, not A")
+    check(ingest.listCaptures().contains(where: { $0.captureId == "cap-232-b" && $0.intent == "keep" }), "B Save marks keep on B")
+    keepPosted.removeAll()
+    WatchBridge.testingKeep = { sid in
+        keepPosted.append(sid)
+        return (404, nil)
+    }
+    eq(postSave("sess-232-a", captureId: "cap-232-a")["save"] as? String ?? "", "failed")
+    check(keepPosted == ["sess-232-a"], "retry of A still posts A after B started")
+    WatchBridge.testingKeep = nil
+
+    let bindB = WatchSendBuffer()
+    bindB.beginCapture()
+    let watchB = WatchPhoneSession(sendBuffer: bindB, pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("232-b")), connect: false)
+    WCSession.default.messages.removeAll()
+    deliver(watchB, ["sessionId": "sess-232-a", "pcmReady": "true"])
+    check(bindB.sessionId != "sess-232-a", "stale reply/context with only session A must not bind B")
+    watchB.confirmSave()
+    check(watchB.saving, "Save before a confirmed mapping waits instead of guessing an id")
+    check(!WCSession.default.messages.contains(where: { ($0["action"] as? String) == "save" }), "unmapped Save must not go on the wire")
+    deliver(watchB, ["sessionId": "sess-232-a"])
+    check(bindB.sessionId.isEmpty, "session-only leftover A cannot pin B's Save")
+    deliver(watchB, ["sessionId": "sess-232-b", "pcmAckCaptureId": bindB.captureId, "captureId": bindB.captureId])
+    check(bindB.sessionId == "sess-232-b", "B binds when the payload names this capture and B")
+    check(WCSession.default.messages.contains(where: { ($0["action"] as? String) == "save" && ($0["sessionId"] as? String) == "sess-232-b" }), "first confirmed session pins B's Save")
+    deliver(watchB, ["save": "saved", "sessionId": "sess-232-a"])
+    check(!watchB.savedAck, "A's late History ack cannot mark B saved")
+    deliver(watchB, ["ok": true, "save": "saved", "sessionId": "sess-232-b"])
+    check(watchB.savedAck, "B's matching History ack is Saved to History")
+    ingest.reset()
+    bridge.testingResetCopyState()
     WatchBridge.testingKeep = nil
 
     let savedUi = WatchPhoneSession.WatchSaveUi(terminal: "saved", dismissed: false, pendingSync: false, offeringSave: false, saveFailed: false, savedAck: false, saving: false, hint: WatchCopy.ready)
