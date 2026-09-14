@@ -171,6 +171,27 @@ section('assertGatePreconditions')
   } catch (error) {
     ok(error instanceof CompileGateError && /pod install/.test(error.message), 'a missing Pods project tells you how to install pods')
   }
+
+  // Pods present but half-installed: the comparison alone would have skipped these, because it
+  // only ran when both halves existed. CocoaPods' "[CP] Check Pods Manifest.lock" phase fails
+  // on a missing half, so passing them through means the long build failure comes back.
+  const noManifestLock = fixture()
+  rmSync(join(noManifestLock, 'ios/App/Pods/Manifest.lock'))
+  try {
+    assertGatePreconditions(noManifestLock)
+    ok(false, 'a missing Pods/Manifest.lock must refuse')
+  } catch (error) {
+    ok(error instanceof CompileGateError && /pod install/.test(error.message), 'a missing Pods/Manifest.lock tells you to run pod install')
+  }
+
+  const noPodfileLock = fixture()
+  rmSync(join(noPodfileLock, 'ios/App/Podfile.lock'))
+  try {
+    assertGatePreconditions(noPodfileLock)
+    ok(false, 'a missing Podfile.lock must refuse')
+  } catch (error) {
+    ok(error instanceof CompileGateError && /cap:sync/.test(error.message), 'a missing Podfile.lock tells you to run cap:sync')
+  }
 }
 
 section('runCompileGate — arguments')
@@ -242,6 +263,15 @@ section('runCommand — CLI')
   const noPods = fixture()
   rmSync(join(noPods, 'ios/App/Pods'), { recursive: true })
   eq(runCommand([], { root: noPods, run: captureRun({ status: 0 }).run, stdout, stderr }), 2, 'a precondition failure exits 2, not 1')
+
+  // The gap this guards: a half-installed Pods project used to pass the precondition check and
+  // reach xcodebuild, which then failed with the 3000-line [CP] Check Pods Manifest.lock error.
+  const halfPods = fixture()
+  rmSync(join(halfPods, 'ios/App/Pods/Manifest.lock'))
+  const neverRun = captureRun({ status: 0 })
+  eq(runCommand([], { root: halfPods, run: neverRun.run, stdout, stderr }), 2, 'a missing Pods/Manifest.lock exits 2')
+  eq(neverRun.calls.length, 0, 'xcodebuild is never invoked when a precondition is unsatisfied')
+  ok(err.some((line) => /pod install/.test(line)), 'the refusal names the command that fixes it')
 
   const device = captureRun({ status: 0 })
   eq(runCommand(['--device'], { root, run: device.run, stdout, stderr }), 0, '--device is accepted')

@@ -11,10 +11,16 @@
  * Neither list contains plugins/nod-watch/ios/Sources/NodWatchPlugin/NodWatchPlugin.swift,
  * so a duplicate `copyId:` argument in that file passed both gates and only failed at the
  * first real `xcodebuild` — which used to be the archive, i.e. install time, on an already
- * merged main. A hand-maintained file list drifts every time a plugin or file is added; the
- * Xcode scheme does not. This gate builds the actual `App` scheme, which compiles the App
- * target, the WatchApp target and every local Pods target (NodAuth / NodMic / NodSplash /
- * NodWatch) for iOS Simulator and watchOS Simulator in a single pass.
+ * merged main. The hand-written lists simply never named that file. This gate builds the
+ * actual `App` scheme instead, which compiles the App target, the WatchApp target and every
+ * local Pods target (NodAuth / NodMic / NodSplash / NodWatch) for iOS Simulator and watchOS
+ * Simulator in a single pass.
+ *
+ * What the scheme does and does not cover: it is the real build dependency graph, so every
+ * file that is in a target gets compiled, including a plugin newly added to the Podfile. It
+ * cannot see a new source file that was never added to any target's membership — such a file
+ * compiles to nothing, and this gate stays green. Adding a file to a target is still on the
+ * author.
  *
  * Measured on this repo (Xcode 26.6, Apple silicon, `generic/platform=iOS Simulator`):
  * ~3 s warm after touching one plugin Swift file, ~25 s cold when the Xcode module cache is
@@ -130,9 +136,15 @@ export function extractCompileErrors(output, root) {
 }
 
 /**
- * Refuse with an actionable message instead of letting `xcodebuild` emit a 3000-line
- * failure for a missing precondition. These three are the ones that actually happen:
- * a fresh worktree, a stale Pods project, and an unsynced web bundle.
+ * Refuse with an actionable message instead of letting `xcodebuild` emit a 3000-line failure
+ * for a precondition already known to be unsatisfied: no workspace, no Pods project, a Pods
+ * project that disagrees with Podfile.lock (either half missing, or differing), no web bundle.
+ *
+ * This proves presence and Pods/lock *consistency*, not freshness. It does not compare
+ * ios/App/App/public against the current web/dist, nor the Podfile against the current plugin
+ * set, so it cannot tell that a `cap:sync` was skipped after a web or plugin change. Those
+ * comparisons belong to the delivery path (`assertWebAssets` / `localPodFrameworks` in
+ * scripts/ios-deliver.mjs); this gate only needs the real targets to be compilable.
  */
 export function assertGatePreconditions(root) {
   const workspace = join(root, 'ios/App/App.xcworkspace')
@@ -144,11 +156,20 @@ export function assertGatePreconditions(root) {
     throw new CompileGateError('ios/App/Pods/Pods.xcodeproj is missing — run npm run cap:sync (it runs pod install), or (cd ios/App && pod install)')
   }
 
-  // The same comparison CocoaPods' own "[CP] Check Pods Manifest.lock" phase performs, but
-  // reported as one sentence instead of a build failure.
+  // The same precondition CocoaPods' own "[CP] Check Pods Manifest.lock" phase enforces, but
+  // reported as one sentence instead of a build failure. Both halves have to be checked for
+  // existence: a missing Manifest.lock (half-installed Pods, or Pods restored without it) and a
+  // missing Podfile.lock both fail that phase, so skipping the comparison would let exactly the
+  // long build failure this function exists to prevent through.
   const podfileLock = join(root, 'ios/App/Podfile.lock')
   const manifestLock = join(root, 'ios/App/Pods/Manifest.lock')
-  if (existsSync(podfileLock) && existsSync(manifestLock) && readFileSync(podfileLock, 'utf8') !== readFileSync(manifestLock, 'utf8')) {
+  if (!existsSync(podfileLock)) {
+    throw new CompileGateError(`missing ${podfileLock} — run npm run cap:sync first (it runs pod install)`)
+  }
+  if (!existsSync(manifestLock)) {
+    throw new CompileGateError(`missing ${manifestLock} — the Pods project is not installed, or was left half-installed; run (cd ios/App && pod install)`)
+  }
+  if (readFileSync(podfileLock, 'utf8') !== readFileSync(manifestLock, 'utf8')) {
     throw new CompileGateError('ios/App/Pods is out of sync with Podfile.lock — run (cd ios/App && pod install) before compiling')
   }
 

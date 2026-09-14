@@ -46,11 +46,21 @@ NodWatch），iOS 与 watchOS 模拟器一次编完。不需要签名证书或 T
 worktree 陈旧对象，也不会污染交付的 clean-tree 守卫。
 
 为什么不是「检查所有 Swift 文件」的脚本：`scripts/test-watch-replay.sh` 与 watchOS
-`swiftc -typecheck` 各自维护一份**手写文件清单**，两份都漏了
+`swiftc -typecheck` 各自维护一份**手写文件清单**，两份都没有列到
 `plugins/nod-watch/ios/Sources/NodWatchPlugin/NodWatchPlugin.swift`；该文件里重复的
 `copyId:` 实参能同时通过这两个闸门，直到第一次真实 `xcodebuild`（也就是装机时刻，而且已经
-在合并后的 `main` 上）才报错。手写清单会随文件与插件增加而漂移，scheme 不会。单独对那个
-文件跑 `swiftc -typecheck` 也不行：它没有 pod 模块路径，只会报 `no such module 'Capacitor'`。
+在合并后的 `main` 上）才报错。单独对那个文件跑 `swiftc -typecheck` 也不行：它没有 pod
+模块路径，只会报 `no such module 'Capacitor'`。
+
+真实 scheme 覆盖的是**真实构建依赖图**：在 target 里的文件都会编，新加进 Podfile 的插件也会
+编。它看不见「新文件从没被加进任何 target membership」——那种文件编译为零，闸门仍然绿；把新
+文件加进 target 仍然是作者的责任。
+
+前置条件只证明**存在与一致性**，不证明「最新一次 `cap:sync` 跑过」：它不比对
+`ios/App/App/public` 与当前 `web/dist`，也不比对 Podfile 与当前插件集合，所以 web 或插件改完
+跳过 `cap:sync` 不会在这里被拦住（这两件事由交付路径的 `assertWebAssets` /
+`localPodFrameworks` 负责）。workspace / Pods 工程 / `Podfile.lock` / `Pods/Manifest.lock`
+任一半缺失，或后两者内容不一致，都会在调 `xcodebuild` 之前拒绝。
 
 `test-watch-replay.sh` 仍然负责行为测试；这个闸门只回答「真实 target 还能不能编译」。
 退出码：0 编译通过，1 编译失败，2 用法或前置条件不满足（前置条件会直接说清是缺

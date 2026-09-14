@@ -55,10 +55,19 @@ It exists because the hand-written file lists in `scripts/test-watch-replay.sh` 
 watchOS `swiftc -typecheck` both omitted
 `plugins/nod-watch/ios/Sources/NodWatchPlugin/NodWatchPlugin.swift`: a duplicate `copyId:`
 argument passed both gates and only failed at the first real `xcodebuild`, i.e. at install
-time on an already merged `main`. A hand-kept file list drifts whenever a file or a plugin is
-added; the scheme does not. `test-watch-replay.sh` still owns behaviour tests — this gate only
-answers "do the real targets still compile?", needs no signing identity, and never writes
-inside the checkout.
+time on an already merged `main` — neither list ever named that file. The `App` scheme is the
+real build dependency graph, so everything that is in a target gets compiled, including a
+plugin newly added to the Podfile; a new source file that was never added to a target's
+membership still compiles to nothing and leaves this gate green. `test-watch-replay.sh` still
+owns behaviour tests — this gate only answers "do the real targets still compile?", needs no
+signing identity, and never writes inside the checkout.
+
+Its precondition checks prove **presence and Pods/lock consistency, not freshness**: they do
+not compare `ios/App/App/public` against the current `web/dist`, nor the Podfile against the
+current plugin set, so a `cap:sync` skipped after a web or plugin change is not caught here
+(the delivery path's `assertWebAssets` / `localPodFrameworks` cover that). A missing workspace,
+Pods project, or either lock half, and a `Podfile.lock` that disagrees with
+`Pods/Manifest.lock`, are all refused before `xcodebuild` runs.
 
 ## Division of labor
 
