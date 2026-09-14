@@ -7076,6 +7076,22 @@ async def lifespan(_app: FastAPI):
 
     threading.Thread(target=loop, daemon=True, name="nod-backup").start()
     threading.Thread(target=live_loop, daemon=True, name="nod-live").start()
+
+    def clerk_proxy_enable():
+        time.sleep(12)
+        try:
+            from server.clerk_auth import clerk_proxy_enable_allowed, enable_clerk_fapi_proxy
+
+            if not clerk_proxy_enable_allowed():
+                return
+            enable_clerk_fapi_proxy()
+        except Exception:
+            log.exception("clerk proxy enable failed")
+
+    from server.clerk_auth import clerk_proxy_enable_allowed
+
+    if clerk_proxy_enable_allowed():
+        threading.Thread(target=clerk_proxy_enable, daemon=True, name="nod-clerk-proxy").start()
     yield
 
 

@@ -1,5 +1,6 @@
 import {
   CLERK_JS_URL,
+  CLERK_PROXY_URL,
   CLERK_LOAD_TIMEOUT_MS,
   GOOGLE_LOAD_ERROR,
   googleButtonDisabled,
@@ -30,6 +31,7 @@ eq(googleButtonLabel({ ...idle, isLoaded: false, loadFailed: true }), 'Continue 
 eq(googleButtonDisabled({ ...idle, isLoaded: false, loadFailed: true }), true, 'failed disabled')
 eq(googleLoadError(true), GOOGLE_LOAD_ERROR, 'failed error copy')
 eq(CLERK_JS_URL, '/clerk.browser.js', 'same-origin clerk-js')
+eq(CLERK_PROXY_URL, '/__clerk', 'same-origin clerk fapi proxy')
 eq(CLERK_LOAD_TIMEOUT_MS, 20_000, 'load timeout')
 
 console.log('googleAuth.test.ts ok')
