@@ -98,3 +98,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Test production native replay consumers with device transport doubles
         run: bash scripts/test-watch-replay.sh
+      - name: Test iOS delivery manifest guards (fixtures only, no device)
+        run: node scripts/ios-deliver.test.mjs
