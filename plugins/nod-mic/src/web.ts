@@ -38,7 +38,7 @@ export class NodMicWeb extends WebPlugin implements NodMicPlugin {
     return { captures: [] }
   }
 
-  async deletePendingCapture(_options: { captureId: string }): Promise<{ freed: number }> {
+  async deletePendingCapture(_options: { captureId?: string; sessionId?: string }): Promise<{ freed: number }> {
     return { freed: 0 }
   }
 }

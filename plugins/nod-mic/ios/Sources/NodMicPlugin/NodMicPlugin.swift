@@ -145,7 +145,10 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func deletePendingCapture(_ call: CAPPluginCall) {
         let id = call.getString("captureId") ?? ""
-        let freed = WatchPcmIngest.shared.deleteCapture(id)
+        let sid = call.getString("sessionId") ?? ""
+        var freed = 0
+        if !id.isEmpty { freed += WatchPcmIngest.shared.deleteCapture(id) }
+        if !sid.isEmpty { freed += WatchPcmIngest.shared.deleteCaptures(sessionId: sid) }
         call.resolve(["freed": freed])
     }
 

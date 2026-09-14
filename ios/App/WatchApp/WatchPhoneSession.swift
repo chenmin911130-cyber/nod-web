@@ -1238,6 +1238,10 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
                 payload["sessionId"] = sendBuffer.sessionId
             }
         }
+        if action == "discard" {
+            let sid = phoneSessionId.isEmpty ? sendBuffer.sessionId : phoneSessionId
+            if !sid.isEmpty { payload["sessionId"] = sid }
+        }
         if action == "save" {
             guard let wire = Self.saveWireMessage(sessionId: saveRequestId, captureId: saveRequestCaptureId) else { return }
             payload["sessionId"] = wire.sessionId

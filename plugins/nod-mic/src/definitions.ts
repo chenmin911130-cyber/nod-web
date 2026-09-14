@@ -29,7 +29,7 @@ export interface NodMicPlugin {
       mode?: string
     }>
   }>
-  deletePendingCapture(options: { captureId: string }): Promise<{ freed: number }>
+  deletePendingCapture(options: { captureId?: string; sessionId?: string }): Promise<{ freed: number }>
   addListener(eventName: 'pcm', listenerFunc: (event: PcmEvent) => void): Promise<PluginListenerHandle>
   removeAllListeners(): Promise<void>
 }

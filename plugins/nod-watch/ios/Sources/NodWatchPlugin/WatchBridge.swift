@@ -41,15 +41,20 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
     private static let accountTokenKey = "nod.watch.accountToken"
     private static let accountOriginKey = "nod.watch.accountOrigin"
     private static let jobsKey = "nod.watch.saveJobs"
+    private static let discardedKey = "nod.watch.discardedIds"
     private static let maxKeepAttempts = 8
     private var jobs: [String: SaveJob] = [:]
     private var inflight: Set<String> = []
     private var jobsLoaded = false
+    private var discardedIds: Set<String> = []
+    private var discardedLoaded = false
     #if PCM_REPLAY_TESTING
     static var testingKeep: ((String) -> (Int, Data?))?
     static var testingKeepAsync: ((String, @escaping (Int, Data?) -> Void) -> Void)?
+    static var testingDiscard: ((String) -> (Int, Data?))?
     static var testingNow: (() -> TimeInterval)?
     static var testingKeepCalls = 0
+    static var testingDiscardCalls = 0
     static var testingUserDefaults: UserDefaults?
     #endif
     private var lastPcmAckByte = 0
@@ -795,11 +800,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             }
         }
         if action == "discard" {
-            NotificationCenter.default.post(
-                name: Notification.Name("nod.watch.pcm.discard"),
-                object: nil,
-                userInfo: ["captureId": captureId.isEmpty ? lastPcmCaptureId : captureId]
-            )
+            let cap = captureId.isEmpty ? lastPcmCaptureId : captureId
+            nativeWatchDiscard(sessionId: sessionId, captureId: cap)
         }
         if action == "save" {
             _ = nativeWatchSave(sessionId: sessionId, captureId: captureId)
@@ -970,7 +972,10 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         jobs = [:]
         inflight = []
         jobsLoaded = true
+        discardedIds = []
+        discardedLoaded = true
         defaults.removeObject(forKey: Self.jobsKey)
+        defaults.removeObject(forKey: Self.discardedKey)
     }
 
     func testingUnloadJobs() {
@@ -989,6 +994,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             publishSave(sessionId: sessionId, save: "saved")
             return "saved"
         }
+        ensureDiscardedLoaded()
+        if discardedIds.contains(sessionId) { return "failed" }
         let cap = captureForSave(sessionId: sessionId, captureId: captureId)
         let reply = NSMutableDictionary()
         NotificationCenter.default.post(
@@ -1033,10 +1040,12 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let rows = reply["rows"] as? [[String: String]] ?? []
         let account = accountToken()
         var changed = false
+        ensureDiscardedLoaded()
         for row in rows {
             let sid = row["sessionId"] ?? ""
             let cap = row["captureId"] ?? ""
             guard !sid.isEmpty else { continue }
+            if discardedIds.contains(sid) { continue }
             if jobs[sid]?.save == "saved" { continue }
             if jobs[sid] == nil {
                 jobs[sid] = SaveJob(
@@ -1052,6 +1061,76 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
             }
         }
         if changed { persistJobs() }
+    }
+
+    /// No Save / History delete: drop the keep job, persist the discard, delete
+    /// the phone capture, and DELETE the cloud session even if WKWebView is parked.
+    func discardSave(sessionId: String, captureId: String) {
+        nativeWatchDiscard(sessionId: sessionId, captureId: captureId)
+    }
+
+    private func nativeWatchDiscard(sessionId: String, captureId: String) {
+        ensureJobsLoaded()
+        ensureDiscardedLoaded()
+        var sid = sessionId
+        var cap = captureId
+        if sid.isEmpty, !cap.isEmpty {
+            sid = jobs.first(where: { $0.value.captureId == cap })?.key
+                ?? (cap == lastPcmCaptureId ? lastPcmAckSessionId : "")
+            if sid.isEmpty { sid = lastSessionId }
+        }
+        if cap.isEmpty, !sid.isEmpty {
+            cap = captureForSave(sessionId: sid, captureId: "")
+        }
+        if !sid.isEmpty {
+            discardedIds.insert(sid)
+            jobs.removeValue(forKey: sid)
+        }
+        if !cap.isEmpty {
+            discardedIds.insert(cap)
+        }
+        persistDiscarded()
+        persistJobs()
+        NotificationCenter.default.post(
+            name: Notification.Name("nod.watch.pcm.discard"),
+            object: nil,
+            userInfo: ["captureId": cap]
+        )
+        if !sid.isEmpty {
+            startNativeDiscard(sid)
+        }
+    }
+
+    private func ensureDiscardedLoaded() {
+        guard !discardedLoaded else { return }
+        discardedLoaded = true
+        discardedIds = Set(defaults.stringArray(forKey: Self.discardedKey) ?? [])
+    }
+
+    private func persistDiscarded() {
+        let rows = Array(discardedIds.prefix(200))
+        defaults.set(rows, forKey: Self.discardedKey)
+    }
+
+    private func startNativeDiscard(_ sessionId: String) {
+        #if PCM_REPLAY_TESTING
+        if let hook = Self.testingDiscard {
+            Self.testingDiscardCalls += 1
+            _ = hook(sessionId)
+        }
+        return
+        #else
+        let token = accountToken()
+        var origin = defaults.string(forKey: Self.accountOriginKey) ?? ""
+        if origin.isEmpty { origin = "https://nodpilot.com" }
+        let root = origin.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !token.isEmpty, let url = URL(string: "\(root)/api/account/history/\(sessionId)") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: req).resume()
+        #endif
     }
 
     private func enqueueKeep(_ sessionId: String) {
@@ -1116,6 +1195,8 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         let result = Self.keepHttpFace(code: code, body: body, sessionId: sessionId)
         NSLog("nod.watch.keep session=%@ status=%d face=%@ error=%@", sessionId, code, result.save, result.error)
         ensureJobsLoaded()
+        ensureDiscardedLoaded()
+        if discardedIds.contains(sessionId) { return }
         if jobs[sessionId]?.save == "saved" { return }
         var job = jobs[sessionId] ?? SaveJob(
             sessionId: sessionId,

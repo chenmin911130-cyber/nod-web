@@ -41,4 +41,8 @@ export class NodWatchWeb extends WebPlugin implements NodWatchPlugin {
   async resumeKeeps(): Promise<void> {
     return
   }
+
+  async discardSave(): Promise<void> {
+    return
+  }
 }
