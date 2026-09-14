@@ -17,7 +17,10 @@ import Foundation
 ///   fit the card, plus every clause that carries a condition, an uncertainty, a
 ///   contrast or a requirement even when it does not fit. Those are the clauses
 ///   whose removal would change what the answer means; the elaboration is what
-///   the card leaves for the full text.
+///   the card leaves for the full text. Detection is a broad set of
+///   subordinate-clause introducers ("when…", "in case…", "provided…", "as long
+///   as…", "如果…", "一旦…", "…的时候", "…时，"), not a short keyword list: missing
+///   a form loses the clause, while keeping one only lengthens a scrollable card.
 /// - A sentence is never cut mid-way. Nothing here rewrites, joins or reorders
 ///   words, so a kept clause keeps its exact wording and its meaning.
 /// - An empty or still-streaming answer yields an empty summary; the caller shows
@@ -192,75 +195,97 @@ enum WatchQASummary {
 
     /// Clauses whose loss would change the answer: conditions, uncertainty,
     /// contrast, requirements and explicit list points.
+    ///
+    /// This is deliberately a broad net, because the failure it guards against is
+    /// asymmetric: dropping a condition changes what the answer means (which #218
+    /// forbids), while keeping one only makes the compact card a little longer,
+    /// and the card scrolls. So any subordinate-clause introducer counts, not a
+    /// short list of the obvious forms — a "when the phone disconnects…" or
+    /// "provided the token is valid…" clause carries as much meaning as an
+    /// "if…" clause, and a keyword whitelist that misses it silently loses it.
     private static func isMeaningCritical(_ sentence: String) -> Bool {
-        containsCJKPhrase(sentence) || containsLatinWord(sentence) || isListPoint(sentence)
+        hasCJKMarker(sentence) || hasLatinMarker(sentence) || isListPoint(sentence)
     }
 
-    private static let cjkPhrases = [
-        // conditions
-        "如果", "假如", "假设", "若是", "除非", "否则", "一旦", "要是",
-        "只要", "万一", "只有", "除了", "取决于", "前提", "条件",
+    // MARK: CJK markers
+
+    /// CJK has no word boundaries, so these are plain substrings.
+    private static let cjkMarkers = [
+        // conditions / provisos
+        "如果", "假如", "假设", "假若", "倘若", "若是", "要是", "一旦", "只要",
+        "只有", "除非", "否则", "万一", "前提", "取决", "视情况", "情况下",
+        "的话", "的时候",
         // uncertainty
         "可能", "也许", "或许", "大概", "大约", "不确定", "未必", "至少", "最多",
-        "预计", "估计", "视情况",
+        "预计", "估计", "恐怕", "似乎", "看起来",
         // contrast / correction
-        "但是", "不过", "然而", "而是", "例外", "注意", "风险",
+        "但是", "不过", "然而", "而是", "反而", "例外", "注意", "风险",
         // requirement
-        "需要", "必须", "不能", "应当", "建议", "务必",
-        // list points
-        "首先", "其次", "另外", "此外", "最后", "其一", "其二", "步骤",
+        "需要", "必须", "不能", "应当", "应该", "建议", "务必", "一定要", "得先",
     ]
 
-    /// Latin keywords. Long, unambiguous ones match as a prefix so "depending",
-    /// "requirements" and "assumptions" are caught; short ones need word
-    /// boundaries so "but" is not found inside "button".
+    private static let cjkTimeBreaks = ["时，", "时、", "时；", "时。", "时！", "时？"]
+
+    private static func hasCJKMarker(_ sentence: String) -> Bool {
+        if cjkMarkers.contains(where: { sentence.contains($0) }) { return true }
+        // "当…时" / "…时，" / "…的时候" — the CJK temporal/conditional clause
+        // form, which no single keyword above covers.
+        if cjkTimeBreaks.contains(where: { sentence.contains($0) }) { return true }
+        return sentence.contains("当") && sentence.contains("时")
+    }
+
+    // MARK: Latin markers
+
+    /// Stems, matched at a word start: "assum" covers assume/assuming/assumption,
+    /// "conditio" covers condition/conditions/conditional.
     private static let latinStems = [
-        "depend", "requir", "assum", "uncertain", "probabl", "possibl", "condition",
-    ]
-    private static let latinWords = [
-        "if", "unless", "otherwise", "whether", "may", "might", "could", "would",
-        "should", "must", "need", "needs", "perhaps", "maybe", "however", "but",
-        "except", "only", "note", "risk", "likely", "unlikely", "budget", "deadline",
+        "depend", "requir", "assum", "uncertain", "probabl", "possibl",
+        "conditio", "expect", "need", "suppos",
     ]
 
-    private static func containsCJKPhrase(_ sentence: String) -> Bool {
-        cjkPhrases.contains { sentence.contains($0) }
-    }
+    /// Whole words. "when", "while" and "until" are temporal as often as they are
+    /// conditional, but a temporal clause is still meaning-bearing, and over-
+    /// keeping is the safe direction.
+    private static let latinWords: Set<String> = [
+        "if", "when", "whenever", "while", "unless", "until", "provided",
+        "providing", "otherwise", "whether", "may", "might", "could", "would",
+        "should", "must", "perhaps", "maybe", "however", "but", "except", "only",
+        "note", "risk", "likely", "unlikely", "budget", "deadline", "warning",
+        "caution", "caveat", "contingency",
+    ]
 
-    private static func containsLatinWord(_ sentence: String) -> Bool {
-        let lower = sentence.lowercased()
-        for stem in latinStems where hasBoundaryPrefix(lower, stem) { return true }
-        for word in latinWords where hasWord(lower, word) { return true }
-        return false
-    }
+    /// Multi-word introducers, matched as consecutive word tokens so "in case" is
+    /// found and a bare "case" is not.
+    private static let latinPhrases: [[String]] = [
+        ["in", "case"], ["as", "long", "as"], ["as", "soon", "as"],
+        ["so", "long", "as"], ["subject", "to"], ["in", "the", "event"],
+        ["in", "the", "worst", "case"], ["in", "the", "best", "case"],
+        ["at", "least"], ["at", "most"], ["in", "the", "meantime"],
+    ]
 
-    /// `stem` at a word start, with any continuation (so "requir" matches
-    /// "requires" and "required").
-    private static func hasBoundaryPrefix(_ haystack: String, _ stem: String) -> Bool {
-        var start = haystack.startIndex
-        while let range = haystack.range(of: stem, range: start..<haystack.endIndex) {
-            let before = range.lowerBound == haystack.startIndex
-                ? nil
-                : haystack[haystack.index(before: range.lowerBound)]
-            if before.map({ !$0.isLetter && !$0.isNumber }) ?? true { return true }
-            start = range.upperBound
+    private static func hasLatinMarker(_ sentence: String) -> Bool {
+        let tokens = words(in: sentence)
+        guard !tokens.isEmpty else { return false }
+        for token in tokens {
+            if latinWords.contains(token) { return true }
+            if latinStems.contains(where: { token.hasPrefix($0) }) { return true }
         }
-        return false
+        return latinPhrases.contains { contains(tokens, $0) }
     }
 
-    private static func hasWord(_ haystack: String, _ word: String) -> Bool {
-        var start = haystack.startIndex
-        while let range = haystack.range(of: word, range: start..<haystack.endIndex) {
-            let before = range.lowerBound == haystack.startIndex
-                ? nil
-                : haystack[haystack.index(before: range.lowerBound)]
-            let after = range.upperBound == haystack.endIndex
-                ? nil
-                : haystack[range.upperBound]
-            let beforeOK = before.map { !$0.isLetter && !$0.isNumber } ?? true
-            let afterOK = after.map { !$0.isLetter && !$0.isNumber } ?? true
-            if beforeOK, afterOK { return true }
-            start = range.upperBound
+    /// Word tokens: letters, digits and the apostrophe. Matching whole words keeps
+    /// "but" out of "button" and "case" alone out of a proviso.
+    private static func words(in sentence: String) -> [String] {
+        sentence.lowercased()
+            .split { !($0.isLetter || $0.isNumber || $0 == "'") }
+            .map(String.init)
+    }
+
+    private static func contains(_ tokens: [String], _ phrase: [String]) -> Bool {
+        guard !phrase.isEmpty, tokens.count >= phrase.count else { return false }
+        for start in 0...(tokens.count - phrase.count) where
+            Array(tokens[start..<(start + phrase.count)]) == phrase {
+            return true
         }
         return false
     }

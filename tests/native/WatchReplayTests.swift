@@ -1468,6 +1468,9 @@ func waitSend() {
     check(!WatchAod.waveformAnimates(listening: true, paused: false, dimmed: false, reduceMotion: true),
           "Reduce Motion holds the waveform still")
 
+    // #218 Live Q&A reading rules (compact summary + no jump while reading).
+    WatchQASummaryTests.run()
+
     _ = bridge
     print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake, Save, locked Live Q&A, Always-On display and waveform tests passed")
  }
