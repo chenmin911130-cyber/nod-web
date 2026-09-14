@@ -3,16 +3,14 @@
 本文件是手机与 Apple Watch 启动页的**唯一几何真源**。所有实现必须按这里的比例/常数定位，
 不要凭截图目测。
 
-- 设计对照图：`/Users/minchen/.codex/generated_images/01a09787-26bc-7843-a8aa-c5d68deaa1ef/exec-d2e505d8-543a-4f4d-b6a7-b103d6cfb585.png`（851×1847）
-- 矢量源（真源）：
-  - `docs/design/brand/launch-screen.svg` — 整屏组合，viewBox `0 0 851 1847`
-  - `docs/design/brand/mark.svg` — 仅标识，131.282 × 160（透明底）
-  - `docs/design/brand/wordmark.svg` — 仅字标，viewBox `355 762 321 76`（墨迹 356..673.5，透明底）
-- 位图（1:1 渲染结果，仅作对照证据）：`docs/design/brand/launch-851x1847.png`
-- 生成脚本：`tools/brand/compose.mjs`（`node tools/brand/compose.mjs` 重写上述 SVG）
-- 位图生成：`node tools/brand/render-launch.mjs`（由 SVG 确定性栅格化 1x/2x/3x，与 SVG 必须一致）
-- 手机启动图资源：`ios/App/App/Assets.xcassets/LaunchBrand.imageset/launch-brand@2x.png`
-  （1702×3694 px，代表 851×1847 pt）
+- **手机启动图真源**：`docs/design/brand/launch-source.png`（851×1847，已确认的 App 启动稿）。不要再几何重建字标来替代这张图。
+- 手机资源：`node tools/brand/render-launch.mjs` 写出 1x 对照、`LaunchBrand` @2x（1702×3694）和 @3x（2553×5541）。`LaunchScreen` 与 `LaunchOverlay` 都用这张图、`scaleAspectFit`、黑底。
+- 手表仍用矢量几何（表盘不是 851×1847），见下方「缩放到表盘」。
+- 矢量对照（手表 / 组合测量，不是手机启动图）：
+  - `docs/design/brand/launch-screen.svg`
+  - `docs/design/brand/mark.svg`
+  - `docs/design/brand/wordmark.svg`
+  - `tools/brand/compose.mjs`
 
 
 ## 设计坐标系（851 × 1847）
@@ -90,9 +88,6 @@ rowCentre = 0.4327 * availableHeight                    // 与设计 cy=799.5 �
 
 ## 未纳入的实现细节
 
-- 设计图是 AI 生成的位图，字形有抖动（其标识宽 137 而 logo 真值 131.282，波形条宽
-  11.5 而规格 13），所以对**设计图**的像素 IoU 有天花板：标识 ≈0.83、字标 ≈0.74。
-  对本仓库自己生成的启动位图（`launch-851x1847.png` / `launch-brand@2x`），原生绘制的
-  IoU 为标识 0.973、字标 0.921、波形 0.995 —— 这三者必须一致，才是本单的验收口径。
-- 字标按上述度量**几何重建**（圆角矩形字干 + 正圆字腹），不是用系统字体渲染。
-- 标识几何直接取自 `web/public/logo.svg` 的两条路径与圆点，仅做等比缩放，未重画。
+- 手机启动页直接用确认稿 `launch-source.png`（及 @2x/@3x）。不再用几何重建去对齐这张图。
+- 手表启动页仍按本节度量矢量绘制：表盘比例不是 851:1847，不能整张长图铺上。
+- 标识几何仍取自 `web/public/logo.svg`，供手表与其他矢量表面使用。

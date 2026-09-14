@@ -80,11 +80,9 @@ final class StartupNavigationObserver: NSObject, WKNavigationDelegate {
 /// The brand mask that covers the window between the static launch screen and the first
 /// page the web layer has actually painted.
 ///
-/// It draws the same composition as the launch image — `BrandLaunch`'s design frame, the
-/// same aspect-fill mapping — so the only thing that changes when it appears is that the
-/// waveform starts breathing. Nothing here reads audio, asks for a permission or opens an
-/// audio session: the loop is pure ambience for the moment the app is initialising, and it
-/// must never look like a meter.
+/// It shows the same `LaunchBrand` image as `LaunchScreen.storyboard` (`scaleAspectFit`
+/// on black) so the letterforms stay the confirmed design raster. Reconstructed PDF
+/// mark/wordmark and extra waveform bars would fight that image.
 ///
 /// The mask is also the app's bounded exit from a cold start that never completes: if the
 /// web layer is alive it comes down as it always has, and if it is dead the mask shows
@@ -102,22 +100,18 @@ final class LaunchOverlay: UIView {
     /// A cold launch is the only thing that shows the brand.
     private(set) static var hasRevealedInThisProcess = false
 
-    /// Bounded wait for the readiness signal. A healthy cold start reports in well under a
-    /// second, so ten seconds never preempts a slow-but-progressing load; if the bridge or
-    /// the network is broken the mask probes the web layer and either hands over to the web
-    /// view's own offline / sign-in / retry state or shows the recovery page.
+    /// Bounded wait for the readiness signal. Native boot no longer waits for
+    /// `/api/me`, so a healthy cold start reports in well under a second. Ten
+    /// seconds never preempts a slow-but-progressing load; if the bridge is broken
+    /// the mask probes the web layer and either hands over to the web view's own
+    /// offline / sign-in / retry state or shows the recovery page.
     private static let safetyTimeout: TimeInterval = 10
     private static let fadeDuration: TimeInterval = 0.2
 
     private static let log = OSLog(subsystem: "com.nodpilot.app", category: "LaunchOverlay")
 
-    private let markView = UIImageView()
-    private let wordmarkView = UIImageView()
-    private var bars: [CALayer] = []
+    private let brandView = UIImageView()
 
-    private var mapping: BrandLaunch.Mapping?
-    private var displayLink: CADisplayLink?
-    private var loopStart: CFTimeInterval = 0
     private var timeoutWork: DispatchWorkItem?
     private var readyObserver: NSObjectProtocol?
 
@@ -154,7 +148,6 @@ final class LaunchOverlay: UIView {
         buildRecoveryPage()
         observeReadiness()
         armSafetyTimeout()
-        if !UIAccessibility.isReduceMotionEnabled { startBreathing() }
     }
 
     @available(*, unavailable)
@@ -163,88 +156,31 @@ final class LaunchOverlay: UIView {
     }
 
     deinit {
-        displayLink?.invalidate()
         timeoutWork?.cancel()
         if let readyObserver { NotificationCenter.default.removeObserver(readyObserver) }
         stopObservingNavigation()
     }
 
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        let scale = window?.screen.scale ?? UIScreen.main.scale
-        for bar in bars { bar.contentsScale = scale }
-    }
-
     override func layoutSubviews() {
         super.layoutSubviews()
-        let mapping = BrandLaunch.mapping(in: bounds)
-        self.mapping = mapping
-        markView.frame = mapping.rect(BrandLaunch.markRect)
-        wordmarkView.frame = mapping.rect(BrandLaunch.wordmarkRect)
-        for (index, bar) in bars.enumerated() {
-            bar.bounds = CGRect(
-                x: 0,
-                y: 0,
-                width: mapping.length(BrandLaunch.barWidth),
-                height: 2 * mapping.length(BrandLaunch.barHalfHeight(index))
-            )
-            // Position is the design centre, so `transform` can only breathe the bar
-            // around the same y the launch image drew it at.
-            bar.position = mapping.point(x: BrandLaunch.barCentreX(index), y: BrandLaunch.waveformCentreY)
-            bar.cornerRadius = mapping.length(BrandLaunch.barCornerRadius)
-        }
+        brandView.frame = bounds
+        recoveryView.frame = bounds
     }
 
     private func buildContent() {
-        // Asset images: the PDFs stay vector, so the mark and the wordmark are crisp at
-        // whatever the aspect-fill mapping scales them to.
-        markView.image = UIImage(named: "BrandMark")
-        markView.contentMode = .scaleToFill
-        wordmarkView.image = UIImage(named: "BrandWordmark")
-        wordmarkView.contentMode = .scaleToFill
-        addSubview(markView)
-        addSubview(wordmarkView)
-        for _ in 0..<BrandLaunch.barCount {
-            let bar = CALayer()
-            bar.backgroundColor = BrandLaunch.accentColor.cgColor
-            bar.actions = ["transform": NSNull(), "position": NSNull(), "bounds": NSNull()]
-            layer.addSublayer(bar)
-            bars.append(bar)
-        }
+        brandView.image = UIImage(named: "LaunchBrand")
+        brandView.contentMode = .scaleAspectFit
+        brandView.backgroundColor = BrandLaunch.backgroundColor
+        addSubview(brandView)
     }
 
     /// Built once, on top of the brand artwork and hidden until the mask decides the web
-    /// layer is dead. Opaque black, so it also hides the mark and the breathing bars.
+    /// layer is dead. Opaque black, so it also hides the launch image.
     private func buildRecoveryPage() {
         recoveryView.frame = bounds
         recoveryView.isHidden = true
         recoveryView.onRetry = { [weak self] in self?.retry() }
         addSubview(recoveryView)
-    }
-
-    // MARK: - Breathing loop
-
-    private func startBreathing() {
-        guard displayLink == nil, !gate.isRecovering else { return }
-        loopStart = CACurrentMediaTime()
-        let link = CADisplayLink(target: self, selector: #selector(step))
-        link.add(to: .main, forMode: .common)
-        displayLink = link
-    }
-
-    private func stopBreathing() {
-        displayLink?.invalidate()
-        displayLink = nil
-    }
-
-    @objc private func step() {
-        let time = CACurrentMediaTime() - loopStart
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        for (index, bar) in bars.enumerated() {
-            bar.transform = CATransform3DMakeScale(1, BrandLaunch.breathScale(index, at: time), 1)
-        }
-        CATransaction.commit()
     }
 
     // MARK: - Gate driving
@@ -342,7 +278,6 @@ final class LaunchOverlay: UIView {
         revealPending = false
         isRevealing = true
         Self.hasRevealedInThisProcess = true
-        stopBreathing()
         // The mask is done: step out from in front of the bridge's own navigation delegate
         // so nothing about deep links or in-page navigation is ever routed through us again.
         stopObservingNavigation()
@@ -373,9 +308,6 @@ final class LaunchOverlay: UIView {
     /// come down afterwards if the web layer's own retry eventually reports ready.
     private func showRecovery() {
         guard !isRevealing else { return }
-        // The breathing waveform would be invisible under an opaque page; stop burning a
-        // display link while the user decides.
-        stopBreathing()
         // A page that once had to say "can't retry" must not stay disabled if it is shown
         // again for a later failure.
         recoveryView.reset()
@@ -415,7 +347,6 @@ final class LaunchOverlay: UIView {
         note("retry: \(reload ? "reload" : "load") \(url.absoluteString)")
         hideRecovery()
         alpha = 1
-        if !UIAccessibility.isReduceMotionEnabled { startBreathing() }
         armSafetyTimeout()
         if reload {
             webView.reload()
@@ -502,13 +433,11 @@ final class LaunchOverlay: UIView {
 
     func applicationDidBecomeActive() {
         isActive = true
-        if !UIAccessibility.isReduceMotionEnabled, !isRevealing, !gate.isRecovering { startBreathing() }
         if revealPending { requestReveal() }
     }
 
     func applicationWillResignActive() {
         isActive = false
-        stopBreathing()
         guard isRevealing else { return }
         // An inactive app must not uncover its page — a permission alert or the app
         // switcher may be in front of it. Hold the mask opaque and reveal on the next
