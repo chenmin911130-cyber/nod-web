@@ -298,13 +298,12 @@ export function mergeLocalCaptures<T extends { id: string; started_at?: string |
   local: LocalPhoneCapture[],
   toRow: (row: LocalPhoneCapture) => T,
   discardedIds: readonly string[] = [],
-): T[] {
+): Array<T & { kept: boolean }> {
   const ids = new Set(sessions.map((s) => s.id))
   const extra = local
     .filter((row) => localCaptureCanAppear(row, discardedIds))
     .filter((row) => !ids.has(localCaptureHistoryId(row)))
     .map(toRow)
-  if (!extra.length) return sessions
   return mergePendingHistory(sessions, extra)
 }
 
