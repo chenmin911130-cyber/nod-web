@@ -18,6 +18,7 @@
     "@capacitor/status-bar": "^7.0.3",
     "nod-auth": "file:plugins/nod-auth",
     "nod-mic": "file:plugins/nod-mic",
+    "nod-splash": "file:plugins/nod-splash",
     "nod-watch": "file:plugins/nod-watch"
   },
   "devDependencies": {

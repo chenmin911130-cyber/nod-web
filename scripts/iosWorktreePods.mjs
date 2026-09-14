@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const LOCAL_PLUGINS = ['nod-auth', 'nod-mic', 'nod-watch']
+const LOCAL_PLUGINS = ['nod-auth', 'nod-mic', 'nod-splash', 'nod-watch']
 
 const POD_PATHS = {
   Capacitor: '../../node_modules/@capacitor/ios',
@@ -14,6 +14,7 @@ const POD_PATHS = {
   CapacitorStatusBar: '../../node_modules/@capacitor/status-bar',
   NodAuth: '../../plugins/nod-auth',
   NodMic: '../../plugins/nod-mic',
+  NodSplash: '../../plugins/nod-splash',
   NodWatch: '../../plugins/nod-watch',
 }
 
@@ -61,7 +62,7 @@ function pluginPathEntries(pbx, podsDir) {
   let m
   while ((m = re.exec(pbx))) {
     const p = m[1]
-    if (!/nod-(mic|watch|auth)/.test(p)) continue
+    if (!/nod-(mic|watch|auth|splash)/.test(p)) continue
     const abs = resolve(podsDir, p)
     hits.push(existsSync(abs) ? realpathSync(abs) : abs)
   }
@@ -76,7 +77,7 @@ export function assertPodsProject(root = process.cwd()) {
   const pluginsRoot = realpathSync(join(root, 'plugins'))
   const hits = pluginPathEntries(readFileSync(pbxPath, 'utf8'), join(root, 'ios/App/Pods'))
   if (!hits.length) {
-    throw new Error('ios worktree pods: Pods project has no nod-mic / nod-watch / nod-auth paths')
+    throw new Error('ios worktree pods: Pods project has no nod-auth / nod-mic / nod-splash / nod-watch paths')
   }
   const bad = hits.filter((p) => !p.startsWith(pluginsRoot))
   if (bad.length) {

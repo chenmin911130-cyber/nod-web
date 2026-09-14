@@ -17,6 +17,7 @@ def capacitor_pods
   pod 'CapacitorStatusBar', :path => '../../node_modules/@capacitor/status-bar'
   pod 'NodAuth', :path => '../../plugins/nod-auth'
   pod 'NodMic', :path => '../../plugins/nod-mic'
+  pod 'NodSplash', :path => '../../plugins/nod-splash'
   pod 'NodWatch', :path => '../../plugins/nod-watch'
 end
 

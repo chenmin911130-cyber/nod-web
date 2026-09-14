@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client'
 import { PRODUCT_NAME } from './brand'
 import { ensureLocalGuest, fetchMe, getToken, isLocalHost } from './auth'
 import { installNativeShell, isNativeApp, maybeReturnToNativeApp, nativeGo, rememberNativeReturn } from './native'
+import { signalSplashReady } from './splashReady'
 
 const rootEl = document.getElementById('root')
 
@@ -13,6 +14,7 @@ async function mountWorkspace() {
   await import('./App.css')
   installWebApi()
   createRoot(rootEl).render(<App />)
+  void signalSplashReady()
 }
 
 async function boot() {
@@ -25,6 +27,7 @@ async function boot() {
     await import('./App.css')
     const { default: NativeSignIn } = await import('./components/NativeSignIn')
     createRoot(rootEl).render(<NativeSignIn onSignedIn={() => location.replace('/app')} />)
+    void signalSplashReady()
     return
   }
   const path = window.location.pathname + window.location.search
@@ -46,6 +49,7 @@ async function boot() {
         }}
       />,
     )
+    void signalSplashReady()
     return
   }
   if (!me) {
