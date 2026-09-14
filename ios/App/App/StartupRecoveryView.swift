@@ -73,6 +73,22 @@ final class StartupRecoveryView: UIView {
         ])
     }
 
+    /// The button's title when a tap genuinely has nothing to load (no web view, no
+    /// committed URL, no attempted URL and no entry URL). The page must not keep offering a
+    /// button that cannot do anything, so it says so instead.
+    static var retryUnavailableTitle: String {
+        pick([
+            "zh": "无法重试",
+            "en": "Can't retry",
+            "it": "Impossibile riprovare",
+            "es": "No se puede reintentar",
+            "fr": "Réessayer impossible",
+            "de": "Erneut versuchen nicht möglich",
+            "pt": "Não dá para tentar de novo",
+            "ja": "再試行できません",
+        ])
+    }
+
     // MARK: - Life cycle
 
     override init(frame: CGRect) {
@@ -101,7 +117,10 @@ final class StartupRecoveryView: UIView {
 
         retryButton.setTitle(Self.retryTitle, for: .normal)
         retryButton.setTitleColor(BrandLaunch.accentColor, for: .normal)
+        retryButton.setTitleColor(BrandLaunch.inkColor.withAlphaComponent(0.4), for: .disabled)
         retryButton.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
+        retryButton.titleLabel?.adjustsFontSizeToFitWidth = true
+        retryButton.titleLabel?.minimumScaleFactor = 0.7
         retryButton.layer.borderColor = BrandLaunch.accentColor.withAlphaComponent(0.55).cgColor
         retryButton.layer.borderWidth = 1
         retryButton.layer.cornerRadius = 22
@@ -120,9 +139,27 @@ final class StartupRecoveryView: UIView {
             retryButton.centerXAnchor.constraint(equalTo: centerXAnchor),
             retryButton.topAnchor.constraint(equalTo: messageLabel.bottomAnchor, constant: 28),
             retryButton.bottomAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.bottomAnchor, constant: -24),
+            retryButton.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 24),
+            retryButton.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
             retryButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 128),
             retryButton.heightAnchor.constraint(equalToConstant: 44),
         ])
+    }
+
+    // MARK: - Retry availability
+
+    /// Back to the normal page: called every time the mask presents it, so a page that once
+    /// had to say "can't retry" does not stay disabled for a later, recoverable failure.
+    func reset() {
+        retryButton.isEnabled = true
+        retryButton.setTitle(Self.retryTitle, for: .normal)
+    }
+
+    /// A tap that has nothing to load. The button stops pretending: disabled, and its title
+    /// says why (issue #227 requires an *actionable* retry, never a silent no-op).
+    func showRetryUnavailable() {
+        retryButton.isEnabled = false
+        retryButton.setTitle(Self.retryUnavailableTitle, for: .normal)
     }
 
     @objc private func retryTapped() {

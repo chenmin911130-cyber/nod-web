@@ -2,96 +2,26 @@ import os
 import UIKit
 import WebKit
 
-/// What the brand mask should do once it has to decide whether the web layer is merely
-/// slow or actually dead (issue #227: "实际不可恢复初始化失败需有限时失败出口和可操作重试").
-///
-/// A plain value type with no UIKit or WebKit in it, so the rule itself can be checked
-/// without a device or a web view.
-enum StartupRecoveryDecision: Equatable {
-    /// The `NodSplash` handshake arrived: the first real web page is on screen. Reveal.
-    case ready
-    /// The document finished loading **and** the probe found the web app's root painted:
-    /// the web layer is alive, only slower than the mask's patience. Reveal and let the web
-    /// view's own offline / signed-out / retry state show — never the recovery page.
-    case slowButAlive
-    /// The document never loaded, or it loaded and the JavaScript never ran. An
-    /// unrecoverable initialisation failure: show the recovery page instead of uncovering a
-    /// blank web view.
-    case dead
-}
-
-/// The rule that separates "slow" from "dead", plus the probe that feeds it.
-enum StartupRecovery {
-
-    /// Cheap, non-throwing liveness probe. `#root` is the element the app mounts into
-    /// (`web/app.html`: `<div id="root"></div>`); a document that is no longer `loading`
-    /// whose root still has no children means the bundle's JavaScript never ran — a dead
-    /// start, not a slow one. Nothing here talks to the network, so it cannot itself hang.
-    static let probeScript = "(function(){try{var r=document.getElementById('root');return !!(document.readyState!=='loading' && r && r.childElementCount>0)}catch(e){return false}})()"
-
-    /// The decision. "Alive" is deliberately narrow and is exactly what the issue asks
-    /// for: **the web view finished a navigation in this process** (so the bundle and its
-    /// assets resolved and the document is real) **and** the probe found the app's root
-    /// painted (so the JavaScript actually booted). Anything else is an unrecoverable
-    /// initialisation failure: no navigation ever committed, a navigation that failed, or a
-    /// document whose root never filled.
-    ///
-    /// This is not "the API was slow". A slow request happens *after* the shell has loaded
-    /// and painted, so the shell's own offline / signed-out / retry state owns that case and
-    /// the mask must yield to it. Neither is it "the network is slow": the native bundle
-    /// (`capacitor://localhost`, no `server.url`) is entirely local, so a document that has
-    /// not finished loading after ten seconds is a broken bundle or a WebKit failure, not
-    /// latency.
-    ///
-    /// `didFinishNavigation` is monotonic within one attempt — one successful navigation is
-    /// evidence the bundle resolves — because the entry document redirects to `app.html`
-    /// with `location.replace` (`scripts/prepare-ios-web.mjs`), so a cancelled first
-    /// navigation must not erase the second one's success. A retry clears it again.
-    static func decision(isReady: Bool, didFinishNavigation: Bool, hasPaintedRoot: Bool) -> StartupRecoveryDecision {
-        if isReady { return .ready }
-        if didFinishNavigation && hasPaintedRoot { return .slowButAlive }
-        return .dead
-    }
-
-    /// A navigation WebKit cancelled, or one a policy turned into something else, is not a
-    /// failure. This matters on every healthy cold start: the bundled entry document
-    /// redirects itself to `app.html` with `location.replace`, so the first navigation is
-    /// cancelled by the second (and CAP's URL policy cancels outbound links the same way).
-    /// Treating those as failures would put the recovery page on screen on every launch.
-    static func isBenignNavigationInterruption(_ error: NSError) -> Bool {
-        if error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled { return true }
-        // WebKitErrorDomain 102: frame load interrupted by policy change.
-        if error.domain == "WebKitErrorDomain" && error.code == 102 { return true }
-        return false
-    }
-
-    /// Whether a failed navigation is the unrecoverable case the recovery page exists for —
-    /// the *first* page never loading. Once a document has loaded, a later failed navigation
-    /// belongs to the live web layer (a deep link, a route it moved to), and the mask must
-    /// not drop a recovery page over a page that is alive; the ready handshake or the timeout
-    /// probe decides that instead.
-    static func isUnrecoverableNavigationFailure(didFinishNavigation: Bool) -> Bool {
-        !didFinishNavigation
-    }
-}
-
 /// Stands in for the bridge's own `WKNavigationDelegate` so the mask can see the first
-/// navigation finish or fail.
+/// navigation start, finish or fail.
 ///
 /// Capacitor installs one `WebViewDelegationHandler` as the web view's navigation delegate
 /// and uses it for far more than navigation (URL policy, the JS message bridge, zooming),
 /// so replacing it outright — or subclassing it, which cannot reach its internal `bridge` —
-/// would break the bridge. Instead every call this class does not consume is forwarded
-/// straight to the delegate it replaced, through `responds(to:)` +
-/// `forwardingTarget(for:)`, and `LaunchOverlay` hands that delegate back once the mask is
-/// gone. `decidePolicyFor` in particular is never consumed here, so the bridge keeps its
-/// decision handler exactly as it is.
+/// would break the bridge. Instead every call this class consumes is forwarded straight on
+/// to the delegate it replaced, and every call it does not consume is forwarded through
+/// `responds(to:)` + `forwardingTarget(for:)`. `LaunchOverlay` hands that delegate back once
+/// the mask is gone.
 final class StartupNavigationObserver: NSObject, WKNavigationDelegate {
 
     /// The delegate that was in place when the mask took over. Weak, because the bridge
     /// owns it and the mask must not extend its life.
     private(set) weak var forwardTarget: WKNavigationDelegate?
 
+    /// A main-frame navigation is about to be attempted; the URL matters because a
+    /// *provisional* failure never becomes `webView.url` and a retry still has to have
+    /// something to load (issue #227, "可操作重试").
+    var onAttempt: ((URL?) -> Void)?
     /// A navigation loaded its document.
     var onFinish: (() -> Void)?
     /// A navigation failed — provisionally or after committing.
@@ -114,7 +44,22 @@ final class StartupNavigationObserver: NSObject, WKNavigationDelegate {
         return forwardTarget
     }
 
-    // MARK: - The two events the mask consumes, forwarded to the bridge as well
+    // MARK: - The events the mask consumes, all forwarded to the bridge as well
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if navigationAction.targetFrame?.isMainFrame ?? true {
+            onAttempt?(navigationAction.request.url)
+        }
+        // The bridge's decision is the one that counts — its own navigation policy is not
+        // ours to change. If it has somehow gone, allowing the navigation is the neutral
+        // answer and keeps the decision handler balanced (WebKit traps if it is not called).
+        let selector = NSSelectorFromString("webView:decidePolicyForNavigationAction:decisionHandler:")
+        if let target = forwardTarget, target.responds(to: selector) {
+            target.webView?(webView, decidePolicyFor: navigationAction, decisionHandler: decisionHandler)
+        } else {
+            decisionHandler(.allow)
+        }
+    }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         forwardTarget?.webView?(webView, didFinish: navigation)
@@ -143,7 +88,9 @@ final class StartupNavigationObserver: NSObject, WKNavigationDelegate {
 ///
 /// The mask is also the app's bounded exit from a cold start that never completes: if the
 /// web layer is alive it comes down as it always has, and if it is dead the mask shows
-/// `StartupRecoveryView` with a working 重试 instead of uncovering a blank page.
+/// `StartupRecoveryView` with a working 重试 instead of uncovering a blank page. Every
+/// decision it makes is a `StartupRecoveryGate` transition (see `StartupRecoveryGate.swift`)
+/// — this class owns the web view, the clock and the views, not the policy.
 final class LaunchOverlay: UIView {
 
     /// Posted by the `NodSplash` plugin once the first real page is on screen. The plugin
@@ -174,8 +121,8 @@ final class LaunchOverlay: UIView {
     private var timeoutWork: DispatchWorkItem?
     private var readyObserver: NSObjectProtocol?
 
-    private var isReady = false
-    private var didTimeOut = false
+    /// Everything the mask knows about the cold start, and every decision it makes.
+    private var gate = StartupRecoveryGate()
     private var isRevealing = false
     private var revealPending = false
     private var isActive = true
@@ -183,13 +130,14 @@ final class LaunchOverlay: UIView {
     /// The web layer's view, handed over by `AppDelegate`. Weak: the bridge owns it.
     private weak var webView: WKWebView?
     private var navigationObserver: StartupNavigationObserver?
-    /// Set by a finished navigation; cleared only when a retry starts a fresh attempt.
-    private var didFinishNavigation = false
     /// The last URL a navigation attempted, so a retry can reload a page that failed
     /// *provisionally* and therefore never became `webView.url`.
     private var lastAttemptURL: URL?
+    /// The app's own entry URL, resolved by `AppDelegate` from Capacitor's configuration.
+    /// The last-resort retry target: it is what the bridge itself loads at launch, so a
+    /// retry can start a load even when nothing has committed and nothing was reported.
+    private var entryURL: URL?
     private let recoveryView = StartupRecoveryView()
-    private var isRecovering = false
 
     // MARK: - Life cycle
 
@@ -277,7 +225,7 @@ final class LaunchOverlay: UIView {
     // MARK: - Breathing loop
 
     private func startBreathing() {
-        guard displayLink == nil, !isRecovering else { return }
+        guard displayLink == nil, !gate.isRecovering else { return }
         loopStart = CACurrentMediaTime()
         let link = CADisplayLink(target: self, selector: #selector(step))
         link.add(to: .main, forMode: .common)
@@ -299,7 +247,7 @@ final class LaunchOverlay: UIView {
         CATransaction.commit()
     }
 
-    // MARK: - Readiness, timeout, reveal
+    // MARK: - Gate driving
 
     private func observeReadiness() {
         readyObserver = NotificationCenter.default.addObserver(
@@ -319,34 +267,45 @@ final class LaunchOverlay: UIView {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.safetyTimeout, execute: work)
     }
 
+    /// Run one gate action. The gate decides, this performs.
+    private func perform(_ action: StartupRecoveryGate.Action) {
+        switch action {
+        case .none:
+            break
+        case .reveal:
+            requestReveal()
+        case .recover:
+            showRecovery()
+        case .retry(let url):
+            startRetry(to: url)
+        case .retryUnavailable:
+            recoveryView.showRetryUnavailable()
+        }
+    }
+
     private func webLayerIsReady() {
-        guard !isReady else { return }
-        isReady = true
-        note("ready — the splash handshake arrived, revealing the web layer")
-        requestReveal()
+        guard !gate.isReady else { return }
+        let wasRecovering = gate.isRecovering
+        note(wasRecovering
+            ? "ready — the splash handshake arrived while the recovery page was up; hiding it and revealing"
+            : "ready — the splash handshake arrived, revealing the web layer")
+        perform(gate.splashReady())
     }
 
     private func safetyTimeoutFired() {
-        guard !isReady, !didTimeOut, !isRecovering, !Self.hasRevealedInThisProcess else { return }
-        didTimeOut = true
+        guard gate.safetyTimeoutFired() else { return }
         note("safety timeout (\(Int(Self.safetyTimeout))s) — probing the web layer before deciding")
         probeWebLayer { [weak self] painted in
             guard let self else { return }
-            switch StartupRecovery.decision(
-                isReady: self.isReady,
-                didFinishNavigation: self.didFinishNavigation,
-                hasPaintedRoot: painted
-            ) {
-            case .ready:
+            let action = self.gate.probeReturned(painted ? .alive : .dead)
+            if self.gate.isReady {
                 self.note("ready -> reveal (the handshake landed while the probe was in flight)")
-                self.requestReveal()
-            case .slowButAlive:
-                self.note("slow-but-alive -> reveal (navigation finished: \(self.didFinishNavigation), painted root: \(painted))")
-                self.requestReveal()
-            case .dead:
-                self.note("dead -> recovery (navigation finished: \(self.didFinishNavigation), painted root: \(painted))")
-                self.showRecovery()
+            } else if action == .reveal {
+                self.note("slow-but-alive -> reveal (navigation finished: \(self.gate.didFinishNavigation), painted root: \(painted))")
+            } else if action == .recover {
+                self.note("dead -> recovery (navigation finished: \(self.gate.didFinishNavigation), painted root: \(painted))")
             }
+            self.perform(action)
         }
     }
 
@@ -375,10 +334,7 @@ final class LaunchOverlay: UIView {
     /// deferred to the next `applicationDidBecomeActive`, so a page can never be uncovered
     /// behind a permission alert or while the app is in the background.
     private func requestReveal() {
-        guard (isReady || didTimeOut), !isRevealing else { return }
-        // A timeout alone is never grounds to uncover the page once the mask has decided the
-        // web layer is dead: only the ready handshake may lift the recovery page.
-        guard isReady || !isRecovering else { return }
+        guard !isRevealing else { return }
         guard isActive else {
             revealPending = true
             return
@@ -416,11 +372,13 @@ final class LaunchOverlay: UIView {
     /// from the safety timeout or straight from a navigation failure; the mask may still
     /// come down afterwards if the web layer's own retry eventually reports ready.
     private func showRecovery() {
-        guard !isRecovering, !isRevealing, !Self.hasRevealedInThisProcess else { return }
-        isRecovering = true
+        guard !isRevealing else { return }
         // The breathing waveform would be invisible under an opaque page; stop burning a
         // display link while the user decides.
         stopBreathing()
+        // A page that once had to say "can't retry" must not stay disabled if it is shown
+        // again for a later failure.
+        recoveryView.reset()
         bringSubviewToFront(recoveryView)
         recoveryView.isHidden = false
         // The mask itself must not swallow touches, but this one page must take them.
@@ -428,66 +386,64 @@ final class LaunchOverlay: UIView {
     }
 
     private func hideRecovery() {
-        guard isRecovering else { return }
-        isRecovering = false
         recoveryView.isHidden = true
         isUserInteractionEnabled = false
     }
 
-    /// 重试: one bounded attempt, back on the brand mask. The mask never reloads from the
-    /// web layer's own state — it only ever retries the page it was waiting for.
+    /// 重试 tapped. The gate picks the URL (committed → attempted → the app's own entry
+    /// URL); this either starts that load or tells the page it cannot, but it never leaves
+    /// an enabled button that does nothing.
     private func retry() {
-        guard isRecovering, !isRevealing else { return }
+        guard !isRevealing else { return }
         guard let webView else {
-            note("retry(reload-failed): no web view attached — recovery stays up")
+            note("retry(reload-failed): no web view attached — the page says so")
+            recoveryView.showRetryUnavailable()
             return
         }
-
-        let reload: () -> Void
-        if let url = webView.url {
-            note("retry: reload \(url.absoluteString)")
-            reload = { webView.reload() }
-        } else if let url = lastAttemptURL {
-            // A provisional failure never commits a URL, so `reload()` would be a no-op on a
-            // web view that has never loaded: reload the exact page that failed instead.
-            note("retry: no committed url — loading the failed url \(url.absoluteString)")
-            reload = { webView.load(URLRequest(url: url)) }
-        } else {
-            note("retry(reload-failed): no committed or attempted url to reload — recovery stays up")
-            return
+        let action = gate.retry(committed: webView.url, attempted: lastAttemptURL, entry: entryURL)
+        if action == .retryUnavailable {
+            note("retry(reload-failed): no committed url, no attempted url and no entry url — the page says so")
         }
+        perform(action)
+    }
 
-        // Back to the mask for another bounded attempt. Clearing `isReady` is what lets the
-        // NodSplash handshake complete a second time; clearing `didFinishNavigation` makes
-        // the probe judge this attempt's navigation, not the dead one's.
-        isReady = false
-        didTimeOut = false
-        didFinishNavigation = false
+    /// Start one bounded attempt, back on the brand mask. `armSafetyTimeout()` is what
+    /// makes the exit bounded again: ready, or the timeout judges this attempt too.
+    private func startRetry(to url: URL) {
+        guard let webView else { return }
+        let reload = webView.url == url
+        note("retry: \(reload ? "reload" : "load") \(url.absoluteString)")
         hideRecovery()
         alpha = 1
         if !UIAccessibility.isReduceMotionEnabled { startBreathing() }
         armSafetyTimeout()
-        reload()
+        if reload {
+            webView.reload()
+        } else {
+            webView.load(URLRequest(url: url))
+        }
     }
 
     // MARK: - Web view handover
 
-    /// Hand the mask the web view it has to judge. Called by `AppDelegate`; idempotent, and
-    /// a no-op once the mask has come down so a hot resume can never reinstall it.
-    func attach(webView: WKWebView) {
+    /// Hand the mask the web view it has to judge, plus the app's own entry URL. Called by
+    /// `AppDelegate`; idempotent, and a no-op once the mask has come down so a hot resume can
+    /// never reinstall it. The entry URL is refreshed on every call, because it may only be
+    /// resolvable once the bridge has finished loading.
+    func attach(webView: WKWebView, entryURL: URL?) {
+        if let entryURL { self.entryURL = entryURL }
         guard navigationObserver == nil, !Self.hasRevealedInThisProcess else { return }
         self.webView = webView
         let observer = StartupNavigationObserver(forwardingTo: webView.navigationDelegate)
+        observer.onAttempt = { [weak self] url in self?.navigationDidAttempt(url) }
         observer.onFinish = { [weak self] in self?.navigationDidFinish() }
         observer.onFail = { [weak self] error in self?.navigationDidFail(error) }
         webView.navigationDelegate = observer
         navigationObserver = observer
         // The bridge may already have committed the entry document before the mask attached.
-        // Seed the flag so the timeout does not read that as a dead start; the probe still
-        // has to find a painted root, so this can never call a dead page alive.
-        didFinishNavigation = webView.url != nil && !webView.isLoading
+        gate.attached(alreadyFinishedNavigation: webView.url != nil && !webView.isLoading)
         lastAttemptURL = webView.url
-        note("attached to the web view (url: \(webView.url?.absoluteString ?? "none"), loading: \(webView.isLoading))")
+        note("attached to the web view (url: \(webView.url?.absoluteString ?? "none"), entry: \(self.entryURL?.absoluteString ?? "none"), loading: \(webView.isLoading))")
     }
 
     /// Give the bridge back the delegate the mask borrowed.
@@ -498,36 +454,39 @@ final class LaunchOverlay: UIView {
         webView.navigationDelegate = observer.forwardTarget
     }
 
+    /// A main-frame navigation is starting. Recorded as early as possible so `retry()` has
+    /// something to load even when the navigation never commits and never reports a URL.
+    private func navigationDidAttempt(_ url: URL?) {
+        guard !Self.hasRevealedInThisProcess, let url else { return }
+        lastAttemptURL = url
+    }
+
     /// A document loaded. Deliberately does **not** reveal: a loaded document is not a
     /// painted page, and the mask still waits for the `NodSplash` handshake or the timeout
-    /// (which is what `didFinishNavigation` feeds).
+    /// (which is what the gate's navigation evidence feeds).
     private func navigationDidFinish() {
-        guard !Self.hasRevealedInThisProcess else { return }
-        didFinishNavigation = true
         if let url = webView?.url { lastAttemptURL = url }
         note("navigation finished (url: \(webView?.url?.absoluteString ?? "none"))")
+        perform(gate.navigationFinished())
     }
 
     /// A failed navigation is the unrecoverable case — a missing bundle, an asset that will
     /// not load, the entry document never arriving — so the recovery page goes up
     /// immediately instead of waiting out the full timeout.
     private func navigationDidFail(_ error: NSError) {
-        guard !isReady, !isRevealing, !Self.hasRevealedInThisProcess else { return }
         if StartupRecovery.isBenignNavigationInterruption(error) {
+            perform(gate.navigationFailed(isBenign: true))
             note("navigation interruption ignored (\(error.domain) \(error.code)) — not a failure")
             return
         }
-        // Only a first page that never loaded is the initialisation failure this page exists
-        // for. Once *a* document has loaded, a later failed navigation belongs to the live web
-        // layer (a deep link, a route it moved to), and dropping the recovery page over a
-        // working page would be worse than letting the ready handshake or the timeout decide.
-        guard StartupRecovery.isUnrecoverableNavigationFailure(didFinishNavigation: didFinishNavigation) else {
-            note("navigation failed after a document had loaded (\(error.domain) \(error.code)) — leaving it to the web layer")
-            return
-        }
         if let url = error.userInfo[NSURLErrorFailingURLErrorKey] as? URL { lastAttemptURL = url }
-        note("dead -> recovery (first navigation failed: \(error.domain) \(error.code))")
-        showRecovery()
+        let action = gate.navigationFailed(isBenign: false)
+        if action == .recover {
+            note("dead -> recovery (first navigation failed: \(error.domain) \(error.code))")
+        } else {
+            note("navigation failed while the web layer owned the screen (\(error.domain) \(error.code)) — leaving it to the web layer")
+        }
+        perform(action)
     }
 
     // MARK: - Diagnostics
@@ -543,7 +502,7 @@ final class LaunchOverlay: UIView {
 
     func applicationDidBecomeActive() {
         isActive = true
-        if !UIAccessibility.isReduceMotionEnabled, !isRevealing, !isRecovering { startBreathing() }
+        if !UIAccessibility.isReduceMotionEnabled, !isRevealing, !gate.isRecovering { startBreathing() }
         if revealPending { requestReveal() }
     }
 

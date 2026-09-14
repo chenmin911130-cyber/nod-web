@@ -47,9 +47,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         guard let window = window else { return }
         let overlay = LaunchOverlay(frame: window.bounds)
         // Hand the mask the bridge's web view so, at its safety timeout, it can tell a
-        // slow-but-alive start from a dead one instead of uncovering a blank page (#227).
-        if let webView = (window.rootViewController as? CAPBridgeViewController)?.webView {
-            overlay.attach(webView: webView)
+        // slow-but-alive start from a dead one instead of uncovering a blank page (#227),
+        // plus the URL Capacitor itself boots from — the last-resort target a retry falls
+        // back to when no navigation ever committed a URL.
+        if let controller = window.rootViewController as? CAPBridgeViewController,
+           let webView = controller.webView {
+            overlay.attach(webView: webView, entryURL: controller.bridge?.config.appStartServerURL)
         }
         // Above the bridge's view, but still inside the app's own window, so a system
         // permission alert still comes up over it.
@@ -58,11 +61,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     private func makeWebViewFeelNative() {
-        guard let webView = (window?.rootViewController as? CAPBridgeViewController)?.webView else { return }
+        guard let controller = window?.rootViewController as? CAPBridgeViewController,
+              let webView = controller.webView else { return }
         // If the bridge's view had not loaded yet when the mask was installed, this is the
-        // first moment its web view exists. `attach` is idempotent and a no-op once the
-        // mask is gone.
-        launchOverlay?.attach(webView: webView)
+        // first moment its web view — and its entry URL — exist. `attach` is idempotent and a
+        // no-op once the mask is gone.
+        launchOverlay?.attach(webView: webView, entryURL: controller.bridge?.config.appStartServerURL)
         webView.allowsLinkPreview = false
         webView.isOpaque = true
         webView.backgroundColor = UIColor(red: 5 / 255, green: 7 / 255, blue: 10 / 255, alpha: 1)

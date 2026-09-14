@@ -14,6 +14,7 @@
 		D0D1227000000000000000B3 /* LaunchBrand.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D1227000000000000000B1 /* LaunchBrand.swift */; };
 		D0D1227000000000000000B5 /* LaunchOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D1227000000000000000B4 /* LaunchOverlay.swift */; };
 		D0D1227000000000000000B6 /* StartupRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D1227000000000000000B7 /* StartupRecoveryView.swift */; };
+		D0D1227000000000000000B8 /* StartupRecoveryGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D1227000000000000000B9 /* StartupRecoveryGate.swift */; };
 		D0D10000000000000000001E /* WatchConnectivity.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0D10000000000000000001D /* WatchConnectivity.framework */; };
 		D0D100000000000000000033 /* ClockKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000034 /* ClockKit.framework */; };
 		D0D100000000000000000014 /* NodWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D100000000000000000002 /* NodWatchApp.swift */; };
@@ -44,6 +45,7 @@
 		D0D1227000000000000000B1 /* LaunchBrand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchBrand.swift; sourceTree = "<group>"; };
 		D0D1227000000000000000B4 /* LaunchOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchOverlay.swift; sourceTree = "<group>"; };
 		D0D1227000000000000000B7 /* StartupRecoveryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupRecoveryView.swift; sourceTree = "<group>"; };
+		D0D1227000000000000000B9 /* StartupRecoveryGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupRecoveryGate.swift; sourceTree = "<group>"; };
 		D0D10000000000000000001D /* WatchConnectivity.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WatchConnectivity.framework; path = System/Library/Frameworks/WatchConnectivity.framework; sourceTree = SDKROOT; };
 		D0D100000000000000000034 /* ClockKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ClockKit.framework; path = System/Library/Frameworks/ClockKit.framework; sourceTree = SDKROOT; };
 		D0D100000000000000000001 /* WatchApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WatchApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -129,6 +131,7 @@
 				D0D1227000000000000000B1 /* LaunchBrand.swift */,
 				D0D1227000000000000000B4 /* LaunchOverlay.swift */,
 				D0D1227000000000000000B7 /* StartupRecoveryView.swift */,
+				D0D1227000000000000000B9 /* StartupRecoveryGate.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -353,6 +356,7 @@
 				D0D1227000000000000000B2 /* LaunchBrand.swift in Sources */,
 				D0D1227000000000000000B5 /* LaunchOverlay.swift in Sources */,
 				D0D1227000000000000000B6 /* StartupRecoveryView.swift in Sources */,
+				D0D1227000000000000000B8 /* StartupRecoveryGate.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
