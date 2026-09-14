@@ -16,7 +16,8 @@ import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { findDeviceId, matchGlob, parseArgs, parsePorcelain, runCapture, runCommand } from './ios-deliver.mjs'
+import { LOCAL_PLUGINS } from './iosWorktreePods.mjs'
+import { LOCAL_PLUGIN_PODS, findDeviceId, matchGlob, parseArgs, parsePorcelain, runCapture, runCommand } from './ios-deliver.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SCRIPT = join(HERE, 'ios-deliver.mjs')
@@ -144,6 +145,12 @@ const PLIST = (bundleId, version, build) => `<?xml version="1.0" encoding="UTF-8
 </plist>
 `
 
+// The fixture's local plugin set is derived from scripts/iosWorktreePods.mjs — the
+// module that actually pins the Podfile — so adding a plugin there (e.g. nod-splash in
+// #228) updates the fixture automatically instead of leaving a hardcoded copy behind.
+const PLUGINS = [...LOCAL_PLUGINS]
+const PLUGIN_PODS = PLUGINS.map((name) => LOCAL_PLUGIN_PODS[name])
+
 const PODFILE = `require_relative '../../node_modules/@capacitor/ios/scripts/pods_helpers'
 
 platform :ios, '14.0'
@@ -151,9 +158,7 @@ use_frameworks!
 
 def capacitor_pods
   pod 'Capacitor', :path => '../../node_modules/@capacitor/ios'
-  pod 'NodAuth', :path => '../../plugins/nod-auth'
-  pod 'NodMic', :path => '../../plugins/nod-mic'
-  pod 'NodWatch', :path => '../../plugins/nod-watch'
+${PLUGINS.map((name) => `  pod '${LOCAL_PLUGIN_PODS[name]}', :path => '../../plugins/${name}'`).join('\n')}
 end
 
 target 'App' do
@@ -172,13 +177,7 @@ function podsPbx(entries) {
   return `// fixture Pods project\n${entries.map((entry) => `\t\t\t\t${entry}`).join('\n')}\n`
 }
 
-const DEFAULT_POD_ENTRIES = [
-  'path = "../../../plugins/nod-auth";',
-  'path = "../../../plugins/nod-mic";',
-  'path = "../../../plugins/nod-watch";',
-]
-
-const PLUGINS = ['nod-auth', 'nod-mic', 'nod-watch']
+const DEFAULT_POD_ENTRIES = PLUGINS.map((name) => `path = "../../../plugins/${name}";`)
 
 /**
  * Build an isolated checkout. Everything is committed so `git status` is clean
@@ -189,7 +188,7 @@ function makeFixture({
   podEntries = DEFAULT_POD_ENTRIES,
   appBuild = '91',
   appVersion = '1.0',
-  frameworks = ['NodAuth', 'NodMic', 'NodWatch'],
+  frameworks = PLUGIN_PODS,
   webMismatch = false,
   watchApp = true,
 } = {}) {
@@ -320,7 +319,17 @@ section('happy path: manifest is produced and validated')
   eq(manifest.tools.node, process.version, 'node version recorded')
   eq(manifest.deviceTargets.phone.bundleId, 'com.nodpilot.app', 'phone target recorded')
   eq(manifest.deviceTargets.watch.bundleId, 'com.nodpilot.app.watchkitapp', 'watch target recorded')
-  eq(Object.keys(manifest.frameworks).sort().join(','), 'NodAuth,NodMic,NodWatch', 'embedded frameworks recorded')
+  eq(Object.keys(manifest.frameworks).sort().join(','), [...PLUGIN_PODS].sort().join(','), 'embedded frameworks recorded')
+  eq(
+    Object.keys(manifest.dependencies.plugins).sort().join(','),
+    [...PLUGINS].sort().join(','),
+    'dependencies.plugins covers every local plugin from iosWorktreePods.mjs',
+  )
+  eq(
+    [...manifest.declaredPods].sort().join(','),
+    [...PLUGIN_PODS].sort().join(','),
+    'declaredPods (Podfile scan) agrees with the shared local plugin set',
+  )
   eq(manifest.readback.status, 'not-installed', 'read-back starts as not-installed')
   eq(manifest.secretsIncluded, false, 'manifest declares no secrets')
   ok(manifest.unverified.some((line) => line.includes('archive')), 'fixture run records archive as unverified')
@@ -497,7 +506,7 @@ section('prepare-ios-web pins NOD_IOS_BUNDLE instead of incrementing')
 
 section('reject: missing embedded framework')
 {
-  const fixture = makeFixture({ frameworks: ['NodAuth', 'NodWatch'] })
+  const fixture = makeFixture({ frameworks: PLUGIN_PODS.filter((pod) => pod !== 'NodMic') })
   expectReject('NodMic.framework missing from the app', fixture.root, buildArgs(fixture), 'NodMic')
 }
 

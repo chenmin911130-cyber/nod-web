@@ -133,3 +133,10 @@ function main() {
 if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])) {
   main()
 }
+
+// Re-exported at the end of the file on purpose: iOS delivery (scripts/ios-deliver.mjs)
+// and its tests derive the local plugin set from here, so adding a plugin to the lists
+// above cannot leave a hardcoded copy behind. Kept as a separate statement — and away
+// from the declarations — so concurrent edits to those lists do not conflict with it.
+export { LOCAL_PLUGINS, POD_PATHS }
+

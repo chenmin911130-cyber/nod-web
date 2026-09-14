@@ -35,18 +35,33 @@ import {
 import { join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { assertPluginRoots, assertPodsProject } from './iosWorktreePods.mjs'
+import { LOCAL_PLUGINS, POD_PATHS, assertPluginRoots, assertPodsProject } from './iosWorktreePods.mjs'
 
 export const MANIFEST_SCHEMA = 'nod-web/ios-delivery-manifest@1'
 export const MANIFEST_NAME = 'delivery-manifest.json'
 export const FORTY_HEX = /^[0-9a-f]{40}$/
 
-/** Local plugin package name -> CocoaPods framework name. Mirrors the Podfile. */
-export const LOCAL_PLUGIN_PODS = {
-  'nod-auth': 'NodAuth',
-  'nod-mic': 'NodMic',
-  'nod-watch': 'NodWatch',
+function pascalCase(plugin) {
+  return plugin
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join('')
 }
+
+/**
+ * Local plugin package name -> CocoaPods framework name.
+ *
+ * Derived from iosWorktreePods.mjs, the module that actually pins the Podfile, so the
+ * manifest and the realpath guard can never disagree about which plugins are local.
+ * New plugins (e.g. the nod-splash added by #228) are picked up automatically; the
+ * PascalCase fallback only applies if a plugin is registered there without a pod path.
+ */
+export const LOCAL_PLUGIN_PODS = Object.fromEntries(
+  LOCAL_PLUGINS.map((plugin) => {
+    const pod = Object.entries(POD_PATHS).find(([, path]) => path.endsWith(`/plugins/${plugin}`))?.[0]
+    return [plugin, pod || pascalCase(plugin)]
+  }),
+)
 
 /**
  * Generated files cap:sync / pod install are allowed to touch. Everything else in
@@ -522,6 +537,11 @@ export function buildManifest({ root, args, run = runCapture, now = () => new Da
       }
       buildSource = 'pinned'
       verified.push(`bundle pinned explicitly: CURRENT_PROJECT_VERSION=${build}`)
+    } else {
+      unverified.push(
+        '--skip-sync: cap:sync and the NOD_IOS_BUNDLE pin did not run, so the requested bundle was not written into the checkout; ' +
+          'the version guard below applies to the supplied artifact only',
+      )
     }
     const archivePath = resolve(root, args.archivePath || join(out, 'Nod.xcarchive'))
     if (!args.noArchive) {
