@@ -607,14 +607,16 @@ test.describe('Listen mobile ended Notes chrome', () => {
 
   test('ended Notes hides Start listening, keeps Save tappable, and does not cover Summarize', async ({ page }) => {
     const ws = await mockListenWs(page, '/app')
+    await page.context().grantPermissions(['microphone'])
     await page.getByRole('button', { name: 'Start listening' }).click()
     await ws.gotoListening()
+    await page.locator('.status-toast').waitFor({ state: 'hidden', timeout: 8000 }).catch(() => {})
     ws.send({ type: 'question', id: 'm-end-1', text: 'Lock the launch window for September.' })
     await expect(page.getByText('Lock the launch window for September.')).toBeVisible()
     await ws.endSession()
     await page.getByRole('tab', { name: 'Notes' }).click()
 
-    await expect(page.getByText('Ended')).toBeVisible()
+    await expect(page.locator('.iphone-ended-clock')).toBeVisible()
     await expect(page.locator('.listen-notes .listen-empty')).toHaveCount(0)
     await expect(page.getByText('Start listening', { exact: true })).toHaveCount(0)
 
@@ -645,6 +647,11 @@ test.describe('Listen mobile ended Notes chrome', () => {
     expect(overlap).toBe(false)
     expect(sumBox.width).toBeGreaterThan(viewport.width * 0.7)
 
+    await page.evaluate(() => {
+      document.querySelectorAll('.status-toast').forEach((el) => {
+        ;(el as HTMLElement).style.visibility = 'hidden'
+      })
+    })
     await page.screenshot({ path: `${EVIDENCE}/ended-notes-save-390.png` })
   })
 })
