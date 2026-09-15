@@ -34,7 +34,7 @@ import {
   speakerSuggestText,
   spokenSettingsValue,
 } from '../iphoneCopy'
-import { ENDED_TAP_SLOP, bottomBarMode, endedDockFromPointer, endedHasContent, endedSheetAvailable, listenAskPlacement, nextComposeDraft } from '../listenChrome'
+import { ENDED_TAP_SLOP, bottomBarMode, endedDockFromPointer, endedHasContent, endedSheetAvailable, listenAskPlacement, nextComposeDraft, showNotesEmptyHint } from '../listenChrome'
 import { usePhoneChrome } from '../phoneChrome'
 import { askOutcome, groupTranscript, iphoneSummaryHeading, isCatchAskCurrent, liveFeed, liveStageMode, summaryPlainText, transcriptPlainText, type LiveFeedItem } from '../liveView'
 import { useStickToBottom } from '../useStickToBottom'
@@ -1628,7 +1628,7 @@ export default function ListenPane(props: Props) {
   )
 
   return (
-    <div className={`listen-main scene-${props.scene}${biOn ? ' tr-on' : ' tr-off'}${props.ended ? ' ended' : ''}${props.qa ? ' qa' : ''}${ready ? ' iphone-ready' : ''}${endedSheetUi ? ` ended-dock-${endedDock}` : ''}${askPlacement === 'bar' ? ' live-bar' : ''}`}>
+    <div className={`listen-main scene-${props.scene}${biOn ? ' tr-on' : ' tr-off'}${props.ended ? ' ended' : ''}${props.qa ? ' qa' : ''}${ready ? ' iphone-ready' : ''}${endedSheetUi ? ` ended-dock-${endedDock}` : ''}${askPlacement === 'bar' ? ' live-bar' : ''}${askPlacement === 'fab' ? ' ask-fab' : ''}`}>
       {ready ? (
         <div className="iphone-stack iphone-ready">
           <div className="iphone-stage">
@@ -1942,11 +1942,15 @@ export default function ListenPane(props: Props) {
               </div>
               <div className="listen-scroll" ref={rightRef}>
                 {props.catchNotes.length === 0 && !sections.length && !props.busy && (
-                  <div className="listen-empty">
-                    {phone
-                      ? IPHONE_COPY.emptyNotes
-                      : <>Ask in the box below — the answer lands here. Or tap <b>Summarize</b> for a recap.</>}
-                  </div>
+                  phone ? (
+                    showNotesEmptyHint({ ended: props.ended, hasNotes: false }) ? (
+                      <div className="listen-empty">{IPHONE_COPY.emptyNotes}</div>
+                    ) : null
+                  ) : (
+                    <div className="listen-empty">
+                      Ask in the box below — the answer lands here. Or tap <b>Summarize</b> for a recap.
+                    </div>
+                  )
                 )}
                 {props.catchNotes.map((note, i) => {
                   const askStatus = note.kind === 'ask'
@@ -2020,8 +2024,7 @@ export default function ListenPane(props: Props) {
           </div>
           )}
 
-          <div className={`listen-ask-dock${askPlacement === 'fab' ? ' ask-fab-dock' : ''}${askPlacement === 'bar' ? ' ask-bar-dock' : ''}`}>
-          {props.saveBanner}
+          <div className={`listen-ask-dock${askPlacement === 'fab' ? ' ask-fab-dock' : ''}${askPlacement === 'bar' ? ' ask-bar-dock' : ''}${props.saveBanner ? ' has-save-banner' : ''}`}>
           {askPlacement !== 'field' && askPlacement !== 'hidden' ? (
             <AskBubble
               className={askPlacement === 'fab' ? 'iphone-ask-fab' : 'iphone-ask-dock-btn'}
@@ -2076,6 +2079,7 @@ export default function ListenPane(props: Props) {
           </div>
             </>
           ) : null}
+          {props.saveBanner}
           {phone && !props.qa && props.onStart ? (
             <ListenRecordBar
               mode={barMode}

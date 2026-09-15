@@ -602,6 +602,53 @@ test.describe('Translate mobile chrome (#193 item 5)', () => {
   })
 })
 
+test.describe('Listen mobile ended Notes chrome', () => {
+  test.use({ viewport: { width: 390, height: 844 } })
+
+  test('ended Notes hides Start listening, keeps Save tappable, and does not cover Summarize', async ({ page }) => {
+    const ws = await mockListenWs(page, '/app')
+    await page.getByRole('button', { name: 'Start listening' }).click()
+    await ws.gotoListening()
+    ws.send({ type: 'question', id: 'm-end-1', text: 'Lock the launch window for September.' })
+    await expect(page.getByText('Lock the launch window for September.')).toBeVisible()
+    await ws.endSession()
+    await page.getByRole('tab', { name: 'Notes' }).click()
+
+    await expect(page.getByText('Ended')).toBeVisible()
+    await expect(page.locator('.listen-notes .listen-empty')).toHaveCount(0)
+    await expect(page.getByText('Start listening', { exact: true })).toHaveCount(0)
+
+    const banner = page.getByText('Save this session?')
+    const save = page.locator('.save-banner-save')
+    const notNow = page.locator('.save-banner-notnow')
+    await expect(banner).toBeVisible()
+    await expect(save).toBeVisible()
+    await expect(notNow).toBeVisible()
+
+    const viewport = page.viewportSize()!
+    const saveBox = (await save.boundingBox())!
+    const notNowBox = (await notNow.boundingBox())!
+    expect(saveBox.y + saveBox.height).toBeLessThanOrEqual(viewport.height - 48)
+    expect(notNowBox.y + notNowBox.height).toBeLessThanOrEqual(viewport.height - 48)
+
+    const summarize = page.getByRole('button', { name: 'Summarize' })
+    const fab = page.getByRole('button', { name: 'Ask' })
+    await expect(summarize).toBeVisible()
+    const sumBox = (await summarize.boundingBox())!
+    const fabBox = (await fab.boundingBox())!
+    const overlap = !(
+      sumBox.x + sumBox.width <= fabBox.x
+      || fabBox.x + fabBox.width <= sumBox.x
+      || sumBox.y + sumBox.height <= fabBox.y
+      || fabBox.y + fabBox.height <= sumBox.y
+    )
+    expect(overlap).toBe(false)
+    expect(sumBox.width).toBeGreaterThan(viewport.width * 0.7)
+
+    await page.screenshot({ path: `${EVIDENCE}/ended-notes-save-390.png` })
+  })
+})
+
 test.describe('Listen mobile small phone', () => {
   test.use({ viewport: { width: 320, height: 568 } })
 

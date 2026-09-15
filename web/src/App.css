@@ -7181,13 +7181,24 @@ html.nod-phone .app.iphone-v2 .iphone-saved-check {
 
 html.nod-phone .app.iphone-v2 .listen-ask-dock {
   flex: 0 0 auto;
+  gap: 10px;
+}
+
+/* Mobile Safari/Chrome toolbar is not included in safe-area. Lift Save / Ask /
+   Continue above it; native Capacitor keeps the home-indicator inset only. */
+html.nod-web.nod-phone:not(.nod-native) .app.iphone-v2 .listen-ask-dock {
+  padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+}
+
+html.nod-web.nod-phone:not(.nod-native) .app.iphone-v2 .listen-ask-dock .iphone-live-bar {
+  padding-bottom: 10px;
 }
 
 html.nod-phone .app.iphone-v2 .save-banner {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin: 0 max(var(--iphone-gutter), env(safe-area-inset-right)) 8px max(var(--iphone-gutter), env(safe-area-inset-left));
+  margin: 0 max(var(--iphone-gutter), env(safe-area-inset-right)) 0 max(var(--iphone-gutter), env(safe-area-inset-left));
   padding: 12px 14px;
   background: var(--nod-surface);
   border-radius: 14px;
@@ -7239,8 +7250,9 @@ html.nod-phone .app.iphone-v2 .save-banner-notnow {
 }
 
 html.nod-phone .app.iphone-v2 .save-banner-save {
-  height: 36px;
+  height: 44px;
   min-width: 88px;
+  min-height: 44px;
   padding: 0 16px;
   border: 0;
   border-radius: 10px;
@@ -8220,6 +8232,15 @@ html.nod-phone .app.iphone-v2 .iphone-summarize {
   display: flex;
   gap: 8px;
   margin: 8px 0 16px;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main.ask-fab .listen-notes .listen-scroll {
+  padding-bottom: 72px;
+}
+
+html.nod-phone .app.iphone-v2 .listen-main.ask-fab .iphone-summarize {
+  width: 100%;
+  margin-bottom: 8px;
 }
 
 html.nod-phone .app.iphone-v2 .iphone-summary-actions button,
@@ -10018,7 +10039,11 @@ html.nod-phone .app.iphone-v2 .iphone-ask-bubble.draggable {
 
 html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-ask-fab,
 html.nod-phone .app.iphone-v2 .listen-main:not(.qa) .iphone-ask-dock-btn {
-  margin: 0 12px 10px auto;
+  margin: 0 12px 0 auto;
+}
+
+html.nod-phone .app.iphone-v2 .listen-ask-dock.has-save-banner .iphone-ask-fab {
+  margin-bottom: 2px;
 }
 
 html.nod-phone .app.iphone-v2 .iphone-tr-ask-wrap {
