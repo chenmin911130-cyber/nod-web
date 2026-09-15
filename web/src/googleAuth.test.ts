@@ -1,7 +1,9 @@
 import {
+  CLERK_CAPTCHA_ELEMENT_ID,
   CLERK_JS_URL,
-  CLERK_PROXY_URL,
   CLERK_LOAD_TIMEOUT_MS,
+  CLERK_SIGN_IN_URL,
+  CLERK_SIGN_UP_URL,
   GOOGLE_LOAD_ERROR,
   googleButtonDisabled,
   googleButtonLabel,
@@ -30,8 +32,10 @@ eq(googleButtonDisabled({ ...idle, busy: true }), true, 'busy disabled')
 eq(googleButtonLabel({ ...idle, isLoaded: false, loadFailed: true }), 'Continue with Google', 'failed label')
 eq(googleButtonDisabled({ ...idle, isLoaded: false, loadFailed: true }), true, 'failed disabled')
 eq(googleLoadError(true), GOOGLE_LOAD_ERROR, 'failed error copy')
-eq(CLERK_JS_URL, '/clerk.browser.js', 'same-origin clerk-js')
-eq(CLERK_PROXY_URL, '/__clerk', 'same-origin clerk fapi proxy')
+eq(CLERK_JS_URL, '/clerk-js/clerk.browser.js', 'same-origin clerk-js directory')
+eq(CLERK_SIGN_IN_URL, '/login', 'hosted sign-in stays on this origin')
+eq(CLERK_SIGN_UP_URL, '/signup', 'hosted sign-up stays on this origin')
+eq(CLERK_CAPTCHA_ELEMENT_ID, 'clerk-captcha', 'oauth callback captcha mount')
 eq(CLERK_LOAD_TIMEOUT_MS, 20_000, 'load timeout')
 
 console.log('googleAuth.test.ts ok')

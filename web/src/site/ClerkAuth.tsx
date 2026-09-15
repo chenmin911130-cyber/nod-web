@@ -8,6 +8,7 @@ import {
 } from '@clerk/clerk-react'
 import { getToken, setToken } from '../auth'
 import {
+  CLERK_CAPTCHA_ELEMENT_ID,
   CLERK_LOAD_TIMEOUT_MS,
   googleButtonDisabled,
   googleButtonLabel,
@@ -212,6 +213,7 @@ export function GoogleButton({ next = '/app' }: { next?: string }) {
       </button>
       {isSignedIn && !err && !loadFailed && <div className="site-ok">You're already signed in with Google.</div>}
       {(err || loadErr) && <div className="site-err">{err || loadErr}</div>}
+      <div id={CLERK_CAPTCHA_ELEMENT_ID} />
     </div>
   )
 }
@@ -225,6 +227,7 @@ export function SSOCallbackPage() {
           <h1>Finishing sign-in…</h1>
           <p>Hold on — Nodpilot is opening the workspace.</p>
           <AuthenticateWithRedirectCallback />
+          <div id={CLERK_CAPTCHA_ELEMENT_ID} />
         </div>
       </div>
     </div>

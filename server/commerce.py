@@ -34,16 +34,25 @@ log = logging.getLogger("nod.api")
 router = APIRouter()
 
 
-@router.get("/clerk.browser.js")
-def clerk_browser_js():
-    from server.clerk_auth import load_clerk_browser_js
+def _clerk_js_response(name: str) -> RawResponse:
+    from server.clerk_auth import load_clerk_js_asset
 
-    body, media = load_clerk_browser_js()
+    body, media = load_clerk_js_asset(name)
     return RawResponse(
         content=body,
         media_type=media,
         headers={"Cache-Control": "public, max-age=3600"},
     )
+
+
+@router.get("/clerk.browser.js")
+def clerk_browser_js():
+    return _clerk_js_response("clerk.browser.js")
+
+
+@router.get("/clerk-js/{name}")
+def clerk_js_dir(name: str):
+    return _clerk_js_response(name)
 
 
 _CLERK_PROXY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
