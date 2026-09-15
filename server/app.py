@@ -912,7 +912,7 @@ def _close_llm_stream(stream) -> None:
 def _friendly_gen_error(err: BaseException) -> str:
     if _is_transient_llm_error(err):
         return "Generation failed: network error. Please try again."
-    return f"Generation failed:{err}"
+    return "Generation failed. Please try again."
 
 
 # --- Think (#182): the search backend ---------------------------------------
@@ -7076,22 +7076,6 @@ async def lifespan(_app: FastAPI):
 
     threading.Thread(target=loop, daemon=True, name="nod-backup").start()
     threading.Thread(target=live_loop, daemon=True, name="nod-live").start()
-
-    def clerk_proxy_enable():
-        time.sleep(12)
-        try:
-            from server.clerk_auth import clerk_proxy_enable_allowed, enable_clerk_fapi_proxy
-
-            if not clerk_proxy_enable_allowed():
-                return
-            enable_clerk_fapi_proxy()
-        except Exception:
-            log.exception("clerk proxy clear failed")
-
-    from server.clerk_auth import clerk_proxy_enable_allowed
-
-    if clerk_proxy_enable_allowed():
-        threading.Thread(target=clerk_proxy_enable, daemon=True, name="nod-clerk-proxy").start()
     yield
 
 

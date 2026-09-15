@@ -4,7 +4,6 @@ import base64
 import logging
 import os
 import re
-import sys
 import time
 from functools import lru_cache
 from urllib.parse import urlparse
@@ -13,8 +12,8 @@ import httpx
 import jwt
 from fastapi import HTTPException, Request
 from jwt import PyJWKClient
-from starlette.responses import Response as StarletteResponse
 
+from server.cors import CAPACITOR_ORIGINS
 from server.settings import CLERK_PUBLISHABLE_KEY, CLERK_SECRET_KEY, PUBLIC_URL
 
 log = logging.getLogger("nod.clerk")
@@ -146,211 +145,6 @@ def load_clerk_browser_js() -> tuple[bytes, str]:
     return load_clerk_js_asset(CLERK_JS_ENTRY)
 
 
-CLERK_PROXY_PATH = "/__clerk"
-_HOP_HEADERS = frozenset(
-    {
-        "connection",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "te",
-        "trailers",
-        "transfer-encoding",
-        "upgrade",
-        "host",
-        "content-length",
-        # nodpilot.com is itself on Cloudflare. Forwarding these to
-        # clerk.nodpilot.com (also Cloudflare) produces a 403 challenge and
-        # breaks every Clerk fetch that went through /__clerk.
-        "cdn-loop",
-        "cf-ray",
-        "cf-visitor",
-        "cf-ew-via",
-        "cf-worker",
-        "cf-warp-tag-id",
-        "true-client-ip",
-    }
-)
-
-
-def clerk_proxy_public_url() -> str:
-    """Absolute Frontend API proxy URL Clerk JS and the Dashboard expect."""
-    public = (os.environ.get("PUBLIC_URL") or PUBLIC_URL or "").strip()
-    if public and "://" not in public:
-        public = "https://" + public
-    host = (urlparse(public).hostname or "").lower()
-    if not host or host in {"127.0.0.1", "localhost"}:
-        fapi = _frontend_api()
-        if fapi.startswith("clerk.") and fapi.count(".") >= 2:
-            public = "https://" + fapi.split(".", 1)[1]
-        else:
-            return ""
-    return public.rstrip("/") + CLERK_PROXY_PATH
-
-
-def clerk_fapi_target(path: str) -> str:
-    raw = (path or "").lstrip("/")
-    if ".." in raw or "://" in raw:
-        raise HTTPException(status_code=400, detail="Invalid path")
-    host = _frontend_api()
-    if not host:
-        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
-    return f"https://{host}/{raw}" if raw else f"https://{host}/"
-
-
-def clerk_client_ip(headers: dict[str, str], peer: str = "") -> str:
-    # Prefer Cloudflare's connecting IP. Do not trust the leftmost
-    # X-Forwarded-For: the client can set it before Cloudflare appends.
-    lowered = {k.lower(): v for k, v in headers.items()}
-    cf = (lowered.get("cf-connecting-ip") or "").strip()
-    if cf:
-        return cf.split(",", 1)[0].strip()[:64]
-    return (peer or "0.0.0.0")[:64]
-
-
-def rewrite_clerk_location(location: str, fapi_host: str, proxy_public: str) -> str:
-    if not location or not fapi_host or not proxy_public:
-        return location
-    prefixes = [
-        f"https://{fapi_host}",
-        f"http://{fapi_host}",
-        "https://frontend-api.clerk.dev",
-        "https://frontend-api.clerk.services",
-    ]
-    for prefix in prefixes:
-        if location == prefix or location.startswith(prefix + "/") or location.startswith(prefix + "?"):
-            return proxy_public.rstrip("/") + location[len(prefix) :]
-    return location
-
-
-def forward_clerk_fapi(
-    method: str,
-    path: str,
-    query: str,
-    body: bytes,
-    incoming: dict[str, str],
-    peer: str,
-) -> StarletteResponse:
-    secret = (os.environ.get("CLERK_SECRET_KEY") or CLERK_SECRET_KEY or "").strip()
-    proxy_public = clerk_proxy_public_url()
-    if not secret or not proxy_public:
-        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
-    target = clerk_fapi_target(path)
-    if query:
-        target = f"{target}?{query}"
-    fapi_host = _frontend_api()
-    out: dict[str, str] = {}
-    for key, value in incoming.items():
-        low = key.lower()
-        if low in _HOP_HEADERS or low in {"clerk-secret-key", "clerk-proxy-url"}:
-            continue
-        out[key] = value
-    out["Host"] = fapi_host
-    out["Clerk-Proxy-Url"] = proxy_public
-    out["Clerk-Secret-Key"] = secret
-    out["X-Forwarded-For"] = clerk_client_ip(incoming, peer)
-    try:
-        res = httpx.request(
-            method.upper(),
-            target,
-            content=body or None,
-            headers=out,
-            timeout=30.0,
-            follow_redirects=False,
-        )
-    except httpx.HTTPError as ex:
-        log.warning("clerk fapi proxy failed err=%s", ex)
-        raise HTTPException(status_code=502, detail="Could not reach Google sign-in") from ex
-    excluded = {"transfer-encoding", "connection", "keep-alive", "content-encoding", "content-length"}
-    response = StarletteResponse(content=res.content, status_code=res.status_code)
-    for key, value in res.headers.multi_items():
-        if key.lower() in excluded:
-            continue
-        if key.lower() == "location":
-            value = rewrite_clerk_location(value, fapi_host, proxy_public)
-        if key.lower() == "set-cookie":
-            response.headers.append("set-cookie", value)
-        else:
-            response.headers[key] = value
-    return response
-
-
-def clerk_proxy_enable_allowed() -> bool:
-    if os.environ.get("PYTEST_CURRENT_TEST"):
-        return False
-    if "pytest" in sys.modules:
-        return False
-    joined = " ".join(sys.argv).lower()
-    return "unittest" not in joined and "pytest" not in joined
-
-
-def _clerk_domain_row(rows: list, wanted: str) -> dict | None:
-    chosen = None
-    for row in rows:
-        if not isinstance(row, dict) or not row.get("id"):
-            continue
-        hay = " ".join(str(row.get(k) or "") for k in ("name", "frontend_api_url", "accounts_url"))
-        if wanted and wanted in hay:
-            return row
-        if "nodpilot.com" in hay.lower() and chosen is None:
-            chosen = row
-    if chosen is None and len(rows) == 1 and isinstance(rows[0], dict):
-        return rows[0]
-    return chosen
-
-
-def enable_clerk_fapi_proxy() -> None:
-    """Clear a /__clerk Dashboard proxy so browsers use the clerk.* CNAME.
-
-    #250 set proxy_url to https://nodpilot.com/__clerk and pointed Clerk JS
-    at that path. Production /__clerk returns Cloudflare 403 (the app sits
-    on Cloudflare and was forwarding cdn-loop to Clerk's Cloudflare), so
-    every Google sign-in fetch failed. The publishable key already encodes
-    clerk.nodpilot.com, which serves the Frontend API directly.
-    """
-    if not clerk_proxy_enable_allowed():
-        return
-    secret = (os.environ.get("CLERK_SECRET_KEY") or CLERK_SECRET_KEY or "").strip()
-    if not secret:
-        return
-    auth = {"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
-    try:
-        listed = httpx.get("https://api.clerk.com/v1/domains", headers=auth, timeout=15.0)
-        listed.raise_for_status()
-        payload = listed.json()
-    except Exception as ex:
-        log.warning("clerk domains list failed err=%s", ex)
-        return
-    rows = payload if isinstance(payload, list) else (payload.get("data") or payload.get("domains") or [])
-    if not isinstance(rows, list):
-        return
-    chosen = _clerk_domain_row(rows, _frontend_api())
-    if not chosen:
-        log.warning("clerk proxy_url skipped: no matching domain")
-        return
-    current = str(chosen.get("proxy_url") or "").rstrip("/")
-    if not current:
-        return
-    ours = clerk_proxy_public_url().rstrip("/")
-    if current != ours and not current.endswith("/__clerk"):
-        log.warning("clerk proxy_url left untouched: %s", current)
-        return
-    domain_id = chosen["id"]
-    try:
-        patched = httpx.patch(
-            f"https://api.clerk.com/v1/domains/{domain_id}",
-            headers=auth,
-            json={"proxy_url": None},
-            timeout=20.0,
-        )
-        if patched.status_code >= 400:
-            log.warning("clerk proxy_url clear status=%s body=%s", patched.status_code, patched.text[:300])
-            return
-        log.info("clerk proxy_url cleared domain=%s", domain_id)
-    except Exception as ex:
-        log.warning("clerk proxy_url clear failed err=%s", ex)
-
-
 def _origin(url: str) -> str:
     url = (url or "").strip().rstrip("/")
     if not url:
@@ -369,34 +163,46 @@ def _dev_origins() -> list[str]:
     return [f"http://{host}:{port}" for host in hosts for port in ports]
 
 
+def _www_siblings(origins: set[str]) -> set[str]:
+    extra: set[str] = set()
+    for origin in origins:
+        parsed = urlparse(origin)
+        host = (parsed.hostname or "").lower()
+        if not host or host in {"127.0.0.1", "localhost"}:
+            continue
+        if host.startswith("www.") and host.count(".") >= 2:
+            extra.add(f"{parsed.scheme}://{host[4:]}")
+        elif host.count(".") == 1:
+            extra.add(f"{parsed.scheme}://www.{host}")
+    return origins | extra
+
+
 def _app_origins() -> set[str]:
+    """Origins a Clerk session azp may name.
+
+    Production: https://nodpilot.com, https://www.nodpilot.com, and the
+    Clerk hosts from the publishable key / PUBLIC_URL (clerk.nodpilot.com,
+    accounts.nodpilot.com). Native: Capacitor WKWebView origins. Local:
+    loopback Vite/API ports. Request Origin is never added.
+    """
     origins = {origin for origin in (_origin(PUBLIC_URL), *_dev_origins()) if origin}
+    origins.update(CAPACITOR_ORIGINS)
     fapi = _frontend_api()
     if fapi:
         origins.add(f"https://{fapi}")
     for host in clerk_browser_hosts():
         origins.add(f"https://{host}")
-    return origins
+    return _www_siblings(origins)
 
 
-def _azp_allowed(azp: str, request: Request | None, issuer: str) -> bool:
+def _azp_allowed(azp: str, issuer: str = "") -> bool:
     if not azp:
         return True
     allowed = _app_origins()
     issuer_origin = _origin(issuer)
     if issuer_origin:
         allowed.add(issuer_origin)
-    if request is not None:
-        req_origin = _origin(request.headers.get("origin") or "")
-        if req_origin:
-            allowed.add(req_origin)
     if azp in allowed:
-        return True
-    if azp.startswith("https://") and azp.endswith(".up.railway.app"):
-        return True
-    if azp.startswith("https://") and (
-        azp.endswith(".clerk.accounts.dev") or azp.endswith(".accounts.dev")
-    ):
         return True
     parsed = urlparse(azp)
     if parsed.hostname in {"localhost", "127.0.0.1"}:
@@ -460,7 +266,7 @@ def verify_clerk_session(token: str, request: Request | None = None) -> dict:
     azp = str(payload.get("azp") or "")
     if isinstance(payload.get("aud"), str) and not azp:
         azp = payload["aud"]
-    if azp and not _azp_allowed(azp, request, issuer):
+    if azp and not _azp_allowed(azp, issuer):
         log.warning("clerk azp rejected: %s", azp)
         raise HTTPException(401, "Invalid Google session")
     if not payload.get("sub"):

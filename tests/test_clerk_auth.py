@@ -3,25 +3,18 @@ import os
 import unittest
 from unittest import mock
 
-import httpx
-
 from fastapi import HTTPException
 
 from server.clerk_auth import (
+    _azp_allowed,
     _frontend_api,
     _issuer_allowed,
     clerk_browser_hosts,
-    clerk_client_ip,
-    clerk_fapi_target,
     clerk_js_filename_allowed,
     clerk_js_source_url,
-    clerk_proxy_public_url,
-    enable_clerk_fapi_proxy,
-    forward_clerk_fapi,
     load_clerk_browser_js,
     load_clerk_js_asset,
     reset_clerk_js_cache,
-    rewrite_clerk_location,
 )
 
 
@@ -102,145 +95,42 @@ class ClerkJsProxyTests(unittest.TestCase):
         self.assertEqual(get.call_count, 1)
 
 
-class ClerkFapiProxyTests(unittest.TestCase):
+class ClerkAzpTests(unittest.TestCase):
     def setUp(self):
         os.environ["CLERK_PUBLISHABLE_KEY"] = _live_key("clerk.nodpilot.com")
-        os.environ["PUBLIC_URL"] = "https://nodpilot.com"
-        os.environ["CLERK_SECRET_KEY"] = "sk_test_proxy"
 
     def tearDown(self):
-        for key in ("CLERK_PUBLISHABLE_KEY", "PUBLIC_URL", "CLERK_SECRET_KEY"):
-            os.environ.pop(key, None)
+        os.environ.pop("CLERK_PUBLISHABLE_KEY", None)
 
-    def test_target_url(self):
-        self.assertEqual(
-            clerk_fapi_target("v1/client/sign_ins"),
-            "https://clerk.nodpilot.com/v1/client/sign_ins",
-        )
-        self.assertEqual(clerk_proxy_public_url(), "https://nodpilot.com/__clerk")
+    def test_allows_nod_origins_and_capacitor(self):
+        with mock.patch("server.clerk_auth.PUBLIC_URL", "https://nodpilot.com"):
+            issuer = "https://clerk.nodpilot.com"
+            self.assertTrue(_azp_allowed("https://nodpilot.com", issuer))
+            self.assertTrue(_azp_allowed("https://www.nodpilot.com", issuer))
+            self.assertTrue(_azp_allowed("https://clerk.nodpilot.com", issuer))
+            self.assertTrue(_azp_allowed("https://accounts.nodpilot.com", issuer))
+            self.assertTrue(_azp_allowed("capacitor://localhost", issuer))
+            self.assertTrue(_azp_allowed("ionic://localhost", issuer))
+            self.assertTrue(_azp_allowed("https://localhost", issuer))
+            self.assertTrue(_azp_allowed("http://127.0.0.1:5174", issuer))
+            self.assertTrue(_azp_allowed("", issuer))
 
-    def test_rejects_dotdot_and_absolute_url(self):
-        with self.assertRaises(HTTPException) as raised:
-            clerk_fapi_target("../v1/client")
-        self.assertEqual(raised.exception.status_code, 400)
-        with self.assertRaises(HTTPException) as raised:
-            clerk_fapi_target("https://evil.example/v1")
-        self.assertEqual(raised.exception.status_code, 400)
+    def test_rejects_request_origin_and_railway(self):
+        with mock.patch("server.clerk_auth.PUBLIC_URL", "https://nodpilot.com"):
+            issuer = "https://clerk.nodpilot.com"
+            self.assertFalse(_azp_allowed("https://evil.example", issuer))
+            self.assertFalse(_azp_allowed("https://nod-web-production.up.railway.app", issuer))
+            self.assertFalse(_azp_allowed("https://foo.clerk.accounts.dev", issuer))
 
-    def test_client_ip_prefers_cloudflare(self):
-        ip = clerk_client_ip(
-            {"X-Forwarded-For": "1.1.1.1, 2.2.2.2", "CF-Connecting-IP": "203.0.113.9"},
-            "10.0.0.1",
-        )
-        self.assertEqual(ip, "203.0.113.9")
 
-    def test_client_ip_ignores_spoofed_xff(self):
-        ip = clerk_client_ip({"X-Forwarded-For": "1.1.1.1"}, "10.0.0.1")
-        self.assertEqual(ip, "10.0.0.1")
+class ClerkProxyGoneTests(unittest.TestCase):
+    def test_fapi_proxy_path_is_not_mounted(self):
+        from starlette.testclient import TestClient
 
-    def test_location_rewrite(self):
-        self.assertEqual(
-            rewrite_clerk_location(
-                "https://clerk.nodpilot.com/v1/client",
-                "clerk.nodpilot.com",
-                "https://nodpilot.com/__clerk",
-            ),
-            "https://nodpilot.com/__clerk/v1/client",
-        )
-        self.assertEqual(
-            rewrite_clerk_location(
-                "https://frontend-api.clerk.dev/v1/oauth",
-                "clerk.nodpilot.com",
-                "https://nodpilot.com/__clerk",
-            ),
-            "https://nodpilot.com/__clerk/v1/oauth",
-        )
+        from server.app import app
+        from server.commerce import router
 
-    def test_forwards_required_headers(self):
-        captured: dict = {}
-        fake = mock.Mock()
-        fake.status_code = 200
-        fake.content = b'{"ok":true}'
-        fake.headers = httpx.Headers(
-            {
-                "content-type": "application/json",
-                "location": "https://clerk.nodpilot.com/v1/x",
-            }
-        )
-
-        def capture(_method, url, **kwargs):
-            captured["url"] = url
-            captured["headers"] = kwargs["headers"]
-            return fake
-
-        with mock.patch("server.clerk_auth.httpx.request", side_effect=capture):
-            res = forward_clerk_fapi(
-                "POST",
-                "v1/client/sign_ins",
-                "__clerk_api_version=2025-11-10",
-                b"{}",
-                {
-                    "cf-connecting-ip": "203.0.113.9",
-                    "content-type": "application/json",
-                    "cdn-loop": "cloudflare; loops=1",
-                    "cf-ray": "abc123",
-                    "cf-visitor": '{"scheme":"https"}',
-                },
-                "10.0.0.1",
-            )
-        self.assertEqual(
-            captured["url"],
-            "https://clerk.nodpilot.com/v1/client/sign_ins?__clerk_api_version=2025-11-10",
-        )
-        self.assertEqual(captured["headers"]["Clerk-Proxy-Url"], "https://nodpilot.com/__clerk")
-        self.assertEqual(captured["headers"]["Clerk-Secret-Key"], "sk_test_proxy")
-        self.assertEqual(captured["headers"]["X-Forwarded-For"], "203.0.113.9")
-        self.assertNotIn("cdn-loop", {k.lower() for k in captured["headers"]})
-        self.assertNotIn("cf-ray", {k.lower() for k in captured["headers"]})
-        self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.headers["location"], "https://nodpilot.com/__clerk/v1/x")
-
-    def test_clears_dashboard_proxy_url(self):
-        listed = mock.Mock()
-        listed.raise_for_status = mock.Mock()
-        listed.json.return_value = {
-            "data": [
-                {
-                    "id": "dmn_1",
-                    "name": "nodpilot.com",
-                    "frontend_api_url": "https://clerk.nodpilot.com",
-                    "proxy_url": "https://nodpilot.com/__clerk",
-                }
-            ]
-        }
-        patched = mock.Mock(status_code=200, text="{}")
-        with (
-            mock.patch("server.clerk_auth.clerk_proxy_enable_allowed", return_value=True),
-            mock.patch("server.clerk_auth.httpx.get", return_value=listed) as get,
-            mock.patch("server.clerk_auth.httpx.patch", return_value=patched) as patch,
-        ):
-            enable_clerk_fapi_proxy()
-        get.assert_called_once()
-        patch.assert_called_once()
-        self.assertIsNone(patch.call_args.kwargs["json"]["proxy_url"])
-
-    def test_leaves_unrelated_proxy_url(self):
-        listed = mock.Mock()
-        listed.raise_for_status = mock.Mock()
-        listed.json.return_value = {
-            "data": [
-                {
-                    "id": "dmn_1",
-                    "name": "nodpilot.com",
-                    "frontend_api_url": "https://clerk.nodpilot.com",
-                    "proxy_url": "https://other.example/proxy",
-                }
-            ]
-        }
-        with (
-            mock.patch("server.clerk_auth.clerk_proxy_enable_allowed", return_value=True),
-            mock.patch("server.clerk_auth.httpx.get", return_value=listed),
-            mock.patch("server.clerk_auth.httpx.patch") as patch,
-        ):
-            enable_clerk_fapi_proxy()
-        patch.assert_not_called()
+        paths = [getattr(route, "path", "") for route in router.routes]
+        self.assertFalse(any(path.startswith("/__clerk") for path in paths))
+        res = TestClient(app).get("/__clerk/v1/environment")
+        self.assertEqual(res.status_code, 404)

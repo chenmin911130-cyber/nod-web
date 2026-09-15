@@ -55,20 +55,6 @@ def clerk_js_dir(name: str):
     return _clerk_js_response(name)
 
 
-_CLERK_PROXY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
-
-
-@router.api_route("/__clerk", methods=_CLERK_PROXY_METHODS)
-@router.api_route("/__clerk/{path:path}", methods=_CLERK_PROXY_METHODS)
-async def clerk_fapi_proxy(request: Request, path: str = ""):
-    from server.clerk_auth import forward_clerk_fapi
-
-    body = await request.body()
-    peer = request.client.host if request.client else ""
-    incoming = {key: value for key, value in request.headers.items()}
-    return forward_clerk_fapi(request.method, path, request.url.query, body, incoming, peer)
-
-
 class RegisterIn(BaseModel):
     email: str
     password: str
