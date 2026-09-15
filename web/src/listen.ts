@@ -473,10 +473,45 @@ export function promoteMeetingSpeakers(
   return next
 }
 
+export const SUMMARIZE_2MIN_MS = 120_000
+
+/** Transcript lines from the last 2 minutes (`at` wall clock).
+ * Missing `at`: include the line only if it sits after the last timestamped
+ * line older than the window (the recent tail). If no line has `at`, return []
+ * — do not recap the whole session. */
 export function lastTwoMinutes(lines: MeetingLine[], now = Date.now()): MeetingLine[] {
-  const cutoff = now - 120_000
-  const windowed = lines.filter((line) => (line.at ?? 0) >= cutoff)
-  return windowed.length ? windowed : lines.slice(-8)
+  const cutoff = now - SUMMARIZE_2MIN_MS
+  const hasStamp = lines.some((line) => typeof line.at === 'number' && line.at > 0)
+  if (!hasStamp) return []
+  let lastOld = -1
+  for (let i = 0; i < lines.length; i++) {
+    const at = lines[i].at
+    if (typeof at === 'number' && at > 0 && at < cutoff) lastOld = i
+  }
+  return lines.filter((line, i) => {
+    if (!(line.text || '').trim()) return false
+    const at = line.at
+    if (typeof at === 'number' && at > 0) return at >= cutoff
+    return i > lastOld
+  })
+}
+
+/** Build a listen Ask. The Summarize 2 min chip windows the transcript and
+ * does not fall back to whole-session notes when the window is empty. */
+export function listenAskPayload(
+  question: string,
+  lines: MeetingLine[],
+  ended: boolean,
+  now = Date.now(),
+): { display: string; listenerQuestion: string; lines: MeetingLine[] } | null {
+  const ask = question.trim()
+  if (!ask) return null
+  if (ask === IPHONE_COPY.quickSummarize) {
+    const windowed = lastTwoMinutes(lines, now)
+    if (!windowed.length) return null
+    return { display: ask, listenerQuestion: IPHONE_COPY.quickSummarizeAsk, lines: windowed }
+  }
+  return { display: ask, listenerQuestion: ask, lines: askContext(lines, ended, now) }
 }
 
 export function transcriptBlock(

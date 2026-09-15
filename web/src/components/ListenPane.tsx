@@ -12,6 +12,7 @@ import {
   parseBiLines,
   parseNotes,
   resolveSpeakerName,
+  lastTwoMinutes,
   sceneChipLabel,
   sceneLabel,
   visibleSections,
@@ -1312,6 +1313,7 @@ export default function ListenPane(props: Props) {
     busy: props.busy,
     catchAskId: props.catchAskId,
   })
+  const summarizeWindow = lastTwoMinutes(props.lines)
   const showQuickChips = phone && mobilePane !== 'transcript' && !props.qa && props.scene !== 'interview' && (props.listening || paused || (props.ended && hasContent)) && props.lines.length > 0
   // #193 item 2: the shortcuts live in the content area (the design puts them
   // under the last line) and no longer depend on the Ask input being open.
@@ -1320,8 +1322,11 @@ export default function ListenPane(props: Props) {
       <button
         type="button"
         className="iphone-ask-chip"
-        disabled={props.busy}
-        onClick={() => props.onSummary()}
+        disabled={props.busy || summarizeWindow.length === 0}
+        onClick={() => {
+          if (props.busy || summarizeWindow.length === 0) return
+          props.onAsk(IPHONE_COPY.quickSummarize)
+        }}
       >
         <span aria-hidden="true">✦</span>
         {IPHONE_COPY.quickSummarize}

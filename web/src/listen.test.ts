@@ -1,4 +1,5 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, SCENE_HELP, applyListenSetting, askPrompt, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesBilingualOn, notesLangActions, notesPrompt, outLangRule, parseNotes, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakersExpected, transcriptBlock } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, SCENE_HELP, applyListenSetting, askPrompt, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, lastTwoMinutes, listenAskPayload, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesBilingualOn, notesLangActions, notesPrompt, outLangRule, parseNotes, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakersExpected, transcriptBlock } from './listen'
+import { IPHONE_COPY } from './iphoneCopy'
 import type { MeetingLine } from './types'
 
 function eq<T>(got: T, want: T, label?: string) {
@@ -253,4 +254,69 @@ eq(notesBodyText('我们周五发。'), '我们周五发。', 'single-language n
   // Bilingual off: transcriptBlock never includes a translation column.
   const tb = transcriptBlock([{ id: '1', ts: '0:01', text: 'We ship Friday.', translation: '我们周五发。' }], false)
   if (tb.includes('我们周五发。')) throw new Error('bilingual off never adds the translation rows')
+}
+
+// Summarize 2 min: window by line.at. Missing at stays in the recent tail after
+// the last clearly-old timestamp; with no timestamps at all, return [] so we
+// never recap the whole session.
+{
+  const now = 1_000_000
+  const line = (id: string, at?: number, text = id): MeetingLine => ({ id, ts: '0:00', text, at })
+  eq(lastTwoMinutes([], now), [], 'empty transcript is empty')
+  eq(
+    lastTwoMinutes([line('old', now - 180_000), line('older', now - 121_000)], now).map((l) => l.id),
+    [],
+    'lines older than 2 min are dropped',
+  )
+  eq(
+    lastTwoMinutes([line('keep', now - 30_000), line('fresh', now - 5_000)], now).map((l) => l.id),
+    ['keep', 'fresh'],
+    'lines within 2 min are kept',
+  )
+  eq(
+    lastTwoMinutes(
+      [line('old', now - 180_000), line('keep', now - 10_000), line('too-old', now - 200_000)],
+      now,
+    ).map((l) => l.id),
+    ['keep'],
+    'only in-window timestamps survive even if order is mixed',
+  )
+  eq(
+    lastTwoMinutes(
+      [line('old', now - 180_000), line('tail-unstamped'), line('fresh', now - 8_000)],
+      now,
+    ).map((l) => l.id),
+    ['tail-unstamped', 'fresh'],
+    'missing at is kept only in the recent tail after the last old timestamp',
+  )
+  eq(
+    lastTwoMinutes([line('a'), line('b')], now).map((l) => l.id),
+    [],
+    'no timestamps: cannot prove a 2 min window, so do not recap the whole session',
+  )
+  eq(
+    lastTwoMinutes([line('blank', now - 5_000, '   ')], now).map((l) => l.id),
+    [],
+    'blank text in the window is not speech',
+  )
+}
+
+{
+  const now = 2_000_000
+  const old: MeetingLine = { id: 'old', ts: '0:01', text: 'Decide the launch last hour', at: now - 180_000 }
+  const recent: MeetingLine = { id: 'new', ts: '0:02', text: 'Ship Friday; Priya owns email', at: now - 20_000 }
+  const recap = listenAskPayload(IPHONE_COPY.quickSummarize, [old, recent], false, now)
+  if (!recap) throw new Error('Summarize 2 min with recent speech must send an ask')
+  eq(recap.display, 'Summarize 2 min', 'Live card question stays the chip label')
+  eq(recap.listenerQuestion, IPHONE_COPY.quickSummarizeAsk, 'model gets the short 2 min recap prompt')
+  eq(recap.lines.map((l) => l.id), ['new'], 'ask transcript is only the last 2 min')
+  const prompt = askPrompt(recap.lines, recap.listenerQuestion, 'en')
+  if (prompt.includes('last hour')) throw new Error('2 min ask must not include older transcript')
+  if (!prompt.includes('Ship Friday')) throw new Error('2 min ask includes the in-window line')
+  if (prompt.includes('[NOD_NOTES')) throw new Error('chip is an Ask, not whole-session Notes')
+  eq(listenAskPayload(IPHONE_COPY.quickSummarize, [old], false, now), null, 'no speech in last 2 min does not fire')
+  const items = listenAskPayload(IPHONE_COPY.quickActionItems, [old, recent], false, now)
+  if (!items) throw new Error('action-item chip still asks')
+  eq(items.listenerQuestion, IPHONE_COPY.quickActionItems, 'other chips keep their own question')
+  if (!items.lines.some((l) => l.id === 'old')) throw new Error('action-item chip is not forced through the 2 min window')
 }
