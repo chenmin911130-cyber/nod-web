@@ -1,151 +1,39 @@
 import type { Lang, PairLang } from './types'
 import { TRANSLATE_LANGS } from './types'
 import type { ListenScene } from './listen'
+import { translateLangDisplayName } from './langDisplayNames'
+import { resolveUiLang, type UiLang } from './uiLang'
+import { EN_IPHONE_COPY, iphoneCopyFor, type IphoneCopy } from './iphoneCopyLocales'
 
-export const IPHONE_COPY = {
-  listenTab: 'Listen',
-  translateTab: 'Translate',
-  start: 'Start',
-  startListening: 'Start listening',
-  more: 'More',
-  moreSession: 'This session',
-  pause: 'Pause',
-  resume: 'Resume',
-  stop: 'End',
-  translateStatus: 'Listening',
-  translateStop: 'Stop',
-  muted: 'Muted',
-  readyStatus: 'Ready to listen',
-  recordingStatus: 'Recording',
-  listeningNow: 'Listening...',
-  listeningNowLabel: 'Listening now',
-  keyPoint: 'Key Point',
-  actionItem: 'Action Item',
-  aiInsight: 'AI Insight',
-  copyLine: 'Copy',
-  shareSummary: 'Share',
-  summarizeNow: 'Summarize',
-  readyTitle: 'Ready to listen.',
-  readyTitleShort: 'Ready to listen',
-  readyHelp: 'Tap start to capture, transcribe, and organize your conversation in real time.',
-  readyHelpCapture: "Capture your conversation. We'll organize the rest.",
-  recordingSetup: 'Recording setup',
-  sceneRow: 'Scene',
-  spokenLanguage: 'Spoken language',
-  notesLanguage: 'Notes language',
-  sceneSection: 'SCENE',
-  participants: 'Participants',
-  setupDone: 'Done',
-  speechAutoTitle: 'Auto-detect',
-  speechAutoHelp: 'Detect automatically',
-  notesAutoTitle: 'Auto',
-  notesAutoHelp: 'Follow speech',
-  listeningEmpty: 'Listening…',
-  listeningEmptyHelp: "We'll show what's said here.",
-  askConversation: 'Ask about this conversation…',
-  askFollowUp: 'Ask a follow-up…',
-  askThinking: 'Thinking…',
-  askCouldntAnswer: "Couldn't answer.",
-  askRetry: 'Retry',
-  askBasedOn: 'Based on the conversation so far',
-  quickSummarize: 'Summarize 2 min',
-  quickSummarizeAsk: 'Recap only the last 2 minutes: decisions, owners, and open questions. Keep it short.',
-  quickActionItems: 'List the action items so far, with who owns each.',
-  quickActionItemsChip: 'List action items',
-  quickKeyConcepts: 'List the key concepts so far.',
-  quickKeyConceptsChip: 'Key concepts so far',
-  aiNote: 'Your AI listening assistant, ready when you are.',
-  pausedStatus: 'Paused',
-  endedStatus: 'Ended',
-  liveTab: 'Live',
-  transcriptTab: 'Transcript',
-  summaryTab: 'Notes',
-  autoDetect: 'Auto Detect',
-  emptyLive: 'Start listening. What was said stays here.',
-  emptyTranscript: 'Waiting for speech…',
-  emptyNotes: 'Start listening',
-  fullTranscript: 'Full transcript',
-  allCapturedSpeech: 'All captured speech',
-  backToLatest: 'Back to latest',
-  speakerSuggestIs: '{label} is {name}?',
-  emptyTranslateTitle: 'Ready to translate',
-  emptyTranslateSub: 'Tap the mic below to speak, or type to translate.',
-  histTitle: 'History',
-  histDone: 'Done',
-  histSearch: 'Search',
-  histOpen: 'Open',
-  histShare: 'Share notes',
-  histPdf: 'Export PDF',
-  histAudio: 'Save audio to Files',
-  histDelete: 'Delete',
-  accountTitle: 'Account',
-  askPlaceholder: 'Ask anything about this meeting…',
-  askSend: 'Ask',
-  askEntry: 'Ask',
-  typeToTranslate: 'Type to translate',
-  showKeyboard: 'Show keyboard',
-  hideKeyboard: 'Hide keyboard',
-  morePdf: 'Export PDF',
-  moreSave: 'Save',
-  moreSaveHint: 'Available after recording ends',
-  moreSaved: 'Saved',
-  moreViewHistory: 'View in History',
-  moreHistory: 'History',
-  moreNew: 'New session',
-  newCompact: '+ New',
-  continueRecording: 'Continue',
-  collapseAsk: 'Close',
-  expandResults: 'Show transcript',
-  collapseResults: 'Show settings',
-  moreCancel: 'Cancel',
-  meetingNotes: 'Meeting notes',
-  studyNotes: 'Study notes',
-  saveTitle: 'Save to History?',
-  saveBody: 'Keep this meeting so you can reopen it later.',
-  saveYes: 'Save',
-  saveNo: "Don't save",
-  saveBannerTitle: 'Save this session?',
-  saveRestoreTitle: 'Unsaved',
-  saveNotNow: 'Not now',
-  saveSaving: 'Saving…',
-  saveFailed: "Couldn't save.",
-  saveRetry: 'Retry save',
-  saveWaitingSync: 'Waiting to sync',
-  saveSavedLine: 'Saved to History',
-  saveCancel: 'Cancel',
-  keepRecording: 'Keep recording',
-  keepRecordingHelp: 'Audio stays on your account for 30 days. Uncheck to keep notes only.',
-  listenAny: 'Listen · Any language',
-  notesSheetHelp: 'Notes are written in this language only',
-  enhance: 'More accurate',
-  confirmStatus: 'Confirming before translate',
-  autoDetectFrom: 'Auto-detect',
-  startTranslate: 'Start voice translation',
-  copyTranslation: 'Copy translation',
-  autoNotes: 'Auto notes',
-  appliesToNextRecording: 'Applies to next recording',
-  settingsLocked: 'Settings are locked while recording',
-  uplinkUnavailable: 'Background recording is unavailable. Reopen the app and try again.',
-  uplinkFailed: 'Background recording could not start. You can still record while the app is open.',
-  settingsReadonlyAria: 'Session settings (read-only while recording)',
-  leaveTitle: 'Start a new session?',
-  leaveSubRecording: 'Recording will end first. Your notes stay until you choose.',
-  leaveSubEnded: "This session isn't saved yet.",
-  leaveSave: 'Save and start new',
-  leaveDiscard: 'Discard and start new',
-  leaveDiscardHelp: 'This cannot be undone.',
-  leaveWaitAnswer: 'Wait for the answer to finish',
-  leaveSavedStatus: 'Saved · new session',
-} as const
+export type { IphoneCopy }
+export { iphoneCopyFor, EN_IPHONE_COPY }
+
+let cachedLang: UiLang | null = null
+let cachedCopy: IphoneCopy | null = null
+
+/** Picks the copy table on each read so a document-start locale injection wins. */
+export function currentIphoneCopy(): IphoneCopy {
+  const lang = resolveUiLang()
+  if (cachedCopy && cachedLang === lang) return cachedCopy
+  cachedLang = lang
+  cachedCopy = iphoneCopyFor(lang)
+  return cachedCopy
+}
+
+export const IPHONE_COPY: IphoneCopy = new Proxy({} as IphoneCopy, {
+  get(_target, prop) {
+    if (typeof prop !== 'string') return undefined
+    return currentIphoneCopy()[prop as keyof IphoneCopy]
+  },
+})
 
 export function nativeListenChipOrder(scene: ListenScene): ReadonlyArray<'scene' | 'speech' | 'notes'> {
   return ['scene', 'speech', 'notes']
 }
 
 export function listenChipParts(lang: Lang): { title: string; sub: string } {
-  if (lang === 'auto') return { title: 'Auto', sub: '' }
-  const name = TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
-  return { title: name, sub: '' }
+  if (lang === 'auto') return { title: IPHONE_COPY.notesAutoTitle, sub: '' }
+  return { title: translateLangDisplayName(lang), sub: '' }
 }
 
 export function notesChipParts(lang: Lang, biTarget?: PairLang): { title: string; sub: string } {
@@ -153,18 +41,17 @@ export function notesChipParts(lang: Lang, biTarget?: PairLang): { title: string
 }
 
 export function listenDetectChip(lang: Lang): string {
-  if (lang === 'auto') return 'Auto'
-  return TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
+  if (lang === 'auto') return IPHONE_COPY.notesAutoTitle
+  return translateLangDisplayName(lang)
 }
 
 export function notesInChip(lang: Lang, _biTarget?: PairLang): string {
-  if (lang === 'auto') return 'Notes · Auto'
-  const name = TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
-  return `Notes · ${name}`
+  if (lang === 'auto') return `${IPHONE_COPY.summaryTab} · ${IPHONE_COPY.notesAutoTitle}`
+  return `${IPHONE_COPY.summaryTab} · ${translateLangDisplayName(lang)}`
 }
 
 export function bilingualButtonTitle(on: boolean, target: PairLang): string {
-  const name = TRANSLATE_LANGS.find((item) => item.id === target)?.name || 'Chinese'
+  const name = translateLangDisplayName(target)
   return on
     ? `Bilingual on → ${name} — tap to turn off`
     : `Bilingual off — translations in ${name}`
@@ -186,11 +73,11 @@ export function translateTargetChip(lang: PairLang): string {
 
 export function translateFromChip(lang: Lang): string {
   if (lang === 'auto') return IPHONE_COPY.autoDetectFrom
-  return TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
+  return translateLangDisplayName(lang)
 }
 
 export function translateToChip(lang: PairLang): string {
-  return TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
+  return translateLangDisplayName(lang)
 }
 
 export function translateSourceTag(input: { from?: string; locked?: string; heard?: string | null }): string {
@@ -201,7 +88,7 @@ export function translateSourceTag(input: { from?: string; locked?: string; hear
 export function translateSourceName(input: { from?: string; locked?: string; heard?: string | null }): string {
   const raw = input.from || (input.locked && input.locked !== 'auto' ? input.locked : '') || input.heard || ''
   if (!raw || raw === 'auto') return ''
-  return TRANSLATE_LANGS.find((item) => item.id === raw)?.name || ''
+  return translateLangDisplayName(raw as PairLang)
 }
 
 export function translateSwapAffordance(input: { from: string; heardFrom?: string | null }): 'arrow' | 'swap' {
@@ -348,12 +235,12 @@ export function speakerSuggestText(label: string, name: string): string {
 
 export function spokenSettingsValue(lang: Lang): string {
   if (lang === 'auto') return IPHONE_COPY.speechAutoTitle
-  return TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
+  return translateLangDisplayName(lang)
 }
 
 export function notesSettingsValue(lang: Lang): string {
   if (lang === 'auto') return IPHONE_COPY.notesAutoTitle
-  return TRANSLATE_LANGS.find((item) => item.id === lang)?.name || 'English'
+  return translateLangDisplayName(lang)
 }
 
 export type AskEntryKind = 'ask' | 'keyboard'

@@ -153,7 +153,7 @@ export default function AccountPane({
   const blocked = signOutGate === 'blocked-listening'
   const waiting = signOutGate === 'wait-saving'
   const signOutHint = blocked
-    ? 'Stop listening first'
+    ? IPHONE_COPY.stopListeningFirst
     : waiting
       ? IPHONE_COPY.saveSaving
       : ''
@@ -170,9 +170,9 @@ export default function AccountPane({
         body: JSON.stringify({ email: me?.email || '', message }),
       })
       setFeedback('')
-      setFeedbackMsg('Thanks — we have the note.')
+      setFeedbackMsg(IPHONE_COPY.feedbackThanks)
     } catch (ex) {
-      setFeedbackErr(ex instanceof Error ? ex.message : 'Could not send feedback')
+      setFeedbackErr(ex instanceof Error ? ex.message : IPHONE_COPY.feedbackFailed)
     } finally {
       setFeedbackBusy(false)
     }
@@ -272,7 +272,7 @@ export default function AccountPane({
                 disabled={feedbackBusy || !feedback.trim()}
                 onClick={() => void sendFeedback()}
               >
-                {feedbackBusy ? 'Sending…' : 'Send'}
+                {feedbackBusy ? IPHONE_COPY.feedbackSending : IPHONE_COPY.feedbackSend}
               </button>
             </div>
           </div>

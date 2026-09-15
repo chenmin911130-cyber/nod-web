@@ -1,4 +1,7 @@
-export type WatchUiLang = 'zh' | 'en' | 'it' | 'es' | 'fr' | 'de' | 'pt' | 'ja'
+import { watchUiLang, type UiLang } from './uiLang'
+
+export type WatchUiLang = UiLang
+export { watchUiLang }
 
 export type WatchUiCopy = {
   listening: string
@@ -182,14 +185,6 @@ const COPY: Record<WatchUiLang, WatchUiCopy> = {
     diskFull: '容量不足',
     drainFailed: '送信できませんでした',
   },
-}
-
-const LANGS = new Set<WatchUiLang>(Object.keys(COPY) as WatchUiLang[])
-
-export function watchUiLang(locale: string): WatchUiLang {
-  const tag = locale.trim().toLowerCase().replace(/_/g, '-')
-  const code = (tag.split('-')[0] || 'en') as WatchUiLang
-  return LANGS.has(code) ? code : 'en'
 }
 
 export function watchUiCopy(locale: string): WatchUiCopy {

@@ -2580,7 +2580,7 @@ export default function App() {
       workspaceMode: s.workspaceMode,
     })
     if (gate === 'blocked-listening') {
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'Stop listening first' } })
+      dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.stopListeningFirst } })
       return
     }
     if (gate === 'wait-saving') {
@@ -2606,7 +2606,7 @@ export default function App() {
       workspaceMode: s.workspaceMode,
     })
     if (gate === 'blocked-listening') {
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'Stop listening first' } })
+      dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.stopListeningFirst } })
       return
     }
     if (gate === 'wait-saving') {
@@ -2754,7 +2754,7 @@ export default function App() {
         }
         dispatch({
           type: 'fail_ask',
-          text: ex instanceof Error ? ex.message : 'Could not send the file',
+          text: ex instanceof Error ? ex.message : IPHONE_COPY.sendFileFailed,
           submitId: submit_id,
         })
       }
@@ -2980,7 +2980,7 @@ export default function App() {
       listening: sessionListening({ capture: s.capture }),
       paused: s.capture === 'paused',
     })) {
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'Stop listening first' } })
+      dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.stopListeningFirst } })
       return
     }
     if (s.stealth && mode !== 'interview') {
@@ -3533,7 +3533,7 @@ export default function App() {
       } catch (ex) {
         dispatch({
           type: 'engine',
-          ev: { type: 'error', text: ex instanceof Error ? ex.message : 'Could not send the file' },
+          ev: { type: 'error', text: ex instanceof Error ? ex.message : IPHONE_COPY.sendFileFailed },
         })
       }
     })()
@@ -3561,7 +3561,7 @@ export default function App() {
       } catch (ex) {
         dispatch({
           type: 'engine',
-          ev: { type: 'error', text: ex instanceof Error ? ex.message : 'Could not send the file' },
+          ev: { type: 'error', text: ex instanceof Error ? ex.message : IPHONE_COPY.sendFileFailed },
         })
       }
     })()
@@ -4343,15 +4343,17 @@ export default function App() {
       {consentOpen && (
         <div className="consent-mask">
           <div className="consent-card">
-            <h2>Before you start recording</h2>
+            <h2>{IPHONE_COPY.consentTitle}</h2>
             <p>
-              The first time you enable the microphone, Nodpilot sends audio to AssemblyAI and text to a language model.
-              Tell others in the room if they must know. You can
-              delete stored history from Account. Read the <a href="/privacy">privacy policy</a> and{' '}
-              <a href="/consent">consent note</a>.
+              {IPHONE_COPY.consentBody}{' '}
+              {IPHONE_COPY.consentLinksPrefix}{' '}
+              <a href="/privacy">{IPHONE_COPY.consentPrivacyLink}</a>{' '}
+              {IPHONE_COPY.consentLinksJoin}{' '}
+              <a href="/consent">{IPHONE_COPY.consentNoteLink}</a>
+              {IPHONE_COPY.consentLinksSuffix}
             </p>
             <button className="keysetup-save" type="button" onClick={acceptConsent}>
-              I agree — enable microphone
+              {IPHONE_COPY.consentAgree}
             </button>
             <button
               className="consent-later"
@@ -4361,7 +4363,7 @@ export default function App() {
                 setConsentOpen(false)
               }}
             >
-              Not now
+              {IPHONE_COPY.consentLater}
             </button>
           </div>
         </div>

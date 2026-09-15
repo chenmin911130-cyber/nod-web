@@ -9,7 +9,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     /// The brand mask for this cold launch; nil once it has faded out (or if it was never
     /// installed). A hot resume must never build another one.
     private var launchOverlay: LaunchOverlay?
-
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         DispatchQueue.main.async {
             self.makeWebViewFeelNative()
