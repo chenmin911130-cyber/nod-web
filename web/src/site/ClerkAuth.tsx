@@ -14,7 +14,7 @@ import {
   googleButtonLabel,
   googleLoadError,
 } from '../googleAuth'
-import { apiUrl, maybeReturnToNativeApp, nativeGo, wantsNativeReturn } from '../native'
+import { apiUrl, maybeReturnToNativeApp, nativeGo, safeNextPath, wantsNativeReturn } from '../native'
 import { track } from './track'
 import './Site.css'
 
@@ -88,7 +88,7 @@ export function ClerkExchange() {
       const path = window.location.pathname.replace(/\/+$/, '') || '/'
       const view = new URLSearchParams(window.location.search).get('view')
       if (path === '/login' || path === '/signup' || path === '/sso-callback' || view === 'login' || view === 'signup' || view === 'sso-callback') {
-        const next = new URLSearchParams(window.location.search).get('next') || '/app'
+        const next = safeNextPath(new URLSearchParams(window.location.search).get('next'))
         nativeGo(next, true)
       }
     })()
@@ -136,6 +136,7 @@ export function NativeGoogleButton() {
 }
 
 export function GoogleButton({ next = '/app' }: { next?: string }) {
+  const dest = safeNextPath(next)
   const { isLoaded, isSignedIn, getToken: getClerkToken } = useAuth()
   const clerk = useClerk()
   const { signIn } = useSignIn()
@@ -161,7 +162,7 @@ export function GoogleButton({ next = '/app' }: { next?: string }) {
         if (!sessionToken) throw new Error('Google session expired. Try again.')
         await exchangeClerkSession(sessionToken)
         if (maybeReturnToNativeApp(getToken())) return
-        nativeGo(next, true)
+        nativeGo(dest, true)
         return
       }
       if (!signIn) {
@@ -169,7 +170,7 @@ export function GoogleButton({ next = '/app' }: { next?: string }) {
         return
       }
       track('cta_google')
-      const complete = `/login?next=${encodeURIComponent(next)}${wantsNativeReturn() ? '&native_return=1' : ''}`
+      const complete = `/login?next=${encodeURIComponent(dest)}${wantsNativeReturn() ? '&native_return=1' : ''}`
       if (typeof signIn.authenticateWithRedirect === 'function') {
         await signIn.authenticateWithRedirect({
           strategy: 'oauth_google',

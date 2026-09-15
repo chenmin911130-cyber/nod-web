@@ -3,7 +3,7 @@ import threading
 import unittest
 from unittest import mock
 
-from server.app import Pipeline, Session, _close_llm_stream
+from server.app import Pipeline, Session, _close_llm_stream, _friendly_gen_error
 
 
 def _pipe() -> Pipeline:
@@ -44,6 +44,26 @@ class _Choice:
 class _Chunk:
     def __init__(self, text: str):
         self.choices = [_Choice(text)]
+
+
+class FriendlyGenErrorTests(unittest.TestCase):
+    def test_transient_is_network_copy(self):
+        self.assertEqual(
+            _friendly_gen_error(TimeoutError("read timed out")),
+            "Generation failed: network error. Please try again.",
+        )
+        self.assertEqual(
+            _friendly_gen_error(ConnectionError("connection reset")),
+            "Generation failed: network error. Please try again.",
+        )
+
+    def test_non_transient_never_includes_exception_text(self):
+        err = RuntimeError("sk_live_leaked_key invalid model deepseek-secret")
+        text = _friendly_gen_error(err)
+        self.assertEqual(text, "Generation failed. Please try again.")
+        self.assertNotIn("sk_live", text)
+        self.assertNotIn("deepseek-secret", text)
+        self.assertNotIn(str(err), text)
 
 
 class CloseLlmStreamTests(unittest.TestCase):
