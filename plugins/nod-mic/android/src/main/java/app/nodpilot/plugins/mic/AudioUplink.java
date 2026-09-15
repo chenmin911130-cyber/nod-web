@@ -37,7 +37,7 @@ final class AudioUplink {
     private final Object lock = new Object();
     private final ArrayDeque<byte[]> pending = new ArrayDeque<>();
     private final OkHttpClient client = new OkHttpClient.Builder()
-        .pingInterval(0, TimeUnit.SECONDS)
+        .pingInterval(15, TimeUnit.SECONDS)
         .build();
 
     private boolean enabled;

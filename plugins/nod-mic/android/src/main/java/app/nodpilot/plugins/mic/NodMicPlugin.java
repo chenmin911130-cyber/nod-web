@@ -8,7 +8,9 @@ import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Process;
+import android.os.SystemClock;
 import android.util.Base64;
+import android.util.Log;
 import androidx.core.content.ContextCompat;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -29,7 +31,9 @@ import com.getcapacitor.annotation.PermissionCallback;
 )
 public class NodMicPlugin extends Plugin {
 
+    private static final String TAG = "NodMic";
     private static final int SAMPLE_RATE = 16_000;
+    private static final int FRAME = 3200;
     private final Object recLock = new Object();
     private volatile boolean running;
     private AudioRecord recorder;
@@ -163,55 +167,94 @@ public class NodMicPlugin extends Plugin {
 
     private boolean startRecorder() {
         haltRecorder();
+        if (!openRecorder()) return false;
+        recThread = new Thread(this::readLoop, "nod-mic");
+        recThread.start();
+        return true;
+    }
+
+    private boolean openRecorder() {
         synchronized (recLock) {
+            if (recorder != null) return true;
             if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 return false;
             }
             int min = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
             if (min <= 0) return false;
-            int buf = Math.max(min, FRAME);
+            int buf = Math.max(min * 4, FRAME * 4);
+            AudioRecord next;
             try {
-                recorder = new AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, buf);
+                next = new AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, buf);
             } catch (Exception e) {
-                recorder = null;
+                Log.w(TAG, "AudioRecord open failed", e);
                 return false;
             }
-            if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
-                recorder.release();
-                recorder = null;
+            if (next.getState() != AudioRecord.STATE_INITIALIZED) {
+                next.release();
                 return false;
             }
-            recorder.startRecording();
-            if (recorder.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
-                recorder.release();
-                recorder = null;
+            next.startRecording();
+            if (next.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
+                next.release();
                 return false;
             }
-            recThread = new Thread(this::readLoop, "nod-mic");
-            recThread.start();
+            recorder = next;
             return true;
         }
     }
 
-    private static final int FRAME = 3200;
+    private void releaseRecorder() {
+        AudioRecord rec;
+        synchronized (recLock) {
+            rec = recorder;
+            recorder = null;
+        }
+        if (rec == null) return;
+        try {
+            rec.stop();
+        } catch (Exception ignored) {}
+        rec.release();
+    }
 
     private void readLoop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO);
         byte[] buf = new byte[FRAME];
+        int failStreak = 0;
+        long lastKick = 0;
         while (running) {
+            long now = SystemClock.elapsedRealtime();
+            if (CaptureLoopPolicy.shouldRefreshForeground(now, lastKick)) {
+                startService();
+                lastKick = now;
+            }
             AudioRecord rec;
             synchronized (recLock) {
                 rec = recorder;
             }
-            if (rec == null) break;
+            if (rec == null) {
+                if (!openRecorder()) {
+                    failStreak++;
+                    sleepQuiet(CaptureLoopPolicy.reopenDelayMs(failStreak));
+                    continue;
+                }
+                failStreak = 0;
+                continue;
+            }
             int n;
             try {
                 n = rec.read(buf, 0, buf.length);
             } catch (Exception e) {
-                break;
+                n = AudioRecord.ERROR_INVALID_OPERATION;
             }
-            if (n < 0) break;
-            if (n == 0) continue;
+            if (CaptureLoopPolicy.shouldReopenRecorder(running, n)) {
+                releaseRecorder();
+                failStreak++;
+                sleepQuiet(CaptureLoopPolicy.reopenDelayMs(failStreak));
+                continue;
+            }
+            if (!running) break;
+            if (n <= 0) continue;
+            failStreak = 0;
             if (AudioUplink.get().isEnabled()) {
                 AudioUplink.get().enqueue(buf, n);
                 continue;
@@ -223,6 +266,14 @@ public class NodMicPlugin extends Plugin {
             if (host != null) {
                 host.runOnUiThread(() -> notifyListeners("pcm", ev));
             }
+        }
+    }
+
+    private static void sleepQuiet(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -240,20 +291,13 @@ public class NodMicPlugin extends Plugin {
 
     private void haltRecorder() {
         Thread t;
-        AudioRecord rec;
         synchronized (recLock) {
             t = recThread;
             recThread = null;
-            rec = recorder;
-            recorder = null;
         }
-        if (rec != null) {
-            try {
-                rec.stop();
-            } catch (Exception ignored) {}
-            rec.release();
-        }
-        if (t != null) {
+        releaseRecorder();
+        if (t != null && t != Thread.currentThread()) {
+            t.interrupt();
             try {
                 t.join(400);
             } catch (InterruptedException ignored) {
@@ -271,8 +315,11 @@ public class NodMicPlugin extends Plugin {
             } else {
                 getContext().startService(i);
             }
-        } catch (Exception ignored) {
-            /* lock-screen keep-alive is best-effort if the OS blocks FGS */
+        } catch (Exception e) {
+            Log.e(TAG, "microphone foreground service failed", e);
+            try {
+                getContext().startService(i);
+            } catch (Exception ignored) {}
         }
     }
 
