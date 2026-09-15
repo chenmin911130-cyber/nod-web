@@ -1,4 +1,5 @@
 import { Capacitor } from '@capacitor/core'
+import { SITE_ORIGIN } from './siteOrigin'
 
 export const NATIVE_API_ORIGIN = 'https://nodpilot.com'
 export const NATIVE_AUTH_SCHEME = 'nodpilot'
@@ -43,6 +44,25 @@ export function wsUrl(): string {
   return `${proto}//${location.host}/ws`
 }
 
+const DEFAULT_NEXT_PATH = '/app'
+
+/** Same-origin path after sign-in. Rejects `https://…`, `//evil`, and `/\evil`. */
+export function safeNextPath(raw: string | null | undefined, fallback = DEFAULT_NEXT_PATH): string {
+  const value = (raw || '').trim()
+  if (!value.startsWith('/') || value.startsWith('//') || value.startsWith('/\\') || value.includes('\\')) {
+    return fallback
+  }
+  try {
+    const url = new URL(value, SITE_ORIGIN)
+    if (url.origin !== SITE_ORIGIN || url.username || url.password) return fallback
+    const path = `${url.pathname}${url.search}${url.hash}`
+    if (!path.startsWith('/') || path.startsWith('//')) return fallback
+    return path
+  } catch {
+    return fallback
+  }
+}
+
 /** Map a site path (`/login?next=/app`) onto the bundled HTML files. */
 export function appHref(path: string): string {
   if (!isNativeApp()) return path
@@ -64,7 +84,7 @@ export function appHref(path: string): string {
 }
 
 export function nativeGo(path: string, replace = false): void {
-  const href = appHref(path)
+  const href = appHref(safeNextPath(path))
   if (replace) location.replace(href)
   else location.assign(href)
 }

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { accountDeletedNotice, deleteAccountCopy } from '../accountCopy'
 import { api, fetchMe, getToken, setToken } from '../auth'
-import { isNativeApp, maybeReturnToNativeApp, nativeGo } from '../native'
+import { isNativeApp, maybeReturnToNativeApp, nativeGo, safeNextPath } from '../native'
 import { applySeo, track } from './track'
 import './Site.css'
 import { PRODUCT_NAME } from '../brand'
@@ -98,7 +98,7 @@ export function LoginPage({ clerkEnabled = false }: { clerkEnabled?: boolean }) 
   const [sent, setSent] = useState(false)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
-  const next = new URLSearchParams(location.search).get('next') || '/app'
+  const next = safeNextPath(new URLSearchParams(location.search).get('next'))
 
   useAuthSeo('Sign in', '/login', 'Sign in to Nodpilot with Google or an email code.')
 
