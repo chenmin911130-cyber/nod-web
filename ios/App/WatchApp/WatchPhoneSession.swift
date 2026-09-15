@@ -151,7 +151,7 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
     // an app must declare exactly one session type (self care / mindfulness /
     // physical therapy / smart alarm) in its Background Modes capability, and
     // none of them describes live Q&A or translation. The WatchKit app instead
-    // declares `WKBackgroundModes: audio`, and `WatchRecorder` activates a real
+    // declares `UIBackgroundModes: audio`, and `WatchRecorder` activates a real
     // `AVAudioSession(.playAndRecord)`: per Apple, an app running an active
     // background audio session stays onscreen and may keep updating its UI. So
     // the extended session was inert while its expiry handler restarted it from
