@@ -2,11 +2,17 @@ import type { Api, AppConfig, CaptureState, EngineEvent, EngineMsg, EngineState 
 import { PRODUCT_NAME } from './brand'
 import { getToken } from './auth'
 import { MicCapture } from './audio'
-import { apiUrl, isNativeApp, wsUrl } from './native'
+import { apiUrl, isAndroidApp, isNativeApp, wsUrl } from './native'
 import { micSilenceShouldWarn } from './micGuard'
 import { audioUplinkWsUrl, controlWsUrl, shouldEmitUplinkNotice, uplinkFailureFromError, uplinkFailureLog, uplinkShouldForwardPcmFromJs, uplinkTokenAfterNativeStart } from './uplink'
 import { isWatchMicPreferred, setWatchPcmSink } from './watch'
 import { copyText } from './historyRestore'
+
+function micSilentHelp(): string {
+  return isAndroidApp()
+    ? 'Microphone is silent. Allow microphone in system settings, then Stop and Start again.'
+    : 'Microphone is silent. Check iPhone Control Centre mic access, then Stop and Start again.'
+}
 
 const EVENT_TYPES = new Set([
   'ready',
@@ -266,7 +272,7 @@ export function installWebApi(): void {
               window.clearInterval(silenceWatch)
               emit({
                 type: 'error',
-                text: 'Microphone is silent. Check iPhone Control Centre mic access, then Stop and Start again.',
+                text: micSilentHelp(),
               })
             }
           }, 500)
@@ -411,7 +417,7 @@ export function installWebApi(): void {
   mic.onFallbackFailed = () => {
     emit({
       type: 'error',
-      text: 'Microphone is silent. Check iPhone Control Centre mic access, then Stop and Start again.',
+      text: micSilentHelp(),
     })
   }
 

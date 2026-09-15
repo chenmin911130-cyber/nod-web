@@ -81,3 +81,7 @@ Pods project, or either lock half, a `Podfile.lock` that disagrees with
 ### Self-improve
 
 Record confirmed agent misses in `.cursor/skills/self-improve/errors.md`. Read that log before Watch / listen / Translate / phone-sync work. After a miss, append one entry. See `.cursor/skills/self-improve/SKILL.md`.
+
+## Android
+
+Phone debug APK: [docs/android.md](docs/android.md) (`npm run cap:android`). Isolation worktrees go in `.worktrees/<id>/`, not `/private/tmp`. Matches iPhone phone features (Google, Listen uplink, save/play); no Watch; does not bump the iOS bundle.
