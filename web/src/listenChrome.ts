@@ -71,6 +71,18 @@ export function hideTopStatusRow(input: { variant: 'listen' | 'translate' | 'int
   return input.variant !== 'interview'
 }
 
+/**
+ * Notes empty copy is the Start CTA. Hide it once the session has ended
+ * or notes already exist — otherwise an Ended Notes tab still reads
+ * "Start listening".
+ */
+export function showNotesEmptyHint(input: { ended: boolean; hasNotes: boolean }): boolean {
+  return !input.ended && !input.hasNotes
+}
+
+/** Safari/Chrome bottom toolbar is not in `safe-area-inset-bottom` on mobile web. */
+export const LISTEN_WEB_CHROME_BOTTOM_PX = 56
+
 export function listenAskPlacement(input: {
   phone: boolean
   qa: boolean

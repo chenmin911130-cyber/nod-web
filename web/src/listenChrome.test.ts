@@ -20,6 +20,8 @@ import {
   historyRestoreHidesAsk,
   bottomBarMode,
   listenAskPlacement,
+  LISTEN_WEB_CHROME_BOTTOM_PX,
+  showNotesEmptyHint,
   nextComposeDraft,
   nextComposeFiles,
   nextComposeSessionId,
@@ -117,6 +119,11 @@ eq(METER_BAR_PX, 22, 'item 6: the meter grew to 22px')
 eq(listenAskPlacement({ phone: true, qa: false, ready: true, listening: false, paused: false, ended: false, hasContent: false }), 'hidden', 'Ready has no Ask field')
 eq(listenAskPlacement({ phone: true, qa: false, ready: false, listening: true, paused: false, ended: false, hasContent: true }), 'bar', 'recording Ask sits with the bar')
 eq(listenAskPlacement({ phone: true, qa: false, ready: false, listening: false, paused: true, ended: false, hasContent: true }), 'bar', 'paused Ask stays with the bar')
+eq(showNotesEmptyHint({ ended: false, hasNotes: false }), true, 'fresh Notes still offers Start listening')
+eq(showNotesEmptyHint({ ended: true, hasNotes: false }), false, 'Ended Notes does not keep the Start listening CTA')
+eq(showNotesEmptyHint({ ended: true, hasNotes: true }), false, 'notes content hides the empty Start hint')
+eq(showNotesEmptyHint({ ended: false, hasNotes: true }), false, 'existing notes hide the empty Start hint')
+eq(LISTEN_WEB_CHROME_BOTTOM_PX, 56, 'mobile web reserves the Safari/Chrome toolbar')
 eq(listenAskPlacement({ phone: true, qa: false, ready: false, listening: false, paused: false, ended: true, hasContent: true }), 'fab', 'ended Ask is a FAB')
 eq(listenAskPlacement({ phone: true, qa: false, ready: false, listening: false, paused: false, ended: false, hasContent: true }), 'dock', 'history restore with content still has Ask')
 eq(listenAskPlacement({ phone: false, qa: false, ready: false, listening: true, paused: false, ended: false, hasContent: true }), 'field', 'desktop keeps the always-on field')
