@@ -184,3 +184,16 @@ export function savePromptSurface(input: {
   if (input.offered) return 'none'
   return input.phone ? 'banner' : 'modal'
 }
+
+/**
+ * Engine `save_prompt` after a local End offer must bind the session id but
+ * not open a second Save / Not now. A first offer from the server (idle stop,
+ * no local End) still opens. Leave-and-save / leave-and-discard already decided.
+ */
+export function engineSavePromptOpensUi(input: {
+  offered: boolean
+  leaving: boolean
+  skip: boolean
+}): boolean {
+  return !input.leaving && !input.skip && !input.offered
+}

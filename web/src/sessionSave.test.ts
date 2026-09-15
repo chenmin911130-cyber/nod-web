@@ -14,6 +14,7 @@ import {
   keepShouldWaitForCapture,
   leaveActionStillArmed,
   savePromptSurface,
+  engineSavePromptOpensUi,
   setPendingAfterSave,
 } from './sessionSave'
 
@@ -116,6 +117,27 @@ eq(
   'none',
   'translate → none',
 )
+eq(
+  engineSavePromptOpensUi({ offered: true, leaving: false, skip: false }),
+  false,
+  'End already showed Save → engine save_prompt does not open another',
+)
+eq(
+  engineSavePromptOpensUi({ offered: false, leaving: false, skip: false }),
+  true,
+  'idle/server stop still opens Save',
+)
+eq(
+  engineSavePromptOpensUi({ offered: false, leaving: true, skip: false }),
+  false,
+  'leave-and-save does not re-open Save',
+)
+eq(
+  engineSavePromptOpensUi({ offered: false, leaving: false, skip: true }),
+  false,
+  'leave-and-discard does not re-open Save',
+)
+
 eq(
   savePromptSurface({ phone: true, workspaceMode: 'meeting', kept: false, offered: false, hasContent: false }),
   'none',
