@@ -79,8 +79,8 @@ import {
   writeWatchReportSnapshot,
 } from './watchReport'
 import {
-  askContext,
   askPrompt,
+  listenAskPayload,
   bindSpeakerName,
   notesBilingualOn,
   isAskPrompt,
@@ -3502,14 +3502,15 @@ export default function App() {
   const handleListenAsk = useCallback((text: string, files?: AttachPayload[]) => {
     const s = stateRef.current
     const question = text.trim() || (files?.length ? `Please review: ${files.map((f) => f.name).join(', ')}` : '')
-    if (!question) return
-    dispatch({ type: 'expect_catch', kind: 'ask', title: 'Ask', question })
+    const payload = listenAskPayload(question, s.meetingLines, s.meetingEnded)
+    if (!payload) return
+    dispatch({ type: 'expect_catch', kind: 'ask', title: 'Ask', question: payload.display })
     void (async () => {
       try {
         const attach_id = await parkAttaches(files)
         window.api.send({
           type: 'ask',
-          text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, notesBilingualOn(s.notesLang, s.translateOn), s.speakerNames, s.notesTranslateTo),
+          text: askPrompt(payload.lines, payload.listenerQuestion, s.notesLang, notesBilingualOn(s.notesLang, s.translateOn), s.speakerNames, s.notesTranslateTo),
           attach_id,
           mode: 'listen_ask',
         })
@@ -3527,12 +3528,14 @@ export default function App() {
     const note = s.catchNotes.find((row) => row.id === noteId)
     const question = (note?.question || '').trim()
     if (!question || note?.kind !== 'ask') return
+    const payload = listenAskPayload(question, s.meetingLines, s.meetingEnded)
+    if (!payload) return
     dispatch({ type: 'retry_ask', noteId })
     void (async () => {
       try {
         window.api.send({
           type: 'ask',
-          text: askPrompt(askContext(s.meetingLines, s.meetingEnded), question, s.notesLang, notesBilingualOn(s.notesLang, s.translateOn), s.speakerNames, s.notesTranslateTo),
+          text: askPrompt(payload.lines, payload.listenerQuestion, s.notesLang, notesBilingualOn(s.notesLang, s.translateOn), s.speakerNames, s.notesTranslateTo),
           mode: 'listen_ask',
           // #182: name the answer being retried, so a Think lookup that already
           // succeeded is reused instead of paid for twice, and a failed one is
