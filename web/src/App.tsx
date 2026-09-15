@@ -38,6 +38,7 @@ import {
   keepShouldWaitForCapture,
   leaveActionStillArmed,
   markOffered,
+  engineSavePromptOpensUi,
   savePromptSurface,
   setPendingAfterSave,
   type KeepAfterNotesJob,
@@ -1216,7 +1217,9 @@ export default function App() {
   }
   const [saveBook, setSaveBook] = useState<SaveBook>(emptySaveBook)
   const saveBookRef = useRef(saveBook)
-  saveBookRef.current = saveBook
+  // commitBook writes the ref first. A stale render must not copy React state
+  // back over it — that un-offered Save and let engine save_prompt open a second
+  // Save / Not now after End.
   const [watchInboundSave, setWatchInboundSave] = useState<{ id: string; status: SaveStatus } | null>(null)
   const watchInboundSaveRef = useRef(watchInboundSave)
   watchInboundSaveRef.current = watchInboundSave
@@ -1269,6 +1272,7 @@ export default function App() {
     saveBookRef.current = next
     setSaveBook(next)
     saveOfferedRef.current = next.offered
+    if (!next.offered) skipOfferSavePromptRef.current = false
   }
   const startOrResumeMeeting = (s: AppState) => {
     if (s.meetingStartedAt == null) {
@@ -2178,6 +2182,9 @@ export default function App() {
   }
 
   const offerSaveUi = () => {
+    // #36: one Save UI per live session. saveOfferedRef survives a stale render
+    // that would otherwise make saveBook.offered look false again.
+    if (saveOfferedRef.current) return
     const s = stateRef.current
     if (!sessionShouldOpenSavePrompt({
       workspaceMode: s.workspaceMode,
@@ -2189,12 +2196,13 @@ export default function App() {
       phone: phoneRef.current,
       workspaceMode: s.workspaceMode,
       kept: historyKeptRef.current,
-      offered: saveBookRef.current.offered,
+      offered: saveBookRef.current.offered || saveOfferedRef.current,
       hasContent: meetingHasSaveableContent(s),
       sessionMode: saveBookRef.current.sessionMode,
     })
     if (surface === 'none') return
     commitBook(markOffered(saveBookRef.current))
+    skipOfferSavePromptRef.current = true
     const liveId = saveBookRef.current.liveId
     if (liveId) persistRestoreDismissed(liveId)
     if (surface === 'banner') {
@@ -2353,16 +2361,20 @@ export default function App() {
         || saveBookRef.current.pendingAfterSave === 'signout'
         || saveBookRef.current.pendingAfterSave === 'delete'
         || pendingLeaveSaveRef.current
-      if (skipOfferSavePromptRef.current && !leaving) {
-        skipOfferSavePromptRef.current = false
-        return
-      }
+      const skipUi = skipOfferSavePromptRef.current
       // #196 review fix: a save_prompt may only take over the save book when the
       // announced SESSION mode can actually be saved. The id used to be bound
       // unconditionally with the CURRENT pane mode, so a Translate session's late
       // message arriving after the user switched back to Meeting was labelled
       // Meeting and replaced the original meeting's save target.
       if (!modeIsSaveEligible(e.mode)) {
+        return
+      }
+      // Discard-and-new already wiped the book. Re-binding the ended id would
+      // attach Save to the fresh session. An End offer still needs the bind so
+      // Keep has a live id.
+      if (skipUi && !leaving && !saveOfferedRef.current && !saveBookRef.current.liveId) {
+        skipOfferSavePromptRef.current = false
         return
       }
       bindLiveFromEngine(e.id, e.mode)
@@ -2373,12 +2385,16 @@ export default function App() {
         }
         return
       }
-      if (leaving || skipOfferSavePromptRef.current) {
-        skipOfferSavePromptRef.current = false
-        return
-      }
       if (sessionListening({ capture: stateRef.current.capture })) {
         dispatch({ type: 'engine', ev: { type: 'phase', capture: 'off', engine: 'idle' } })
+      }
+      if (!engineSavePromptOpensUi({
+        offered: saveOfferedRef.current || saveBookRef.current.offered,
+        leaving,
+        skip: skipUi,
+      })) {
+        skipOfferSavePromptRef.current = false
+        return
       }
       offerSaveUi()
       return

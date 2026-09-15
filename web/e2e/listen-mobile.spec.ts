@@ -317,6 +317,20 @@ test.describe('Listen mobile recording chrome', () => {
     await expect(page.locator('.listen-prompt input')).toHaveValue('keep through continue')
   })
 
+  test('End plus engine save_prompt shows Save/Not now only once', async ({ page }) => {
+    const ws = await mockListenWs(page)
+    await ws.gotoListening()
+    await page.getByRole('button', { name: 'End' }).click()
+    ws.send({ type: 'phase', capture: 'off', engine: 'idle' })
+    ws.send({ type: 'save_prompt', id: 'sess-end-1', mode: 'meeting' })
+    ws.send({ type: 'save_prompt', id: 'sess-end-1', mode: 'meeting' })
+    await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible()
+    await expect(page.getByText('Save this session?')).toHaveCount(1)
+    await expect(page.locator('.save-banner-save')).toHaveCount(1)
+    await expect(page.locator('.save-banner-notnow')).toHaveCount(1)
+    await expect(page.getByRole('dialog', { name: 'Save to History?' })).toHaveCount(0)
+  })
+
   test('save failure on the ended sheet shows Retry', async ({ page }) => {
     const ws = await mockListenWs(page)
     await ws.gotoListening()
