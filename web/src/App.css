@@ -9841,7 +9841,8 @@ html.nod-phone .app.iphone-v2 .tb-new-stack {
 html.nod-phone .app.iphone-v2 .tb-new-ring {
   width: 28px;
   height: 28px;
-  border: 1.5px solid #f4f8fc;
+  border: 1.5px solid #00d2ff;
+  color: #00d2ff;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
