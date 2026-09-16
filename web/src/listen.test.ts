@@ -1,5 +1,5 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, SCENE_HELP, applyListenSetting, askPrompt, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, lastTwoMinutes, listenAskPayload, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesBilingualOn, notesLangActions, notesPrompt, outLangRule, parseNotes, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakersExpected, transcriptBlock } from './listen'
-import { IPHONE_COPY } from './iphoneCopy'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, applyListenSetting, askPrompt, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, lastTwoMinutes, listenAskPayload, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesBilingualOn, notesLangActions, notesPrompt, outLangRule, parseNotes, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakersExpected, transcriptBlock } from './listen'
+import { IPHONE_COPY, iphoneCopyFor } from './iphoneCopy'
 import type { MeetingLine } from './types'
 
 function eq<T>(got: T, want: T, label?: string) {
@@ -157,9 +157,9 @@ eq(sceneLabel('interview'), 'Live Q&A')
 eq(LISTEN_SCENES.find((s) => s.id === 'interview')?.label, 'Live Q&A')
 eq(sceneLabel('meeting'), 'Meeting')
 eq(sceneLabel('lecture'), 'Lecture')
-eq(SCENE_HELP.meeting, 'Decisions and action items', 'meeting blurb')
-eq(SCENE_HELP.lecture, 'Key concepts and study notes', 'lecture blurb')
-eq(SCENE_HELP.interview, 'Questions and suggested answers', 'live qa blurb')
+eq(iphoneCopyFor('en').sceneHelpMeeting, 'Decisions and action items', 'meeting blurb')
+eq(iphoneCopyFor('en').sceneHelpLecture, 'Revision notes and homework', 'lecture blurb')
+eq(iphoneCopyFor('en').sceneHelpQa, 'Hear a question, draft an answer', 'live qa blurb')
 
 // item1: the lecture section order is defined once (SCENE_SECTIONS), the single
 // source every renderer (Live pane / PDF / copy-Share) reads.

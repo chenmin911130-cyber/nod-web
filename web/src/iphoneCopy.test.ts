@@ -308,5 +308,13 @@ eq(
 eq(iphoneCopyFor('it').saveYes, 'Salva', 'it overlap Save from Watch')
 eq(iphoneCopyFor('it').listenTab, 'Listen', 'it non-overlap falls back to en')
 eq(iphoneCopyFor('zh').quickSummarizeAsk, IPHONE_COPY.quickSummarizeAsk, 'model prompt stays English in zh UI')
+eq(zh.sceneHelpMeeting, '决定与待办', 'zh scene help meeting')
+eq(zh.enhanceOn, '开', 'zh enhance on')
+eq(zh.enhanceOff, '关', 'zh enhance off')
+eq(zh.accountHelpFeedback, '帮助与反馈', 'zh account help')
+eq(zh.toastPaused, '已暂停 · 准备好再继续', 'zh pause toast')
+eq(zh.histToday, '今天', 'zh history today')
+eq(zh.histUntitled, '未命名', 'zh history untitled')
+eq(IPHONE_COPY.moreNew, 'New session', 'moreNew stays en in node tests')
 
 console.log('iphoneCopy.test.ts ok')

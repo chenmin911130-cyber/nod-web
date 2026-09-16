@@ -4,7 +4,6 @@ import { TRANSLATE_LANGS } from '../types'
 import {
   LISTEN_SCENES,
   MEETING_SPEAKER_OPTIONS,
-  SCENE_HELP,
   bilingualDisabled,
   notesBilingualOn,
   listenMetaLine,
@@ -31,10 +30,13 @@ import {
   notesChipParts,
   notesPageTitle,
   notesSettingsValue,
+  sceneHelpText,
   showLineTranslation,
   speakerSuggestText,
+  speechChipTitle,
   spokenSettingsValue,
 } from '../iphoneCopy'
+import { translateLangDisplayName } from '../langDisplayNames'
 import { ENDED_TAP_SLOP, bottomBarMode, endedDockFromPointer, endedHasContent, endedSheetAvailable, listenAskPlacement, nextComposeDraft, showNotesEmptyHint } from '../listenChrome'
 import { usePhoneChrome } from '../phoneChrome'
 import { askOutcome, groupTranscript, iphoneSummaryHeading, isCatchAskCurrent, liveFeed, liveStageMode, summaryPlainText, transcriptPlainText, type LiveFeedItem } from '../liveView'
@@ -298,8 +300,8 @@ function LangSelect({
                 setOpen(false)
               }}
             >
-              <b>{lang.tag}</b>
-              <span>{lang.name}</span>
+              <b>{lang.id === 'auto' ? IPHONE_COPY.notesAutoTitle : lang.tag}</b>
+              <span>{lang.id === 'auto' ? IPHONE_COPY.notesAutoHelp : translateLangDisplayName(lang.id)}</span>
             </button>
           ))}
         </div>
@@ -345,13 +347,11 @@ function SpeechLangSelect({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label="Speech recognition language"
-        title={
-          value === 'auto'
-            ? heardTag
-              ? `Speech recognition · Auto (hearing ${heardTag})`
-              : 'Speech recognition · Auto'
-            : `Speech recognition · ${current.name}`
-        }
+        title={speechChipTitle({
+          auto: value === 'auto',
+          heardTag: heardTag || undefined,
+          name: value === 'auto' ? undefined : translateLangDisplayName(value as PairLang),
+        })}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={() => setOpen((v) => !v)}
       >
@@ -379,8 +379,8 @@ function SpeechLangSelect({
                 setOpen(false)
               }}
             >
-              <b>{lang.tag}</b>
-              <span>{lang.name}</span>
+              <b>{lang.id === 'auto' ? IPHONE_COPY.speechAutoTitle : lang.tag}</b>
+              <span>{lang.id === 'auto' ? IPHONE_COPY.speechAutoHelp : translateLangDisplayName(lang.id)}</span>
             </button>
           ))}
           {onEnhance && (
@@ -403,7 +403,7 @@ function SpeechLangSelect({
                 setOpen(false)
               }}
             >
-              <b>{enhanceOn ? 'On' : 'Off'}</b>
+              <b>{enhanceOn ? IPHONE_COPY.enhanceOn : IPHONE_COPY.enhanceOff}</b>
               <span>{IPHONE_COPY.enhance}</span>
             </button>
           )}
@@ -459,7 +459,7 @@ function SceneSelect({
               >
                 <SceneMark scene={item.id} size={20} />
                 <b>{item.label}</b>
-                <span>{SCENE_HELP[item.id]}</span>
+                <span>{sceneHelpText(item.id)}</span>
               </button>
             ))}
           </div>
@@ -1530,7 +1530,7 @@ export default function ListenPane(props: Props) {
               <SceneMark scene={item.id} />
               <span className="iphone-setup-copy">
                 <b>{item.label}</b>
-                <span>{SCENE_HELP[item.id]}</span>
+                <span>{sceneHelpText(item.id)}</span>
               </span>
               <RadioMark on={draftScene === item.id} />
             </button>
@@ -1575,7 +1575,7 @@ export default function ListenPane(props: Props) {
                 closeSheet()
               }}
             >
-              <b>{lang.id === 'auto' ? IPHONE_COPY.speechAutoTitle : lang.name}</b>
+              <b>{lang.id === 'auto' ? IPHONE_COPY.speechAutoTitle : translateLangDisplayName(lang.id)}</b>
               <span>{lang.id === 'auto' ? IPHONE_COPY.speechAutoHelp : lang.tag}</span>
             </button>
           ))}
@@ -1597,7 +1597,7 @@ export default function ListenPane(props: Props) {
                 closeSheet()
               }}
             >
-              <b>{biOn ? 'On' : 'Off'}</b>
+              <b>{biOn ? IPHONE_COPY.enhanceOn : IPHONE_COPY.enhanceOff}</b>
               <span>{IPHONE_COPY.enhance}</span>
             </button>
           )}
@@ -1622,7 +1622,7 @@ export default function ListenPane(props: Props) {
                 closeSheet()
               }}
             >
-              <b>{lang.id === 'auto' ? IPHONE_COPY.notesAutoTitle : lang.name}</b>
+              <b>{lang.id === 'auto' ? IPHONE_COPY.notesAutoTitle : translateLangDisplayName(lang.id)}</b>
               <span>{lang.id === 'auto' ? IPHONE_COPY.notesAutoHelp : lang.tag}</span>
             </button>
           ))}

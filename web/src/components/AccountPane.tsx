@@ -181,7 +181,7 @@ export default function AccountPane({
   return (
     <div className="account-root" role="dialog" aria-label={IPHONE_COPY.accountTitle}>
       <header className="account-head">
-        <button type="button" className="account-back" onClick={onClose} aria-label="Back">
+        <button type="button" className="account-back" onClick={onClose} aria-label={IPHONE_COPY.accountBack}>
           <BackIcon />
         </button>
         <h2>{IPHONE_COPY.accountTitle}</h2>
@@ -196,18 +196,18 @@ export default function AccountPane({
           {usageLine ? <div className="account-usage">{usageLine}</div> : null}
         </section>
 
-        <div className="account-group-label">HELP & ABOUT</div>
+        <div className="account-group-label">{IPHONE_COPY.accountHelpAbout}</div>
         <div className="account-group">
           <button type="button" className="account-row" onClick={() => setFeedbackOpen(true)}>
-            <span>Help & feedback</span>
+            <span>{IPHONE_COPY.accountHelpFeedback}</span>
             <Chevron />
           </button>
           <button type="button" className="account-row" onClick={() => void openLegal('/privacy')}>
-            <span>Privacy policy</span>
+            <span>{IPHONE_COPY.accountPrivacy}</span>
             <Chevron />
           </button>
           <button type="button" className="account-row" onClick={() => void openLegal('/terms')}>
-            <span>Terms of service</span>
+            <span>{IPHONE_COPY.accountTerms}</span>
             <Chevron />
           </button>
         </div>
@@ -218,20 +218,20 @@ export default function AccountPane({
           aria-disabled={blocked || waiting}
           onClick={onSignOut}
         >
-          <span>Sign out</span>
+          <span>{IPHONE_COPY.accountSignOut}</span>
           {signOutHint ? <span className="account-signout-hint">{signOutHint}</span> : null}
         </button>
         {signOutError ? (
           <div className="account-error">
             <span>{signOutError}</span>
-            <button type="button" className="account-retry" onClick={onSignOut}>Retry</button>
+            <button type="button" className="account-retry" onClick={onSignOut}>{IPHONE_COPY.accountRetry}</button>
           </div>
         ) : null}
 
         <button type="button" className="account-delete-row" onClick={onOpenDelete}>
           <span className="account-delete-label">
             <TrashIcon />
-            {deleteAccountCopy.row}
+            {IPHONE_COPY.accountDeleteRow}
           </span>
           <Chevron />
         </button>
@@ -250,15 +250,15 @@ export default function AccountPane({
       />
 
       {feedbackOpen ? (
-        <div className="account-sheet" role="dialog" aria-label="Help & feedback">
+        <div className="account-sheet" role="dialog" aria-label={IPHONE_COPY.accountHelpFeedback}>
           <div className="account-sheet-card">
-            <h3>Help & feedback</h3>
+            <h3>{IPHONE_COPY.accountHelpFeedback}</h3>
             <textarea
               className="account-feedback"
               rows={5}
               value={feedback}
               onChange={(e) => setFeedback(e.target.value)}
-              placeholder="What’s going on?"
+              placeholder={IPHONE_COPY.accountFeedbackPlaceholder}
             />
             {feedbackMsg ? <p className="account-ok">{feedbackMsg}</p> : null}
             {feedbackErr ? <p className="account-error-text">{feedbackErr}</p> : null}

@@ -1,3 +1,4 @@
+import { IPHONE_COPY } from './iphoneCopy'
 import { fmtHours } from './quotaCopy'
 import type { SaveStatus } from './sessionSave'
 
@@ -41,7 +42,7 @@ export function accountInitials(name: string, email: string): string {
 }
 
 export function signInLine(signIn: string | undefined): string {
-  return signIn === 'google' ? 'Signed in with Google' : 'Signed in with email'
+  return signIn === 'google' ? IPHONE_COPY.accountSignedInGoogle : IPHONE_COPY.accountSignedInEmail
 }
 
 export function listeningLeftLine(usage: {
@@ -52,11 +53,11 @@ export function listeningLeftLine(usage: {
   const used = usage.daily_stt_seconds || 0
   const limit = usage.daily_stt_limit || 0
   if (usage.quota_disabled || limit <= 0) {
-    return `Listened today · ${fmtHours(used)} · no daily cap`
+    return IPHONE_COPY.listenedTodayNoCap.replace('{hours}', fmtHours(used))
   }
   const left = limit - used
-  if (left > 0) return `Listening left today · ${fmtHours(left)}`
-  return 'Daily listening limit reached · resets at midnight UTC'
+  if (left > 0) return IPHONE_COPY.listeningLeftToday.replace('{hours}', fmtHours(left))
+  return IPHONE_COPY.dailyListeningLimit
 }
 
 export function signOutGate(input: {

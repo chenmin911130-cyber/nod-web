@@ -284,16 +284,16 @@ export default function HistoryPane({
             />
             <MicIcon />
           </label>
-          {loading && <p className="hist-empty">Loading sessions…</p>}
+          {loading && <p className="hist-empty">{IPHONE_COPY.histLoading}</p>}
           {err && <p className="hist-err">{err}</p>}
           {!loading && !err && sessions.length === 0 && (
-            <p className="hist-empty">No sessions yet. Save a meeting to see it here.</p>
+            <p className="hist-empty">{IPHONE_COPY.histEmpty}</p>
           )}
           {!loading && err && sessions.length === 0 && (
-            <p className="hist-empty">History could not be refreshed. The list below may be incomplete.</p>
+            <p className="hist-empty">{IPHONE_COPY.histRefreshFailed}</p>
           )}
           {!loading && !err && sessions.length > 0 && visible.length === 0 && (
-            <p className="hist-empty">No sessions match that search.</p>
+            <p className="hist-empty">{IPHONE_COPY.histNoMatch}</p>
           )}
           <div className="hist-body hist-body-pick">
             <ul className="hist-list">
