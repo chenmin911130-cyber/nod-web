@@ -30,6 +30,8 @@ export type LiveFeedLine = {
   speaker: string
   text: string
   at: number
+  /** Unfinalized tail from the live partial, rendered inline after ``text``. */
+  liveTail?: string
 }
 
 export type LiveFeedAsk = {
@@ -56,6 +58,36 @@ export function askOutcome(input: {
 
 export function isCatchAskCurrent(noteId: string, catchAskId?: string): boolean {
   return noteId === catchAskId || noteId === '__pending__' || noteId.startsWith('__pending__:')
+}
+
+function joinLiveFragments(left: string, right: string): string {
+  const a = (left || '').trim()
+  const b = (right || '').trim()
+  if (!a) return b
+  if (!b) return a
+  if (a.endsWith('-') || b.startsWith('-')) return `${a}${b}`
+  return `${a} ${b}`
+}
+
+/** Merge consecutive finals from the same speaker into one linear bubble. */
+export function mergeLiveSpeakerRuns(items: LiveFeedItem[]): LiveFeedItem[] {
+  const out: LiveFeedItem[] = []
+  for (const item of items) {
+    if (item.type !== 'line') {
+      out.push(item)
+      continue
+    }
+    const prev = out[out.length - 1]
+    if (prev && prev.type === 'line' && speakerKey(prev.speaker) === speakerKey(item.speaker)) {
+      prev.text = joinLiveFragments(prev.text, item.text)
+      prev.ts = item.ts || prev.ts
+      prev.at = Math.max(prev.at, item.at)
+      if (item.liveTail) prev.liveTail = item.liveTail
+    } else {
+      out.push({ ...item })
+    }
+  }
+  return out
 }
 
 export function liveFeed(input: {
@@ -97,10 +129,16 @@ export function liveFeed(input: {
         at: note.at ?? 0,
       }
     })
-  const items = [...lines, ...asks].sort((a, b) => a.at - b.at)
+  const items = mergeLiveSpeakerRuns([...lines, ...asks].sort((a, b) => a.at - b.at))
   const text = (input.partial || '').trim()
-  const draft = text ? { speaker: input.partialSpeaker || '', text } : null
-  return { items, draft }
+  if (!text) return { items, draft: null }
+  const speaker = input.partialSpeaker || ''
+  const last = items[items.length - 1]
+  if (last && last.type === 'line' && speakerKey(last.speaker) === speakerKey(speaker)) {
+    last.liveTail = text
+    return { items, draft: null }
+  }
+  return { items, draft: { speaker, text } }
 }
 
 export function formatActionItem(row: { text: string; owner?: string }): string {
@@ -203,6 +241,15 @@ export type TranscriptGroup = {
 
 function speakerKey(speaker?: string): string {
   return (speaker || '').trim()
+}
+
+/** One card per speaker group: join rapid STT fragments into linear text. */
+export function mergeGroupDisplayLines(lines: TranscriptGroupLine[]): TranscriptGroupLine[] {
+  if (lines.length <= 1) return lines
+  const text = lines.map((line) => (line.text || '').trim()).filter(Boolean).join(' ')
+  if (!text) return lines
+  const last = lines[lines.length - 1]
+  return [{ ...lines[0], text, translation: last.translation, translateFailed: last.translateFailed }]
 }
 
 export function groupTranscript(

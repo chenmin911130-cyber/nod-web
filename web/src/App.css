@@ -7633,6 +7633,11 @@ html.nod-phone .app.iphone-v2 .iphone-live-item-text {
   line-height: 1.45;
 }
 
+html.nod-phone .app.iphone-v2 .iphone-live-item-tail {
+  color: #8b969f;
+  font-style: italic;
+}
+
 html.nod-phone .app.iphone-v2 .iphone-live-draft {
   display: flex;
   align-items: flex-start;

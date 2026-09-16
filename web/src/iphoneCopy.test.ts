@@ -5,6 +5,7 @@ import {
   speakerSuggestText,
   canSwitchWorkspace,
   isListenReadyView,
+  readyPreservesCapture,
   listenChipLabel,
   listenChipParts,
   moreMenuEnabled,
@@ -226,6 +227,10 @@ eq(
   'Live Q&A · Auto-detect',
   'Live Q&A omits the notes segment',
 )
+
+eq(readyPreservesCapture({ capture: 'off', autoOn: false }), false, 'fresh connect may reset capture on ready')
+eq(readyPreservesCapture({ capture: 'listening', autoOn: true }), true, 'live listen keeps capture on ready')
+eq(readyPreservesCapture({ capture: 'off', autoOn: true }), true, 'reattach with autoOn keeps capture until phase')
 
 const readyBase = { phone: true, listening: false, paused: false, ended: false, lines: 0, partial: false }
 eq(isListenReadyView(readyBase), true, 'phone idle empty session is ready')

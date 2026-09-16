@@ -2929,6 +2929,10 @@ class CloudListener:
                 data.get("session_duration_seconds"),
                 data.get("audio_duration_seconds"),
             )
+            # Proactive rotate: AssemblyAI max-duration sessions end cleanly here;
+            # restart before the socket close so listening never reads as idle.
+            if not self._stop.is_set():
+                self._notify_drop("session ended")
         elif kind == "Error":
             code, err_text = error_summary(data if isinstance(data, dict) else {})
             err = f"{code} {err_text}".strip() if code is not None else (err_text or str(message))
@@ -4026,6 +4030,10 @@ class Session:
         """
         if not self._claim_handoff_collect(lst):
             return
+        if getattr(self, "_workspace", "") == "meeting" and getattr(self, "_listen_wanted", False):
+            self._flush_meeting_hold()
+            self._stop_meeting_worker(wait=True, timeout=2.0)
+            self._seal_open_line()
         result = self._stash_unsent(lst)
         if result.kind == "blocked":
             self._release_handoff_collect(lst)
@@ -5000,6 +5008,37 @@ class Session:
         with getattr(self, "_meeting_lock", threading.Lock()):
             self._open_line = None
 
+    def _seal_open_line(self) -> None:
+        """Commit an open meeting line before STT handoff so audio_s>0 cannot leave
+        only turn=0 when the socket rotates mid-extend."""
+        with getattr(self, "_meeting_lock", threading.Lock()):
+            open_line = self._open_line
+            self._open_line = None
+        if not open_line:
+            return
+        text = (open_line.get("text") or "").strip()
+        if not text or open_line.get("closed"):
+            return
+        lang = open_line.get("lang")
+        speaker = open_line.get("speaker")
+        qid = str(open_line.get("id") or self.pipeline._new_qid())
+        heard = heard_lang_from_text(text, lang)
+        self._maybe_follow_speech(text, heard)
+        self._remember_final(text)
+        qev: dict[str, Any] = {"type": "question", "id": qid, "text": text}
+        if heard:
+            qev["language"] = heard
+        if speaker:
+            qev["speaker"] = speaker
+        self.emit(qev)
+        if self.user_id and self.usage_session_id:
+            from server.meter import save_history
+
+            try:
+                save_history(self.user_id, self.usage_session_id, "transcript", text, qid, speaker or "")
+            except Exception:
+                logging.getLogger("nod").exception("seal open line history save failed")
+
     def _remember_stt_turn(self, meta: dict[str, Any] | None, line_id: str) -> None:
         if not meta or meta.get("stt_turn") is None or not line_id:
             return
@@ -5297,20 +5336,35 @@ class Session:
         if mode not in ("interview", "meeting", "translate"):
             mode = "interview"
         prev = self._workspace
-        prev_lang = self._effective_stt_lang(prev)
-        prev_url = assemblyai_ws_url(self._stt_cfg()) if self._listener else ""
-        if prev == "translate" and mode != "translate":
-            self._flush_translate_carry("workspace")
-        self._workspace = mode
-        if str(scene or "").strip().lower() in ("meeting", "lecture", "interview"):
-            self.cfg.setdefault("stt", {})["listen_scene"] = str(scene).strip().lower()
+        stt = self.cfg.setdefault("stt", {})
+        current_scene = str(stt.get("listen_scene") or "").strip().lower()
+        scene_raw = str(scene or "").strip().lower()
+        new_scene = scene_raw if scene_raw in ("meeting", "lecture", "interview") else None
+        new_speakers = None
         if speakers_expected is not None:
             try:
                 n = int(speakers_expected)
                 if 1 <= n <= 10:
-                    self.cfg.setdefault("stt", {})["speakers_expected"] = n
+                    new_speakers = n
             except (TypeError, ValueError):
                 pass
+        current_speakers = stt.get("speakers_expected")
+        mode_changes = prev != mode
+        scene_changes = new_scene is not None and new_scene != current_scene
+        speakers_changes = new_speakers is not None and new_speakers != current_speakers
+        prev_lang = self._effective_stt_lang(prev)
+        prev_url = assemblyai_ws_url(self._stt_cfg()) if self._listener else ""
+        if prev == "translate" and mode != "translate":
+            self._flush_translate_carry("workspace")
+        # Reconnect sync re-sends the same workspace; turn_reset here wiped _open_line
+        # and bumped _meeting_gen (Anna hollow-PDF: sole turn=0 across audio_s=164).
+        if not mode_changes and not scene_changes and not speakers_changes:
+            return
+        self._workspace = mode
+        if new_scene is not None:
+            stt["listen_scene"] = new_scene
+        if new_speakers is not None:
+            stt["speakers_expected"] = new_speakers
         self._reset_turn_state()
         if mode == "translate" and prev != "translate":
             self.cancel_generate()
@@ -5399,7 +5453,10 @@ class Session:
         logging.getLogger("nod").warning(
             "stt pcm_rejected session=%s capture=%s reason=%s", sid, cap, reason
         )
-        self.emit({"type": "error", "text": text})
+        # Expected post-stop/backfill rejection: native gets pcm_rejected; do not
+        # surface a control-WS error or increment errors_1h for teardown noise.
+        if reason != "session_ended":
+            self.emit({"type": "error", "text": text})
         event = {
             "type": "pcm_rejected",
             "id": sid,
@@ -6065,6 +6122,8 @@ class Session:
         self.emit({"type": "status", "text": "Listening resumed"})
 
     def _offer_save_history(self) -> None:
+        if getattr(self, "_listen_wanted", False):
+            return
         if not getattr(self, "user_id", None) or not getattr(self, "usage_session_id", None):
             return
         if getattr(self, "_workspace", "") != "meeting":
@@ -6452,12 +6511,18 @@ class Session:
         Precedence: recording (manual) > paused > listening > off. The engine
         axis is deliberately separate (see ``_engine``), so a model generating
         an answer no longer reads as "not listening" on the Watch.
+
+        A live listen with no ``_listener`` yet — STT handoff, blocked sender
+        recovery, or reopen in flight — is still listening; only a session that
+        is not wanted (or is paused/manual) reads as off.
         """
         if getattr(self, "_manual", False):
             return "recording"
         if getattr(self, "_paused", False):
             return "paused"
         if getattr(self, "_listener", None) is not None:
+            return "listening"
+        if getattr(self, "_listen_wanted", False):
             return "listening"
         return "off"
 

@@ -8,7 +8,7 @@ import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
-import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberHistoryDiscarded, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, modeIsSaveEligible, sessionIsSaveEligible, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
+import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberHistoryDiscarded, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachState, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, modeIsSaveEligible, sessionIsSaveEligible, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
 import { flushPendingKeepMessage, keepHistoryMessage, watchDiscardCommand, watchFailKeepNativeFace, watchJsFailMayApply, watchKeepNotesWait, watchNativeSaveReduce, watchPhoneStatusMayPush, watchSaveCommand, watchSaveKeepTarget, watchSaveRepeatAction, watchSaveShouldSendKeepHistory, watchSaveStatusPayload, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave, type NativeWatchSaveFace } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
@@ -18,7 +18,7 @@ import AccountPane from './components/AccountPane'
 import LeaveSessionSheet from './components/LeaveSessionSheet'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
-import { IPHONE_COPY, canSwitchWorkspace, sameSpokenLine, sessionListening, toastSpeechOnly } from './iphoneCopy'
+import { IPHONE_COPY, canSwitchWorkspace, readyPreservesCapture, sameSpokenLine, sessionListening, toastSpeechOnly } from './iphoneCopy'
 import { translateLangDisplayName } from './langDisplayNames'
 import { showListenNew, composeSessionKey, nextComposeSessionId, endedHasContent, IDLE_CAPTURE_CLOCK, advanceCaptureClock, captureClockMs, clockCapture } from './listenChrome'
 import SaveBanner from './components/SaveBanner'
@@ -89,6 +89,7 @@ import {
   isCatchPrompt,
   isNotesPrompt,
   notesPrompt,
+  notesTranscriptTooThin,
   capTranscript,
   notesLangActions,
   MEETING_SPEAKER_OPTIONS,
@@ -407,6 +408,9 @@ function reducer(state: AppState, action: Action): AppState {
       }
       switch (ev.type) {
         case 'ready':
+          if (readyPreservesCapture({ capture: state.capture, autoOn: state.autoOn })) {
+            return { ...state, status: STATUS_READY }
+          }
           return { ...state, status: STATUS_READY, capture: 'off', engine: 'idle' }
         case 'keys_status':
           return { ...state, keys: { hasLlm: ev.has_llm, hasStt: ev.has_stt } }
@@ -866,8 +870,9 @@ function reducer(state: AppState, action: Action): AppState {
       const lastTurn = turns[turns.length - 1]
       const elapsed = action.elapsedMs ?? restoreElapsedMs({ lines: meetingLines })
       const clock = action.live ? restoreAttachedClock(elapsed) : restoreSessionClock(elapsed)
+      const attached = restoreAttachState(clock, state, action.live)
       return {
-        ...state,
+        ...attached,
         // #182: a restored session is a new session — never inherit Think from an
         // old answer's tag, and never silently keep it on.
         thinkOn: false,
@@ -879,8 +884,7 @@ function reducer(state: AppState, action: Action): AppState {
         currentQId: lastTurn?.id || '',
         notesRaw: action.live && state.notesRaw.length > action.notes.length ? state.notesRaw : action.notes,
         translatePairs,
-        speakerDecided: {},
-        ...clock,
+        speakerDecided: action.live ? state.speakerDecided : {},
         meetingStartedAt: action.live && state.meetingStartedAt != null ? state.meetingStartedAt : clock.meetingStartedAt,
         composeSessionId: nextComposeSessionId(action.live ? 'continue' : 'restore', state.composeSessionId),
         view: 'workspace',
@@ -1875,7 +1879,7 @@ export default function App() {
       if (e.type === 'ready') {
         syncWorkspace()
         checkPendingRestore()
-        if (listenWanted.current) {
+        if (listenWanted.current && !sessionListening({ capture: stateRef.current.capture })) {
           queueMicrotask(() => api.send(watchStartListenCommand(isWatchMicPreferred())))
         }
       }
@@ -2394,7 +2398,7 @@ export default function App() {
         }
         return
       }
-      if (sessionListening({ capture: stateRef.current.capture })) {
+      if (sessionListening({ capture: stateRef.current.capture }) && !listenWanted.current) {
         dispatch({ type: 'engine', ev: { type: 'phase', capture: 'off', engine: 'idle' } })
       }
       if (!engineSavePromptOpensUi({
@@ -2476,6 +2480,8 @@ export default function App() {
     }
   }
 
+  // Clears UI + sends WS clear (server turn_reset). Does NOT DELETE history —
+  // discard is only SavePrompt / Leave discard / Watch discard / History delete.
   const doClear = useCallback(() => {
     submitsRef.current.clear()
     spokenTranslate.current.clear()
@@ -3391,6 +3397,10 @@ export default function App() {
       dispatch({ type: 'engine', ev: { type: 'status', text: 'No transcript to note yet.' } })
       return
     }
+    if (notesTranscriptTooThin(s.meetingLines)) {
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'Not enough transcript for notes yet.' } })
+      return
+    }
     killInflightTranslation()
     dispatch({ type: 'expect_notes' })
     const cap = capTranscript(s.meetingLines)
@@ -3424,6 +3434,7 @@ export default function App() {
       workspaceMode: state.workspaceMode,
       busy: state.busy,
       lineCount: state.meetingLines.length,
+      lines: state.meetingLines,
       listenFlush: state.listenFlushWait.status,
     })
     if (next === 'wait') return

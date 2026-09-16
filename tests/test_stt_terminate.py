@@ -49,13 +49,14 @@ class TerminateHelperTests(unittest.TestCase):
 
 
 class CloudListenerStopTests(unittest.TestCase):
-    def _listener(self) -> CloudListener:
+    def _listener(self, on_drop=None) -> CloudListener:
         return CloudListener(
             api_key="test-key",
             cfg={"stt": {}},
             on_final=lambda *a: None,
             on_partial=None,
             on_error=None,
+            on_drop=on_drop,
         )
 
     def test_stop_sends_terminate_before_close(self):
@@ -89,6 +90,17 @@ class CloudListenerStopTests(unittest.TestCase):
             "session_duration_seconds": 90,
         }))
         self.assertTrue(lst._terminated.is_set())
+
+    def test_termination_triggers_drop_for_seamless_rotate(self):
+        dropped: list[str] = []
+        lst = self._listener(on_drop=dropped.append)
+        lst._was_ready = True
+        lst._on_message(None, json.dumps({
+            "type": "Termination",
+            "audio_duration_seconds": 164,
+            "session_duration_seconds": 175,
+        }))
+        self.assertEqual(dropped, ["session ended"])
 
 
 class SessionListenLifecycleTests(unittest.TestCase):

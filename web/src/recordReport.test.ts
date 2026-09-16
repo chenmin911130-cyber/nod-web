@@ -5,7 +5,7 @@ function eq(got: string, want: string) {
   if (got !== want) throw new Error(`expected ${want}, got ${got}`)
 }
 
-function report(input: { capture: string; engine: string; workspaceMode: string; busy: boolean; lineCount: number; heardListen?: boolean; flagged?: boolean; listenFlush?: ListenFlush }): string {
+function report(input: { capture: string; engine: string; workspaceMode: string; busy: boolean; lineCount: number; lines?: Array<{ text?: string }>; heardListen?: boolean; flagged?: boolean; listenFlush?: ListenFlush }): string {
   return shouldGenerateAutoReport({
     flagged: input.flagged ?? true,
     heardListen: input.heardListen ?? true,
@@ -14,6 +14,7 @@ function report(input: { capture: string; engine: string; workspaceMode: string;
     workspaceMode: input.workspaceMode,
     busy: input.busy,
     lineCount: input.lineCount,
+    lines: input.lines,
     listenFlush: input.listenFlush,
   })
 }
@@ -32,6 +33,19 @@ eq(report({ capture: 'off', engine: 'idle', workspaceMode: 'meeting', busy: fals
 eq(report({ capture: 'off', engine: 'idle', workspaceMode: 'meeting', busy: false, lineCount: 2, listenFlush: 'idle' }), 'wait')
 eq(report({ capture: 'off', engine: 'idle', workspaceMode: 'meeting', busy: false, lineCount: 2, listenFlush: 'timeout' }), 'generate')
 eq(report({ capture: 'off', engine: 'idle', workspaceMode: 'meeting', busy: false, lineCount: 2 }), 'wait')
+eq(
+  report({
+    capture: 'off',
+    engine: 'idle',
+    workspaceMode: 'meeting',
+    busy: false,
+    lineCount: 1,
+    lines: [{ text: 'Only one short line here.' }],
+    listenFlush: 'complete',
+  }),
+  'skip',
+  'thin transcript skips auto-notes',
+)
 
 // A Save while Notes are still streaming must wait for them.
 if (keepShouldWaitForNotes('ask-1') !== true) throw new Error('streaming notes => save waits')

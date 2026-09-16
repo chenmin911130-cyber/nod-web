@@ -62,6 +62,14 @@ class CaptureAxisTests(unittest.TestCase):
         sess = _session()
         self.assertEqual(sess._capture(), "off")
 
+    def test_capture_listen_wanted_without_listener(self):
+        sess = _session(_listen_wanted=True, _listener=None)
+        self.assertEqual(sess._capture(), "listening")
+
+    def test_capture_off_when_listen_not_wanted(self):
+        sess = _session(_listen_wanted=False, _listener=None)
+        self.assertEqual(sess._capture(), "off")
+
 
 class PhasePairingTests(unittest.TestCase):
     def test_emit_phase_sends_capture_and_engine(self):
@@ -70,6 +78,11 @@ class PhasePairingTests(unittest.TestCase):
         self.assertEqual(sess.emit.events, [
             {"type": "phase", "capture": "listening", "engine": "idle"},
         ])
+
+    def test_emit_phase_listen_wanted_during_handoff(self):
+        sess = _session(_listen_wanted=True, _listener=None)
+        sess._emit_phase()
+        self.assertEqual(sess.emit.events[-1]["capture"], "listening")
 
     def test_start_emits_phase_right_after_ready(self):
         # Reconnecting clients read `capture` from the first frame after ready.

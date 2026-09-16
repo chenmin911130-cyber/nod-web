@@ -688,6 +688,22 @@ export function restoreAttachedClock(elapsedMs: number, now = Date.now()): {
   }
 }
 
+/** Merge attach clock without wiping an in-flight live partial. */
+export function restoreAttachState<T extends { partial: string; partialSpeaker: string; speakerDecided: Record<string, string> }>(
+  clock: ReturnType<typeof restoreAttachedClock>,
+  state: T,
+  live: boolean,
+): T & ReturnType<typeof restoreAttachedClock> {
+  if (!live) return { ...state, ...clock }
+  return {
+    ...state,
+    ...clock,
+    partial: state.partial,
+    partialSpeaker: state.partialSpeaker,
+    speakerDecided: state.speakerDecided,
+  }
+}
+
 /** Which Start branch a restored or ended Meeting takes. Path A and B must agree. */
 export function startMeetingKind(s: {
   meetingStartedAt: number | null

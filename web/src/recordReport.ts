@@ -1,3 +1,6 @@
+import { notesTranscriptTooThin } from './listen'
+import type { MeetingLine } from './types'
+
 /** After a Record session stops, wait until capture is off and the engine is idle. */
 export type ListenFlush = 'idle' | 'pending' | 'complete' | 'timeout'
 
@@ -80,6 +83,7 @@ export function shouldGenerateAutoReport(input: {
   workspaceMode: string
   busy: boolean
   lineCount: number
+  lines?: MeetingLine[]
   listenFlush?: ListenFlush
 }): 'wait' | 'skip' | 'generate' {
   if (!input.flagged) return 'skip'
@@ -88,6 +92,7 @@ export function shouldGenerateAutoReport(input: {
   if (input.workspaceMode === 'translate') return 'skip'
   if (input.busy) return 'wait'
   if (input.lineCount === 0) return 'skip'
+  if (input.lines && notesTranscriptTooThin(input.lines)) return 'skip'
   const needsFlush = input.workspaceMode === 'meeting'
   if (needsFlush) {
     const flush = input.listenFlush ?? 'idle'

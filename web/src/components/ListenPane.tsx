@@ -40,7 +40,7 @@ import {
 import { translateLangDisplayName } from '../langDisplayNames'
 import { ENDED_TAP_SLOP, bottomBarMode, endedDockFromPointer, endedHasContent, endedSheetAvailable, listenAskPlacement, nextComposeDraft, showNotesEmptyHint } from '../listenChrome'
 import { usePhoneChrome } from '../phoneChrome'
-import { askOutcome, groupTranscript, iphoneSummaryHeading, isCatchAskCurrent, liveFeed, liveStageMode, summaryPlainText, transcriptPlainText, type LiveFeedItem } from '../liveView'
+import { askOutcome, groupTranscript, iphoneSummaryHeading, isCatchAskCurrent, liveFeed, liveStageMode, mergeGroupDisplayLines, summaryPlainText, transcriptPlainText, type LiveFeedItem } from '../liveView'
 import { useStickToBottom } from '../useStickToBottom'
 import { AnswerContent } from './AnswerContent'
 import { CopyButton, ShareOrCopyButton } from './CopyButton'
@@ -844,7 +844,10 @@ function IphoneLiveFeed({
                   ) : null}
                   {item.ts ? <span className="iphone-live-item-ts">{item.ts}</span> : null}
                 </div>
-                <p className="iphone-live-item-text">{item.text}</p>
+                <p className="iphone-live-item-text">
+                  {item.text}
+                  {item.liveTail ? <span className="iphone-live-item-tail">{item.liveTail}</span> : null}
+                </p>
               </div>
             </div>
           )
@@ -1858,7 +1861,7 @@ export default function ListenPane(props: Props) {
                             />
                           ) : null}
                         </div>
-                        {group.lines.map((line, i) => {
+                        {mergeGroupDisplayLines(group.lines).map((line, i) => {
                           const lineId = line.id || ''
                           const isLiveLine = props.listening && lastGroup && i === group.lines.length - 1 && !group.draft
                           return (

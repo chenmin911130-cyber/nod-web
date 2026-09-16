@@ -225,6 +225,14 @@ export function notesPageTitle(scene: ListenScene): string | null {
   return IPHONE_COPY.meetingNotes
 }
 
+/** Reattach sends `ready` before `phase`; never clear an active capture axis. */
+export function readyPreservesCapture(input: {
+  capture: string
+  autoOn: boolean
+}): boolean {
+  return input.capture !== 'off' || input.autoOn
+}
+
 export function isListenReadyView(input: {
   phone: boolean
   listening: boolean
