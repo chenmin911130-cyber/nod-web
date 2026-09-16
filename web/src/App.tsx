@@ -61,7 +61,7 @@ import { api as authApi, deleteAccount, fetchMe, logout, type Me } from './auth'
 import { accountInitials, deleteAccountCopy, signOutGate } from './accountCopy'
 import { isNativeApp, nativeGo } from './native'
 import { usePhoneChrome } from './phoneChrome'
-import { currentWatchCopySeq, discardWatchSave, installWatchRemote, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
+import { currentWatchCopySeq, discardWatchSave, installWatchRemote, pinWatchSession, pushWatchStatus, setPreferWatchMic, takePhoneMic, watchListenControlShouldApplyMode, watchShouldApplyMode, isWatchMicPreferred } from './watch'
 import { applyChunk, applyCopyRow, applySnapshot, copySessionAccepts, snapshotApplies, upsertCopyRows } from './copyVersion'
 import { mergeQaRows } from './watchQa'
 import { watchStartListenCommand } from './watchReplay'
@@ -1882,6 +1882,7 @@ export default function App() {
         copyRowsRounds.current = 0
         queueMicrotask(() => requestCopyRowsRef.current())
         const sid = e.usage_session_id || ''
+        if (sid) bindLiveFromEngine(sid)
         if (sid) {
           persistRestoreDismissed(sid)
           const seq = ++attachRestoreSeq.current
@@ -1905,7 +1906,11 @@ export default function App() {
         const before = Number(e.oldest_order || 0)
         queueMicrotask(() => requestCopyRowsRef.current(before))
       }
+      if (e.type === 'listen_flush' && e.session_id) {
+        bindLiveFromEngine(e.session_id)
+      }
       if (e.type === 'pcm_drained') {
+        bindLiveFromEngine(e.id)
         pushWatchStatus({
           capture: '',
           sessionId: e.id,
@@ -2174,6 +2179,7 @@ export default function App() {
     // and replaced the real meeting's save target. No announcement → the book keeps
     // whatever mode its own row established (never a pane guess).
     commitBook(bindLiveId(saveBookRef.current, id, sessionMode))
+    pinWatchSession(id)
     if (saveBookRef.current.offered) persistRestoreDismissed(id)
     if (keepEpochRef.current && !keepEpochRef.current.liveId) {
       keepEpochRef.current = { ...keepEpochRef.current, liveId: id }

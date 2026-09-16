@@ -1215,8 +1215,32 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
             return
         }
         if listening || paused { return }
+        pinSaveRequestIfNeeded()
         offeringSave = true
         hint = WatchCopy.savedLocal
+    }
+
+    private func bindPhoneSessionIfNeeded(sessionId: String, captureId: String) {
+        guard Self.sessionBindApplies(
+            liveCaptureId: sendBuffer.captureId,
+            liveSessionId: sendBuffer.sessionId,
+            incomingSessionId: sessionId,
+            incomingCaptureId: captureId
+        ) else { return }
+        phoneSessionId = sessionId
+        sendBuffer.bindSession(sessionId)
+        pcmStore.bindSession(sessionId)
+        pinSaveRequestIfNeeded(sessionId: sessionId, captureId: captureId)
+    }
+
+    private func pinSaveRequestIfNeeded(sessionId: String = "", captureId: String = "") {
+        let sid = sessionId.isEmpty
+            ? (phoneSessionId.isEmpty ? sendBuffer.sessionId : phoneSessionId)
+            : sessionId
+        guard !sid.isEmpty else { return }
+        if saveRequestId.isEmpty { saveRequestId = sid }
+        let cap = captureId.isEmpty ? sendBuffer.captureId : captureId
+        if saveRequestCaptureId.isEmpty, !cap.isEmpty { saveRequestCaptureId = cap }
     }
 
     /// User chooses to leave an incomplete capture. Keep its files, detach it
@@ -1403,7 +1427,11 @@ final class WatchPhoneSession: NSObject, ObservableObject, WCSessionDelegate, AV
             }
         }
         if Self.flag(payload, "pcmDrained") {
-            // Cloud drain is phone-side only. Watch End already completed on persist.
+            let drainSession = payload["pcmDrainedSessionId"] as? String ?? ""
+            let drainCapture = payload["pcmDrainedCaptureId"] as? String ?? ""
+            if !drainSession.isEmpty, !drainCapture.isEmpty {
+                bindPhoneSessionIfNeeded(sessionId: drainSession, captureId: drainCapture)
+            }
         }
         if Self.flag(payload, "pcmStalled") {
             let stallSession = (payload["pcmStallSessionId"] as? String) ?? ""
