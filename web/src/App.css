@@ -8008,6 +8008,16 @@ html.nod-phone .app.iphone-v2 .iphone-tr-group {
   margin: 0 0 16px;
 }
 
+html.nod-phone .app.iphone-v2 .iphone-tr-group.iphone-tr-turn {
+  padding-bottom: 12px;
+  border-bottom: 1px solid #1c242c;
+}
+
+html.nod-phone .app.iphone-v2 .iphone-live-draft .iphone-spk-avatar {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
 html.nod-phone .app.iphone-v2 .iphone-tr-group-head {
   display: flex;
   align-items: center;

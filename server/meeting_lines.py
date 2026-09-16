@@ -23,6 +23,11 @@ _ENDS_SENTENCE = ("。", "！", "？", ".", "!", "?", "…")
 # STT speaker ids can flip mid-clause on sub-second gaps; do not start a new line.
 _SPEAKER_SPLIT_MIN_GAP_MS = 500
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]")
+_ASK_HINT = re.compile(
+    r"[?？]|吗[.。!！]?$|呢[.。!！]?$|怎么|为什么|"
+    r"\bwhat\b|\bwhy\b|\bhow\b|\bwhen\b|\bwhere\b|\bwho\b|\bwhich\b",
+    re.I,
+)
 # A sentence-end punctuation followed by whitespace or end-of-text.
 _SENTENCE_END_RE = re.compile(r"[.!?…。！？](?=\s|$)")
 # Function words that cannot legally close a sentence — STT appends a bogus "." at
@@ -57,6 +62,16 @@ def starts_lower_latin(text: str) -> bool:
 
 def is_cjk(text: str) -> bool:
     return bool(_CJK_RE.search(text or ""))
+
+
+def looks_like_question(text: str) -> bool:
+    """Interview / meeting host turns often miss trailing ? in STT — still start a new line."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    if t.endswith(("?", "？")):
+        return True
+    return bool(_ASK_HINT.search(t))
 
 
 # --------------------------------------------------------------------------- #
@@ -354,6 +369,8 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
         if not false_period(ptxt):
             return "new", "ends_sentence"
         # else a bogus '.' — a continuation is plausible; fall through.
+    if looks_like_question(ptxt):
+        return "new", "question"
 
     gap = gap_ms(prev_open, nxt, now)
     if gap is None:
@@ -372,6 +389,8 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
         return "new", "speaker"  # unknown → known: never backfill a speaker
     if p and not n:
         txt = nxt.get("text", "") or ""
+        if looks_like_question(ptxt):
+            return "new", "question"
         if not (starts_lower_latin(txt) or (is_cjk(txt) and gap_ms_val <= 1000)):
             return "new", "speaker"
 

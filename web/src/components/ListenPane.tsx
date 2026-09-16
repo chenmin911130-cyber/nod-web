@@ -40,7 +40,7 @@ import {
 import { translateLangDisplayName } from '../langDisplayNames'
 import { ENDED_TAP_SLOP, bottomBarMode, endedDockFromPointer, endedHasContent, endedSheetAvailable, listenAskPlacement, nextComposeDraft, showNotesEmptyHint } from '../listenChrome'
 import { usePhoneChrome } from '../phoneChrome'
-import { askOutcome, groupTranscript, iphoneSummaryHeading, isCatchAskCurrent, liveFeed, liveStageMode, mergeGroupDisplayLines, summaryPlainText, transcriptPlainText, type LiveFeedItem } from '../liveView'
+import { askOutcome, groupTranscript, iphoneSummaryHeading, isCatchAskCurrent, liveFeed, liveStageMode, mergeLiveSpeakerRunsForScene, summaryPlainText, transcriptDisplayLines, transcriptPlainText, type LiveFeedItem } from '../liveView'
 import { useStickToBottom } from '../useStickToBottom'
 import { AnswerContent } from './AnswerContent'
 import { CopyButton, ShareOrCopyButton } from './CopyButton'
@@ -854,8 +854,17 @@ function IphoneLiveFeed({
         ))}
         {showDraft && draft ? (
           <div className="iphone-live-draft iphone-live-now">
-            <i className={`iphone-dot ${listening && !paused ? 'recording' : 'paused'}`} aria-hidden="true" />
+            {draft.speaker ? <SpeakerAvatar speaker={draft.speaker} /> : null}
             <div className="iphone-live-draft-main">
+              {draft.speaker ? (
+                <div className="iphone-live-item-meta">
+                  <SpeakerName
+                    speakerId={draft.speaker}
+                    label={resolveSpeakerName(speakerNames, draft.speaker)}
+                    onRename={onRename}
+                  />
+                </div>
+              ) : null}
               <span className="iphone-live-draft-status">
                 {!listening && paused ? IPHONE_COPY.pausedStatus : IPHONE_COPY.listeningEmpty}
               </span>
@@ -1352,6 +1361,7 @@ export default function ListenPane(props: Props) {
     catchNotes: props.catchNotes,
     busy: props.busy,
     catchAskId: props.catchAskId,
+    mergeSameSpeaker: mergeLiveSpeakerRunsForScene(props.scene),
   })
   const summarizeWindow = lastTwoMinutes(props.lines)
   const showQuickChips = phone && mobilePane !== 'transcript' && !props.qa && props.scene !== 'interview' && (props.listening || paused || (props.ended && hasContent)) && props.lines.length > 0
@@ -1382,12 +1392,15 @@ export default function ListenPane(props: Props) {
       </button>
     </div>
   ) : null
+  const turnTranscript = props.scene === 'meeting' || props.scene === 'interview'
   const trGroups = useMemo(
-    () => groupTranscript(
-      props.lines,
-      props.ended ? null : { text: props.partial, speaker: props.partialSpeaker },
-    ),
-    [props.lines, props.partial, props.partialSpeaker, props.ended],
+    () => (turnTranscript
+      ? []
+      : groupTranscript(
+        props.lines,
+        props.ended ? null : { text: props.partial, speaker: props.partialSpeaker },
+      )),
+    [props.lines, props.partial, props.partialSpeaker, props.ended, turnTranscript],
   )
   const hadAskAnswer = props.catchNotes.some((note) => note.kind === 'ask' && note.text.trim())
   const hasFeed = feed.items.length > 0 || Boolean(feed.draft)
@@ -1847,62 +1860,132 @@ export default function ListenPane(props: Props) {
                 ) : phone ? (
                   <>
                   {speakerSuggestRow}
-                  {trGroups.map((group, gi) => {
-                    const lastGroup = gi === trGroups.length - 1
-                    return (
-                      <div className="iphone-tr-group" key={`${group.speaker || 'none'}-${group.startTs || 'draft'}-${gi}`}>
-                        <div className="iphone-tr-group-head">
-                          {group.speaker ? <SpeakerAvatar speaker={group.speaker} /> : <span className="iphone-tr-ava" />}
-                          {group.speaker ? (
-                            <SpeakerName
-                              speakerId={group.speaker}
-                              label={resolveSpeakerName(props.speakerNames, group.speaker)}
+                  {turnTranscript ? (
+                    <>
+                      {props.lines.map((line, i) => {
+                        const lineId = line.id || ''
+                        const isLast = i === props.lines.length - 1
+                        const isLiveLine = props.listening && isLast && !props.partial && !props.ended
+                        return (
+                          <div className="iphone-tr-group iphone-tr-turn" key={lineId || `${line.ts}-${i}`}>
+                            <div className="iphone-tr-group-head">
+                              {line.speaker ? <SpeakerAvatar speaker={line.speaker} /> : <span className="iphone-tr-ava" />}
+                              {line.speaker ? (
+                                <SpeakerName
+                                  speakerId={line.speaker}
+                                  label={resolveSpeakerName(props.speakerNames, line.speaker)}
+                                  onRename={props.onRenameSpeaker}
+                                />
+                              ) : null}
+                              {line.ts ? <span className="iphone-tr-group-ts">{line.ts}</span> : null}
+                            </div>
+                            <LineRow
+                              ts={line.ts}
+                              text={line.text}
+                              translation={line.translation || ''}
+                              speaker={line.speaker || ''}
+                              speakerLabel={line.speaker ? resolveSpeakerName(props.speakerNames, line.speaker) : ''}
+                              live={isLiveLine}
+                              last={isLast && !props.partial}
+                              translateOn={biOn}
+                              translateFailed={line.translateFailed || false}
+                              onOpen={() => {
+                                if (!lineId || isLiveLine) return
+                                const opening = openedLine !== lineId
+                                setOpenedLine(opening ? lineId : '')
+                                if (!opening) return
+                                if (line.translateFailed) props.onRetryLineTranslation?.(lineId)
+                                else if (!line.translation?.trim()) props.onRequestLineTranslation?.(lineId)
+                              }}
+                              busy={props.translatingLineId === lineId}
                               onRename={props.onRenameSpeaker}
+                              actions
+                              compact
+                              cardOpen={openedLine === lineId}
+                              showCopy={openedLine === lineId}
                             />
-                          ) : null}
-                        </div>
-                        {mergeGroupDisplayLines(group.lines).map((line, i) => {
-                          const lineId = line.id || ''
-                          const isLiveLine = props.listening && lastGroup && i === group.lines.length - 1 && !group.draft
-                          return (
-                          <LineRow
-                            key={lineId || `${line.ts}-${i}`}
-                            ts={line.ts}
-                            text={line.text}
-                            translation={line.translation || ''}
-                            speaker={line.speaker || ''}
-                            speakerLabel={line.speaker ? resolveSpeakerName(props.speakerNames, line.speaker) : ''}
-                            live={isLiveLine}
-                            last={lastGroup && i === group.lines.length - 1 && !group.draft}
-                            translateOn={biOn}
-                            translateFailed={line.translateFailed || false}
-                            onOpen={() => {
-                              if (!lineId || isLiveLine) return
-                              const opening = openedLine !== lineId
-                              setOpenedLine(opening ? lineId : '')
-                              if (!opening) return
-                              if (line.translateFailed) props.onRetryLineTranslation?.(lineId)
-                              else if (!line.translation?.trim()) props.onRequestLineTranslation?.(lineId)
-                            }}
-                            busy={props.translatingLineId === lineId}
-                            onRename={props.onRenameSpeaker}
-                            actions
-                            compact
-                            cardOpen={openedLine === lineId}
-                            showCopy={openedLine === lineId}
-                          />
-                          )
-                        })}
-                        {group.draft ? (
+                          </div>
+                        )
+                      })}
+                      {!props.ended && props.partial ? (
+                        <div className="iphone-tr-group iphone-tr-turn iphone-tr-draft">
+                          <div className="iphone-tr-group-head">
+                            {props.partialSpeaker ? <SpeakerAvatar speaker={props.partialSpeaker} /> : <span className="iphone-tr-ava" />}
+                            {props.partialSpeaker ? (
+                              <SpeakerName
+                                speakerId={props.partialSpeaker}
+                                label={resolveSpeakerName(props.speakerNames, props.partialSpeaker)}
+                                onRename={props.onRenameSpeaker}
+                              />
+                            ) : null}
+                            <span className="iphone-tr-group-ts">live</span>
+                          </div>
                           <div className="listen-line iphone-tr-line iphone-tr-compact iphone-tr-draft">
                             <div className="iphone-tr-body">
-                              <div className="listen-orig">{group.draft.text}</div>
+                              <div className="listen-orig">{props.partial}</div>
                             </div>
                           </div>
-                        ) : null}
-                      </div>
-                    )
-                  })}
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    trGroups.map((group, gi) => {
+                      const lastGroup = gi === trGroups.length - 1
+                      return (
+                        <div className="iphone-tr-group" key={`${group.speaker || 'none'}-${group.startTs || 'draft'}-${gi}`}>
+                          <div className="iphone-tr-group-head">
+                            {group.speaker ? <SpeakerAvatar speaker={group.speaker} /> : <span className="iphone-tr-ava" />}
+                            {group.speaker ? (
+                              <SpeakerName
+                                speakerId={group.speaker}
+                                label={resolveSpeakerName(props.speakerNames, group.speaker)}
+                                onRename={props.onRenameSpeaker}
+                              />
+                            ) : null}
+                          </div>
+                          {transcriptDisplayLines(props.scene, group.lines).map((line, i) => {
+                            const lineId = line.id || ''
+                            const isLiveLine = props.listening && lastGroup && i === group.lines.length - 1 && !group.draft
+                            return (
+                            <LineRow
+                              key={lineId || `${line.ts}-${i}`}
+                              ts={line.ts}
+                              text={line.text}
+                              translation={line.translation || ''}
+                              speaker={line.speaker || ''}
+                              speakerLabel={line.speaker ? resolveSpeakerName(props.speakerNames, line.speaker) : ''}
+                              live={isLiveLine}
+                              last={lastGroup && i === group.lines.length - 1 && !group.draft}
+                              translateOn={biOn}
+                              translateFailed={line.translateFailed || false}
+                              onOpen={() => {
+                                if (!lineId || isLiveLine) return
+                                const opening = openedLine !== lineId
+                                setOpenedLine(opening ? lineId : '')
+                                if (!opening) return
+                                if (line.translateFailed) props.onRetryLineTranslation?.(lineId)
+                                else if (!line.translation?.trim()) props.onRequestLineTranslation?.(lineId)
+                              }}
+                              busy={props.translatingLineId === lineId}
+                              onRename={props.onRenameSpeaker}
+                              actions
+                              compact
+                              cardOpen={openedLine === lineId}
+                              showCopy={openedLine === lineId}
+                            />
+                            )
+                          })}
+                          {group.draft ? (
+                            <div className="listen-line iphone-tr-line iphone-tr-compact iphone-tr-draft">
+                              <div className="iphone-tr-body">
+                                <div className="listen-orig">{group.draft.text}</div>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      )
+                    })
+                  )}
                   </>
                 ) : (
                   <>
