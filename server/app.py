@@ -35,7 +35,13 @@ from server.admin import router as admin_router
 from server.commerce import router as commerce_router
 from server.cors import cors_origins
 from server.db import User, init_db
-from server.headers import ApexRedirectMiddleware, CloudflareOriginMiddleware, HostLockMiddleware, SecurityHeadersMiddleware
+from server.headers import (
+    ApexRedirectMiddleware,
+    CanonicalPathRedirectMiddleware,
+    CloudflareOriginMiddleware,
+    HostLockMiddleware,
+    SecurityHeadersMiddleware,
+)
 from server.lang import (
     _LANG_NAMES,
     _STT_AUTO_LANGS,
@@ -7105,6 +7111,7 @@ app.add_middleware(
 app.add_middleware(CloudflareOriginMiddleware)
 app.add_middleware(HostLockMiddleware)
 app.add_middleware(ApexRedirectMiddleware)
+app.add_middleware(CanonicalPathRedirectMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(commerce_router)
 app.include_router(admin_router)
@@ -7501,13 +7508,20 @@ def robots():
     return Response(content=body, media_type="text/plain; charset=utf-8")
 
 
+def _sitemap_loc(base: str, path: str) -> str:
+    """Match siteUrl(): homepage keeps a trailing slash; other paths do not."""
+    if path == "/":
+        return f"{base}/"
+    return f"{base}{path}"
+
+
 @app.get("/sitemap.xml")
 def sitemap():
     base = PUBLIC_URL.rstrip("/")
     paths = ["/", "/zh", "/privacy", "/terms", "/consent"]
     urls = []
     for path in paths:
-        loc = base + ("" if path == "/" else path)
+        loc = _sitemap_loc(base, path)
         urls.append(f"  <url><loc>{loc}</loc><changefreq>weekly</changefreq></url>")
     body = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' + "\n".join(urls) + "\n</urlset>\n"
     return Response(content=body, media_type="application/xml; charset=utf-8")

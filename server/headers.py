@@ -214,6 +214,22 @@ def canonical_apex_host(public_url: str) -> str:
     return host
 
 
+def canonical_path_redirect_url(scope: Scope) -> str | None:
+    """Bare index.html → /. API and health stay put."""
+    if scope.get("type") != "http":
+        return None
+    path = scope.get("path") or "/"
+    if is_health_path(path) or path == "/api" or path.startswith("/api/"):
+        return None
+    if path.rstrip("/") != "/index.html":
+        return None
+    qs = scope.get("query_string") or b""
+    loc = "/"
+    if qs:
+        loc += "?" + qs.decode("latin1", "replace")
+    return loc
+
+
 def apex_redirect_url(scope: Scope, public_url: str) -> str | None:
     """www sibling of PUBLIC_URL → https://apex{path}. API and health stay put."""
     if scope.get("type") != "http":
@@ -236,6 +252,31 @@ def apex_redirect_url(scope: Scope, public_url: str) -> str | None:
     if qs:
         loc += "?" + qs.decode("latin1", "replace")
     return loc
+
+
+class CanonicalPathRedirectMiddleware:
+    """Send /index.html to /. API and WebSocket are unchanged."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        loc = canonical_path_redirect_url(scope)
+        if not loc:
+            await self.app(scope, receive, send)
+            return
+        body = b""
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 301,
+                "headers": [
+                    (b"location", loc.encode("latin1")),
+                    (b"content-length", b"0"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
 
 
 class ApexRedirectMiddleware:

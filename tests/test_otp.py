@@ -122,10 +122,17 @@ class OtpApiTests(unittest.TestCase):
         self.assertIn("Disallow: /api/", text)
         self.assertIn("Allow: /", text)
 
+    def test_index_html_redirects_to_root(self):
+        res = self.client.get("/index.html", follow_redirects=False)
+        self.assertEqual(res.status_code, 301)
+        self.assertEqual(res.headers.get("location"), "/")
+
     def test_sitemap_lists_legal_pages_not_auth(self):
         res = self.client.get("/sitemap.xml")
         self.assertEqual(res.status_code, 200)
         text = res.text
+        self.assertRegex(text, r"<loc>https?://[^<]+/</loc>")
+        self.assertIn("/zh</loc>", text)
         self.assertIn("/privacy", text)
         self.assertIn("/terms", text)
         self.assertIn("/consent", text)

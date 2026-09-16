@@ -1,7 +1,14 @@
 import unittest
 from unittest import mock
 
-from server.headers import ApexRedirectMiddleware, HostLockMiddleware, apex_redirect_url, host_allowed
+from server.headers import (
+    ApexRedirectMiddleware,
+    CanonicalPathRedirectMiddleware,
+    HostLockMiddleware,
+    apex_redirect_url,
+    canonical_path_redirect_url,
+    host_allowed,
+)
 from server.ratelimit import allow, rate_limit_global, ws_connect, ws_disconnect
 from server.settings import _allowed_hosts
 
@@ -77,6 +84,40 @@ class AllowedHostsTests(unittest.TestCase):
         hosts = _allowed_hosts("https://nod-web-production.up.railway.app")
         self.assertIn("nod-web-production.up.railway.app", hosts)
         self.assertNotIn("www.nod-web-production.up.railway.app", hosts)
+
+
+class CanonicalPathRedirectTests(unittest.TestCase):
+    def test_index_html_redirects_to_root(self):
+        self.assertEqual(canonical_path_redirect_url(_scope(path="/index.html")), "/")
+
+    def test_index_html_keeps_query(self):
+        scope = _scope(path="/index.html")
+        scope["query_string"] = b"utm=1"
+        self.assertEqual(canonical_path_redirect_url(scope), "/?utm=1")
+
+    def test_api_does_not_redirect(self):
+        self.assertIsNone(canonical_path_redirect_url(_scope(path="/api/config")))
+
+    def test_root_does_not_redirect(self):
+        self.assertIsNone(canonical_path_redirect_url(_scope(path="/")))
+
+    def test_middleware_sends_301(self):
+        out: dict = {}
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(msg):
+            if msg["type"] == "http.response.start":
+                out["status"] = msg["status"]
+                out["headers"] = dict(msg.get("headers") or [])
+
+        mw = CanonicalPathRedirectMiddleware(mock.AsyncMock())
+        import asyncio
+
+        asyncio.run(mw(_scope(path="/index.html"), receive, send))
+        self.assertEqual(out["status"], 301)
+        self.assertEqual(out["headers"][b"location"], b"/")
 
 
 class ApexRedirectTests(unittest.TestCase):

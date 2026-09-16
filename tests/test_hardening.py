@@ -413,7 +413,7 @@ class StaticTraversalTests(unittest.TestCase):
                 self.assertIn(b"<", body)
 
     def test_real_asset_still_served(self):
-        code, body = _raw_get("/index.html")
+        code, body = _raw_get("/favicon.ico")
         self.assertEqual(code, 200)
         self.assertTrue(body)
 
