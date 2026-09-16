@@ -20,6 +20,8 @@ import re
 from typing import Any
 
 _ENDS_SENTENCE = ("。", "！", "？", ".", "!", "?", "…")
+# STT speaker ids can flip mid-clause on sub-second gaps; do not start a new line.
+_SPEAKER_SPLIT_MIN_GAP_MS = 500
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]")
 # A sentence-end punctuation followed by whitespace or end-of-text.
 _SENTENCE_END_RE = re.compile(r"[.!?…。！？](?=\s|$)")
@@ -289,6 +291,23 @@ def join_meeting_text(left: str, right: str, gap_ms: float | None = None) -> str
     return f"{a} {b}".strip()
 
 
+def _open_mid_clause(prev_open: dict[str, Any]) -> bool:
+    """True when the open line has no real sentence end (continuation is plausible)."""
+    ptxt = (prev_open.get("text") or "").strip()
+    if not ptxt:
+        return False
+    if ends_sentence(ptxt) and not false_period(ptxt):
+        return False
+    return True
+
+
+def _speaker_change_blocked(prev_open: dict[str, Any], gap_ms_val: float) -> bool:
+    """Tiny-gap speaker flips mid-clause are STT artefacts — keep extending."""
+    if gap_ms_val > _SPEAKER_SPLIT_MIN_GAP_MS:
+        return False
+    return _open_mid_clause(prev_open)
+
+
 def gap_ms(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -> tuple[float, str] | None:
     """(gap in ms, source) between the open line and the new turn.
 
@@ -347,7 +366,8 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
     p = prev_open.get("speaker")
     n = nxt.get("speaker")
     if p and n and p != n:
-        return "new", "speaker"
+        if not _speaker_change_blocked(prev_open, gap_ms_val):
+            return "new", "speaker"
     if (not p) and n:
         return "new", "speaker"  # unknown → known: never backfill a speaker
     if p and not n:

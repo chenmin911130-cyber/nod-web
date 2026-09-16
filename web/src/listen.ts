@@ -485,6 +485,16 @@ export function promoteMeetingSpeakers(
 
 export const SUMMARIZE_2MIN_MS = 120_000
 
+/** Block auto-notes / export polish when the server history is too thin to summarize. */
+export const NOTES_MIN_LINES = 2
+export const NOTES_MIN_CHARS = 120
+
+export function notesTranscriptTooThin(lines: Array<{ text?: string }>): boolean {
+  if (lines.length < NOTES_MIN_LINES) return true
+  const chars = lines.reduce((sum, line) => sum + (line.text || '').trim().length, 0)
+  return chars < NOTES_MIN_CHARS
+}
+
 /** Transcript lines from the last 2 minutes (`at` wall clock).
  * Missing `at`: include the line only if it sits after the last timestamped
  * line older than the window (the recent tail). If no line has `at`, return []
@@ -603,6 +613,7 @@ export function notesPrompt(
   names: Record<string, string> = {},
   cap?: { dropped: number; fromTs: string | null },
   biTarget?: PairLang,
+  incomplete = false,
 ): string {
   const follow =
     scene === 'lecture'
@@ -610,10 +621,15 @@ export function notesPrompt(
       : scene === 'interview'
         ? 'followUps = thank-you note / materials to send'
         : 'followUps = next check-ins'
+  const incompleteNote = incomplete
+    ? 'INCOMPLETE SESSION: transcript is very short. Return sparse JSON only; leave every section empty rather than guessing.\n'
+    : ''
   return (
     `${nodTag('NOTES', outLang, false, scene, biTarget)}\n` +
     outLangRule(outLang, 'json', false) +
-    `Write structured notes for a ${scene}. Use only the transcript. Do not invent names, numbers, or commitments.\n` +
+    incompleteNote +
+    `Write structured notes for a ${scene}. Use only the transcript. Do not invent names, numbers, or commitments. ` +
+    `If the transcript is too short to support a section, leave that section empty — do not guess or pad.\n` +
     'Return JSON only with keys: summary (string), takeaways, keyPoints, decisions, actionItems, importantDetails, followUps, revisionNotes, speakers.\n' +
     'Lists are string arrays. actionItems is [{text, owner}] — owner only if spoken.\n' +
     'speakers is [{label, name, evidence}]: label matches the transcript speaker label; name only if explicitly spoken for that speaker; evidence is the short proving quote. Empty array when nobody is named.\n' +

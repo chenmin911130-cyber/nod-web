@@ -89,6 +89,7 @@ import {
   isCatchPrompt,
   isNotesPrompt,
   notesPrompt,
+  notesTranscriptTooThin,
   capTranscript,
   notesLangActions,
   MEETING_SPEAKER_OPTIONS,
@@ -1878,7 +1879,7 @@ export default function App() {
       if (e.type === 'ready') {
         syncWorkspace()
         checkPendingRestore()
-        if (listenWanted.current) {
+        if (listenWanted.current && !sessionListening({ capture: stateRef.current.capture })) {
           queueMicrotask(() => api.send(watchStartListenCommand(isWatchMicPreferred())))
         }
       }
@@ -2397,7 +2398,7 @@ export default function App() {
         }
         return
       }
-      if (sessionListening({ capture: stateRef.current.capture })) {
+      if (sessionListening({ capture: stateRef.current.capture }) && !listenWanted.current) {
         dispatch({ type: 'engine', ev: { type: 'phase', capture: 'off', engine: 'idle' } })
       }
       if (!engineSavePromptOpensUi({
@@ -3394,6 +3395,10 @@ export default function App() {
       dispatch({ type: 'engine', ev: { type: 'status', text: 'No transcript to note yet.' } })
       return
     }
+    if (notesTranscriptTooThin(s.meetingLines)) {
+      dispatch({ type: 'engine', ev: { type: 'status', text: 'Not enough transcript for notes yet.' } })
+      return
+    }
     killInflightTranslation()
     dispatch({ type: 'expect_notes' })
     const cap = capTranscript(s.meetingLines)
@@ -3427,6 +3432,7 @@ export default function App() {
       workspaceMode: state.workspaceMode,
       busy: state.busy,
       lineCount: state.meetingLines.length,
+      lines: state.meetingLines,
       listenFlush: state.listenFlushWait.status,
     })
     if (next === 'wait') return

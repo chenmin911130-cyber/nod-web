@@ -1,4 +1,4 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, applyListenSetting, askPrompt, bilingualDisabled, bindSpeakerName, capTranscript, emptyNotes, exportNoteSections, lastTwoMinutes, listenAskPayload, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesBilingualOn, notesLangActions, notesPrompt, outLangRule, parseNotes, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakerLetterIndex, speakersExpected, transcriptBlock } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, applyListenSetting, askPrompt, bilingualDisabled, bindSpeakerName, capTranscript, emptyNotes, exportNoteSections, lastTwoMinutes, listenAskPayload, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesBilingualOn, notesLangActions, notesPrompt, notesTranscriptTooThin, outLangRule, parseNotes, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakerLetterIndex, speakersExpected, transcriptBlock } from './listen'
 import { IPHONE_COPY, iphoneCopyFor } from './iphoneCopy'
 import type { MeetingLine } from './types'
 
@@ -232,7 +232,21 @@ eq(notesBodyText('我们周五发。'), '我们周五发。', 'single-language n
   if (!notesPrompt('meeting', [{ id: '1', ts: '0:01', text: 'Hi' }], 'en').toLowerCase().includes('explicitly spoken')) {
     throw new Error('notesPrompt requires explicitly spoken names')
   }
+  if (!notesPrompt('meeting', [{ id: '1', ts: '0:01', text: 'Hi' }], 'en', false, {}, undefined, undefined, true).includes('INCOMPLETE SESSION')) {
+    throw new Error('notesPrompt incomplete flag')
+  }
 }
+
+eq(notesTranscriptTooThin([]), true, 'empty is thin')
+eq(notesTranscriptTooThin([{ text: 'Only one short line.' }]), true, 'one line is thin')
+eq(
+  notesTranscriptTooThin([
+    { text: 'First line with enough words to count.' },
+    { text: 'Second line continues the meeting transcript with more detail here.' },
+  ]),
+  false,
+  'two substantive lines are not thin',
+)
 
 // Same-language passthrough dedup: a translation identical to its source (after
 // whitespace normalization) is not a real translation — feed it once, source only.

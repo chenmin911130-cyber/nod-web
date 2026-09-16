@@ -7,6 +7,8 @@ import {
   iphoneSummaryHeading,
   liveFeed,
   liveStageMode,
+  mergeGroupDisplayLines,
+  mergeLiveSpeakerRuns,
   summaryPlainText,
   transcriptPlainText,
 } from './liveView'
@@ -91,12 +93,30 @@ eq(
   }),
   {
     items: [
-      { type: 'line', id: 'a', ts: '12:10', speaker: '1', text: 'Let’s finish the onboarding update by Friday.', at: 0 },
-      { type: 'line', id: 'b', ts: '12:18', speaker: '1', text: 'I’ll prepare the checklist before our next meeting.', at: 0 },
+      {
+        type: 'line',
+        id: 'a',
+        ts: '12:18',
+        speaker: '1',
+        text: 'Let’s finish the onboarding update by Friday. I’ll prepare the checklist before our next meeting.',
+        at: 0,
+      },
     ],
     draft: null,
   },
-  'two consecutive same-speaker lines are both kept and not merged',
+  'consecutive same-speaker finals merge into one linear bubble',
+)
+eq(
+  liveFeed({
+    lines: [{ id: 'a', ts: '00:40', speaker: 'B', text: 'I am doing great, Anna.' }],
+    partial: 'Thanks for asking.',
+    partialSpeaker: 'B',
+  }),
+  {
+    items: [{ type: 'line', id: 'a', ts: '00:40', speaker: 'B', text: 'I am doing great, Anna.', at: 0, liveTail: 'Thanks for asking.' }],
+    draft: null,
+  },
+  'partial joins the last same-speaker line as liveTail',
 )
 
 eq(askOutcome({ note: { text: '' }, busy: true, lastError: null }), 'pending', 'in-flight empty ask is pending')
@@ -398,4 +418,23 @@ eq(
   ).map((g) => ({ speaker: g.speaker, n: g.lines.length, draft: Boolean(g.draft) })),
   [{ speaker: '', n: 2, draft: true }],
   'empty speaker ids group together and take the draft',
+)
+
+eq(
+  mergeLiveSpeakerRuns([
+    { type: 'line', id: '1', ts: '0:10', speaker: 'B', text: 'I am doing great, Anna.', at: 1 },
+    { type: 'line', id: '2', ts: '0:12', speaker: 'B', text: 'Thanks for asking.', at: 2 },
+    { type: 'line', id: '3', ts: '0:14', speaker: 'B', text: 'I am really excited about', at: 3 },
+  ]).map((row) => (row.type === 'line' ? row.text : '')),
+  ['I am doing great, Anna. Thanks for asking. I am really excited about'],
+  'mergeLiveSpeakerRuns linearizes interleaved fragments',
+)
+
+eq(
+  mergeGroupDisplayLines([
+    { id: '1', ts: '0:40', text: 'I am doing great, Anna.', speaker: 'B' },
+    { id: '2', ts: '0:42', text: 'Thanks for asking.', speaker: 'B' },
+  ])[0].text,
+  'I am doing great, Anna. Thanks for asking.',
+  'mergeGroupDisplayLines joins group fragments for one card',
 )

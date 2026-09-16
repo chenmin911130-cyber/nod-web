@@ -168,6 +168,49 @@ class DecideTests(unittest.TestCase):
         nxt = {"text": "next", "speaker": "B", "first_word_ms": 200, "n_words": 1}
         self.assertEqual(decide(prev, nxt, 0.0), "new")
 
+    def test_speaker_flip_mid_clause_tiny_gap_extends(self):
+        # Anna/Jack repro: "...I am joined" (A) + "By my wonderful co-host" (B), gap 81ms.
+        prev = {
+            "id": "q1",
+            "text": "Hi everyone, I am Anna, and as always, I am joined",
+            "speaker": "A",
+            "opened_at": 0.0,
+            "last_final_at": 0.0,
+            "last_word_ms": 16000,
+            "n_words": 12,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "By my wonderful co-host Jack. How are you doing today, Jack?",
+            "speaker": "B",
+            "first_word_ms": 16081,
+            "last_word_ms": 22000,
+            "n_words": 10,
+        }
+        self.assertEqual(decide(prev, nxt, 0.0), "extend")
+        self.assertIn(decide_full(prev, nxt, 0.0)[1], ("ok", "split"))
+
+    def test_speaker_flip_after_sentence_end_stays_new(self):
+        prev = {
+            "id": "q1",
+            "text": "Thanks for joining us today.",
+            "speaker": "A",
+            "opened_at": 0.0,
+            "last_final_at": 0.0,
+            "last_word_ms": 1000,
+            "n_words": 5,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "Let me introduce Jack.",
+            "speaker": "B",
+            "first_word_ms": 1100,
+            "last_word_ms": 2000,
+            "n_words": 4,
+        }
+        self.assertEqual(decide(prev, nxt, 0.0), "new")
+        self.assertEqual(decide_full(prev, nxt, 0.0)[1], "ends_sentence")
+
     def test_known_then_unknown_lowercase_extends(self):
         prev = {"id": "q1", "text": "So one of the", "speaker": "A", "opened_at": 0.0, "last_final_at": 0.0, "last_word_ms": 100, "n_words": 4, "rev": 0}
         nxt = {"text": "significant features", "speaker": None, "first_word_ms": 300, "n_words": 2}
@@ -522,6 +565,15 @@ class MeetingWorkerOrderTests(unittest.TestCase):
         self.assertEqual(len(qs), 2)
         self.assertEqual(qs[0]["text"], "third segment here")
         self.assertEqual(qs[1]["text"], "fourth segment here")
+
+    def test_set_workspace_noop_skips_turn_reset(self):
+        sess = _session()
+        sess.cfg = {"stt": {"listen_scene": "meeting", "speakers_expected": 2}}
+        sess._open_line = {"id": "q1", "text": "held mid sentence", "speaker": "A"}
+        gen_before = sess._meeting_gen
+        sess.set_workspace("meeting", "meeting", 2)
+        self.assertEqual(sess._meeting_gen, gen_before)
+        self.assertEqual(sess._open_line["text"], "held mid sentence")
 
     def test_reset_drops_inflight(self):
         # A buffered final for an OLD meeting generation is dropped on flush, so
