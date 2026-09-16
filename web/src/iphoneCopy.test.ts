@@ -1,5 +1,6 @@
 import {
   IPHONE_COPY,
+  iphoneCopyFor,
   askEntryLabel,
   speakerSuggestText,
   canSwitchWorkspace,
@@ -33,6 +34,8 @@ import {
   translateToChip,
 } from './iphoneCopy'
 import { listenMetaLine } from './listen'
+import { translateLangDisplayName } from './langDisplayNames'
+import { watchUiCopy } from './watchCopy'
 
 function eq<T>(got: T, want: T, label: string) {
   if (got !== want) throw new Error(`${label}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`)
@@ -279,5 +282,31 @@ eq(keptSaveRow.trailing, 'View in History', 'kept Save row trails View in Histor
 eq(keptSaveRow.disabled, false, 'kept Save row stays tappable')
 eq(IPHONE_COPY.uplinkUnavailable, 'Background recording is unavailable. Reopen the app and try again.', 'missing native uplink is a short reopen notice')
 eq(IPHONE_COPY.uplinkFailed, 'Background recording could not start. You can still record while the app is open.', 'uplink connect failure keeps foreground recording')
+
+const zh = iphoneCopyFor('zh')
+const watchZh = watchUiCopy('zh-Hans')
+eq(zh.listenTab, '听写', 'zh Listen tab')
+eq(zh.startListening, '开始听写', 'zh start listening')
+eq(zh.stop, '结束', 'zh End is 结束 not Watch 停止')
+eq(zh.more, '更多', 'zh More')
+eq(zh.saveYes, '保存', 'zh Save matches Watch')
+eq(zh.saveNotNow, '暂不', 'phone End defer is 暂不')
+eq(zh.saveNo, '不保存', 'dialog discard is 不保存')
+eq(zh.saveNotNow !== zh.saveNo, true, 'defer and discard differ in zh')
+eq(zh.saveSavedLine, '已保存到 History', 'saved line matches Swift savedHistory')
+eq(watchZh.save, zh.saveYes, 'phone Save matches watchUiCopy save')
+eq(watchZh.dontSave, zh.saveNo, 'dialog discard matches watch dontSave wording')
+eq(zh.saveSavedLine !== watchZh.saved, true, 'phone saved line is History not drifted 已同步到手机')
+eq(zh.consentPrivacyLink, '隐私政策', 'zh consent privacy link')
+eq(zh.consentNoteLink, '同意说明', 'zh consent note link')
+eq(zh.notesMetaWord, '笔记', 'zh notes meta word')
+eq(
+  `${translateLangDisplayName('zh', 'zh')} ${zh.notesMetaWord}`,
+  '中文 笔记',
+  'zh UI listen meta notes segment',
+)
+eq(iphoneCopyFor('it').saveYes, 'Salva', 'it overlap Save from Watch')
+eq(iphoneCopyFor('it').listenTab, 'Listen', 'it non-overlap falls back to en')
+eq(iphoneCopyFor('zh').quickSummarizeAsk, IPHONE_COPY.quickSummarizeAsk, 'model prompt stays English in zh UI')
 
 console.log('iphoneCopy.test.ts ok')

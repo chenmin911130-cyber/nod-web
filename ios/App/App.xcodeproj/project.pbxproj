@@ -10,6 +10,7 @@
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		50379B232058CBB4000EE86E /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 50379B222058CBB4000EE86E /* capacitor.config.json */; };
 		504EC3081FED79650016851F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504EC3071FED79650016851F /* AppDelegate.swift */; };
+		D0D256000000000000000001 /* NodBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D256000000000000000002 /* NodBridgeViewController.swift */; };
 		D0D1227000000000000000B2 /* LaunchBrand.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D1227000000000000000B1 /* LaunchBrand.swift */; };
 		D0D1227000000000000000B3 /* LaunchBrand.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D1227000000000000000B1 /* LaunchBrand.swift */; };
 		D0D1227000000000000000B5 /* LaunchOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D1227000000000000000B4 /* LaunchOverlay.swift */; };
@@ -44,6 +45,7 @@
 		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		504EC3041FED79650016851F /* App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		504EC3071FED79650016851F /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		D0D256000000000000000002 /* NodBridgeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodBridgeViewController.swift; sourceTree = "<group>"; };
 		D0D1227000000000000000B1 /* LaunchBrand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchBrand.swift; sourceTree = "<group>"; };
 		D0D1227000000000000000B4 /* LaunchOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchOverlay.swift; sourceTree = "<group>"; };
 		D0D1227000000000000000B7 /* StartupRecoveryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupRecoveryView.swift; sourceTree = "<group>"; };
@@ -132,6 +134,7 @@
 			children = (
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
+				D0D256000000000000000002 /* NodBridgeViewController.swift */,
 				D0D1227000000000000000B1 /* LaunchBrand.swift */,
 				D0D1227000000000000000B4 /* LaunchOverlay.swift */,
 				D0D1227000000000000000B7 /* StartupRecoveryView.swift */,
@@ -359,6 +362,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
+				D0D256000000000000000001 /* NodBridgeViewController.swift in Sources */,
 				D0D1227000000000000000B2 /* LaunchBrand.swift in Sources */,
 				D0D1227000000000000000B5 /* LaunchOverlay.swift in Sources */,
 				D0D1227000000000000000B6 /* StartupRecoveryView.swift in Sources */,

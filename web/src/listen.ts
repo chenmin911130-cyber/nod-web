@@ -1,5 +1,6 @@
 import type { Lang, MeetingLine, PairLang } from './types'
 import { TRANSLATE_LANGS } from './types'
+import { translateLangDisplayName } from './langDisplayNames'
 import { IPHONE_COPY, sameSpokenLine } from './iphoneCopy'
 
 function langName(lang: PairLang): string {
@@ -196,13 +197,13 @@ export function listenMetaLine(input: {
   const speech =
     input.speechLang === 'auto'
       ? IPHONE_COPY.autoDetectFrom
-      : (TRANSLATE_LANGS.find((item) => item.id === input.speechLang)?.name || 'English')
+      : translateLangDisplayName(input.speechLang)
   const parts = [sceneChipLabel(input.scene, input.speakersId), speech]
   if (!input.qa) {
     parts.push(
       input.notesLang === 'auto'
         ? IPHONE_COPY.autoNotes
-        : `${TRANSLATE_LANGS.find((item) => item.id === input.notesLang)?.name || 'English'} notes`,
+        : `${translateLangDisplayName(input.notesLang)} ${IPHONE_COPY.notesMetaWord}`,
     )
   }
   return parts.join(' · ')
