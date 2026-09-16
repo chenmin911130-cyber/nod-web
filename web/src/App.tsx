@@ -18,7 +18,7 @@ import AccountPane from './components/AccountPane'
 import LeaveSessionSheet from './components/LeaveSessionSheet'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
-import { IPHONE_COPY, canSwitchWorkspace, sameSpokenLine, sessionListening, toastSpeechOnly } from './iphoneCopy'
+import { IPHONE_COPY, canSwitchWorkspace, readyPreservesCapture, sameSpokenLine, sessionListening, toastSpeechOnly } from './iphoneCopy'
 import { translateLangDisplayName } from './langDisplayNames'
 import { showListenNew, composeSessionKey, nextComposeSessionId, endedHasContent, IDLE_CAPTURE_CLOCK, advanceCaptureClock, captureClockMs, clockCapture } from './listenChrome'
 import SaveBanner from './components/SaveBanner'
@@ -407,6 +407,9 @@ function reducer(state: AppState, action: Action): AppState {
       }
       switch (ev.type) {
         case 'ready':
+          if (readyPreservesCapture({ capture: state.capture, autoOn: state.autoOn })) {
+            return { ...state, status: STATUS_READY }
+          }
           return { ...state, status: STATUS_READY, capture: 'off', engine: 'idle' }
         case 'keys_status':
           return { ...state, keys: { hasLlm: ev.has_llm, hasStt: ev.has_stt } }

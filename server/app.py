@@ -5393,7 +5393,10 @@ class Session:
         logging.getLogger("nod").warning(
             "stt pcm_rejected session=%s capture=%s reason=%s", sid, cap, reason
         )
-        self.emit({"type": "error", "text": text})
+        # Expected post-stop/backfill rejection: native gets pcm_rejected; do not
+        # surface a control-WS error or increment errors_1h for teardown noise.
+        if reason != "session_ended":
+            self.emit({"type": "error", "text": text})
         event = {
             "type": "pcm_rejected",
             "id": sid,
@@ -6446,12 +6449,18 @@ class Session:
         Precedence: recording (manual) > paused > listening > off. The engine
         axis is deliberately separate (see ``_engine``), so a model generating
         an answer no longer reads as "not listening" on the Watch.
+
+        A live listen with no ``_listener`` yet — STT handoff, blocked sender
+        recovery, or reopen in flight — is still listening; only a session that
+        is not wanted (or is paused/manual) reads as off.
         """
         if getattr(self, "_manual", False):
             return "recording"
         if getattr(self, "_paused", False):
             return "paused"
         if getattr(self, "_listener", None) is not None:
+            return "listening"
+        if getattr(self, "_listen_wanted", False):
             return "listening"
         return "off"
 

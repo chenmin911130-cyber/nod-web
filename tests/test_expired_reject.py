@@ -64,6 +64,7 @@ class ExpiredRejectTests(unittest.TestCase):
         self.assertEqual(sent["id"], "sess-live")
         self.assertEqual(sent["capture_id"], "cap-a")
         self.assertIn("补传未完成", sent["text"])
+        self.assertEqual(events, [], "session_ended reject must not emit control error")
         # No drain may be attempted on a dead session.
         self.assertIsNone(getattr(sess, "_pcm_drain_result", None))
 
@@ -89,9 +90,12 @@ class ExpiredRejectTests(unittest.TestCase):
         sess._consent_ok = True
         native = mock.Mock()
         sess._send_audio_text = native
+        events: list[dict] = []
+        sess.emit = events.append
         sess.push_pcm(b"\x01" * 1600)
         self.assertTrue(native.called, "trailing PCM on a terminated session must reject")
         self.assertEqual(native.call_args[0][0]["type"], "pcm_rejected")
+        self.assertEqual(events, [], "session_ended trailing PCM must not emit control error")
         native.reset_mock()
         sess.push_pcm(b"\x02" * 1600)
         self.assertFalse(native.called, "reject is single-shot, not spammed per frame")
