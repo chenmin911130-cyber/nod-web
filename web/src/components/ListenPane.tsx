@@ -1083,6 +1083,8 @@ export default function ListenPane(props: Props) {
   const sessionKeyRef = useRef(props.sessionKey || '')
   const endedSheetDrag = useRef<{ pointerId: number; y: number; el: HTMLElement; moved: boolean } | null>(null)
   const skipEndedClick = useRef(false)
+  /** After a Live quick chip, scroll Notes to that ask card instead of the pane bottom. */
+  const pendingFocusAskRef = useRef(false)
   const [notesOpen, setNotesOpen] = useState(Boolean(props.notesDefaultOpen))
   const [mobilePane, setMobilePane] = useState<'live' | 'transcript' | 'notes'>(props.notesDefaultOpen ? 'notes' : 'live')
   const [notesW, setNotesW] = useState(() => readNotesW(props.scene))
@@ -1267,8 +1269,21 @@ export default function ListenPane(props: Props) {
   const stick = useStickToBottom(leftRef, [props.lines.length, props.partial, !showStage], !showStage)
 
   useEffect(() => {
-    rightRef.current?.scrollTo({ top: rightRef.current.scrollHeight })
-  }, [props.catchNotes, props.notesRaw])
+    const el = rightRef.current
+    if (!el) return
+    if (pendingFocusAskRef.current) {
+      if (!props.catchAskId) return
+      pendingFocusAskRef.current = false
+      const askId = props.catchAskId
+      requestAnimationFrame(() => {
+        const card = el.querySelector(`[data-note-id="${CSS.escape(askId)}"]`)
+        if (card) card.scrollIntoView({ block: 'start', behavior: 'auto' })
+        else el.scrollTop = 0
+      })
+      return
+    }
+    el.scrollTo({ top: el.scrollHeight })
+  }, [props.catchNotes, props.notesRaw, props.catchAskId])
 
   const onResizeStart = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -1306,6 +1321,13 @@ export default function ListenPane(props: Props) {
     props.onSummary()
   }
 
+  const runQuickAsk = (ask: string) => {
+    if (props.busy) return
+    pendingFocusAskRef.current = true
+    openNotes()
+    props.onAsk(ask)
+  }
+
   const submit = () => {
     const text = input.trim()
     if (!text || props.busy) return
@@ -1339,8 +1361,8 @@ export default function ListenPane(props: Props) {
         className="iphone-ask-chip"
         disabled={props.busy || summarizeWindow.length === 0}
         onClick={() => {
-          if (props.busy || summarizeWindow.length === 0) return
-          props.onAsk(IPHONE_COPY.quickSummarize)
+          if (summarizeWindow.length === 0) return
+          runQuickAsk(IPHONE_COPY.quickSummarize)
         }}
       >
         <span aria-hidden="true">✦</span>
@@ -1350,7 +1372,7 @@ export default function ListenPane(props: Props) {
         type="button"
         className="iphone-ask-chip"
         disabled={props.busy}
-        onClick={() => props.onAsk(lecture ? IPHONE_COPY.quickKeyConcepts : IPHONE_COPY.quickActionItems)}
+        onClick={() => runQuickAsk(lecture ? IPHONE_COPY.quickKeyConcepts : IPHONE_COPY.quickActionItems)}
       >
         <span aria-hidden="true">☰</span>
         {lecture ? IPHONE_COPY.quickKeyConceptsChip : IPHONE_COPY.quickActionItemsChip}
@@ -1993,7 +2015,11 @@ export default function ListenPane(props: Props) {
                     })
                     : null
                   return (
-                  <div className={`listen-card${note.kind === 'ask' ? ' ask' : ''}${askStatus === 'failed' ? ' failed' : ''}`} key={note.id || `${note.title}-${i}`}>
+                  <div
+                    className={`listen-card${note.kind === 'ask' ? ' ask' : ''}${askStatus === 'failed' ? ' failed' : ''}`}
+                    key={note.id || `${note.title}-${i}`}
+                    data-note-id={note.id || undefined}
+                  >
                     <div className="listen-tag">{note.kind === 'ask' ? 'Ask' : note.title}</div>
                     {note.question ? <p className="listen-q">{note.question}</p> : null}
                     {askStatus === 'pending' ? (
