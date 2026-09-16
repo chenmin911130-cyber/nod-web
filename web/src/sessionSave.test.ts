@@ -328,4 +328,14 @@ eq(
   'pending new session does not depend on Account being open',
 )
 
+{
+  let book = beginSave(fresh, 'live-native')
+  const { book: saved } = applyKeepAck(book, 'live-native', 'live-native', book.generation)
+  eq(saved.status, 'saved', 'native/http keep marks saved')
+  const lateTimeout = applyKeepFailed(saved, 'timeout')
+  eq(lateTimeout.status, 'saved', 'late WS timeout must not regress saved')
+  const lateError = applyKeepFailed(saved, 'error')
+  eq(lateError.status, 'saved', 'late history_keep_failed must not regress saved')
+}
+
 console.log('sessionSave.test.ts ok')

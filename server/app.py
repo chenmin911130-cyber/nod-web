@@ -6087,6 +6087,11 @@ class Session:
         sid = session_id if session_id is not None else self.usage_session_id
         if not self.user_id or not sid:
             reason = "no_user" if not self.user_id else "no_session"
+            logging.getLogger("nod").info(
+                "history_keep http=0 id=%s ok=0 reason=%s",
+                sid or "",
+                reason,
+            )
             self.emit({"type": "history_keep_failed", "id": sid, "reason": reason})
             return
         keep_content = content is not False
@@ -6094,18 +6099,28 @@ class Session:
         if not keep_content and not keep_audio:
             self.discard_history(session_id=sid)
             return
-        self._flush_cloud_archive(final=False)
-        from server.meter import keep_usage_session
+        from server.meter import is_session_kept, keep_usage_session
 
+        if is_session_kept(sid):
+            logging.getLogger("nod").info("history_keep http=0 id=%s ok=1 already=1", sid)
+            self.emit({"type": "history_kept", "id": sid})
+            return
+        self._flush_cloud_archive(final=False)
         try:
             keep_usage_session(self.user_id, sid, keep_content=keep_content, keep_audio=keep_audio)
         except Exception as exc:
+            logging.getLogger("nod").info(
+                "history_keep http=0 id=%s ok=0 reason=%s",
+                sid,
+                str(exc) or "error",
+            )
             self.emit({
                 "type": "history_keep_failed",
                 "id": sid,
                 "reason": str(exc) or "error",
             })
             return
+        logging.getLogger("nod").info("history_keep http=0 id=%s ok=1 already=0", sid)
         parts = [name for on, name in ((keep_content, "session"), (keep_audio, "recording")) if on]
         self.emit({"type": "status", "text": "Saved to History · " + " and ".join(parts)})
         # Acknowledge so the client flips its kept flag only after the server

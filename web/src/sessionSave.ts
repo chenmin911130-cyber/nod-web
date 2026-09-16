@@ -77,7 +77,7 @@ export function applyKeepAck(
 }
 
 export function applyKeepFailed(book: SaveBook, _reason: KeepFailReason): SaveBook {
-  if (book.status !== 'saving') return book
+  if (book.status === 'saved' || book.status !== 'saving') return book
   return abandonDestructivePending({ ...book, status: 'failed' })
 }
 

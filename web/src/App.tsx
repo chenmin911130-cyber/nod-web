@@ -2379,9 +2379,8 @@ export default function App() {
       }
       bindLiveFromEngine(e.id, e.mode)
       if (watchAutoNotes.current) {
-        if (watchStopShouldAutoKeepHistory(watchAutoNotes.current)) {
-          window.api.send(watchSaveCommand())
-          markHistoryKept(true)
+        if (watchStopShouldAutoKeepHistory(watchAutoNotes.current) && e.id) {
+          window.api.send(watchSaveCommand(e.id))
         }
         return
       }

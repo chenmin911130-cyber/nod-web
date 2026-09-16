@@ -114,6 +114,18 @@ class HistoryKeepTests(unittest.TestCase):
         self.assertEqual(failed["id"], "sess-1")
         self.assertEqual(failed["reason"], "db down")
 
+    def test_keep_history_already_kept_emits_kept_without_rewrite(self):
+        sess = self._session()
+        with (
+            mock.patch("server.meter.keep_usage_session") as keep,
+            mock.patch("server.meter.is_session_kept", return_value=True),
+        ):
+            sess.keep_history(session_id="sess-1")
+        keep.assert_not_called()
+        types = [c.args[0]["type"] for c in sess.emit.call_args_list]
+        self.assertIn("history_kept", types)
+        self.assertNotIn("history_keep_failed", types)
+
     def test_meeting_stop_listen_does_not_offer_save_after_keep(self):
         sess = self._session()
         with (
