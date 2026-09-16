@@ -215,10 +215,9 @@ export function watchSaveRepeatAction(opts: {
   return 'start'
 }
 
-/** Save writes the current usage session through the server. Audio follows the phone default. */
-export function watchSaveCommand(id?: string): Extract<EngineMsg, { type: 'keep_history' }> {
-  if (id) return { type: 'keep_history', content: true, audio: true, id }
-  return { type: 'keep_history', content: true, audio: true }
+/** Save writes the named usage session through the server. Refuse keep without an id. */
+export function watchSaveCommand(id: string): Extract<EngineMsg, { type: 'keep_history' }> {
+  return { type: 'keep_history', content: true, audio: true, id }
 }
 
 export function keepHistoryMessage(opts: {

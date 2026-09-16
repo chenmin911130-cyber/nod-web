@@ -31,6 +31,7 @@ class HistoryKeepHttpTests(unittest.TestCase):
             headers={"Host": "nodpilot.com", "Authorization": f"Bearer {token}"},
         )
         self.assertEqual(again.status_code, 200, again.text)
+        self.assertTrue(again.json().get("already"))
 
     def test_keep_rejects_other_user_and_anonymous(self):
         from server.app import app

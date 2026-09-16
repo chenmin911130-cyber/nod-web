@@ -39,14 +39,9 @@ eq(watchStopShouldAutoKeepHistory(true), true, 'AutoNotes auto-keeps History on 
 eq(watchStopShouldOpenPhoneSave(), false, 'Watch Stop must not open the iPhone Save dialog')
 
 eq(
-  watchSaveCommand(),
-  { type: 'keep_history', content: true, audio: true },
-  'Save goes through the server keep_history command',
-)
-eq(
   watchSaveCommand('live-a'),
   { type: 'keep_history', content: true, audio: true, id: 'live-a' },
-  'Watch Save names the bound session id',
+  'Watch Save must name the bound session id',
 )
 eq(
   keepHistoryMessage({ content: true, audio: true, id: 'live-a' }),
@@ -124,7 +119,7 @@ eq(watchSaveRepeatAction({ kept: false, status: 'failed' }), 'start', 'failed Wa
 
 eq(watchDiscardCommand(), { type: 'discard_history' }, 'Don\'t save discards on the server')
 eq(watchDiscardCommand('sess-a'), { type: 'discard_history', id: 'sess-a' }, 'Don\'t save pins this session, not the next live one')
-eq(watchSaveCommand().type, 'keep_history', 'Save is not start_listen')
+eq(watchSaveCommand('live-a').type, 'keep_history', 'Save is not start_listen')
 eq(watchDiscardCommand().type, 'discard_history', 'Discard is not start_listen')
 eq(watchSavedAckMs(), 2000, 'saved ack returns to Ready by itself')
 

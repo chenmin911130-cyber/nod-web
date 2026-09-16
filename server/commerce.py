@@ -104,6 +104,11 @@ class FeedbackIn(BaseModel):
     message: str = Field(min_length=4, max_length=4000)
 
 
+class HistoryKeepIn(BaseModel):
+    content: bool = True
+    audio: bool = True
+
+
 class TtsIn(BaseModel):
     text: str = Field(min_length=1, max_length=800)
     voice: str = "female"
@@ -477,7 +482,11 @@ def history(pending: bool = False, user: User = Depends(workspace_user)):
 
 
 @router.post("/api/account/history/{session_id}/keep")
-def keep_history_http(session_id: str, user: User = Depends(workspace_user)):
+def keep_history_http(
+    session_id: str,
+    body: HistoryKeepIn = HistoryKeepIn(),
+    user: User = Depends(workspace_user),
+):
     """Watch Save from iPhone native when WKWebView is not running."""
     from server.meter import keep_usage_session
 
@@ -487,7 +496,17 @@ def keep_history_http(session_id: str, user: User = Depends(workspace_user)):
         row = db.get(UsageSession, session_id)
         if not row or row.user_id != user.id or row.discarded_at is not None:
             raise HTTPException(404, "Session not found")
-    keep_usage_session(user.id, session_id, keep_content=True, keep_audio=True)
+        already = bool(row.kept)
+    if already:
+        logging.getLogger("nod").info("history_keep http=1 id=%s already=1", session_id)
+        return {"ok": True, "id": session_id, "already": True}
+    keep_usage_session(
+        user.id,
+        session_id,
+        keep_content=body.content,
+        keep_audio=body.audio,
+    )
+    logging.getLogger("nod").info("history_keep http=1 id=%s already=0", session_id)
     return {"ok": True, "id": session_id}
 
 

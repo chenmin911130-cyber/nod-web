@@ -420,6 +420,12 @@ export function installWatchRemote(handlers: {
   }
 }
 
+/** Push a confirmed usage session id to the phone bridge and Watch before Save. */
+export function pinWatchSession(sessionId: string): void {
+  if (!isNativeApp() || !sessionId) return
+  void NodWatch.setStatus({ capture: '', hint: '', sessionId }).catch(() => undefined)
+}
+
 export function pushWatchStatus(face: {
   capture: string
   hint?: string

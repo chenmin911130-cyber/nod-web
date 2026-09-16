@@ -304,13 +304,20 @@ public final class WatchBridge: NSObject, WCSessionDelegate, AVAudioPlayerDelega
         lastPcmDrainedCaptureId = captureId
         lastPcmDrainedSessionId = sessionId
         lastPcmDrainedByte = byteOffset
+        if !sessionId.isEmpty {
+            lastSessionId = sessionId
+            if !captureId.isEmpty {
+                lastPcmAckSessionId = sessionId
+            }
+        }
         pushStatus(
             capture: lastCapture,
             hint: lastHint,
             original: lastOriginal,
             translation: lastTranslation,
             previous: lastPrevious,
-            history: lastHistory
+            history: lastHistory,
+            sessionId: sessionId
         )
     }
 

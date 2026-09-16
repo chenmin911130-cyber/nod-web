@@ -658,6 +658,26 @@ func waitSend() {
     check((persistAck["sessionId"] as? String) == "sess-ack-c", "persist ack includes top-level sessionId of the confirmed pair")
     check((persistAck["pcmAckSessionId"] as? String) == "sess-ack-c", "persist ack still names pcmAckSessionId")
 
+    let bindDrain = WatchSendBuffer()
+    bindDrain.beginCapture()
+    let watchDrain = WatchPhoneSession(sendBuffer: bindDrain, pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("drain-pin")), connect: false)
+    deliver(watchDrain, [
+        "pcmDrained": "true",
+        "pcmDrainedSessionId": "sess-drain",
+        "pcmDrainedCaptureId": bindDrain.captureId,
+        "pcmDrainedByte": "6400",
+    ])
+    check(bindDrain.sessionId == "sess-drain", "pcmDrained binds the confirmed session before Save")
+    watchDrain.confirmSave()
+    check(
+        WCSession.default.messages.contains(where: {
+            ($0["action"] as? String) == "save"
+                && ($0["sessionId"] as? String) == "sess-drain"
+                && ($0["captureId"] as? String) == bindDrain.captureId
+        }),
+        "Save after pcmDrained goes on the wire with the pinned session id",
+    )
+
     let bindB = WatchSendBuffer()
     bindB.beginCapture()
     let watchB = WatchPhoneSession(sendBuffer: bindB, pcmStore: WatchPcmStore(rootURL: root.appendingPathComponent("232-b")), connect: false)
