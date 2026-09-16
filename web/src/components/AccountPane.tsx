@@ -7,6 +7,7 @@ import {
   signInLine,
   type SignOutGate,
 } from '../accountCopy'
+import { shareOrCopy } from '../copyFeedback'
 import { IPHONE_COPY } from '../iphoneCopy'
 import { isNativeApp, readNativeAppBuild } from '../native'
 import { PRODUCT_NAME } from '../brand'
@@ -208,6 +209,10 @@ export default function AccountPane({
           </button>
           <button type="button" className="account-row" onClick={() => void openLegal('/terms')}>
             <span>{IPHONE_COPY.accountTerms}</span>
+            <Chevron />
+          </button>
+          <button type="button" className="account-row" onClick={() => void shareOrCopy(IPHONE_COPY.shareAppBody)}>
+            <span>{IPHONE_COPY.shareApp}</span>
             <Chevron />
           </button>
         </div>
