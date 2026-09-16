@@ -688,12 +688,14 @@ export function restoreAttachedClock(elapsedMs: number, now = Date.now()): {
   }
 }
 
+type RestoreClock = ReturnType<typeof restoreAttachedClock> | ReturnType<typeof restoreSessionClock>
+
 /** Merge attach clock without wiping an in-flight live partial. */
 export function restoreAttachState<T extends { partial: string; partialSpeaker: string; speakerDecided: Record<string, string> }>(
-  clock: ReturnType<typeof restoreAttachedClock>,
+  clock: RestoreClock,
   state: T,
   live: boolean,
-): T & ReturnType<typeof restoreAttachedClock> {
+): T & RestoreClock {
   if (!live) return { ...state, ...clock }
   return {
     ...state,
