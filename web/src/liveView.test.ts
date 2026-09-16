@@ -9,7 +9,9 @@ import {
   liveStageMode,
   mergeGroupDisplayLines,
   mergeLiveSpeakerRuns,
+  mergeLiveSpeakerRunsForScene,
   summaryPlainText,
+  transcriptDisplayLines,
   transcriptPlainText,
 } from './liveView'
 
@@ -437,4 +439,39 @@ eq(
   ])[0].text,
   'I am doing great, Anna. Thanks for asking.',
   'mergeGroupDisplayLines joins group fragments for one card',
+)
+
+eq(mergeLiveSpeakerRunsForScene('meeting'), false, 'meeting Live keeps one bubble per turn')
+eq(mergeLiveSpeakerRunsForScene('interview'), false, 'interview Live keeps one bubble per turn')
+eq(mergeLiveSpeakerRunsForScene('lecture'), true, 'lecture Live may merge same-speaker runs')
+
+eq(
+  liveFeed({
+    lines: [
+      { id: 'a', ts: '00:50', speaker: '1', text: 'What did you do differently', at: 1 },
+      { id: 'b', ts: '00:52', speaker: '2', text: 'Well, I learned a lot.', at: 2 },
+    ],
+    partial: '',
+    mergeSameSpeaker: false,
+  }).items.map((row) => (row.type === 'line' ? row.text : '')),
+  ['What did you do differently', 'Well, I learned a lot.'],
+  'meeting-style Live does not merge consecutive turns',
+)
+
+eq(
+  transcriptDisplayLines('meeting', [
+    { id: '1', ts: '0:40', text: 'Host asks.', speaker: 'A' },
+    { id: '2', ts: '0:42', text: 'Guest answers.', speaker: 'B' },
+  ]).length,
+  2,
+  'meeting transcript keeps one row per turn',
+)
+
+eq(
+  transcriptDisplayLines('lecture', [
+    { id: '1', ts: '0:40', text: 'Part one.', speaker: 'A' },
+    { id: '2', ts: '0:42', text: 'Part two.', speaker: 'A' },
+  ]).length,
+  1,
+  'lecture transcript still merges same-speaker fragments',
 )

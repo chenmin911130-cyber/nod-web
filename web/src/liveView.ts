@@ -99,6 +99,8 @@ export function liveFeed(input: {
   busy?: boolean
   catchAskId?: string
   lastError?: string | null
+  /** Meeting / interview keep one bubble per turn; lecture may linearize same-speaker runs. */
+  mergeSameSpeaker?: boolean
 }): {
   items: LiveFeedItem[]
   draft: { speaker: string; text: string } | null
@@ -129,7 +131,8 @@ export function liveFeed(input: {
         at: note.at ?? 0,
       }
     })
-  const items = mergeLiveSpeakerRuns([...lines, ...asks].sort((a, b) => a.at - b.at))
+  const sorted = [...lines, ...asks].sort((a, b) => a.at - b.at)
+  const items = input.mergeSameSpeaker === false ? sorted : mergeLiveSpeakerRuns(sorted)
   const text = (input.partial || '').trim()
   if (!text) return { items, draft: null }
   const speaker = input.partialSpeaker || ''
@@ -250,6 +253,16 @@ export function mergeGroupDisplayLines(lines: TranscriptGroupLine[]): Transcript
   if (!text) return lines
   const last = lines[lines.length - 1]
   return [{ ...lines[0], text, translation: last.translation, translateFailed: last.translateFailed }]
+}
+
+/** Meeting / interview: one transcript row per turn (matches PDF). Lecture merges fragments. */
+export function transcriptDisplayLines(scene: ListenScene, lines: TranscriptGroupLine[]): TranscriptGroupLine[] {
+  if (scene === 'meeting' || scene === 'interview') return lines
+  return mergeGroupDisplayLines(lines)
+}
+
+export function mergeLiveSpeakerRunsForScene(scene: ListenScene): boolean {
+  return scene !== 'meeting' && scene !== 'interview'
 }
 
 export function groupTranscript(

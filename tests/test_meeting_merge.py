@@ -33,6 +33,7 @@ from server.meeting_lines import (
     gap_ms,
     join_meeting_text,
     last_sentence_index,
+    looks_like_question,
     tail_meta,
 )
 
@@ -167,6 +168,27 @@ class DecideTests(unittest.TestCase):
         prev = {"id": "q1", "text": "some text", "speaker": None, "opened_at": 0.0, "last_final_at": 0.0, "last_word_ms": 100, "n_words": 2, "rev": 0}
         nxt = {"text": "next", "speaker": "B", "first_word_ms": 200, "n_words": 1}
         self.assertEqual(decide(prev, nxt, 0.0), "new")
+
+    def test_host_question_without_punctuation_starts_new(self):
+        prev = {
+            "id": "q1",
+            "text": "What are some of those things you did differently",
+            "speaker": "A",
+            "opened_at": 1000.0,
+            "last_final_at": 1000.0,
+            "last_word_ms": 52000,
+            "n_words": 10,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "well, it's a terrible answer actually, but I don't think about it",
+            "speaker": None,
+            "first_word_ms": 52800,
+            "last_word_ms": 56000,
+            "n_words": 12,
+        }
+        self.assertTrue(looks_like_question(prev["text"]))
+        self.assertEqual(decide(prev, nxt, 1000.0), "new")
 
     def test_speaker_flip_mid_clause_tiny_gap_extends(self):
         # Anna/Jack repro: "...I am joined" (A) + "By my wonderful co-host" (B), gap 81ms.
