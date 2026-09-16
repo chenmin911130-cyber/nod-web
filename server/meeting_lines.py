@@ -20,8 +20,6 @@ import re
 from typing import Any
 
 _ENDS_SENTENCE = ("。", "！", "？", ".", "!", "?", "…")
-# STT speaker ids can flip mid-clause on sub-second gaps; do not start a new line.
-_SPEAKER_SPLIT_MIN_GAP_MS = 500
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]")
 _ASK_TAIL = re.compile(
     r"\b(what|why|how|when|where|who|which)\b[^?.!]*$|"
@@ -36,6 +34,11 @@ _ANSWER_START = re.compile(
     r"^(well|yes|no|yeah|yep|nope|thank you|thanks|i think|i feel|i mean|look|so|right|okay|ok|it's|that's)\b",
     re.I,
 )
+_HOST_CONT = re.compile(
+    r"^(axios likes|and how you think|and so the|and in that|and we wanted|we wanted to make)\b",
+    re.I,
+)
+_PHRASE_CONT = re.compile(r"^(by|with|along with)\b", re.I)
 # A sentence-end punctuation followed by whitespace or end-of-text.
 _SENTENCE_END_RE = re.compile(r"[.!?…。！？](?=\s|$)")
 # Function words that cannot legally close a sentence — STT appends a bogus "." at
@@ -90,6 +93,25 @@ def looks_like_question_continuation(text: str) -> bool:
 def looks_like_answer_start(text: str) -> bool:
     """Guest answer after a host question ("well, it's…", "Thank you.")."""
     return bool(_ANSWER_START.match((text or "").strip()))
+
+
+def looks_like_host_continuation(text: str) -> bool:
+    """Same host turn split across STT ids ("topic to topic" + "Axios likes…")."""
+    t = (text or "").strip()
+    return bool(_HOST_CONT.match(t) or _PHRASE_CONT.match(t))
+
+
+def _cross_speaker_continuation(prev_open: dict[str, Any], nxt_text: str) -> bool:
+    """Mid-clause join across a diarization flip (#275)."""
+    if not _open_mid_clause(prev_open):
+        return False
+    if looks_like_answer_start(nxt_text):
+        return False
+    if looks_like_question_continuation(nxt_text):
+        return True
+    if looks_like_host_continuation(nxt_text):
+        return True
+    return starts_lower_latin(nxt_text)
 
 
 # --------------------------------------------------------------------------- #
@@ -334,13 +356,6 @@ def _open_mid_clause(prev_open: dict[str, Any]) -> bool:
     return True
 
 
-def _speaker_change_blocked(prev_open: dict[str, Any], gap_ms_val: float) -> bool:
-    """Tiny-gap speaker flips mid-clause are STT artefacts — keep extending."""
-    if gap_ms_val > _SPEAKER_SPLIT_MIN_GAP_MS:
-        return False
-    return _open_mid_clause(prev_open)
-
-
 def gap_ms(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -> tuple[float, str] | None:
     """(gap in ms, source) between the open line and the new turn.
 
@@ -382,11 +397,14 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
     if prev_open.get("closed"):
         return "new", "closed"
     ptxt = prev_open.get("text", "") or ""
+    nxt_text = nxt.get("text", "") or ""
     # Is the previous line truly finished?
     if ends_sentence(ptxt):
         if not false_period(ptxt):
             return "new", "ends_sentence"
         # else a bogus '.' — a continuation is plausible; fall through.
+    if looks_like_answer_start(nxt_text):
+        return "new", "answer"
 
     gap = gap_ms(prev_open, nxt, now)
     if gap is None:
@@ -399,13 +417,13 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
     p = prev_open.get("speaker")
     n = nxt.get("speaker")
     if p and n and p != n:
-        if not _speaker_change_blocked(prev_open, gap_ms_val):
+        if not _cross_speaker_continuation(prev_open, nxt_text):
             return "new", "speaker"
     if (not p) and n:
         return "new", "speaker"  # unknown → known: never backfill a speaker
     if p and not n:
-        txt = nxt.get("text", "") or ""
-        if looks_like_question(ptxt) and not looks_like_question_continuation(txt):
+        txt = nxt_text
+        if looks_like_question(ptxt) and not looks_like_question_continuation(txt) and not looks_like_host_continuation(txt):
             if looks_like_answer_start(txt) or not starts_lower_latin(txt):
                 return "new", "question"
         if not (starts_lower_latin(txt) or (is_cjk(txt) and gap_ms_val <= 1000)):
@@ -414,7 +432,6 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
     # Pathological caps (#33 §1.2): only reached when >=3 turns carried NO sentence
     # end. They are measured on the PREVIOUS line's own age, not the live clock.
     open_age = (prev_open.get("last_final_at") or prev_open.get("opened_at") or now) - (prev_open.get("opened_at") or now)
-    nxt_text = nxt.get("text", "") or ""
     if open_age > 30:
         reason = "open_age"
     elif len(ptxt) + len(nxt_text) > 900:

@@ -417,6 +417,49 @@ export function resolveSpeakerName(names: Record<string, string>, speakerId?: st
   return names[id] || id
 }
 
+const ANSWER_START = /^(well|yes|no|yeah|yep|nope|thank you|thanks|i think|i feel|i mean|look|so|right|okay|ok|it's|that's)\b/i
+const ASK_TAIL = /\b(what|why|how|when|where|who|which)\b[^?.!]*$|(?:吗[.。!！]?$|呢[.。!！]?$|怎么|为什么)/i
+const HOST_OPEN = /\b(welcome|thanks for (?:joining|having)|glad you|let'?s talk|conversation|mr\. president)\b/i
+
+export function looksLikeAnswerStart(text: string): boolean {
+  return ANSWER_START.test((text || '').trim())
+}
+
+export function looksLikeQuestion(text: string): boolean {
+  const t = (text || '').trim()
+  if (!t) return false
+  if (/[?？]$/.test(t)) return true
+  return ASK_TAIL.test(t)
+}
+
+/** Per-line Host/Guest for meeting & interview — STT id is merge-only (#275). */
+export function inferMeetingLineLabel(text: string, scene: ListenScene): string {
+  const roleScene = scene === 'interview' ? 'interview' : 'meeting'
+  const host = speakerLabel(roleScene, 0)
+  const guest = speakerLabel(roleScene, 1)
+  const t = (text || '').trim()
+  if (!t) return ''
+  if (looksLikeAnswerStart(t)) return guest
+  if (looksLikeQuestion(t)) return host
+  if (HOST_OPEN.test(t)) return host
+  if (hostLikeness(t) >= 2) return host
+  if (t.length > 100 || /^well,\s/i.test(t)) return guest
+  if (/\b(judiciously|first term|predecessor|g7\b|administration)\b/i.test(t) && t.length > 60) return guest
+  return host
+}
+
+export function resolveMeetingLineLabel(
+  line: Pick<MeetingLine, 'text' | 'speaker'>,
+  scene: ListenScene,
+  names: Record<string, string>,
+  locked: Record<string, boolean>,
+): string {
+  const id = (line.speaker || '').trim()
+  if (scene === 'lecture') return id ? resolveSpeakerName(names, id) : ''
+  if (id && locked[id] && names[id]) return names[id]
+  return inferMeetingLineLabel(line.text, scene)
+}
+
 export function promoteLectureSpeakers(
   lines: MeetingLine[],
   names: Record<string, string>,
@@ -538,10 +581,14 @@ export function transcriptBlock(
   lines: MeetingLine[],
   bilingual = false,
   names: Record<string, string> = {},
+  scene: ListenScene = 'meeting',
+  locked: Record<string, boolean> = {},
 ): string {
   return lines
     .map((line) => {
-      const who = resolveSpeakerName(names, line.speaker)
+      const who = scene === 'lecture'
+        ? resolveSpeakerName(names, line.speaker)
+        : resolveMeetingLineLabel(line, scene, names, locked)
       const head = `${line.ts}${who ? ` ${who}` : ''}  ${line.text}`
       const tr = line.translation || ''
       // A translation identical to its source (same-language passthrough) is not
@@ -590,6 +637,8 @@ export function askPrompt(
   bilingual = false,
   names: Record<string, string> = {},
   biTarget?: PairLang,
+  scene: ListenScene = 'meeting',
+  locked: Record<string, boolean> = {},
 ): string {
   const ask = question.trim()
   return (
@@ -597,7 +646,7 @@ export function askPrompt(
     outLangRule(outLang, 'answer', bilingual, biTarget) +
     `Listener question: ${ask}\n` +
     `Transcript (use when relevant; if empty, say you have not heard enough yet and still answer what you can):\n` +
-    `${transcriptBlock(lines, bilingual, names) || '(empty)'}`
+    `${transcriptBlock(lines, bilingual, names, scene, locked) || '(empty)'}`
   )
 }
 
@@ -611,6 +660,7 @@ export function notesPrompt(
   outLang: Lang = 'zh',
   bilingual = false,
   names: Record<string, string> = {},
+  locked: Record<string, boolean> = {},
   cap?: { dropped: number; fromTs: string | null },
   biTarget?: PairLang,
   incomplete = false,
@@ -636,7 +686,7 @@ export function notesPrompt(
     `Empty arrays when the transcript has nothing. ${follow}. ` +
     (scene === 'lecture' ? 'revisionNotes = exam / formula items. ' : 'revisionNotes usually []. ') +
     (scene === 'interview' ? 'takeaways = questions asked and what they cared about. ' : 'takeaways usually []. ') +
-    `Transcript:\n${cap && cap.dropped > 0 ? `(Transcript is truncated: the first ${cap.dropped} lines (before ${cap.fromTs}) are not included.)\n` : ''}${transcriptBlock(lines, bilingual, names) || '(empty)'}`
+    `Transcript:\n${cap && cap.dropped > 0 ? `(Transcript is truncated: the first ${cap.dropped} lines (before ${cap.fromTs}) are not included.)\n` : ''}${transcriptBlock(lines, bilingual, names, scene, locked) || '(empty)'}`
   )
 }
 

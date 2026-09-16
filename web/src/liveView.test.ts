@@ -358,6 +358,7 @@ eq(
   [
     {
       speaker: '1',
+      groupKey: '1',
       startTs: '00:09',
       lines: [
         { id: 'a', ts: '00:09', text: 'First.', speaker: '1' },
@@ -390,6 +391,7 @@ eq(
   [
     {
       speaker: '1',
+      groupKey: '1',
       startTs: '00:09',
       lines: [{ id: 'a', ts: '00:09', text: 'Host line.', speaker: '1' }],
       draft: { text: 'As you can see', speaker: '1' },
@@ -420,6 +422,22 @@ eq(
   ).map((g) => ({ speaker: g.speaker, n: g.lines.length, draft: Boolean(g.draft) })),
   [{ speaker: '', n: 2, draft: true }],
   'empty speaker ids group together and take the draft',
+)
+
+eq(
+  groupTranscript(
+    [
+      { id: 'a', ts: '0:12', text: 'Mr. President, welcome to the Axios Show.', speaker: 'B' },
+      { id: 'b', ts: '0:13', text: 'Thank you.', speaker: 'B' },
+    ],
+    null,
+    { scene: 'meeting', speakerNames: { B: 'Guest' }, speakerNameLocked: {} },
+  ).map((g) => ({ groupKey: g.groupKey, n: g.lines.length })),
+  [
+    { groupKey: 'Host', n: 1 },
+    { groupKey: 'Guest', n: 1 },
+  ],
+  'meeting groups split when the same STT id switches inferred role',
 )
 
 eq(

@@ -1,6 +1,7 @@
 import { showLineTranslation } from './iphoneCopy'
 import type { CatchNote } from './types'
 import {
+  resolveMeetingLineLabel,
   resolveSpeakerName,
   sectionTitle,
   sceneSectionOrder,
@@ -206,11 +207,17 @@ function transcriptStamp(ts: string): string {
 export function transcriptPlainText(input: {
   lines: Array<{ ts: string; text: string; speaker?: string; translation?: string }>
   speakerNames: Record<string, string>
+  speakerNameLocked?: Record<string, boolean>
+  scene?: ListenScene
   translateOn: boolean
 }): string {
+  const scene = input.scene
+  const locked = input.speakerNameLocked || {}
   return input.lines
     .map((line) => {
-      const who = resolveSpeakerName(input.speakerNames, line.speaker)
+      const who = scene === 'meeting' || scene === 'interview'
+        ? resolveMeetingLineLabel(line, scene, input.speakerNames, locked)
+        : resolveSpeakerName(input.speakerNames, line.speaker)
       const head = who
         ? `${transcriptStamp(line.ts)} ${who}: ${line.text}`
         : `${transcriptStamp(line.ts)} ${line.text}`
@@ -237,6 +244,7 @@ export type TranscriptGroupLine = {
 
 export type TranscriptGroup = {
   speaker: string
+  groupKey: string
   startTs: string
   lines: TranscriptGroupLine[]
   draft?: { text: string; speaker: string }
@@ -244,6 +252,29 @@ export type TranscriptGroup = {
 
 function speakerKey(speaker?: string): string {
   return (speaker || '').trim()
+}
+
+export type GroupTranscriptOpts = {
+  scene?: ListenScene
+  speakerNames?: Record<string, string>
+  speakerNameLocked?: Record<string, boolean>
+}
+
+function transcriptGroupKey(
+  line: TranscriptGroupLine,
+  opts?: GroupTranscriptOpts,
+): string {
+  const scene = opts?.scene
+  if (scene === 'meeting' || scene === 'interview') {
+    const label = resolveMeetingLineLabel(
+      line,
+      scene,
+      opts?.speakerNames || {},
+      opts?.speakerNameLocked || {},
+    )
+    if (label) return label
+  }
+  return speakerKey(line.speaker)
 }
 
 /** One card per speaker group: join rapid STT fragments into linear text. */
@@ -268,26 +299,30 @@ export function mergeLiveSpeakerRunsForScene(_scene: ListenScene): boolean {
 export function groupTranscript(
   lines: TranscriptGroupLine[],
   partial?: { text?: string; speaker?: string } | null,
+  opts?: GroupTranscriptOpts,
 ): TranscriptGroup[] {
   const groups: TranscriptGroup[] = []
   for (const line of lines) {
+    const groupKey = transcriptGroupKey(line, opts)
     const speaker = speakerKey(line.speaker)
     const last = groups[groups.length - 1]
-    if (last && last.speaker === speaker && !last.draft) {
+    if (last && last.groupKey === groupKey && !last.draft) {
       last.lines.push(line)
     } else {
-      groups.push({ speaker, startTs: line.ts || '', lines: [line] })
+      groups.push({ speaker, groupKey, startTs: line.ts || '', lines: [line] })
     }
   }
   const draftText = (partial?.text || '').trim()
   if (!draftText) return groups
+  const draftLine: TranscriptGroupLine = { ts: '', text: draftText, speaker: partial?.speaker }
+  const groupKey = transcriptGroupKey(draftLine, opts)
   const speaker = speakerKey(partial?.speaker)
   const last = groups[groups.length - 1]
   const draft = { text: draftText, speaker }
-  if (last && last.speaker === speaker) {
+  if (last && last.groupKey === groupKey) {
     last.draft = draft
     return groups
   }
-  groups.push({ speaker, startTs: '', lines: [], draft })
+  groups.push({ speaker, groupKey, startTs: '', lines: [], draft })
   return groups
 }

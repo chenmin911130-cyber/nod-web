@@ -1,4 +1,4 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, applyListenSetting, askPrompt, bilingualDisabled, bindSpeakerName, capTranscript, emptyNotes, exportNoteSections, lastTwoMinutes, listenAskPayload, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesBilingualOn, notesLangActions, notesPrompt, notesTranscriptTooThin, outLangRule, parseNotes, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakerLetterIndex, speakersExpected, transcriptBlock } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, applyListenSetting, askPrompt, bilingualDisabled, bindSpeakerName, capTranscript, emptyNotes, exportNoteSections, inferMeetingLineLabel, lastTwoMinutes, listenAskPayload, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesBilingualOn, notesLangActions, notesPrompt, notesTranscriptTooThin, outLangRule, parseNotes, promoteLectureSpeakers, resolveMeetingLineLabel, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakerLetterIndex, speakersExpected, transcriptBlock } from './listen'
 import { IPHONE_COPY, iphoneCopyFor } from './iphoneCopy'
 import type { MeetingLine } from './types'
 
@@ -66,7 +66,7 @@ const capBoundary = capTranscript(capLines, 52)
 if (capBoundary.dropped !== 1 || capBoundary.fromTs !== '0:05' || capBoundary.lines.map((l) => l.id).join(',') !== '2,3') {
   throw new Error(`cap boundary, got ${JSON.stringify(capBoundary)}`)
 }
-const cappedNotes = notesPrompt('meeting', capTrailing.lines, 'zh', false, {}, { dropped: capTrailing.dropped, fromTs: capTrailing.fromTs })
+const cappedNotes = notesPrompt('meeting', capTrailing.lines, 'zh', false, {}, {}, { dropped: capTrailing.dropped, fromTs: capTrailing.fromTs })
 if (!cappedNotes.includes('Transcript is truncated') || !cappedNotes.includes('first 2')) throw new Error('notes prompt shows truncation notice')
 
 // C: meeting speaker count drives max_speakers; only meeting is overridable.
@@ -232,7 +232,7 @@ eq(notesBodyText('我们周五发。'), '我们周五发。', 'single-language n
   if (!notesPrompt('meeting', [{ id: '1', ts: '0:01', text: 'Hi' }], 'en').toLowerCase().includes('explicitly spoken')) {
     throw new Error('notesPrompt requires explicitly spoken names')
   }
-  if (!notesPrompt('meeting', [{ id: '1', ts: '0:01', text: 'Hi' }], 'en', false, {}, undefined, undefined, true).includes('INCOMPLETE SESSION')) {
+  if (!notesPrompt('meeting', [{ id: '1', ts: '0:01', text: 'Hi' }], 'en', false, {}, {}, undefined, undefined, true).includes('INCOMPLETE SESSION')) {
     throw new Error('notesPrompt incomplete flag')
   }
 }
@@ -339,4 +339,31 @@ eq(
   if (!items) throw new Error('action-item chip still asks')
   eq(items.listenerQuestion, IPHONE_COPY.quickActionItems, 'other chips keep their own question')
   if (!items.lines.some((l) => l.id === 'old')) throw new Error('action-item chip is not forced through the 2 min window')
+}
+
+// #275 Axios 2.5min golden: per-line Host/Guest, not STT id binding.
+{
+  const axiosLines: MeetingLine[] = [
+    { id: '1', ts: '0:12', text: 'Mr. President, welcome to the Axios Show on HBO. We are glad you came here in person today.', speaker: 'B' },
+    { id: '2', ts: '0:13', text: 'Thank you.', speaker: 'B' },
+    { id: '3', ts: '0:14', text: 'We wanted to make this more of a conversation and hop around from topic to topic, and we wanted to do, Axios likes to do one big thing. And so the one big thing we want to talk about is power', speaker: 'B' },
+    { id: '4', ts: '0:23', text: 'And how you think about it and in that span of time, what is the one big thing you have learned about wielding power?', speaker: 'B' },
+    { id: '5', ts: '0:47', text: "Well, I think you have to do it judiciously. In my first term I learned a lot about wielding power.", speaker: 'B' },
+    { id: '6', ts: '2:03', text: "But that's because you've applied lessons from your first term. What are some of those things you did differently", speaker: 'B' },
+    { id: '7', ts: '2:14', text: "Well, it's a terrible answer actually, but I don't think about it that way.", speaker: 'B' },
+  ]
+  const names = bindSpeakerName(bindSpeakerName({}, 'B', 'meeting'), 'A', 'meeting')
+  const label = (line: MeetingLine) => resolveMeetingLineLabel(line, 'meeting', names, {})
+  eq(label(axiosLines[0]), 'Host', 'welcome is Host even when STT id is B')
+  eq(label(axiosLines[1]), 'Guest', 'Thank you is Guest')
+  if (axiosLines[0].text.includes('Thank you')) throw new Error('welcome must not include Thank you')
+  eq(label(axiosLines[3]), 'Host', 'wielding power question is Host')
+  if (!axiosLines[3].text.includes('about wielding power?')) throw new Error('question tail stays on host line')
+  eq(label(axiosLines[4]), 'Guest', 'long Well answer is Guest')
+  eq(label(axiosLines[5]), 'Host', 'host follow-up question is Host')
+  eq(label(axiosLines[6]), 'Guest', 'Well answer opener is Guest')
+  eq(inferMeetingLineLabel('Axios likes to do one big thing', 'meeting'), 'Host', 'host continuation phrase')
+  const tb = transcriptBlock(axiosLines.slice(0, 2), false, names, 'meeting', {})
+  if (!tb.includes('0:12 Host')) throw new Error('transcript block uses inferred Host')
+  if (!tb.includes('0:13 Guest')) throw new Error('transcript block uses inferred Guest')
 }

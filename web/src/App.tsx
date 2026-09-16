@@ -96,7 +96,7 @@ import {
   exportNoteSections,
   parseNotes,
   promoteLectureSpeakers,
-  promoteMeetingSpeakers,
+  resolveMeetingLineLabel,
   resolveSpeakerName,
   speakersExpected,
   listenSettingsBlocked,
@@ -529,8 +529,6 @@ function reducer(state: AppState, action: Action): AppState {
             }]
             if (scene === 'lecture') {
               speakerNames = promoteLectureSpeakers(meetingLines, speakerNames, state.speakerNameLocked)
-            } else {
-              speakerNames = promoteMeetingSpeakers(meetingLines, speakerNames, state.speakerNameLocked, scene)
             }
             return {
               ...state,
@@ -3404,7 +3402,7 @@ export default function App() {
     killInflightTranslation()
     dispatch({ type: 'expect_notes' })
     const cap = capTranscript(s.meetingLines)
-    window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, cap.lines, s.notesLang, notesBilingualOn(s.notesLang, s.translateOn), s.speakerNames, cap, s.notesTranslateTo), mode: 'notes' })
+    window.api.send({ type: 'ask', text: notesPrompt(s.listenScene, cap.lines, s.notesLang, notesBilingualOn(s.notesLang, s.translateOn), s.speakerNames, s.speakerNameLocked, cap, s.notesTranslateTo), mode: 'notes' })
     if (cap.dropped > 0) {
       dispatch({
         type: 'engine',
@@ -3561,7 +3559,7 @@ export default function App() {
         const attach_id = await parkAttaches(files)
         window.api.send({
           type: 'ask',
-          text: askPrompt(payload.lines, payload.listenerQuestion, s.notesLang, notesBilingualOn(s.notesLang, s.translateOn), s.speakerNames, s.notesTranslateTo),
+          text: askPrompt(payload.lines, payload.listenerQuestion, s.notesLang, notesBilingualOn(s.notesLang, s.translateOn), s.speakerNames, s.notesTranslateTo, s.listenScene, s.speakerNameLocked),
           attach_id,
           mode: 'listen_ask',
         })
@@ -3586,7 +3584,7 @@ export default function App() {
       try {
         window.api.send({
           type: 'ask',
-          text: askPrompt(payload.lines, payload.listenerQuestion, s.notesLang, notesBilingualOn(s.notesLang, s.translateOn), s.speakerNames, s.notesTranslateTo),
+          text: askPrompt(payload.lines, payload.listenerQuestion, s.notesLang, notesBilingualOn(s.notesLang, s.translateOn), s.speakerNames, s.notesTranslateTo, s.listenScene, s.speakerNameLocked),
           mode: 'listen_ask',
           // #182: name the answer being retried, so a Think lookup that already
           // succeeded is reused instead of paid for twice, and a failed one is
@@ -3690,7 +3688,9 @@ export default function App() {
         catchNotes: s.catchNotes.map((n) => ({ title: n.title, text: n.text })),
         transcript: lines.map((ln) => ({
           ts: ln.ts,
-          speaker: resolveSpeakerName(s.speakerNames, ln.speaker),
+          speaker: lecture
+            ? resolveSpeakerName(s.speakerNames, ln.speaker)
+            : resolveMeetingLineLabel(ln, s.listenScene, s.speakerNames, s.speakerNameLocked),
           text: ln.text,
           translation: notesBilingualOn(s.notesLang, s.translateOn) ? ln.translation : undefined,
         })),
@@ -3761,7 +3761,9 @@ export default function App() {
       if (lines.length === 0) blocks.push({ kind: 'p', text: 'No transcript lines.' })
       else {
         for (const ln of lines) {
-          const who = resolveSpeakerName(s.speakerNames, ln.speaker)
+          const who = lecture
+            ? resolveSpeakerName(s.speakerNames, ln.speaker)
+            : resolveMeetingLineLabel(ln, s.listenScene, s.speakerNames, s.speakerNameLocked)
           blocks.push({ kind: 'line', text: ln.text, ts: ln.ts, speaker: who })
           // Same-language passthrough: the translation equals the source, so a
           // second row would print it twice. (Fallback path of the export; the
@@ -4261,6 +4263,7 @@ export default function App() {
             notesLang={state.notesLang}
             lines={state.meetingLines}
             speakerNames={state.speakerNames}
+            speakerNameLocked={state.speakerNameLocked}
             speakerDecided={state.speakerDecided}
             partialSpeaker={state.partialSpeaker}
             onRenameSpeaker={handleRenameSpeaker}
