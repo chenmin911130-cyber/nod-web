@@ -115,7 +115,7 @@ export function bindLiveId(book: SaveBook, id: string | undefined, sessionMode?:
   return next
 }
 
-/** A new listen is a new capture. The previous liveId must not ride Watch status. */
+/** A new listen is a new capture. Clears liveId only — never discards the prior session. */
 export function saveBookOnNewListen(book: SaveBook): SaveBook {
   return { ...book, offered: false, liveId: null }
 }

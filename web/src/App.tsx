@@ -2480,6 +2480,8 @@ export default function App() {
     }
   }
 
+  // Clears UI + sends WS clear (server turn_reset). Does NOT DELETE history —
+  // discard is only SavePrompt / Leave discard / Watch discard / History delete.
   const doClear = useCallback(() => {
     submitsRef.current.clear()
     spokenTranslate.current.clear()
