@@ -86,9 +86,12 @@ export function routeTranslateChunk(
   translateOn: boolean,
   hasMeetingLines: boolean,
   hasPairs: boolean,
+  meetingOnDemand = false,
 ): 'meeting' | 'pairs' | 'drop' {
   if (workspaceMode === 'translate') return hasPairs ? 'pairs' : 'drop'
-  if (workspaceMode === 'meeting' && translateOn) return hasMeetingLines ? 'meeting' : 'drop'
+  if (workspaceMode === 'meeting' && (translateOn || meetingOnDemand)) {
+    return hasMeetingLines ? 'meeting' : 'drop'
+  }
   return 'drop'
 }
 

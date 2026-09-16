@@ -27,6 +27,9 @@ eq(translateAskIdAfterDone('qid-2', 'qid-1'), 'qid-2', 'foreign done keeps the b
 eq(translateAskIdAfterDone('qid-2', ''), 'qid-2', 'empty done keeps the bind')
 eq(translateAskIdAfterDone('qid-2', 'qid-2'), '', 'matching done clears the bind')
 
+eq(routeTranslateChunk('meeting', false, true, false), 'drop', 'meeting chunks drop when bilingual off')
+eq(routeTranslateChunk('meeting', false, true, false, true), 'meeting', 'on-demand card translate routes to meeting')
+
 eq(
   translateShouldPassthrough('What\'s yours?', 'zh', 'en'),
   false,

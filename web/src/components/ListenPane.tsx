@@ -31,6 +31,7 @@ import {
   notesPageTitle,
   notesSettingsValue,
   sceneHelpText,
+  showCardTranslation,
   showLineTranslation,
   speakerSuggestText,
   speechChipTitle,
@@ -95,6 +96,9 @@ interface Props {
   onStop?: () => void
   onContinue?: () => void
   onExportPdf?: () => void
+  onRequestLineTranslation?: (id: string) => void
+  onRetryLineTranslation?: (id: string) => void
+  translatingLineId?: string
   actions?: ReactNode
   saveBanner?: ReactNode
   showSavedLine?: boolean
@@ -987,23 +991,34 @@ interface LineRowProps {
   actions?: boolean
   compact?: boolean
   showCopy?: boolean
+  cardOpen?: boolean
 }
 
 // A two-hour session renders thousands of these. Without memo every partial
 // transcript update rebuilt the whole list.
 const LineRow = memo(function LineRow(p: LineRowProps) {
-  const showTr = showLineTranslation({
-    translateOn: p.translateOn,
-    original: p.text,
-    translation: p.translation,
-    last: p.last,
-    native: p.actions,
-    pending: p.busy,
-  })
+  const cardMode = Boolean(p.compact && p.actions)
+  const showTr = cardMode
+    ? showCardTranslation({
+      open: Boolean(p.cardOpen),
+      original: p.text,
+      translation: p.translation,
+      pending: p.busy,
+    })
+    : showLineTranslation({
+      translateOn: p.translateOn,
+      original: p.text,
+      translation: p.translation,
+      last: p.last,
+      native: p.actions,
+      pending: p.busy,
+    })
   // A line whose translation gave up shows a failed badge instead of a blank /
   // ellipsis row. (showLineTranslation returns false for an empty translation,
   // so this is separate from showTr; switching the target re-arms it.)
-  const showFailed = p.translateFailed && p.translateOn
+  const showFailed = cardMode
+    ? Boolean(p.cardOpen && p.translateFailed)
+    : p.translateFailed && p.translateOn
   if (p.actions) {
     return (
       <div className={`listen-line iphone-tr-line${p.compact ? ' iphone-tr-compact iphone-tr-card' : ''}${p.live ? ' live' : ''}`} onClick={p.onOpen}>
@@ -1821,26 +1836,38 @@ export default function ListenPane(props: Props) {
                             />
                           ) : null}
                         </div>
-                        {group.lines.map((line, i) => (
+                        {group.lines.map((line, i) => {
+                          const lineId = line.id || ''
+                          const isLiveLine = props.listening && lastGroup && i === group.lines.length - 1 && !group.draft
+                          return (
                           <LineRow
-                            key={line.id || `${line.ts}-${i}`}
+                            key={lineId || `${line.ts}-${i}`}
                             ts={line.ts}
                             text={line.text}
                             translation={line.translation || ''}
                             speaker={line.speaker || ''}
                             speakerLabel={line.speaker ? resolveSpeakerName(props.speakerNames, line.speaker) : ''}
-                            live={props.listening && lastGroup && i === group.lines.length - 1 && !group.draft}
-                            last={(lastGroup && i === group.lines.length - 1 && !group.draft) || openedLine === line.id}
+                            live={isLiveLine}
+                            last={lastGroup && i === group.lines.length - 1 && !group.draft}
                             translateOn={biOn}
                             translateFailed={line.translateFailed || false}
-                            onOpen={() => setOpenedLine(line.id || '')}
-                            busy={props.busy}
+                            onOpen={() => {
+                              if (!lineId || isLiveLine) return
+                              const opening = openedLine !== lineId
+                              setOpenedLine(opening ? lineId : '')
+                              if (!opening) return
+                              if (line.translateFailed) props.onRetryLineTranslation?.(lineId)
+                              else if (!line.translation?.trim()) props.onRequestLineTranslation?.(lineId)
+                            }}
+                            busy={props.translatingLineId === lineId}
                             onRename={props.onRenameSpeaker}
                             actions
                             compact
-                            showCopy={openedLine === line.id}
+                            cardOpen={openedLine === lineId}
+                            showCopy={openedLine === lineId}
                           />
-                        ))}
+                          )
+                        })}
                         {group.draft ? (
                           <div className="listen-line iphone-tr-line iphone-tr-compact iphone-tr-draft">
                             <div className="iphone-tr-body">

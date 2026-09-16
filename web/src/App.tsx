@@ -646,11 +646,14 @@ function reducer(state: AppState, action: Action): AppState {
           }
           const translateChunk = isTranslateChunk(translateAskId, ev.id)
           if (translateChunk) {
+            const bilingual = notesBilingualOn(state.notesLang, state.translateOn)
+            const bindIsMeetingLine = meetingLines.some((ln) => ln.id === state.translateBindId)
             const route = routeTranslateChunk(
               state.workspaceMode,
-              notesBilingualOn(state.notesLang, state.translateOn),
+              bilingual,
               meetingLines.length > 0,
               translatePairs.length > 0,
+              !bilingual && bindIsMeetingLine,
             )
             if (route === 'meeting') meetingLines = applyLineTranslationRev(meetingLines, state.translateBindId, state.translateBindRev, ev.text ?? '')
             else if (route === 'pairs') translatePairs = applyTranslateChunk(translatePairs, state.translateBindId, ev.text ?? '', ev.copy_seq, ev.copy_id)
@@ -3298,6 +3301,21 @@ export default function App() {
   }, [askTranslate])
   pumpTranslateRef.current = pumpTranslate
 
+  const requestLineTranslation = useCallback((id: string) => {
+    const line = stateRef.current.meetingLines.find((ln) => ln.id === id)
+    if (!line?.text.trim()) return
+    askTranslate(line.text, id)
+  }, [askTranslate])
+
+  const retryLineTranslation = useCallback((id: string) => {
+    askedTranslate.current.delete(id)
+    translateRetries.current.delete(id)
+    dispatch({ type: 'clear_translation', id })
+    const line = stateRef.current.meetingLines.find((ln) => ln.id === id)
+    if (!line?.text.trim()) return
+    askTranslate(line.text, id)
+  }, [askTranslate])
+
   useEffect(() => {
     const liveOn = ttsMode === 'live' && listenSessionShouldAutoSpeak(state.workspaceMode)
     if (!liveOn) {
@@ -4296,6 +4314,9 @@ export default function App() {
             onAsk={handleListenAsk}
             onRetryAsk={handleRetryAsk}
             catchAskId={state.catchAskId}
+            onRequestLineTranslation={requestLineTranslation}
+            onRetryLineTranslation={retryLineTranslation}
+            translatingLineId={state.busy && state.translateBindId ? state.translateBindId : ''}
             elapsedMs={state.meetingElapsedMs}
             sessionKey={composeSessionKey(state.workspaceMode, state.composeSessionId)}
             onStart={handlePrimary}

@@ -24,6 +24,7 @@ import {
   recClock,
   sameSpokenLine,
   spokenSettingsValue,
+  showCardTranslation,
   showLineTranslation,
   showLiveTranslation,
   translateFromChip,
@@ -155,6 +156,10 @@ eq(
   true,
   'a different notes language still shows under the transcript',
 )
+eq(showCardTranslation({ open: false, original: 'Hello', translation: '你好' }), false, 'closed card hides translation')
+eq(showCardTranslation({ open: true, original: 'Hello', translation: '你好' }), true, 'open card shows translation')
+eq(showCardTranslation({ open: true, original: 'Hello', translation: 'Hello', pending: false }), false, 'open card hides same-language duplicate')
+eq(showCardTranslation({ open: true, original: 'Hello', translation: '', pending: true }), true, 'open card shows pending ellipsis')
 eq(IPHONE_COPY.emptyTranscript, 'Waiting for speech…', 'Transcript empty waits for speech')
 eq(IPHONE_COPY.fullTranscript, 'Full transcript', 'Transcript header title')
 eq(IPHONE_COPY.allCapturedSpeech, 'All captured speech', 'Transcript header subtitle')

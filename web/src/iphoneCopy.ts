@@ -170,6 +170,19 @@ export function showLineTranslation(input: {
   return !sameSpokenLine(input.original, tr)
 }
 
+/** Transcript card tap: one open card may show translation even when bilingual is off. */
+export function showCardTranslation(input: {
+  open: boolean
+  original: string
+  translation: string
+  pending?: boolean
+}): boolean {
+  if (!input.open) return false
+  const tr = input.translation.trim()
+  if (!tr) return Boolean(input.pending)
+  return !sameSpokenLine(input.original, tr)
+}
+
 export function moreMenuEnabled(input: { hasContent: boolean; canSave: boolean }): {
   pdf: boolean
   save: boolean
