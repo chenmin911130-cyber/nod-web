@@ -74,6 +74,7 @@ export function applySeo(opts: {
   setMeta('name', 'twitter:image', opts.image)
   setLink('canonical', opts.url)
   setLink('alternate', siteUrl('/'), 'en')
+  setLink('alternate', siteUrl('/zh'), 'zh-Hans')
   setLink('alternate', siteUrl('/'), 'x-default')
   let jsonld = document.getElementById('nod-jsonld') as HTMLScriptElement | null
   if (!jsonld) {
