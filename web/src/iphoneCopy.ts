@@ -250,3 +250,36 @@ export function askEntryLabel(kind: AskEntryKind, expanded = false): string {
   if (kind === 'keyboard') return expanded ? IPHONE_COPY.hideKeyboard : IPHONE_COPY.showKeyboard
   return IPHONE_COPY.askEntry
 }
+
+export function sceneHelpText(scene: ListenScene): string {
+  if (scene === 'meeting') return IPHONE_COPY.sceneHelpMeeting
+  if (scene === 'lecture') return IPHONE_COPY.sceneHelpLecture
+  return IPHONE_COPY.sceneHelpQa
+}
+
+export function meetingSpeakerPeopleLabel(id: '2' | '3-4' | '5+'): string {
+  if (id === '2') return IPHONE_COPY.speakerPeople2
+  if (id === '3-4') return IPHONE_COPY.speakerPeople34
+  return IPHONE_COPY.speakerPeople5
+}
+
+export function toastSpeechOnly(name: string): string {
+  return IPHONE_COPY.toastSpeechOnly.replace('{name}', name)
+}
+
+export function speechChipTitle(input: { auto: boolean; heardTag?: string; name?: string }): string {
+  if (input.auto) {
+    return input.heardTag
+      ? IPHONE_COPY.speechAutoHearing.replace('{tag}', input.heardTag)
+      : IPHONE_COPY.speechAuto
+  }
+  return IPHONE_COPY.speechNamed.replace('{name}', input.name || '')
+}
+
+export function listenedTodayNoCap(hours: string): string {
+  return IPHONE_COPY.listenedTodayNoCap.replace('{hours}', hours)
+}
+
+export function listeningLeftToday(hours: string): string {
+  return IPHONE_COPY.listeningLeftToday.replace('{hours}', hours)
+}

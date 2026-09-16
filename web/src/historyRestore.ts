@@ -325,8 +325,8 @@ export function assembleHistoryList<T extends { id: string; started_at?: string 
   error: string
 } {
   const errors: string[] = []
-  if (!input.saved.ok) errors.push('Could not load saved History. Pull to retry.')
-  if (!input.pending.ok) errors.push('Could not load unsaved History. Pull to retry.')
+  if (!input.saved.ok) errors.push(IPHONE_COPY.histLoadSavedFailed)
+  if (!input.pending.ok) errors.push(IPHONE_COPY.histLoadPendingFailed)
   const saved = input.saved.ok ? input.saved.sessions : []
   const pending = input.pending.ok ? input.pending.sessions : []
   const discardedIds = input.discardedIds || []
@@ -413,7 +413,7 @@ export function serializeRestoreDismissed(ids: readonly string[]): string {
 }
 
 export function restoreOfferBody(offer: Pick<RestoreOffer, 'title' | 'startedAt' | 'sttSeconds'>, nowMs = Date.now()): string {
-  const title = (offer.title || 'Untitled').trim() || 'Untitled'
+  const title = (offer.title || IPHONE_COPY.histUntitled).trim() || IPHONE_COPY.histUntitled
   const when = historyRowWhen(offer.startedAt, offer.sttSeconds || 0, nowMs)
   return when ? `${title} · ${when}` : title
 }
@@ -574,24 +574,38 @@ function clock12(ms: number): string {
   return `${h}:${String(d.getMinutes()).padStart(2, '0')} ${ap}`
 }
 
-export function historyDayLabel(startedAt: string | null, nowMs = Date.now()): string {
+export type HistoryDayBucket = 'today' | 'yesterday' | 'earlier' | string
+
+export function historyDayBucket(startedAt: string | null, nowMs = Date.now()): HistoryDayBucket {
   const t = startedAt ? Date.parse(startedAt) : NaN
-  if (!Number.isFinite(t)) return 'Earlier'
+  if (!Number.isFinite(t)) return 'earlier'
   const day = localDayKey(t)
-  if (day === localDayKey(nowMs)) return 'Today'
+  if (day === localDayKey(nowMs)) return 'today'
   const yest = new Date(nowMs)
   yest.setDate(yest.getDate() - 1)
-  if (day === localDayKey(yest.getTime())) return 'Yesterday'
+  if (day === localDayKey(yest.getTime())) return 'yesterday'
   const d = new Date(t)
   return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`
 }
 
+export function historyDayDisplayLabel(bucket: HistoryDayBucket): string {
+  if (bucket === 'today') return IPHONE_COPY.histToday
+  if (bucket === 'yesterday') return IPHONE_COPY.histYesterday
+  if (bucket === 'earlier') return IPHONE_COPY.histEarlier
+  return bucket
+}
+
+export function historyDayLabel(startedAt: string | null, nowMs = Date.now()): string {
+  return historyDayDisplayLabel(historyDayBucket(startedAt, nowMs))
+}
+
 export function historyRowWhen(startedAt: string | null, sttSeconds: number, nowMs = Date.now()): string {
   const dur = historyDurationLabel(sttSeconds)
-  const day = historyDayLabel(startedAt, nowMs)
+  const bucket = historyDayBucket(startedAt, nowMs)
+  const day = historyDayDisplayLabel(bucket)
   const t = startedAt ? Date.parse(startedAt) : NaN
-  if (day === 'Today' || day === 'Yesterday') return `${day}, ${clock12(t)} • ${dur}`
-  if (day === 'Earlier') return dur
+  if (bucket === 'today' || bucket === 'yesterday') return `${day}, ${clock12(t)} • ${dur}`
+  if (bucket === 'earlier') return dur
   return `${day} • ${dur}`
 }
 
@@ -602,14 +616,17 @@ export function groupHistoryByDay<T extends { started_at: string | null }>(
   const groups = new Map<string, T[]>()
   const order: string[] = []
   for (const session of sessions) {
-    const label = historyDayLabel(session.started_at, nowMs)
-    if (!groups.has(label)) {
-      groups.set(label, [])
-      order.push(label)
+    const bucket = historyDayBucket(session.started_at, nowMs)
+    if (!groups.has(bucket)) {
+      groups.set(bucket, [])
+      order.push(bucket)
     }
-    groups.get(label)!.push(session)
+    groups.get(bucket)!.push(session)
   }
-  return order.map((label) => ({ label, sessions: groups.get(label)! }))
+  return order.map((bucket) => ({
+    label: historyDayDisplayLabel(bucket),
+    sessions: groups.get(bucket)!,
+  }))
 }
 
 export function sessionHasAudio(session: Pick<HistorySession, 'files'>): boolean {

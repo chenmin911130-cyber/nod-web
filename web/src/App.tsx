@@ -18,7 +18,8 @@ import AccountPane from './components/AccountPane'
 import LeaveSessionSheet from './components/LeaveSessionSheet'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
-import { IPHONE_COPY, canSwitchWorkspace, sameSpokenLine, sessionListening } from './iphoneCopy'
+import { IPHONE_COPY, canSwitchWorkspace, sameSpokenLine, sessionListening, toastSpeechOnly } from './iphoneCopy'
+import { translateLangDisplayName } from './langDisplayNames'
 import { showListenNew, composeSessionKey, nextComposeSessionId, endedHasContent, IDLE_CAPTURE_CLOCK, advanceCaptureClock, captureClockMs, clockCapture } from './listenChrome'
 import SaveBanner from './components/SaveBanner'
 import {
@@ -1661,7 +1662,7 @@ export default function App() {
         const s = stateRef.current
         if (s.workspaceMode === 'meeting') {
           endMeetingListeningRef.current(
-            'Listening stopped · writing notes',
+            IPHONE_COPY.toastStoppedNotes,
             watchStopShouldOpenPhoneSave(),
           )
           return
@@ -2272,7 +2273,7 @@ export default function App() {
       const waitNotes = watchKeepNotesWait(true, stateRef.current.notesAskId)
       if (waitNotes) {
         keepAfterNotes.current = { content, audio, liveId: book.liveId || target.keepId, generation: book.generation }
-        dispatch({ type: 'engine', ev: { type: 'status', text: 'Saving after notes finish…' } })
+        dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.toastSavingAfterNotes } })
         return
       }
       sendKeepNow({ content, audio, id: target.keepId })
@@ -2302,7 +2303,7 @@ export default function App() {
     }
     if (waitNotes) {
       keepAfterNotes.current = { content, audio, liveId: book.liveId, generation: book.generation }
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'Saving after notes finish…' } })
+      dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.toastSavingAfterNotes } })
       return
     }
     sendKeepNow({ content, audio })
@@ -2528,7 +2529,7 @@ export default function App() {
     })
     if (decision === 'clear') {
       doClear()
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'New session' } })
+      dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.moreNew } })
       return
     }
     if (decision === 'blocked') return
@@ -2689,7 +2690,7 @@ export default function App() {
     }
     window.api.send(watchDiscardCommand(liveId || undefined))
     doClear()
-    dispatch({ type: 'engine', ev: { type: 'status', text: 'New session' } })
+    dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.moreNew } })
   }
 
   const handleClear = useCallback(() => {
@@ -2887,8 +2888,8 @@ export default function App() {
         type: 'status',
         text:
           lang === 'auto'
-            ? 'Speech recognition · Auto · follows the language you speak'
-            : `Speech recognition · ${targetName(lang)} only`,
+            ? IPHONE_COPY.toastSpeechAutoFollow
+            : toastSpeechOnly(translateLangDisplayName(lang)),
       },
     })
   }, [])
@@ -3041,7 +3042,7 @@ export default function App() {
     }
     if (s.workspaceMode === 'meeting') {
       if (live) {
-        endMeetingListeningRef.current('Listening stopped · writing notes', true)
+        endMeetingListeningRef.current(IPHONE_COPY.toastStoppedNotes, true)
         return
       }
       startOrResumeMeeting(s)
@@ -3068,7 +3069,7 @@ export default function App() {
       return
     }
     if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
-      endMeetingListeningRef.current('Listening stopped · writing notes', true)
+      endMeetingListeningRef.current(IPHONE_COPY.toastStoppedNotes, true)
       return
     }
     // #193: Translate has no notes/save machine, so a PAUSED Translate session
@@ -3112,13 +3113,13 @@ export default function App() {
         dispatch({ type: 'meeting_clock', startedAt: s.meetingStartedAt, elapsedMs: Date.now() - s.meetingStartedAt })
       }
       window.api.send({ type: 'pause_listen' })
-      dispatch({ type: 'engine', ev: { type: 'status', text: 'Paused · resume when ready' } })
+      dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.toastPaused } })
     }
   }, [])
 
   const handleResume = useCallback(() => {
     window.api.send({ type: 'resume_listen' })
-    dispatch({ type: 'engine', ev: { type: 'status', text: 'Listening resumed' } })
+    dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.toastResumed } })
   }, [])
 
   const handleMark = useCallback(() => {
@@ -3145,7 +3146,7 @@ export default function App() {
       dispatch({ type: 'notes_lang', lang: 'auto' })
       dispatch({
         type: 'engine',
-        ev: { type: 'status', text: 'Auto · notes follow the language you speak' },
+        ev: { type: 'status', text: IPHONE_COPY.toastNotesFollowSpeech },
       })
       return
     }
@@ -3208,7 +3209,7 @@ export default function App() {
     window.api.send({ type: 'set_workspace', mode: s.workspaceMode, scene, speakers_expected: speakersExpected(scene, count) })
     dispatch({
       type: 'engine',
-      ev: { type: 'status', text: 'Switching the number of speakers reconnects for a few seconds.' },
+      ev: { type: 'status', text: IPHONE_COPY.toastSwitchingSpeakers },
     })
   }, [])
 
@@ -4117,7 +4118,7 @@ export default function App() {
           if (pendingNewAfterSave.current) {
             pendingNewAfterSave.current = false
             doClear()
-            dispatch({ type: 'engine', ev: { type: 'status', text: 'New session' } })
+            dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.moreNew } })
           } else if (leavingSignOut) {
             performSignOut()
           } else if (leavingDelete) {
