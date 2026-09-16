@@ -1392,15 +1392,12 @@ export default function ListenPane(props: Props) {
       </button>
     </div>
   ) : null
-  const turnTranscript = props.scene === 'meeting' || props.scene === 'interview'
   const trGroups = useMemo(
-    () => (turnTranscript
-      ? []
-      : groupTranscript(
-        props.lines,
-        props.ended ? null : { text: props.partial, speaker: props.partialSpeaker },
-      )),
-    [props.lines, props.partial, props.partialSpeaker, props.ended, turnTranscript],
+    () => groupTranscript(
+      props.lines,
+      props.ended ? null : { text: props.partial, speaker: props.partialSpeaker },
+    ),
+    [props.lines, props.partial, props.partialSpeaker, props.ended],
   )
   const hadAskAnswer = props.catchNotes.some((note) => note.kind === 'ask' && note.text.trim())
   const hasFeed = feed.items.length > 0 || Boolean(feed.draft)
@@ -1860,76 +1857,7 @@ export default function ListenPane(props: Props) {
                 ) : phone ? (
                   <>
                   {speakerSuggestRow}
-                  {turnTranscript ? (
-                    <>
-                      {props.lines.map((line, i) => {
-                        const lineId = line.id || ''
-                        const isLast = i === props.lines.length - 1
-                        const isLiveLine = props.listening && isLast && !props.partial && !props.ended
-                        return (
-                          <div className="iphone-tr-group iphone-tr-turn" key={lineId || `${line.ts}-${i}`}>
-                            <div className="iphone-tr-group-head">
-                              {line.speaker ? <SpeakerAvatar speaker={line.speaker} /> : <span className="iphone-tr-ava" />}
-                              {line.speaker ? (
-                                <SpeakerName
-                                  speakerId={line.speaker}
-                                  label={resolveSpeakerName(props.speakerNames, line.speaker)}
-                                  onRename={props.onRenameSpeaker}
-                                />
-                              ) : null}
-                              {line.ts ? <span className="iphone-tr-group-ts">{line.ts}</span> : null}
-                            </div>
-                            <LineRow
-                              ts={line.ts}
-                              text={line.text}
-                              translation={line.translation || ''}
-                              speaker={line.speaker || ''}
-                              speakerLabel={line.speaker ? resolveSpeakerName(props.speakerNames, line.speaker) : ''}
-                              live={isLiveLine}
-                              last={isLast && !props.partial}
-                              translateOn={biOn}
-                              translateFailed={line.translateFailed || false}
-                              onOpen={() => {
-                                if (!lineId || isLiveLine) return
-                                const opening = openedLine !== lineId
-                                setOpenedLine(opening ? lineId : '')
-                                if (!opening) return
-                                if (line.translateFailed) props.onRetryLineTranslation?.(lineId)
-                                else if (!line.translation?.trim()) props.onRequestLineTranslation?.(lineId)
-                              }}
-                              busy={props.translatingLineId === lineId}
-                              onRename={props.onRenameSpeaker}
-                              actions
-                              compact
-                              cardOpen={openedLine === lineId}
-                              showCopy={openedLine === lineId}
-                            />
-                          </div>
-                        )
-                      })}
-                      {!props.ended && props.partial ? (
-                        <div className="iphone-tr-group iphone-tr-turn iphone-tr-draft">
-                          <div className="iphone-tr-group-head">
-                            {props.partialSpeaker ? <SpeakerAvatar speaker={props.partialSpeaker} /> : <span className="iphone-tr-ava" />}
-                            {props.partialSpeaker ? (
-                              <SpeakerName
-                                speakerId={props.partialSpeaker}
-                                label={resolveSpeakerName(props.speakerNames, props.partialSpeaker)}
-                                onRename={props.onRenameSpeaker}
-                              />
-                            ) : null}
-                            <span className="iphone-tr-group-ts">live</span>
-                          </div>
-                          <div className="listen-line iphone-tr-line iphone-tr-compact iphone-tr-draft">
-                            <div className="iphone-tr-body">
-                              <div className="listen-orig">{props.partial}</div>
-                            </div>
-                          </div>
-                        </div>
-                      ) : null}
-                    </>
-                  ) : (
-                    trGroups.map((group, gi) => {
+                  {trGroups.map((group, gi) => {
                       const lastGroup = gi === trGroups.length - 1
                       return (
                         <div className="iphone-tr-group" key={`${group.speaker || 'none'}-${group.startTs || 'draft'}-${gi}`}>
@@ -1984,8 +1912,7 @@ export default function ListenPane(props: Props) {
                           ) : null}
                         </div>
                       )
-                    })
-                  )}
+                    })}
                   </>
                 ) : (
                   <>

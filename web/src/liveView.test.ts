@@ -441,8 +441,8 @@ eq(
   'mergeGroupDisplayLines joins group fragments for one card',
 )
 
-eq(mergeLiveSpeakerRunsForScene('meeting'), false, 'meeting Live keeps one bubble per turn')
-eq(mergeLiveSpeakerRunsForScene('interview'), false, 'interview Live keeps one bubble per turn')
+eq(mergeLiveSpeakerRunsForScene('meeting'), true, 'meeting Live merges same-speaker fragments')
+eq(mergeLiveSpeakerRunsForScene('interview'), true, 'interview Live merges same-speaker fragments')
 eq(mergeLiveSpeakerRunsForScene('lecture'), true, 'lecture Live may merge same-speaker runs')
 
 eq(
@@ -460,13 +460,12 @@ eq(
 
 eq(
   transcriptDisplayLines('meeting', [
-    { id: '1', ts: '0:40', text: 'Host asks.', speaker: 'A' },
-    { id: '2', ts: '0:42', text: 'Guest answers.', speaker: 'B' },
+    { id: '1', ts: '0:34', text: 'what is the one big thing you have learned', speaker: 'A' },
+    { id: '2', ts: '0:36', text: 'about wielding power?', speaker: 'A' },
   ]).length,
-  2,
-  'meeting transcript keeps one row per turn',
+  1,
+  'meeting transcript merges same-speaker fragments into one card',
 )
-
 eq(
   transcriptDisplayLines('lecture', [
     { id: '1', ts: '0:40', text: 'Part one.', speaker: 'A' },

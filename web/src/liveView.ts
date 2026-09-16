@@ -255,14 +255,14 @@ export function mergeGroupDisplayLines(lines: TranscriptGroupLine[]): Transcript
   return [{ ...lines[0], text, translation: last.translation, translateFailed: last.translateFailed }]
 }
 
-/** Meeting / interview: one transcript row per turn (matches PDF). Lecture merges fragments. */
-export function transcriptDisplayLines(scene: ListenScene, lines: TranscriptGroupLine[]): TranscriptGroupLine[] {
-  if (scene === 'meeting' || scene === 'interview') return lines
+/** Join rapid STT fragments within one speaker group into one card. */
+export function transcriptDisplayLines(_scene: ListenScene, lines: TranscriptGroupLine[]): TranscriptGroupLine[] {
   return mergeGroupDisplayLines(lines)
 }
 
-export function mergeLiveSpeakerRunsForScene(scene: ListenScene): boolean {
-  return scene !== 'meeting' && scene !== 'interview'
+/** Same-speaker runs merge in Live; speaker changes still start a new bubble. */
+export function mergeLiveSpeakerRunsForScene(_scene: ListenScene): boolean {
+  return true
 }
 
 export function groupTranscript(
