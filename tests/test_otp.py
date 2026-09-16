@@ -127,6 +127,11 @@ class OtpApiTests(unittest.TestCase):
         self.assertEqual(res.status_code, 301)
         self.assertEqual(res.headers.get("location"), "/")
 
+    def test_zh_trailing_slash_redirects(self):
+        res = self.client.get("/zh/", follow_redirects=False)
+        self.assertEqual(res.status_code, 301)
+        self.assertEqual(res.headers.get("location"), "/zh")
+
     def test_sitemap_lists_legal_pages_not_auth(self):
         res = self.client.get("/sitemap.xml")
         self.assertEqual(res.status_code, 200)

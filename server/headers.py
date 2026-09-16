@@ -215,19 +215,21 @@ def canonical_apex_host(public_url: str) -> str:
 
 
 def canonical_path_redirect_url(scope: Scope) -> str | None:
-    """Bare index.html → /. API and health stay put."""
+    """index.html → /; non-root trailing slashes drop the slash. API and health stay put."""
     if scope.get("type") != "http":
         return None
     path = scope.get("path") or "/"
     if is_health_path(path) or path == "/api" or path.startswith("/api/"):
         return None
-    if path.rstrip("/") != "/index.html":
-        return None
     qs = scope.get("query_string") or b""
-    loc = "/"
+    qs_suffix = ""
     if qs:
-        loc += "?" + qs.decode("latin1", "replace")
-    return loc
+        qs_suffix = "?" + qs.decode("latin1", "replace")
+    if path.rstrip("/") == "/index.html":
+        return "/" + qs_suffix
+    if path != "/" and path.endswith("/"):
+        return path.rstrip("/") + qs_suffix
+    return None
 
 
 def apex_redirect_url(scope: Scope, public_url: str) -> str | None:
@@ -255,7 +257,7 @@ def apex_redirect_url(scope: Scope, public_url: str) -> str | None:
 
 
 class CanonicalPathRedirectMiddleware:
-    """Send /index.html to /. API and WebSocket are unchanged."""
+    """Send /index.html to / and strip trailing slashes. API and WebSocket are unchanged."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app

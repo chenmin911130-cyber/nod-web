@@ -101,6 +101,9 @@ class CanonicalPathRedirectTests(unittest.TestCase):
     def test_root_does_not_redirect(self):
         self.assertIsNone(canonical_path_redirect_url(_scope(path="/")))
 
+    def test_trailing_slash_redirects_to_bare_path(self):
+        self.assertEqual(canonical_path_redirect_url(_scope(path="/zh/")), "/zh")
+
     def test_middleware_sends_301(self):
         out: dict = {}
 

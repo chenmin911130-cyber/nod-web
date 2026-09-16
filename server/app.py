@@ -7527,9 +7527,15 @@ def sitemap():
     return Response(content=body, media_type="application/xml; charset=utf-8")
 
 
-def _html_page(name: str) -> FileResponse:
+def _html_page(name: str, site_path: str | None = None) -> Response:
+    page = WEB_DIST / name
+    if site_path is not None and name == "index.html":
+        from server.site_seo import inject_site_seo
+
+        body = inject_site_seo(page.read_text(encoding="utf-8"), PUBLIC_URL, site_path)
+        return Response(content=body, media_type="text/html; charset=utf-8", headers=HTML_NO_CACHE)
     return FileResponse(
-        WEB_DIST / name,
+        page,
         media_type="text/html; charset=utf-8",
         headers=HTML_NO_CACHE,
     )
@@ -7565,7 +7571,7 @@ if WEB_DIST.exists():
 
     @app.get("/")
     def marketing_home():
-        return _html_page("index.html")
+        return _html_page("index.html", "/")
 
     @app.get("/app")
     def workspace_home():
@@ -7594,7 +7600,9 @@ if WEB_DIST.exists():
                 media = static_media_type(dest)
                 return FileResponse(dest, media_type=media) if media else FileResponse(dest)
         if kind == "site":
-            return _html_page("index.html")
+            from server.site_seo import site_shell_path
+
+            return _html_page("index.html", site_shell_path(full_path))
         # webpack publicPath for /clerk.browser.js is "/", so leftover
         # clients request framework_clerk.browser_*.js at the site root.
         from server.clerk_auth import clerk_js_filename_allowed, load_clerk_js_asset
