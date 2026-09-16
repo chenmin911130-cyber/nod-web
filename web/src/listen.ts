@@ -388,6 +388,14 @@ function isUsableSpeakerId(id: string): boolean {
   return Boolean(key) && key !== 'pending' && key !== 'none' && key !== 'unknown'
 }
 
+/** AssemblyAI diarization ids are usually single letters (A/B/…). Map them to a
+ * stable role index so arrival order does not flip Host/Guest mid-session. */
+export function speakerLetterIndex(id: string): number | null {
+  const key = id.trim()
+  if (!/^[A-Za-z]$/.test(key)) return null
+  return key.toUpperCase().charCodeAt(0) - 65
+}
+
 export function bindSpeakerName(
   names: Record<string, string>,
   speakerId: string | undefined,
@@ -395,7 +403,8 @@ export function bindSpeakerName(
 ): Record<string, string> {
   const id = (speakerId || '').trim()
   if (!isUsableSpeakerId(id) || names[id]) return names
-  const index = Object.keys(names).length
+  const letterIndex = speakerLetterIndex(id)
+  const index = letterIndex ?? Object.keys(names).length
   const used = new Set(Object.values(names))
   let label = speakerLabel(scene, index)
   if (used.has(label)) label = `${label} ${index + 1}`

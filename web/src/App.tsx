@@ -8,7 +8,7 @@ import { PRODUCT_NAME } from './brand'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
-import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberHistoryDiscarded, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, modeIsSaveEligible, sessionIsSaveEligible, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
+import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberHistoryDiscarded, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachState, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, modeIsSaveEligible, sessionIsSaveEligible, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
 import { flushPendingKeepMessage, keepHistoryMessage, watchDiscardCommand, watchFailKeepNativeFace, watchJsFailMayApply, watchKeepNotesWait, watchNativeSaveReduce, watchPhoneStatusMayPush, watchSaveCommand, watchSaveKeepTarget, watchSaveRepeatAction, watchSaveShouldSendKeepHistory, watchSaveStatusPayload, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave, type NativeWatchSaveFace } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
@@ -869,8 +869,9 @@ function reducer(state: AppState, action: Action): AppState {
       const lastTurn = turns[turns.length - 1]
       const elapsed = action.elapsedMs ?? restoreElapsedMs({ lines: meetingLines })
       const clock = action.live ? restoreAttachedClock(elapsed) : restoreSessionClock(elapsed)
+      const attached = restoreAttachState(clock, state, action.live)
       return {
-        ...state,
+        ...attached,
         // #182: a restored session is a new session — never inherit Think from an
         // old answer's tag, and never silently keep it on.
         thinkOn: false,
@@ -882,8 +883,7 @@ function reducer(state: AppState, action: Action): AppState {
         currentQId: lastTurn?.id || '',
         notesRaw: action.live && state.notesRaw.length > action.notes.length ? state.notesRaw : action.notes,
         translatePairs,
-        speakerDecided: {},
-        ...clock,
+        speakerDecided: action.live ? state.speakerDecided : {},
         meetingStartedAt: action.live && state.meetingStartedAt != null ? state.meetingStartedAt : clock.meetingStartedAt,
         composeSessionId: nextComposeSessionId(action.live ? 'continue' : 'restore', state.composeSessionId),
         view: 'workspace',

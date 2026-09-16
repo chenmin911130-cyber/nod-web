@@ -1,4 +1,4 @@
-import { applyMeetingResume, assembleHistoryList, elapsedMsFromTranscriptTs, groupHistoryByDay, historyDurationLabel, historyRowStatus, historyRowTitle, historyRowWhen, historySessionMatches, localCaptureCanAppear, localCaptureHistoryId, mergeLocalCaptures, mergePendingHistory, modeIsSaveEligible, overlayNativeSaveJobs, parseRestoreDismissed, rememberRestoreDismissed, restoreAttachedClock, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsSaveEligible, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, sessionShowsUnsaved, shouldOfferSaveOnce, startMeetingKind, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession } from './historyRestore'
+import { applyMeetingResume, assembleHistoryList, elapsedMsFromTranscriptTs, groupHistoryByDay, historyDurationLabel, historyRowStatus, historyRowTitle, historyRowWhen, historySessionMatches, localCaptureCanAppear, localCaptureHistoryId, mergeLocalCaptures, mergePendingHistory, modeIsSaveEligible, overlayNativeSaveJobs, parseRestoreDismissed, rememberRestoreDismissed, restoreAttachState, restoreAttachedClock, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsSaveEligible, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, sessionShowsUnsaved, shouldOfferSaveOnce, startMeetingKind, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession } from './historyRestore'
 import type { HistorySession } from './components/HistoryPane'
 
 function at(h: number, m: number, s = 0): string {
@@ -576,6 +576,14 @@ if (!resumeResetsKept({ kept: true, hasContent: restored.lines.length > 0 })) {
 }
 
 const liveClock = restoreAttachedClock(restored.elapsedMs, 500_000)
+const liveAttach = restoreAttachState(liveClock, {
+  partial: 'still drafting',
+  partialSpeaker: 'B',
+  speakerDecided: { B: 'confirmed' },
+}, true)
+if (liveAttach.partial !== 'still drafting') throw new Error('live attach must keep the in-flight partial')
+if (liveAttach.partialSpeaker !== 'B') throw new Error('live attach must keep partialSpeaker')
+if (liveAttach.speakerDecided.B !== 'confirmed') throw new Error('live attach must keep speakerDecided')
 if (liveClock.meetingEnded) throw new Error('attached restore must not mark the live session ended')
 if (liveClock.meetingStartedAt !== clock.meetingStartedAt) throw new Error('attached restore must keep the same startedAt')
 if (liveClock.meetingElapsedMs !== 65_000) throw new Error('attached restore must keep elapsed')

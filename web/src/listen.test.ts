@@ -1,4 +1,4 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, applyListenSetting, askPrompt, bilingualDisabled, capTranscript, emptyNotes, exportNoteSections, lastTwoMinutes, listenAskPayload, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesBilingualOn, notesLangActions, notesPrompt, outLangRule, parseNotes, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakersExpected, transcriptBlock } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, applyListenSetting, askPrompt, bilingualDisabled, bindSpeakerName, capTranscript, emptyNotes, exportNoteSections, lastTwoMinutes, listenAskPayload, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesBilingualOn, notesLangActions, notesPrompt, outLangRule, parseNotes, promoteLectureSpeakers, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakerLetterIndex, speakersExpected, transcriptBlock } from './listen'
 import { IPHONE_COPY, iphoneCopyFor } from './iphoneCopy'
 import type { MeetingLine } from './types'
 
@@ -76,6 +76,12 @@ eq(speakersExpected('meeting', 6), 6, 'meeting override 6')
 eq(speakersExpected('lecture'), 4, 'lecture stays 4')
 eq(speakersExpected('interview', 6), 2, 'interview ignores override')
 eq(MEETING_SPEAKER_OPTIONS.map((o) => o.count).join(','), '2,4,6', 'bucket counts')
+
+eq(speakerLetterIndex('A'), 0, 'A maps to host index')
+eq(speakerLetterIndex('b'), 1, 'B maps to guest index')
+eq(speakerLetterIndex('12'), null, 'numeric ids stay arrival-order')
+eq(bindSpeakerName({}, 'B', 'meeting').B, 'Guest', 'B is Guest even when it arrives first')
+eq(bindSpeakerName(bindSpeakerName({}, 'B', 'meeting'), 'A', 'meeting').A, 'Host', 'A stays Host when it arrives second')
 
 // item1: scene chip label shows the people-count badge only for non-default Meeting.
 eq(sceneChipLabel('meeting', '2'), 'Meeting', 'meeting default 2 has no badge')
