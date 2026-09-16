@@ -870,7 +870,7 @@ function reducer(state: AppState, action: Action): AppState {
       const lastTurn = turns[turns.length - 1]
       const elapsed = action.elapsedMs ?? restoreElapsedMs({ lines: meetingLines })
       const clock = action.live ? restoreAttachedClock(elapsed) : restoreSessionClock(elapsed)
-      const attached = restoreAttachState(clock, state, action.live)
+      const attached = restoreAttachState(clock, state, action.live ?? false)
       return {
         ...attached,
         // #182: a restored session is a new session — never inherit Think from an

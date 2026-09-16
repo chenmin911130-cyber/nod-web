@@ -1,11 +1,12 @@
 import { applyListenFlushEvent, beginListenFlushWait, idleListenFlushWait, keepShouldWaitForNotes, listenFlushEventMatchesWait, shouldGenerateAutoReport, stopShouldReleaseListener } from './recordReport'
 import type { ListenFlush } from './recordReport'
+import type { MeetingLine } from './types'
 
-function eq(got: string, want: string) {
-  if (got !== want) throw new Error(`expected ${want}, got ${got}`)
+function eq(got: string, want: string, label?: string) {
+  if (got !== want) throw new Error(label ? `${label}: expected ${want}, got ${got}` : `expected ${want}, got ${got}`)
 }
 
-function report(input: { capture: string; engine: string; workspaceMode: string; busy: boolean; lineCount: number; lines?: Array<{ text?: string }>; heardListen?: boolean; flagged?: boolean; listenFlush?: ListenFlush }): string {
+function report(input: { capture: string; engine: string; workspaceMode: string; busy: boolean; lineCount: number; lines?: MeetingLine[]; heardListen?: boolean; flagged?: boolean; listenFlush?: ListenFlush }): string {
   return shouldGenerateAutoReport({
     flagged: input.flagged ?? true,
     heardListen: input.heardListen ?? true,
@@ -40,7 +41,7 @@ eq(
     workspaceMode: 'meeting',
     busy: false,
     lineCount: 1,
-    lines: [{ text: 'Only one short line here.' }],
+    lines: [{ id: '1', ts: '00:00', text: 'Only one short line here.' }],
     listenFlush: 'complete',
   }),
   'skip',
