@@ -23,9 +23,17 @@ _ENDS_SENTENCE = ("。", "！", "？", ".", "!", "?", "…")
 # STT speaker ids can flip mid-clause on sub-second gaps; do not start a new line.
 _SPEAKER_SPLIT_MIN_GAP_MS = 500
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]")
-_ASK_HINT = re.compile(
-    r"[?？]|吗[.。!！]?$|呢[.。!！]?$|怎么|为什么|"
-    r"\bwhat\b|\bwhy\b|\bhow\b|\bwhen\b|\bwhere\b|\bwho\b|\bwhich\b",
+_ASK_TAIL = re.compile(
+    r"\b(what|why|how|when|where|who|which)\b[^?.!]*$|"
+    r"(吗[.。!！]?$|呢[.。!！]?$|怎么|为什么)",
+    re.I,
+)
+_QUESTION_CONT = re.compile(
+    r"^(about|or|and|that|which|who|when|where|how|what|why|in|on|for|with|to|the|a|an)\b",
+    re.I,
+)
+_ANSWER_START = re.compile(
+    r"^(well|yes|no|yeah|yep|nope|thank you|thanks|i think|i feel|i mean|look|so|right|okay|ok|it's|that's)\b",
     re.I,
 )
 # A sentence-end punctuation followed by whitespace or end-of-text.
@@ -65,13 +73,23 @@ def is_cjk(text: str) -> bool:
 
 
 def looks_like_question(text: str) -> bool:
-    """Interview / meeting host turns often miss trailing ? in STT — still start a new line."""
+    """A host turn that looks finished — not merely containing "what" mid-sentence."""
     t = (text or "").strip()
     if not t:
         return False
     if t.endswith(("?", "？")):
         return True
-    return bool(_ASK_HINT.search(t))
+    return bool(_ASK_TAIL.search(t))
+
+
+def looks_like_question_continuation(text: str) -> bool:
+    """Trailing half of a split question ("…learned" + "about wielding power?")."""
+    return bool(_QUESTION_CONT.match((text or "").strip()))
+
+
+def looks_like_answer_start(text: str) -> bool:
+    """Guest answer after a host question ("well, it's…", "Thank you.")."""
+    return bool(_ANSWER_START.match((text or "").strip()))
 
 
 # --------------------------------------------------------------------------- #
@@ -369,8 +387,6 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
         if not false_period(ptxt):
             return "new", "ends_sentence"
         # else a bogus '.' — a continuation is plausible; fall through.
-    if looks_like_question(ptxt):
-        return "new", "question"
 
     gap = gap_ms(prev_open, nxt, now)
     if gap is None:
@@ -389,8 +405,9 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
         return "new", "speaker"  # unknown → known: never backfill a speaker
     if p and not n:
         txt = nxt.get("text", "") or ""
-        if looks_like_question(ptxt):
-            return "new", "question"
+        if looks_like_question(ptxt) and not looks_like_question_continuation(txt):
+            if looks_like_answer_start(txt) or not starts_lower_latin(txt):
+                return "new", "question"
         if not (starts_lower_latin(txt) or (is_cjk(txt) and gap_ms_val <= 1000)):
             return "new", "speaker"
 

@@ -34,6 +34,7 @@ from server.meeting_lines import (
     join_meeting_text,
     last_sentence_index,
     looks_like_question,
+    looks_like_question_continuation,
     tail_meta,
 )
 
@@ -168,6 +169,48 @@ class DecideTests(unittest.TestCase):
         prev = {"id": "q1", "text": "some text", "speaker": None, "opened_at": 0.0, "last_final_at": 0.0, "last_word_ms": 100, "n_words": 2, "rev": 0}
         nxt = {"text": "next", "speaker": "B", "first_word_ms": 200, "n_words": 1}
         self.assertEqual(decide(prev, nxt, 0.0), "new")
+
+    def test_host_question_continuation_extends(self):
+        prev = {
+            "id": "q1",
+            "text": "So a decade ago, you first became president, and in that span of time, what is the one big thing you've learned",
+            "speaker": "A",
+            "opened_at": 1000.0,
+            "last_final_at": 1000.0,
+            "last_word_ms": 34000,
+            "n_words": 22,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "about wielding power?",
+            "speaker": "A",
+            "first_word_ms": 36000,
+            "last_word_ms": 37000,
+            "n_words": 3,
+        }
+        self.assertTrue(looks_like_question(prev["text"]))
+        self.assertTrue(looks_like_question_continuation(nxt["text"]))
+        self.assertEqual(decide(prev, nxt, 1000.0), "extend")
+
+    def test_same_speaker_mid_clause_extends(self):
+        prev = {
+            "id": "q1",
+            "text": "But I feel that it's a very",
+            "speaker": "B",
+            "opened_at": 1000.0,
+            "last_final_at": 1000.0,
+            "last_word_ms": 110000,
+            "n_words": 7,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "powerful administration right now, but that's because you've applied lessons.",
+            "speaker": "B",
+            "first_word_ms": 111500,
+            "last_word_ms": 118000,
+            "n_words": 10,
+        }
+        self.assertEqual(decide(prev, nxt, 1000.0), "extend")
 
     def test_host_question_without_punctuation_starts_new(self):
         prev = {
