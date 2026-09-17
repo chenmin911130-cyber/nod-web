@@ -421,6 +421,10 @@ const ANSWER_START = /^(well|yes|no|yeah|yep|nope|thank you|thanks)\b/i
 const ASK_TAIL = /\b(what|why|how|when|where|who|which)\b[^?.!]*$|(?:吗[.。!！]?$|呢[.。!！]?$|怎么|为什么)/i
 const HOST_OPEN = /\b(welcome|thanks for (?:joining|having)|glad you|let'?s talk|conversation|mr\. president)\b/i
 const HOST_CONT = /^(axios likes|and how you think|and so the|and in that|and we wanted|we wanted to make)\b/i
+/** Host follow-up or question to the guest — line may lack a trailing ? (#277). */
+const HOST_FOLLOWUP_START = /^(?:but that'?s because|What are some|What'?s your|How (?:do|would|can|many)\b|You (?:mentioned|have experience|walked)|You saw)\b/i
+/** Host setup addressing the guest in second person, often before the ask (#277 00:30). */
+const HOST_TO_GUEST = /^(?:And so|So,)\b.*\byou\b/i
 const GUEST_MONOLOGUE = /^(I can't|I was|I wasn't|I'm|I think|I feel|I said|I walked)\b/i
 const THANKS_INLINE = /(?<=\S)\s+((?:Thank you|Thanks)[.!]?)\s+(?=\S)/i
 const ANSWER_AFTER_Q = /^(?:Well,?\s|I think\b|Yeah\.?\s|All of them\b)/i
@@ -521,6 +525,8 @@ export function inferMeetingLineLabel(text: string, scene: ListenScene): string 
   if (looksLikeAnswerStart(t)) return guest
   if (HOST_OPEN.test(t)) return host
   if (HOST_CONT.test(t)) return host
+  if (HOST_FOLLOWUP_START.test(t)) return host
+  if (HOST_TO_GUEST.test(t)) return host
   if (GUEST_MONOLOGUE.test(t)) return guest
   if (hostLikeness(t) >= 2) return host
   if (t.length > 100 || /^well,\s/i.test(t)) return guest

@@ -411,6 +411,12 @@ eq(
     '04:17 cute boss monologue is Guest not default Host',
   )
 
+  eq(
+    label('And so a decade ago, you first became president, and in that span of time'),
+    'Host',
+    '00:30 host setup to guest without trailing question mark',
+  )
+
   const g7Split = splitMeetingTurn(
     "But we had a great administration, but this one is, I think, better. You mentioned the G7. You saw a number of world leaders. You walked in and you said, I'm the boss.",
   )
