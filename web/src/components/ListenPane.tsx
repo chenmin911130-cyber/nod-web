@@ -10,6 +10,7 @@ import {
   notesBodyText,
   parseBiLines,
   parseNotes,
+  resolveMeetingLineLabel,
   resolveSpeakerName,
   lastTwoMinutes,
   sceneChipLabel,
@@ -57,6 +58,7 @@ interface Props {
   notesLang: Lang
   lines: MeetingLine[]
   speakerNames: Record<string, string>
+  speakerNameLocked?: Record<string, boolean>
   speakerDecided?: Record<string, 'confirmed' | 'dismissed'>
   partialSpeaker?: string
   onRenameSpeaker: (id: string, name: string) => void
@@ -802,7 +804,9 @@ function IphoneLiveFeed({
   listening,
   paused,
   ended,
+  scene,
   speakerNames,
+  speakerNameLocked,
   onRename,
   onRetry,
   suggest,
@@ -813,12 +817,19 @@ function IphoneLiveFeed({
   listening: boolean
   paused: boolean
   ended: boolean
+  scene: ListenScene
   speakerNames: Record<string, string>
+  speakerNameLocked: Record<string, boolean>
   onRename: (id: string, name: string) => void
   onRetry?: (noteId: string) => void
   suggest?: ReactNode
   footer?: ReactNode
 }) {
+  const lineLabel = (text: string, speaker?: string) => (
+    scene === 'lecture'
+      ? resolveSpeakerName(speakerNames, speaker)
+      : resolveMeetingLineLabel({ text, speaker }, scene, speakerNames, speakerNameLocked)
+  )
   const listRef = useRef<HTMLDivElement>(null)
   const stick = useStickToBottom(listRef, [items, draft?.text, draft?.speaker, listening, paused])
   const showDraft = Boolean(draft) && !ended
@@ -838,7 +849,7 @@ function IphoneLiveFeed({
                   {item.speaker ? (
                     <SpeakerName
                       speakerId={item.speaker}
-                      label={resolveSpeakerName(speakerNames, item.speaker)}
+                      label={lineLabel(item.text, item.speaker)}
                       onRename={onRename}
                     />
                   ) : null}
@@ -860,7 +871,7 @@ function IphoneLiveFeed({
                 <div className="iphone-live-item-meta">
                   <SpeakerName
                     speakerId={draft.speaker}
-                    label={resolveSpeakerName(speakerNames, draft.speaker)}
+                    label={lineLabel(draft.text, draft.speaker)}
                     onRename={onRename}
                   />
                 </div>
@@ -1392,12 +1403,19 @@ export default function ListenPane(props: Props) {
       </button>
     </div>
   ) : null
+  const locked = props.speakerNameLocked || {}
+  const lineLabel = (line: Pick<MeetingLine, 'text' | 'speaker'>) => (
+    lecture
+      ? resolveSpeakerName(props.speakerNames, line.speaker)
+      : resolveMeetingLineLabel(line, props.scene, props.speakerNames, locked)
+  )
   const trGroups = useMemo(
     () => groupTranscript(
       props.lines,
       props.ended ? null : { text: props.partial, speaker: props.partialSpeaker },
+      { scene: props.scene, speakerNames: props.speakerNames, speakerNameLocked: locked },
     ),
-    [props.lines, props.partial, props.partialSpeaker, props.ended],
+    [props.lines, props.partial, props.partialSpeaker, props.ended, props.scene, props.speakerNames, locked],
   )
   const hadAskAnswer = props.catchNotes.some((note) => note.kind === 'ask' && note.text.trim())
   const hasFeed = feed.items.length > 0 || Boolean(feed.draft)
@@ -1792,7 +1810,9 @@ export default function ListenPane(props: Props) {
           listening={props.listening}
           paused={paused}
           ended={props.ended}
+          scene={props.scene}
           speakerNames={props.speakerNames}
+          speakerNameLocked={locked}
           onRename={props.onRenameSpeaker}
           onRetry={props.onRetryAsk}
           suggest={speakerSuggestRow}
@@ -1826,6 +1846,8 @@ export default function ListenPane(props: Props) {
                     text={transcriptPlainText({
                       lines: props.lines,
                       speakerNames: props.speakerNames,
+                      speakerNameLocked: locked,
+                      scene: props.scene,
                       translateOn: biOn,
                     })}
                   />
@@ -1866,7 +1888,7 @@ export default function ListenPane(props: Props) {
                             {group.speaker ? (
                               <SpeakerName
                                 speakerId={group.speaker}
-                                label={resolveSpeakerName(props.speakerNames, group.speaker)}
+                                label={group.lines[0] ? lineLabel(group.lines[0]) : resolveSpeakerName(props.speakerNames, group.speaker)}
                                 onRename={props.onRenameSpeaker}
                               />
                             ) : null}
@@ -1881,7 +1903,7 @@ export default function ListenPane(props: Props) {
                               text={line.text}
                               translation={line.translation || ''}
                               speaker={line.speaker || ''}
-                              speakerLabel={line.speaker ? resolveSpeakerName(props.speakerNames, line.speaker) : ''}
+                              speakerLabel={line.text ? lineLabel(line) : ''}
                               live={isLiveLine}
                               last={lastGroup && i === group.lines.length - 1 && !group.draft}
                               translateOn={biOn}
@@ -1923,7 +1945,7 @@ export default function ListenPane(props: Props) {
                       text={line.text}
                       translation={line.translation || ''}
                       speaker={line.speaker || ''}
-                      speakerLabel={line.speaker ? resolveSpeakerName(props.speakerNames, line.speaker) : ''}
+                      speakerLabel={lineLabel(line)}
                       live={props.listening && i === props.lines.length - 1 && !props.partial}
                       last={(i === props.lines.length - 1 && !props.partial) || openedLine === line.id}
                       translateOn={biOn}

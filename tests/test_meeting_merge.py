@@ -33,6 +33,7 @@ from server.meeting_lines import (
     gap_ms,
     join_meeting_text,
     last_sentence_index,
+    looks_like_host_continuation,
     looks_like_question,
     looks_like_question_continuation,
     tail_meta,
@@ -275,6 +276,132 @@ class DecideTests(unittest.TestCase):
         }
         self.assertEqual(decide(prev, nxt, 0.0), "new")
         self.assertEqual(decide_full(prev, nxt, 0.0)[1], "ends_sentence")
+
+    def test_different_speaker_200ms_is_new(self):
+        prev = {
+            "id": "q1",
+            "text": "We wanted to make this more of a conversation",
+            "speaker": "A",
+            "opened_at": 1000.0,
+            "last_final_at": 1000.0,
+            "last_word_ms": 1000,
+            "n_words": 8,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "Something entirely different starts here",
+            "speaker": "B",
+            "first_word_ms": 1200,
+            "last_word_ms": 2000,
+            "n_words": 5,
+        }
+        self.assertEqual(decide(prev, nxt, 1000.0), "new")
+        self.assertEqual(decide_full(prev, nxt, 1000.0)[1], "speaker")
+
+    def test_cross_speaker_host_continuation_extends(self):
+        prev = {
+            "id": "q1",
+            "text": "Mr. President, welcome. We wanted to hop around from topic to topic",
+            "speaker": "B",
+            "opened_at": 1000.0,
+            "last_final_at": 1000.0,
+            "last_word_ms": 12000,
+            "n_words": 14,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "Axios likes to do one big thing and so the one big thing we want to talk about is power",
+            "speaker": "A",
+            "first_word_ms": 12200,
+            "last_word_ms": 18000,
+            "n_words": 18,
+        }
+        self.assertTrue(looks_like_host_continuation(nxt["text"]))
+        self.assertEqual(decide(prev, nxt, 1000.0), "extend")
+
+    def test_cross_speaker_power_and_how_you_think_extends(self):
+        prev = {
+            "id": "q1",
+            "text": "Axios likes to do one big thing and so the one big thing we want to talk about is power",
+            "speaker": "A",
+            "opened_at": 1000.0,
+            "last_final_at": 1000.0,
+            "last_word_ms": 18000,
+            "n_words": 18,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "And how you think about it and what have you learned about wielding power?",
+            "speaker": "B",
+            "first_word_ms": 18200,
+            "last_word_ms": 33000,
+            "n_words": 14,
+        }
+        self.assertTrue(looks_like_host_continuation(nxt["text"]))
+        self.assertEqual(decide(prev, nxt, 1000.0), "extend")
+
+    def test_thank_you_after_welcome_is_new(self):
+        prev = {
+            "id": "q1",
+            "text": "Mr. President, welcome to the Axios Show on HBO",
+            "speaker": "B",
+            "opened_at": 1000.0,
+            "last_final_at": 1000.0,
+            "last_word_ms": 5000,
+            "n_words": 9,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "Thank you.",
+            "speaker": "B",
+            "first_word_ms": 5200,
+            "last_word_ms": 5600,
+            "n_words": 2,
+        }
+        self.assertEqual(decide(prev, nxt, 1000.0), "new")
+        self.assertEqual(decide_full(prev, nxt, 1000.0)[1], "answer")
+
+    def test_cross_speaker_lowercase_host_followup_is_new(self):
+        prev = {
+            "id": "q1",
+            "text": "powerful administration right now",
+            "speaker": "B",
+            "opened_at": 1000.0,
+            "last_final_at": 1000.0,
+            "last_word_ms": 110000,
+            "n_words": 4,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "but that's because you've applied lessons from your first term. What are some of those things you did differently",
+            "speaker": "A",
+            "first_word_ms": 110200,
+            "last_word_ms": 118000,
+            "n_words": 16,
+        }
+        self.assertEqual(decide(prev, nxt, 1000.0), "new")
+        self.assertEqual(decide_full(prev, nxt, 1000.0)[1], "speaker")
+
+    def test_well_after_host_question_is_new(self):
+        prev = {
+            "id": "q1",
+            "text": "What are some of those things you did differently",
+            "speaker": "A",
+            "opened_at": 1000.0,
+            "last_final_at": 1000.0,
+            "last_word_ms": 52000,
+            "n_words": 10,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "Well, it's a terrible answer actually, but I don't think about it",
+            "speaker": "B",
+            "first_word_ms": 52800,
+            "last_word_ms": 56000,
+            "n_words": 12,
+        }
+        self.assertEqual(decide(prev, nxt, 1000.0), "new")
+        self.assertEqual(decide_full(prev, nxt, 1000.0)[1], "answer")
 
     def test_known_then_unknown_lowercase_extends(self):
         prev = {"id": "q1", "text": "So one of the", "speaker": "A", "opened_at": 0.0, "last_final_at": 0.0, "last_word_ms": 100, "n_words": 4, "rev": 0}
