@@ -357,12 +357,29 @@ eq(
   eq(label(axiosLines[0]), 'Host', 'welcome is Host even when STT id is B')
   eq(label(axiosLines[1]), 'Guest', 'Thank you is Guest')
   if (axiosLines[0].text.includes('Thank you')) throw new Error('welcome must not include Thank you')
+  eq(label(axiosLines[2]), 'Host', 'opening continuation through Axios likes is Host')
   eq(label(axiosLines[3]), 'Host', 'wielding power question is Host')
   if (!axiosLines[3].text.includes('about wielding power?')) throw new Error('question tail stays on host line')
   eq(label(axiosLines[4]), 'Guest', 'long Well answer is Guest')
   eq(label(axiosLines[5]), 'Host', 'host follow-up question is Host')
   eq(label(axiosLines[6]), 'Guest', 'Well answer opener is Guest')
   eq(inferMeetingLineLabel('Axios likes to do one big thing', 'meeting'), 'Host', 'host continuation phrase')
+  eq(
+    inferMeetingLineLabel(
+      "That's because you've applied lessons. What are some of those things you did differently",
+      'meeting',
+    ),
+    'Host',
+    'That\'s because + What are some is Host not Guest',
+  )
+  eq(
+    inferMeetingLineLabel(
+      'So a decade ago, you first became president, and in that span of time, what have you learned about wielding power?',
+      'meeting',
+    ),
+    'Host',
+    'So a decade ago host question is Host',
+  )
   const tb = transcriptBlock(axiosLines.slice(0, 2), false, names, 'meeting', {})
   if (!tb.includes('0:12 Host')) throw new Error('transcript block uses inferred Host')
   if (!tb.includes('0:13 Guest')) throw new Error('transcript block uses inferred Guest')

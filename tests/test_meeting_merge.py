@@ -361,6 +361,27 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(decide(prev, nxt, 1000.0), "new")
         self.assertEqual(decide_full(prev, nxt, 1000.0)[1], "answer")
 
+    def test_cross_speaker_lowercase_host_followup_is_new(self):
+        prev = {
+            "id": "q1",
+            "text": "powerful administration right now",
+            "speaker": "B",
+            "opened_at": 1000.0,
+            "last_final_at": 1000.0,
+            "last_word_ms": 110000,
+            "n_words": 4,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "but that's because you've applied lessons from your first term. What are some of those things you did differently",
+            "speaker": "A",
+            "first_word_ms": 110200,
+            "last_word_ms": 118000,
+            "n_words": 16,
+        }
+        self.assertEqual(decide(prev, nxt, 1000.0), "new")
+        self.assertEqual(decide_full(prev, nxt, 1000.0)[1], "speaker")
+
     def test_well_after_host_question_is_new(self):
         prev = {
             "id": "q1",

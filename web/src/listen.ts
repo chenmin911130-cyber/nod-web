@@ -417,19 +417,21 @@ export function resolveSpeakerName(names: Record<string, string>, speakerId?: st
   return names[id] || id
 }
 
-const ANSWER_START = /^(well|yes|no|yeah|yep|nope|thank you|thanks|i think|i feel|i mean|look|so|right|okay|ok|it's|that's)\b/i
+const ANSWER_START = /^(well|yes|no|yeah|yep|nope|thank you|thanks)\b/i
 const ASK_TAIL = /\b(what|why|how|when|where|who|which)\b[^?.!]*$|(?:吗[.。!！]?$|呢[.。!！]?$|怎么|为什么)/i
 const HOST_OPEN = /\b(welcome|thanks for (?:joining|having)|glad you|let'?s talk|conversation|mr\. president)\b/i
-
-export function looksLikeAnswerStart(text: string): boolean {
-  return ANSWER_START.test((text || '').trim())
-}
 
 export function looksLikeQuestion(text: string): boolean {
   const t = (text || '').trim()
   if (!t) return false
   if (/[?？]$/.test(t)) return true
   return ASK_TAIL.test(t)
+}
+
+export function looksLikeAnswerStart(text: string): boolean {
+  const t = (text || '').trim()
+  if (looksLikeQuestion(t)) return false
+  return ANSWER_START.test(t)
 }
 
 /** Per-line Host/Guest for meeting & interview — STT id is merge-only (#275). */
@@ -439,8 +441,8 @@ export function inferMeetingLineLabel(text: string, scene: ListenScene): string 
   const guest = speakerLabel(roleScene, 1)
   const t = (text || '').trim()
   if (!t) return ''
-  if (looksLikeAnswerStart(t)) return guest
   if (looksLikeQuestion(t)) return host
+  if (looksLikeAnswerStart(t)) return guest
   if (HOST_OPEN.test(t)) return host
   if (hostLikeness(t) >= 2) return host
   if (t.length > 100 || /^well,\s/i.test(t)) return guest

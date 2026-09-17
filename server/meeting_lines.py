@@ -31,7 +31,7 @@ _QUESTION_CONT = re.compile(
     re.I,
 )
 _ANSWER_START = re.compile(
-    r"^(well|yes|no|yeah|yep|nope|thank you|thanks|i think|i feel|i mean|look|so|right|okay|ok|it's|that's)\b",
+    r"^(well|yes|no|yeah|yep|nope|thank you|thanks)\b",
     re.I,
 )
 _HOST_CONT = re.compile(
@@ -91,8 +91,11 @@ def looks_like_question_continuation(text: str) -> bool:
 
 
 def looks_like_answer_start(text: str) -> bool:
-    """Guest answer after a host question ("well, it's…", "Thank you.")."""
-    return bool(_ANSWER_START.match((text or "").strip()))
+    """Short guest reply after a host question ("Well, …", "Thank you.")."""
+    t = (text or "").strip()
+    if looks_like_question(t):
+        return False
+    return bool(_ANSWER_START.match(t))
 
 
 def looks_like_host_continuation(text: str) -> bool:
@@ -111,7 +114,7 @@ def _cross_speaker_continuation(prev_open: dict[str, Any], nxt_text: str) -> boo
         return True
     if looks_like_host_continuation(nxt_text):
         return True
-    return starts_lower_latin(nxt_text)
+    return False
 
 
 # --------------------------------------------------------------------------- #
