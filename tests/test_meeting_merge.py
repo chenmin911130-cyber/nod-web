@@ -1363,5 +1363,58 @@ class Axios277DirtyTests(MeetingEmitTests):
         self.assertTrue(any(re.search(r"^Thank you\.?$", t, re.I) for t in texts))
 
 
+class Axios281LeadingAckTests(unittest.TestCase):
+    """#281: the acknowledgement in front of the host question is its own line.
+
+    The 122 PDF already split the question from its answer, but `Yeah.` sits BEFORE
+    the question mark, so `_split_question_answer` never peeled it off and the Host
+    line read "Yeah. How many of them believe that?".
+    """
+
+    def test_yeah_before_host_question_splits(self):
+        self.assertEqual(
+            split_meeting_turn("Yeah. How many of them believe that?"),
+            ["Yeah.", "How many of them believe that?"],
+        )
+
+    def test_ack_splits_inside_the_full_122_turn(self):
+        glued = (
+            "Yeah. How many of them believe that? All of them. But I was just being funny. "
+            "I was just being funny, because they were all sitting."
+        )
+        parts = split_meeting_turn(glued)
+        self.assertEqual(parts[0], "Yeah.")
+        self.assertEqual(parts[1], "How many of them believe that?")
+        self.assertTrue(any(p.startswith("All of them") for p in parts))
+        self.assertFalse(any(re.match(r"^Yeah\.\s+how many", p, re.I) for p in parts))
+
+    def test_uh_between_ack_and_question_keeps_the_277_shape(self):
+        # The #277 golden keeps "Yeah. Uh," on the question line; #281 must not
+        # change that shape (only the bare ack peels off).
+        parts = split_meeting_turn(
+            "Yeah. Uh, how many of them believe that? All of them. But I was just being funny."
+        )
+        self.assertEqual(len(parts), 2)
+        self.assertIn("how many", parts[0].lower())
+        self.assertRegex(parts[1], r"^All of them")
+
+    def test_ack_without_a_host_question_does_not_split(self):
+        for text in (
+            "Yep. All of them were sitting.",
+            "Uh-huh. I was just being funny.",
+            "Yeah. Really?",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(split_meeting_turn(text), [text])
+
+    def test_guest_continuation_and_g7_narration_are_untouched(self):
+        self.assertEqual(split_meeting_turn("Yeah. I was just being funny."), ["Yeah. I was just being funny."])
+        g7 = (
+            "And then I walked into the room and it was just sort of funny, "
+            "because it was a very long table, right?"
+        )
+        self.assertEqual(split_meeting_turn(g7), [g7])
+
+
 if __name__ == "__main__":
     unittest.main()

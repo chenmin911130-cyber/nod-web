@@ -64,6 +64,15 @@ _HOST_FOLLOWUP = re.compile(
     re.I,
 )
 _FIRST_PERSON = re.compile(r"\b(I|we|my)\b", re.I)
+# #281: an acknowledgement glued to the FRONT of the host question
+# ("Yeah. How many of them believe that?"). It sits before the question mark, so
+# _split_question_answer (which only looks after a "?") never peeled it off.
+_LEADING_ACK = re.compile(r"^\s*(?:yeah|yep|yup|uh[\s\-]?huh|mm[\s\-]?hmm|mhm)\s*[.,!]?\s+", re.I)
+_HOST_QUESTION_OPEN = re.compile(
+    r"^(?:how|what|when|where|why|who|which|you mentioned|"
+    r"do you|did you|does|is it|are there|can you|would you|could you)\b",
+    re.I,
+)
 # A sentence-end punctuation followed by whitespace or end-of-text.
 _SENTENCE_END_RE = re.compile(r"[.!?…。！？](?=\s|$)")
 # Function words that cannot legally close a sentence — STT appends a bogus "." at
@@ -182,11 +191,34 @@ def _split_guest_host(text: str) -> list[str] | None:
     return None
 
 
+def _split_leading_ack(text: str) -> list[str] | None:
+    """``Yeah. How many…?`` → guest acknowledgement + host question (#281).
+
+    The 122 PDF already split the question from its answer, but the
+    acknowledgement sits BEFORE the question mark, so it stayed glued to the host
+    line ("Yeah. How many of them believe that?"). Only an acknowledgement followed
+    by a host-question opener and a real ``?`` splits, so a guest continuation like
+    "Yeah. I was just being funny." is left alone.
+    """
+    m = _LEADING_ACK.match(text or "")
+    if not m:
+        return None
+    left = (text or "")[: m.end()].strip()
+    right = (text or "")[m.end() :].strip()
+    if not left or not right:
+        return None
+    if not right.endswith(("?", "？")):
+        return None
+    if not _HOST_QUESTION_OPEN.match(right):
+        return None
+    return [left, right]
+
+
 def _split_meeting_turn_once(text: str) -> list[str]:
     t = (text or "").strip()
     if not t:
         return []
-    for splitter in (_split_thanks_inline, _split_guest_host, _split_question_answer):
+    for splitter in (_split_leading_ack, _split_thanks_inline, _split_guest_host, _split_question_answer):
         parts = splitter(t)
         if parts:
             return parts
