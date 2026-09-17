@@ -1,4 +1,4 @@
-import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, applyListenSetting, askPrompt, bilingualDisabled, bindSpeakerName, capTranscript, emptyNotes, exportNoteSections, inferMeetingLineLabel, lastTwoMinutes, listenAskPayload, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesBilingualOn, notesLangActions, notesPrompt, notesTranscriptTooThin, outLangRule, parseNotes, promoteLectureSpeakers, resolveMeetingLineLabel, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakerLetterIndex, speakersExpected, transcriptBlock } from './listen'
+import { LISTEN_SCENES, MEETING_SPEAKER_OPTIONS, applyListenSetting, askPrompt, bilingualDisabled, bindSpeakerName, capTranscript, emptyNotes, exportNoteSections, expandSplitMeetingLines, inferMeetingLineLabel, lastTwoMinutes, listenAskPayload, listenMetaLine, listenSettingsBlocked, nodTag, notesBodyText, notesBilingualOn, notesLangActions, notesPrompt, notesTranscriptTooThin, outLangRule, parseNotes, promoteLectureSpeakers, resolveMeetingLineLabel, sceneChipLabel, sceneLabel, sceneSectionOrder, settingsLocked, speakerLetterIndex, speakersExpected, splitMeetingTurn, transcriptBlock } from './listen'
 import { IPHONE_COPY, iphoneCopyFor } from './iphoneCopy'
 import type { MeetingLine } from './types'
 
@@ -383,4 +383,68 @@ eq(
   const tb = transcriptBlock(axiosLines.slice(0, 2), false, names, 'meeting', {})
   if (!tb.includes('0:12 Host')) throw new Error('transcript block uses inferred Host')
   if (!tb.includes('0:13 Guest')) throw new Error('transcript block uses inferred Guest')
+}
+
+// #277 Axios 5min dirty STT from 16:08 PDF — split then infer Host/Guest.
+{
+  const names = bindSpeakerName(bindSpeakerName({}, 'B', 'meeting'), 'A', 'meeting')
+  const label = (text: string) => resolveMeetingLineLabel({ text, speaker: 'B' }, 'meeting', names, {})
+  const welcomeDirty =
+    'Mr. President, welcome to the Axios Show. Thank you. We wanted to make this more of a conversation than a typical interview where we are just going to hop around from topic to topic, and we wanted to do Axios likes to do one big thing. And so the one big thing we want to talk about is power and how you think about it and how you wield it.'
+  const welcomeParts = splitMeetingTurn(welcomeDirty)
+  if (welcomeParts.length < 3) throw new Error('welcome dirty line must split into welcome / thank you / opening')
+  eq(label(welcomeParts[0]), 'Host', 'welcome chunk is Host')
+  eq(label(welcomeParts[1]), 'Guest', 'embedded Thank you is Guest')
+  eq(label(welcomeParts[2]), 'Host', 'opening after Thank you is Host')
+  if (welcomeParts[0].includes('Thank you')) throw new Error('welcome chunk must not include Thank you')
+
+  const qaSplit = splitMeetingTurn(
+    "Differently or better than you did before? Well, it's a terrible answer actually, but I don't think about it.",
+  )
+  if (qaSplit.length !== 2) throw new Error('question + Well must split')
+  eq(label(qaSplit[0]), 'Host', 'question half is Host')
+  eq(label(qaSplit[1]), 'Guest', 'Well answer is Guest')
+
+  eq(
+    label("I can't believe it. I was just being cute, funny. I wasn't trying to be the boss."),
+    'Guest',
+    '04:17 cute boss monologue is Guest not default Host',
+  )
+
+  eq(
+    label(
+      "And so a decade ago, you first became president, and you've had loads of experience since then.",
+    ),
+    'Host',
+    '00:30 host setup to guest without trailing question mark',
+  )
+  eq(
+    label(
+      "And so when you're compared to somebody like that, you look maybe better than you are. That's possible. But I feel that it's a very powerful term.",
+    ),
+    'Guest',
+    '01:49 guest And so youre line must not match host-to-guest',
+  )
+
+  const g7Split = splitMeetingTurn(
+    "But we had a great administration, but this one is, I think, better. You mentioned the G7. You saw a number of world leaders. You walked in and you said, I'm the boss.",
+  )
+  if (g7Split.length !== 2) throw new Error('guest answer + G7 question must split')
+  eq(label(g7Split[0]), 'Guest', 'better answer is Guest')
+  eq(label(g7Split[1]), 'Host', 'G7 question is Host')
+
+  const leaderSplit = splitMeetingTurn(
+    "You have experience, obviously, with world leaders from your 2 terms. What's your definition of a great leader? How do you define great? Well, you have so many different types of leaders.",
+  )
+  if (leaderSplit.length !== 2) throw new Error('great leader question + Well must split')
+  eq(label(leaderSplit[0]), 'Host', 'great leader questions are Host')
+  eq(label(leaderSplit[1]), 'Guest', 'Well types of leaders is Guest')
+
+  const expanded = expandSplitMeetingLines([
+    { id: '1', ts: '0:12', text: welcomeDirty, speaker: 'B' },
+    { id: '2', ts: '4:17', text: "I can't believe it. I was just being cute, funny. I wasn't trying to be the boss.", speaker: 'B' },
+  ])
+  const tb = transcriptBlock(expanded, false, names, 'meeting', {})
+  if (!tb.includes('Guest')) throw new Error('PDF-style transcript block labels Guest after split')
+  if (tb.includes('4:17 Host')) throw new Error('04:17 must not be Host in transcript block')
 }

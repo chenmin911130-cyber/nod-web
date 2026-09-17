@@ -1,6 +1,7 @@
 import { showLineTranslation } from './iphoneCopy'
 import type { CatchNote } from './types'
 import {
+  expandSplitMeetingLines,
   resolveMeetingLineLabel,
   resolveSpeakerName,
   sectionTitle,
@@ -213,7 +214,10 @@ export function transcriptPlainText(input: {
 }): string {
   const scene = input.scene
   const locked = input.speakerNameLocked || {}
-  return input.lines
+  const rows = scene === 'meeting' || scene === 'interview'
+    ? expandSplitMeetingLines(input.lines)
+    : input.lines
+  return rows
     .map((line) => {
       const who = scene === 'meeting' || scene === 'interview'
         ? resolveMeetingLineLabel(line, scene, input.speakerNames, locked)
@@ -301,8 +305,12 @@ export function groupTranscript(
   partial?: { text?: string; speaker?: string } | null,
   opts?: GroupTranscriptOpts,
 ): TranscriptGroup[] {
+  const scene = opts?.scene
+  const expanded = scene === 'meeting' || scene === 'interview'
+    ? expandSplitMeetingLines(lines)
+    : lines
   const groups: TranscriptGroup[] = []
-  for (const line of lines) {
+  for (const line of expanded) {
     const groupKey = transcriptGroupKey(line, opts)
     const speaker = speakerKey(line.speaker)
     const last = groups[groups.length - 1]

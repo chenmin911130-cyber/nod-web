@@ -420,6 +420,97 @@ export function resolveSpeakerName(names: Record<string, string>, speakerId?: st
 const ANSWER_START = /^(well|yes|no|yeah|yep|nope|thank you|thanks)\b/i
 const ASK_TAIL = /\b(what|why|how|when|where|who|which)\b[^?.!]*$|(?:吗[.。!！]?$|呢[.。!！]?$|怎么|为什么)/i
 const HOST_OPEN = /\b(welcome|thanks for (?:joining|having)|glad you|let'?s talk|conversation|mr\. president)\b/i
+const HOST_CONT = /^(axios likes|and how you think|and so the|and in that|and we wanted|we wanted to make)\b/i
+/** Host follow-up or question to the guest — line may lack a trailing ? (#277). */
+const HOST_FOLLOWUP_START = /^(?:but that'?s because|What are some|What'?s your|How (?:do|would|can|many)\b|You (?:mentioned|have experience|walked)|You saw)\b/i
+const GUEST_MONOLOGUE = /^(I can't|I was|I wasn't|I'm|I think|I feel|I said|I walked)\b/i
+
+/** Host setup addressing the guest (#277 00:30), not guest lines with you're / I feel. */
+function looksLikeHostToGuest(text: string): boolean {
+  const t = (text || '').trim()
+  if (!/^(?:And so|So,)\b/i.test(t)) return false
+  if (/\bI\b/i.test(t)) return false
+  return (
+    /\byou first became\b/i.test(t)
+    || /\byou've had\b/i.test(t)
+    || /\byou have\b/i.test(t)
+    || /\byou learned\b/i.test(t)
+  )
+}
+const THANKS_INLINE = /(?<=\S)\s+((?:Thank you|Thanks)[.!]?)\s+(?=\S)/i
+const ANSWER_AFTER_Q = /^(?:Well,?\s|I think\b|Yeah\.?\s|All of them\b)/i
+const GUEST_STMT_END = /(?:right now|I think,\s*better|the boss)[,.]?\s*$/i
+const HOST_FOLLOWUP = /(?:but that'?s because|What are some|What'?s your|How (?:do|would|can|many)\b|You (?:mentioned|have experience|walked)|You saw)\b/i
+const FIRST_PERSON = /\b(I|we|my)\b/i
+
+function splitThanksInline(text: string): string[] | null {
+  const m = text.match(THANKS_INLINE)
+  if (!m || m.index == null) return null
+  const left = text.slice(0, m.index).trim()
+  let mid = (m[1] || '').trim()
+  if (mid && !/[.!?]$/.test(mid)) mid = `${mid}.`
+  const right = text.slice(m.index + m[0].length).trim()
+  if (!left || !right) return null
+  return [left, mid, right]
+}
+
+function splitQuestionAnswer(text: string): string[] | null {
+  const marks = [...text.matchAll(/[?？]/g)]
+  for (let i = marks.length - 1; i >= 0; i -= 1) {
+    const idx = marks[i].index ?? -1
+    const left = text.slice(0, idx + 1).trim()
+    const right = text.slice(idx + 1).trim()
+    if (!left || !right) continue
+    if (ANSWER_AFTER_Q.test(right)) return [left, right]
+  }
+  return null
+}
+
+function splitGuestHost(text: string): string[] | null {
+  const re = new RegExp(HOST_FOLLOWUP.source, 'gi')
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) {
+    if (m.index === 0) continue
+    const left = text.slice(0, m.index).trim()
+    const right = text.slice(m.index).trim()
+    if (!left || !right) continue
+    const guestLeft = GUEST_STMT_END.test(left) || (FIRST_PERSON.test(left) && !looksLikeQuestion(left))
+    if (guestLeft) return [left, right]
+  }
+  return null
+}
+
+function splitMeetingTurnOnce(text: string): string[] {
+  const t = (text || '').trim()
+  if (!t) return []
+  for (const splitter of [splitThanksInline, splitGuestHost, splitQuestionAnswer]) {
+    const parts = splitter(t)
+    if (parts) return parts
+  }
+  return [t]
+}
+
+/** Split one STT final that embeds two speakers — must match server/meeting_lines.py (#277). */
+export function splitMeetingTurn(text: string): string[] {
+  const parts = splitMeetingTurnOnce(text)
+  if (parts.length <= 1) return parts
+  const out: string[] = []
+  for (const part of parts) out.push(...splitMeetingTurn(part))
+  return out.filter((p) => p.trim())
+}
+
+export function expandSplitMeetingLines(lines: MeetingLine[]): MeetingLine[] {
+  const out: MeetingLine[] = []
+  for (const line of lines) {
+    const parts = splitMeetingTurn(line.text)
+    if (parts.length <= 1) {
+      out.push(line)
+      continue
+    }
+    for (const part of parts) out.push({ ...line, text: part })
+  }
+  return out
+}
 
 export function looksLikeQuestion(text: string): boolean {
   const t = (text || '').trim()
@@ -444,10 +535,13 @@ export function inferMeetingLineLabel(text: string, scene: ListenScene): string 
   if (looksLikeQuestion(t)) return host
   if (looksLikeAnswerStart(t)) return guest
   if (HOST_OPEN.test(t)) return host
+  if (HOST_CONT.test(t)) return host
+  if (HOST_FOLLOWUP_START.test(t)) return host
+  if (looksLikeHostToGuest(t)) return host
+  if (GUEST_MONOLOGUE.test(t)) return guest
   if (hostLikeness(t) >= 2) return host
   if (t.length > 100 || /^well,\s/i.test(t)) return guest
-  if (/\b(judiciously|first term|predecessor|g7\b|administration)\b/i.test(t) && t.length > 60) return guest
-  return host
+  return guest
 }
 
 export function resolveMeetingLineLabel(
@@ -586,7 +680,8 @@ export function transcriptBlock(
   scene: ListenScene = 'meeting',
   locked: Record<string, boolean> = {},
 ): string {
-  return lines
+  const expanded = scene === 'lecture' ? lines : expandSplitMeetingLines(lines)
+  return expanded
     .map((line) => {
       const who = scene === 'lecture'
         ? resolveSpeakerName(names, line.speaker)

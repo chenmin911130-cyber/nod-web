@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import queue
+import re
 import threading
 import time
 import unittest
@@ -34,8 +35,10 @@ from server.meeting_lines import (
     join_meeting_text,
     last_sentence_index,
     looks_like_host_continuation,
+    looks_like_phrase_continuation,
     looks_like_question,
     looks_like_question_continuation,
+    split_meeting_turn,
     tail_meta,
 )
 
@@ -1194,6 +1197,170 @@ class DateContinuationTests(unittest.TestCase):
         self.assertEqual(len(qs), 2)
         self.assertEqual(qs[1]["text"], "6th, live at 1 PM Eastern.")
         self.assertEqual(len(_events(sess, "line_update")), 0)
+
+
+class Axios277DirtyTests(MeetingEmitTests):
+    """#277: 16:08 Axios PDF dirty STT — inline split + same-speaker phrase extend."""
+
+    WELCOME_THANKS = (
+        "Mr. President, welcome to the Axios Show. Thank you. We wanted to make this more "
+        "of a conversation than a typical interview where we're just going to hop around "
+        "from topic to topic, and we wanted to do Axios likes to do one big thing. And so "
+        "the one big thing we want to talk about is power and how you think about it and "
+        "how you wield it."
+    )
+
+    def test_inline_thank_you_splits_three_ways(self):
+        parts = split_meeting_turn(self.WELCOME_THANKS)
+        self.assertGreaterEqual(len(parts), 3)
+        self.assertIn("welcome", parts[0].lower())
+        self.assertNotIn("thank you", parts[0].lower())
+        self.assertRegex(parts[1], r"^Thank you\.?$", parts[1])
+        self.assertIn("We wanted", parts[2])
+
+    def test_overrated_extends_lowercase_continuation(self):
+        prev = {
+            "id": "q1",
+            "text": "Well, I think you have to do it judiciously. I think that experience is good. I always say that potential is overrated.",
+            "speaker": "B",
+            "opened_at": 1000.0,
+            "last_final_at": 1000.0,
+            "last_word_ms": 48000,
+            "n_words": 20,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "far more important. In other words, having ability is far more important than experience, but having both is very good.",
+            "speaker": "B",
+            "first_word_ms": 48200,
+            "last_word_ms": 57000,
+            "n_words": 18,
+        }
+        self.assertEqual(decide(prev, nxt, 1000.0), "extend")
+        self.assertEqual(decide_full(prev, nxt, 1000.0)[1], "same_speaker_continuation")
+
+    def test_term_extends_than_phrase(self):
+        prev = {
+            "id": "q1",
+            "text": "And somebody said the other day that this is a far more powerful administration or term.",
+            "speaker": "B",
+            "opened_at": 1000.0,
+            "last_final_at": 1000.0,
+            "last_word_ms": 78000,
+            "n_words": 16,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "Than the first one. And we had a good first term.",
+            "speaker": "B",
+            "first_word_ms": 78200,
+            "last_word_ms": 89000,
+            "n_words": 10,
+        }
+        self.assertTrue(looks_like_phrase_continuation(nxt["text"]))
+        self.assertEqual(decide(prev, nxt, 1000.0), "extend")
+        self.assertEqual(decide_full(prev, nxt, 1000.0)[1], "phrase_continuation")
+
+    def test_jobs_extends_numbers_phrase(self):
+        prev = {
+            "id": "q1",
+            "text": "We had the best jobs.",
+            "speaker": "B",
+            "opened_at": 1000.0,
+            "last_final_at": 1000.0,
+            "last_word_ms": 179000,
+            "n_words": 5,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "Numbers. We had everything.",
+            "speaker": "B",
+            "first_word_ms": 179200,
+            "last_word_ms": 187000,
+            "n_words": 4,
+        }
+        self.assertEqual(decide(prev, nxt, 1000.0), "extend")
+        self.assertEqual(decide_full(prev, nxt, 1000.0)[1], "phrase_continuation")
+
+    def test_cross_id_lowercase_host_followup_still_new(self):
+        prev = {
+            "id": "q1",
+            "text": "powerful administration right now",
+            "speaker": "B",
+            "opened_at": 1000.0,
+            "last_final_at": 1000.0,
+            "last_word_ms": 110000,
+            "n_words": 4,
+            "rev": 0,
+        }
+        nxt = {
+            "text": "but that's because you've applied lessons from your first term. What are some of those things you did differently",
+            "speaker": "A",
+            "first_word_ms": 110200,
+            "last_word_ms": 118000,
+            "n_words": 16,
+        }
+        self.assertEqual(decide(prev, nxt, 1000.0), "new")
+
+    def test_guest_answer_then_host_question_splits(self):
+        glued = (
+            "Very powerful administration right now, but that's because you've applied lessons. "
+            "You've done some things differently. What are some of those things you did?"
+        )
+        parts = split_meeting_turn(glued)
+        self.assertEqual(len(parts), 2)
+        self.assertIn("right now", parts[0].lower())
+        self.assertNotIn("What are some", parts[0])
+        self.assertIn("What are some", parts[1])
+
+    def test_question_well_splits(self):
+        glued = (
+            "Differently or better than you did before? Well, it's a terrible answer actually, "
+            "but I don't think about it."
+        )
+        parts = split_meeting_turn(glued)
+        self.assertEqual(len(parts), 2)
+        self.assertTrue(parts[0].endswith("?"))
+        self.assertRegex(parts[1], r"^Well,")
+
+    def test_g7_question_splits_from_guest_answer(self):
+        glued = (
+            "But we had a great administration, but this one is, I think, better. "
+            "You mentioned the G7. You saw a number of world leaders. You walked in and you said, I'm the boss."
+        )
+        parts = split_meeting_turn(glued)
+        self.assertEqual(len(parts), 2)
+        self.assertIn("better", parts[0])
+        self.assertIn("You mentioned", parts[1])
+
+    def test_how_many_all_of_them_splits(self):
+        glued = "Yeah. Uh, how many of them believe that? All of them. But I was just being funny."
+        parts = split_meeting_turn(glued)
+        self.assertEqual(len(parts), 2)
+        self.assertIn("how many", parts[0].lower())
+        self.assertRegex(parts[1], r"^All of them")
+
+    def test_great_leader_question_well_splits(self):
+        glued = (
+            "You have experience, obviously, with world leaders from your 2 terms. "
+            "What's your definition of a great leader? How do you define great? "
+            "Well, you have so many different types of leaders."
+        )
+        parts = split_meeting_turn(glued)
+        self.assertEqual(len(parts), 2)
+        self.assertIn("How do you define great?", parts[0])
+        self.assertRegex(parts[1], r"^Well,")
+
+    def test_thank_you_embedded_in_one_string_emits_separate_lines(self):
+        sess = _session()
+        clk = _Clock()
+        with mock.patch("server.app.time.time", clk):
+            self._drive_hold(sess, self.WELCOME_THANKS, speaker="B", meta={"first_word_ms": 1000, "last_word_ms": 30000, "n_words": 40})
+        qs = _events(sess, "question")
+        texts = [q["text"] for q in qs]
+        self.assertGreaterEqual(len(texts), 3)
+        self.assertNotIn("thank you", texts[0].lower())
+        self.assertTrue(any(re.search(r"^Thank you\.?$", t, re.I) for t in texts))
 
 
 if __name__ == "__main__":
