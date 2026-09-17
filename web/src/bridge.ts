@@ -4,7 +4,7 @@ import { getToken } from './auth'
 import { MicCapture } from './audio'
 import { apiUrl, isAndroidApp, isNativeApp, wsUrl } from './native'
 import { micSilenceShouldWarn } from './micGuard'
-import { audioUplinkWsUrl, controlWsUrl, shouldEmitUplinkNotice, uplinkFailureFromError, uplinkFailureLog, uplinkShouldForwardPcmFromJs, uplinkTokenAfterNativeStart } from './uplink'
+import { audioUplinkWsUrl, controlWsUrl, shouldEmitUplinkNotice, uplinkFailureFromError, uplinkFailureLog, uplinkShouldForwardPcmFromJs, uplinkTokenAction, uplinkTokenAfterNativeStart } from './uplink'
 import { isWatchMicPreferred, setWatchPcmSink } from './watch'
 import { copyText } from './historyRestore'
 
@@ -294,10 +294,21 @@ export function installWebApi(): void {
   }
 
   const applyUplinkToken = (token: string) => {
-    if (!token || token === uplinkToken || token === uplinkStarting) return
+    // #279: exactly one native uplink socket. A re-attach re-announcing the same
+    // token is ignored; a genuinely new token replaces the live uplink (stop,
+    // then start) instead of streaming two PCM feeds at the server.
+    const action = uplinkTokenAction({ token, activeToken: uplinkToken, startingToken: uplinkStarting })
+    if (action === 'ignore') return
     if (!isNativeApp()) {
       uplinkToken = uplinkTokenAfterNativeStart(true, token)
       return
+    }
+    if (action === 'replace') {
+      uplinkToken = ''
+      mic.setUplinkActive(false)
+      void import('nod-mic')
+        .then(({ NodMic }) => NodMic.stopUplink())
+        .catch(() => undefined)
     }
     uplinkStarting = token
     void import('nod-mic')

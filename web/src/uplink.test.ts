@@ -1,6 +1,6 @@
 import { nativeFallbackShouldSwitch } from './audio'
 import { IPHONE_COPY } from './iphoneCopy'
-import { audioUplinkWsUrl, controlWsUrl, shouldEmitUplinkNotice, uplinkFailureFromError, uplinkFailureLog, uplinkShouldForwardPcmFromJs, uplinkTokenAfterNativeStart } from './uplink'
+import { audioUplinkWsUrl, controlWsUrl, shouldEmitUplinkNotice, uplinkFailureFromError, uplinkFailureLog, uplinkShouldForwardPcmFromJs, uplinkTokenAction, uplinkTokenAfterNativeStart } from './uplink'
 
 function eq<T>(got: T, want: T, label: string) {
   if (got !== want) throw new Error(`${label}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`)
@@ -68,5 +68,38 @@ eq(
 eq(shouldEmitUplinkNotice('', IPHONE_COPY.uplinkUnavailable), true, 'first uplink failure is shown')
 eq(shouldEmitUplinkNotice(IPHONE_COPY.uplinkUnavailable, IPHONE_COPY.uplinkUnavailable), false, 'duplicate uplink failure is not emitted again')
 eq(shouldEmitUplinkNotice(IPHONE_COPY.uplinkUnavailable, IPHONE_COPY.uplinkFailed), true, 'a different uplink failure replaces the notice')
+
+// #279: a control re-attach re-announcing the same token must never open a second
+// /ws/audio; one native uplink socket at a time.
+eq(
+  uplinkTokenAction({ token: 'tok-1', activeToken: 'tok-1', startingToken: '' }),
+  'ignore',
+  'same token while uplink is live is ignored',
+)
+eq(
+  uplinkTokenAction({ token: 'tok-1', activeToken: '', startingToken: 'tok-1' }),
+  'ignore',
+  'same token while a start is in flight is ignored',
+)
+eq(
+  uplinkTokenAction({ token: 'tok-2', activeToken: '', startingToken: 'tok-1' }),
+  'ignore',
+  'a different token cannot stack a second start',
+)
+eq(
+  uplinkTokenAction({ token: '', activeToken: 'tok-1', startingToken: '' }),
+  'ignore',
+  'an empty token is ignored',
+)
+eq(
+  uplinkTokenAction({ token: 'tok-1', activeToken: '', startingToken: '' }),
+  'start',
+  'first token starts the uplink',
+)
+eq(
+  uplinkTokenAction({ token: 'tok-2', activeToken: 'tok-1', startingToken: '' }),
+  'replace',
+  'a genuinely new token replaces the live uplink instead of running two',
+)
 
 console.log('uplink.test.ts: ok')
