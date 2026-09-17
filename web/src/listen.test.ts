@@ -412,9 +412,18 @@ eq(
   )
 
   eq(
-    label('And so a decade ago, you first became president, and in that span of time'),
+    label(
+      "And so a decade ago, you first became president, and you've had loads of experience since then.",
+    ),
     'Host',
     '00:30 host setup to guest without trailing question mark',
+  )
+  eq(
+    label(
+      "And so when you're compared to somebody like that, you look maybe better than you are. That's possible. But I feel that it's a very powerful term.",
+    ),
+    'Guest',
+    '01:49 guest And so youre line must not match host-to-guest',
   )
 
   const g7Split = splitMeetingTurn(
