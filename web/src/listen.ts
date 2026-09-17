@@ -499,8 +499,10 @@ export function splitMeetingTurn(text: string): string[] {
   return out.filter((p) => p.trim())
 }
 
-export function expandSplitMeetingLines(lines: MeetingLine[]): MeetingLine[] {
-  const out: MeetingLine[] = []
+export type MeetingLineLike = Pick<MeetingLine, 'text'> & Partial<Omit<MeetingLine, 'text'>>
+
+export function expandSplitMeetingLines<T extends MeetingLineLike>(lines: T[]): T[] {
+  const out: T[] = []
   for (const line of lines) {
     const parts = splitMeetingTurn(line.text)
     if (parts.length <= 1) {
