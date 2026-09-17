@@ -94,6 +94,7 @@ import {
   notesLangActions,
   MEETING_SPEAKER_OPTIONS,
   exportNoteSections,
+  expandSplitMeetingLines,
   parseNotes,
   promoteLectureSpeakers,
   resolveMeetingLineLabel,
@@ -3663,7 +3664,7 @@ export default function App() {
       const lecture = s.listenScene === 'lecture'
       theme = lecture ? 'lecture' : 'meeting'
       title = lecture ? 'Study notes' : 'Meeting notes'
-      const lines = s.meetingLines
+      const lines = lecture ? s.meetingLines : expandSplitMeetingLines(s.meetingLines)
       const notes = parseNotes(s.notesRaw)
       const speakers = [...new Set(Object.values(s.speakerNames).filter(Boolean))]
       meta = [

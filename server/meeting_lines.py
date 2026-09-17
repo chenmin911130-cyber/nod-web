@@ -39,6 +39,25 @@ _HOST_CONT = re.compile(
     re.I,
 )
 _PHRASE_CONT = re.compile(r"^(by|with|along with)\b", re.I)
+_PHRASE_CONT_SHORT = re.compile(r"^(than|that|or|and|numbers?|ones?)\b", re.I)
+_THANKS_INLINE = re.compile(
+    r"(?<=\S)\s+((?:Thank you|Thanks)[.!]?)\s+(?=\S)",
+    re.I,
+)
+_ANSWER_AFTER_Q = re.compile(
+    r"^(?:Well,?\s|I think\b|Yeah\.?\s|All of them\b)",
+    re.I,
+)
+_GUEST_STMT_END = re.compile(
+    r"(?:right now|I think,\s*better|the boss)[,.]?\s*$",
+    re.I,
+)
+_HOST_FOLLOWUP = re.compile(
+    r"(?:but that'?s because|What are some|What'?s your|How (?:do|would|can|many)\b|"
+    r"You (?:mentioned|have experience|walked)|You saw)\b",
+    re.I,
+)
+_FIRST_PERSON = re.compile(r"\b(I|we|my)\b", re.I)
 # A sentence-end punctuation followed by whitespace or end-of-text.
 _SENTENCE_END_RE = re.compile(r"[.!?…。！？](?=\s|$)")
 # Function words that cannot legally close a sentence — STT appends a bogus "." at
@@ -102,6 +121,81 @@ def looks_like_host_continuation(text: str) -> bool:
     """Same host turn split across STT ids ("topic to topic" + "Axios likes…")."""
     t = (text or "").strip()
     return bool(_HOST_CONT.match(t) or _PHRASE_CONT.match(t))
+
+
+def looks_like_phrase_continuation(text: str) -> bool:
+    """Short same-speaker tail after a real period ("term." + "Than the first one")."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    head = t.split(".", 1)[0].strip() or t
+    if len(head.split()) > 8:
+        return False
+    return bool(_PHRASE_CONT_SHORT.match(t))
+
+
+def _split_thanks_inline(text: str) -> list[str] | None:
+    m = _THANKS_INLINE.search(text)
+    if not m:
+        return None
+    left = text[: m.start()].strip()
+    mid = m.group(1).strip()
+    if mid and not mid.endswith((".", "!", "?")):
+        mid = f"{mid}."
+    right = text[m.end() :].strip()
+    if not left or not right:
+        return None
+    return [left, mid, right]
+
+
+def _split_question_answer(text: str) -> list[str] | None:
+    t = text or ""
+    for m in reversed(list(re.finditer(r"[?？]", t))):
+        left = t[: m.start() + 1].strip()
+        right = t[m.end() :].strip()
+        if not left or not right:
+            continue
+        if _ANSWER_AFTER_Q.match(right):
+            return [left, right]
+    return None
+
+
+def _split_guest_host(text: str) -> list[str] | None:
+    for m in _HOST_FOLLOWUP.finditer(text):
+        if m.start() == 0:
+            continue
+        left = text[: m.start()].strip()
+        right = text[m.start() :].strip()
+        if not left or not right:
+            continue
+        guest_left = bool(_GUEST_STMT_END.search(left)) or (
+            bool(_FIRST_PERSON.search(left)) and not looks_like_question(left)
+        )
+        if guest_left:
+            return [left, right]
+    return None
+
+
+def _split_meeting_turn_once(text: str) -> list[str]:
+    t = (text or "").strip()
+    if not t:
+        return []
+    for splitter in (_split_thanks_inline, _split_guest_host, _split_question_answer):
+        parts = splitter(t)
+        if parts:
+            return parts
+    return [t]
+
+
+def split_meeting_turn(text: str) -> list[str]:
+    """Split one STT final that embeds two speakers before decide / emit (#277)."""
+    parts = _split_meeting_turn_once(text)
+    if len(parts) <= 1:
+        return parts
+    out: list[str] = []
+    for part in parts:
+        out.extend(split_meeting_turn(part))
+    return [p for p in out if p.strip()]
 
 
 def _cross_speaker_continuation(prev_open: dict[str, Any], nxt_text: str) -> bool:
@@ -404,7 +498,20 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
     # Is the previous line truly finished?
     if ends_sentence(ptxt):
         if not false_period(ptxt):
-            return "new", "ends_sentence"
+            if looks_like_answer_start(nxt_text):
+                return "new", "answer"
+            p = prev_open.get("speaker")
+            n = nxt.get("speaker")
+            if p and n and p != n:
+                if not _cross_speaker_continuation(prev_open, nxt_text):
+                    return "new", "ends_sentence"
+            elif looks_like_phrase_continuation(nxt_text):
+                if not p or not n or p == n:
+                    return "extend", "phrase_continuation"
+            elif (not p or not n or p == n) and starts_lower_latin(nxt_text):
+                return "extend", "same_speaker_continuation"
+            else:
+                return "new", "ends_sentence"
         # else a bogus '.' — a continuation is plausible; fall through.
     if looks_like_answer_start(nxt_text):
         return "new", "answer"

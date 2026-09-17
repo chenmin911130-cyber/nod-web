@@ -68,6 +68,7 @@ from server.meeting_lines import (
     gap_ms as meeting_gap_ms,
     join_meeting_text,
     last_sentence_index as meeting_last_sentence_index,
+    split_meeting_turn,
     tail_meta as meeting_tail_meta,
 )
 from server import qa_semantic
@@ -5123,6 +5124,12 @@ class Session:
 
     def _hold_or_emit_meeting(self, cleaned: str, lang: str | None, speaker: str | None = None, meta: dict[str, Any] | None = None) -> None:
         meta = meta or {}
+        inline = split_meeting_turn(cleaned)
+        if len(inline) > 1:
+            for piece in inline:
+                self._hold_or_emit_meeting(piece, lang, speaker, meta)
+            return
+        cleaned = inline[0] if inline else cleaned
         leftover: tuple[str, str | None, str | None, dict[str, Any]] | None = None
         hold_now = False
         emit_update: tuple[str, str, str | None, str | None, int] | None = None
