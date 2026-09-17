@@ -57,8 +57,15 @@ def is_parked(token: str | None) -> bool:
 
 
 def should_park(session: Any) -> bool:
-    return getattr(session, "_listener", None) is not None and bool(
-        getattr(session, "_uplink_connected", False)
+    if getattr(session, "_listener", None) is None:
+        return False
+    # #279: a session whose native uplink ever attached must survive a control drop
+    # even when the audio socket is momentarily gone — the phone reconnects with
+    # ?attach= and the same /ws/audio keeps feeding. Without `_uplink_seen` a
+    # transient uplink loss closed the session, stopped listening and sealed the
+    # open meeting line. Old clients never set either flag, so they still close.
+    return bool(getattr(session, "_uplink_connected", False)) or bool(
+        getattr(session, "_uplink_seen", False)
     )
 
 
@@ -67,10 +74,17 @@ def adopt(token: str | None, user_id: str | None) -> Any | None:
         return None
     with _lock:
         sess = _by_token.get(token)
-        if sess is None or token not in _parked:
+        if sess is None:
             return None
         if getattr(sess, "user_id", None) != user_id:
             return None
+        if getattr(sess, "_closed", False):
+            return None
+        # #279: a reconnect can arrive BEFORE the previous control socket's finally
+        # parks the session. Returning None there minted a second Session with its
+        # own audio_uplink token — the phone opened a second /ws/audio and the two
+        # sessions fought over the STT slot. Adopt the still-live session instead;
+        # the superseded socket is fenced off by `_control_owner`.
         _parked.pop(token, None)
         return sess
 

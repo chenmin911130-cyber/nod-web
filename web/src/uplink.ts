@@ -10,6 +10,30 @@ export function uplinkTokenAfterNativeStart(startOk: boolean, token: string): st
   return startOk ? token : ''
 }
 
+export type UplinkTokenAction = 'ignore' | 'start' | 'replace'
+
+/**
+ * What to do with an `audio_uplink` token from the server (#279).
+ *
+ * A control re-attach used to re-announce the token and the phone stood up a
+ * SECOND `/ws/audio` while the first was still streaming. Exactly one native
+ * uplink socket may exist: the same token (or one already starting) is ignored,
+ * and a genuinely different token replaces the live one (stop, then start) rather
+ * than running two at once.
+ */
+export function uplinkTokenAction(opts: {
+  token: string
+  activeToken: string
+  startingToken: string
+}): UplinkTokenAction {
+  const next = (opts.token || '').trim()
+  if (!next) return 'ignore'
+  if (next === opts.activeToken || next === opts.startingToken) return 'ignore'
+  // A start is already in flight; stacking another would open a second socket.
+  if (opts.startingToken) return 'ignore'
+  return opts.activeToken ? 'replace' : 'start'
+}
+
 /** Reconnect the control WS with `?attach=` so the server can reclaim a parked Session. */
 export function controlWsUrl(base: string, attachToken: string): string {
   if (!attachToken) return base

@@ -30,6 +30,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from starlette.concurrency import run_in_threadpool
+from starlette.websockets import WebSocketState
 
 from server.admin import router as admin_router
 from server.commerce import router as commerce_router
@@ -68,6 +69,7 @@ from server.meeting_lines import (
     gap_ms as meeting_gap_ms,
     join_meeting_text,
     last_sentence_index as meeting_last_sentence_index,
+    segment_meta as meeting_segment_meta,
     split_meeting_turn,
     tail_meta as meeting_tail_meta,
 )
@@ -3138,6 +3140,11 @@ class Session:
         self._engine = "idle"
         self.audio_token = secrets.token_urlsafe(24)
         self._uplink_connected = False
+        # True once a native /ws/audio ever attached. A control drop must keep the
+        # session (and its open line) alive for the reconnecting uplink even if the
+        # audio socket is momentarily gone (#279).
+        self._uplink_seen = False
+        self._control_owner: object | None = None
         self._control_lost_at = 0.0
         self._uplink_lost_at = 0.0
         self._audio_ws = None
@@ -3338,7 +3345,10 @@ class Session:
         self._emit_phase()
         self._emit_watch_session()
         token = getattr(self, "audio_token", None)
-        if token:
+        # #279: an attach must not ask the phone to open a SECOND /ws/audio. While
+        # the native uplink is still connected the existing socket keeps streaming;
+        # only re-announce the token when there is no live uplink to recover with.
+        if token and not getattr(self, "_uplink_connected", False):
             self.emit({"type": "audio_uplink", "token": token})
         # The phone was locked: the native replay holds only the last 24 rows, so
         # the server fills the rest of this copy session on top of it (#219).
@@ -5126,8 +5136,19 @@ class Session:
         meta = meta or {}
         inline = split_meeting_turn(cleaned)
         if len(inline) > 1:
+            # #279: every piece gets its OWN slice of the turn's word clock. Passing
+            # the whole-turn meta down produced negative inter-piece gaps (turn 0
+            # "Thank you." then "you…" read gap_ms=-8416) and drifted decide/split.
+            cursor = 0
             for piece in inline:
-                self._hold_or_emit_meeting(piece, lang, speaker, meta)
+                start = cleaned.find(piece, cursor)
+                if start < 0:
+                    start = cursor
+                end = start + len(piece)
+                self._hold_or_emit_meeting(
+                    piece, lang, speaker, meeting_segment_meta(meta, cleaned, start, end)
+                )
+                cursor = end
             return
         cleaned = inline[0] if inline else cleaned
         leftover: tuple[str, str | None, str | None, dict[str, Any]] | None = None
@@ -7295,6 +7316,11 @@ async def ws_endpoint(ws: WebSocket):
 
     from server.live import attach, detach
 
+    # #279: this socket's identity as the session's control owner. A reconnect that
+    # adopts the same session swaps the owner; the superseded socket must not then
+    # tear the session down in `finally` (that was closing the open meeting line
+    # and flushing an empty session while the phone was still listening).
+    control_owner = object()
     attach_tok = (ws.query_params.get("attach") or "").strip()
     old = uplink.adopt(attach_tok, user.id) if attach_tok and user is not None else None
     if old is not None:
@@ -7304,11 +7330,13 @@ async def ws_endpoint(ws: WebSocket):
         old.emit = old._routed_emit
         old.pipeline.emit = old._routed_emit
         old._control_lost_at = 0.0
+        old._control_owner = control_owner
         attach(old)
         old.reattach()
         session = old
     else:
         session = Session(emit, json.loads(json.dumps(CFG)), dict(KEYS), user.id if user else None)
+        session._control_owner = control_owner
         uplink.register(session)
         attach(session)
         session.start()
@@ -7356,6 +7384,11 @@ async def ws_endpoint(ws: WebSocket):
     finally:
         send_task.cancel()
         ws_disconnect(ip)
+        if getattr(session, "_control_owner", None) is not control_owner:
+            # A newer control socket adopted this session while this one was
+            # closing; it owns the session now, so closing/parking here would kill
+            # a live listen (#279).
+            return
         detach(session)
         if uplink.should_park(session):
             session._control_lost_at = time.time()
@@ -7395,6 +7428,14 @@ async def ws_audio(ws: WebSocket):
         await ws.close(code=4404)
         return
     prev = getattr(session, "_audio_ws", None)
+    if prev is not None and prev is not ws and getattr(prev, "client_state", None) is WebSocketState.CONNECTED:
+        # #279: an attach (or a stale retry) must not stand up a SECOND audio
+        # socket while the first is still streaming — two PCM feeds double the
+        # audio and squeeze the live STT session. Refuse the newcomer; the
+        # existing /ws/audio keeps feeding the session.
+        ws_disconnect(ip)
+        await ws.close(code=4409)
+        return
     await ws.accept()
     if prev is not None and prev is not ws:
         try:
@@ -7404,6 +7445,7 @@ async def ws_audio(ws: WebSocket):
     session._audio_ws = ws
     session._replay_pcm_rejection()
     session._uplink_connected = True
+    session._uplink_seen = True
     session._uplink_lost_at = 0.0
     try:
         while True:

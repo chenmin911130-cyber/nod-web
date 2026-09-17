@@ -21,6 +21,12 @@ from typing import Any
 
 _ENDS_SENTENCE = ("。", "！", "？", ".", "!", "?", "…")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]")
+# A line marked ``closed`` at a sentence end still absorbs a same-speaker
+# continuation this soon after its last word (#279). Turn 16 of the 121 Axios
+# session: the previous final closed the line at a sentence end and the next
+# final arrived 81ms later from the same speaker, which used to come back as
+# ``new/closed`` and fragment one continuous turn.
+_CLOSED_CONTINUATION_MS = 1200.0
 _ASK_TAIL = re.compile(
     r"\b(what|why|how|when|where|who|which)\b[^?.!]*$|"
     r"(吗[.。!！]?$|呢[.。!！]?$|怎么|为什么)",
@@ -375,6 +381,39 @@ def _lower_first_char(text: str) -> str:
     return text[:first] + text[first].lower() + text[first + 1:]
 
 
+def segment_meta(meta: dict[str, Any] | None, text: str, start: int, end: int) -> dict[str, Any]:
+    """Word clock for ONE segment of an inline ``split_meeting_turn`` (#279).
+
+    ``_hold_or_emit_meeting`` used to hand every piece of a multi-speaker final the
+    SAME whole-turn ``meta``. The later pieces then compared the whole turn's
+    ``first_word_ms`` (before the previous piece's last word) against the open line
+    and produced negative gaps (turn 0 of the 121 session: ``gap_ms=-8416``), which
+    drifts the decide / split / role path. Interpolating the turn's ``[first, last]``
+    span onto ``[start, end)`` gives every piece its own monotonic clock, mirroring
+    ``tail_meta`` (which does the same for the §1.1 sentence-end tail).
+
+    ``turn_order`` is kept: unlike the §1.1 tail these pieces stay in the same
+    worker turn and are only traced, never re-enqueued.
+    """
+    meta = dict(meta or {})
+    total = len(text or "")
+    if total <= 0:
+        return meta
+    total_words = meta.get("n_words") or 0
+    meta["n_words"] = round(total_words * max(0, end - start) / total)
+    fw = meta.get("first_word_ms")
+    lw = meta.get("last_word_ms")
+    if fw is None or lw is None or lw < fw:
+        # No usable span: drop the partial clocks so this piece cannot be compared
+        # on a stale whole-turn time (decide falls back to ``no_open`` / ``answer``).
+        meta["first_word_ms"] = None
+        meta["last_word_ms"] = None
+        return meta
+    meta["first_word_ms"] = fw + (lw - fw) * (start / total)
+    meta["last_word_ms"] = fw + (lw - fw) * (end / total)
+    return meta
+
+
 def tail_meta(meta: dict[str, Any] | None, text: str, split_at: int) -> dict[str, Any]:
     """Meta for the NEW line opened from the tail after a 1.1 split (#33).
 
@@ -478,13 +517,37 @@ def gap_ms(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) ->
     return None
 
 
+def _tight_same_speaker_continuation(prev_open: dict[str, Any], nxt: dict[str, Any], now: float) -> bool:
+    """A ``closed`` line still extends when the SAME speaker continues right away (#279).
+
+    The close is set when §1.1 absorbs up to a sentence end; it is a hint, not a
+    wall. AssemblyAI still cuts one speaker's continuous turn into several finals,
+    so a same-speaker final a few hundred ms after the closed line's last word must
+    extend it instead of starting a new row (the 121 turn-16 ``new/closed`` at
+    81ms). A real speaker flip, an answer opener, or a word gap outside the tight
+    window still starts a new line.
+    """
+    p = prev_open.get("speaker")
+    n = nxt.get("speaker")
+    if not p or not n or p != n:
+        return False
+    if looks_like_answer_start(nxt.get("text") or ""):
+        return False
+    gap = gap_ms(prev_open, nxt, now)
+    if gap is None:
+        return False
+    gap_ms_val, _src = gap
+    return 0.0 <= gap_ms_val <= _CLOSED_CONTINUATION_MS
+
+
 def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -> tuple[str, str]:
     """``("extend"|"new", reason)``.
 
     ``reason`` names the rule that made the call (#33 §1.5): ``ends_sentence``,
     ``false_period``, ``date_continuation``, ``gap``, ``speaker``, ``open_age``,
     ``chars``, ``words``, ``split`` (the next turn carries a sentence end to close
-    on), or ``no_open`` / ``closed`` for the trivial new cases, else ``ok``. The
+    on), ``closed_continuation`` (a closed line absorbed a same-speaker follow-up,
+    #279), or ``no_open`` / ``closed`` for the trivial new cases, else ``ok``. The
     caller logs ``split_at`` / ``tail_len`` separately when §1.1 actually splits.
     """
     if not prev_open:
@@ -492,6 +555,8 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
     if _date_continuation(prev_open, nxt, now):
         return "extend", "date_continuation"
     if prev_open.get("closed"):
+        if _tight_same_speaker_continuation(prev_open, nxt, now):
+            return "extend", "closed_continuation"
         return "new", "closed"
     ptxt = prev_open.get("text", "") or ""
     nxt_text = nxt.get("text", "") or ""
