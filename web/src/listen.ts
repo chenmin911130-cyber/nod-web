@@ -423,7 +423,15 @@ const HOST_OPEN = /\b(welcome|thanks for (?:joining|having)|glad you|let'?s talk
 const HOST_CONT = /^(axios likes|and how you think|and so the|and in that|and we wanted|we wanted to make)\b/i
 /** Host follow-up or question to the guest — line may lack a trailing ? (#277). */
 const HOST_FOLLOWUP_START = /^(?:but that'?s because|What are some|What'?s your|How (?:do|would|can|many)\b|You (?:mentioned|have experience|walked)|You saw)\b/i
-const GUEST_MONOLOGUE = /^(I can't|I was|I wasn't|I'm|I think|I feel|I said|I walked)\b/i
+const GUEST_MONOLOGUE = /^(I can't|I was|I wasn't|I'm|I think|I feel|I said|I walked|And (?:then )?I (?:walked|said|saw|told|looked|went))\b/i
+// #281: an acknowledgement glued to the FRONT of the host question
+// ("Yeah. How many of them believe that?"). `splitQuestionAnswer` only looks after
+// a "?", so the "Yeah." before the question mark stayed on the Host line.
+const LEADING_ACK = /^\s*(?:yeah|yep|yup|uh[\s-]?huh|mm[\s-]?hmm|mhm)\s*[.,!]?\s+/i
+const HOST_QUESTION_OPEN = /^(?:how|what|when|where|why|who|which|you mentioned|do you|did you|does|is it|are there|can you|would you|could you)\b/i
+// A conversational tag hanging off the end of a first-person narration
+// ("…it was a very long table, right?"). The tag is not a real question.
+const TAG_QUESTION_TAIL = /[,;:]?\s*(?:right|yeah|yep|huh|okay|ok|correct|you know)\s*\?$/i
 
 /** Host setup addressing the guest (#277 00:30), not guest lines with you're / I feel. */
 function looksLikeHostToGuest(text: string): boolean {
@@ -480,10 +488,22 @@ function splitGuestHost(text: string): string[] | null {
   return null
 }
 
+function splitLeadingAck(text: string): string[] | null {
+  const t = text || ''
+  const m = t.match(LEADING_ACK)
+  if (!m || m.index !== 0) return null
+  const left = t.slice(0, m[0].length).trim()
+  const right = t.slice(m[0].length).trim()
+  if (!left || !right) return null
+  if (!/[?？]$/.test(right)) return null
+  if (!HOST_QUESTION_OPEN.test(right)) return null
+  return [left, right]
+}
+
 function splitMeetingTurnOnce(text: string): string[] {
   const t = (text || '').trim()
   if (!t) return []
-  for (const splitter of [splitThanksInline, splitGuestHost, splitQuestionAnswer]) {
+  for (const splitter of [splitLeadingAck, splitThanksInline, splitGuestHost, splitQuestionAnswer]) {
     const parts = splitter(t)
     if (parts) return parts
   }
@@ -527,6 +547,22 @@ export function looksLikeAnswerStart(text: string): boolean {
   return ANSWER_START.test(t)
 }
 
+/**
+ * #281: first-person narration that only ends in a conversational tag question
+ * ("…it was a very long table, right?") is a Guest line, not a Host question.
+ * The tag is stripped first: if a real question remains
+ * ("I said, what are we doing, right?") the line stays Host.
+ */
+export function looksLikeGuestTagQuestion(text: string): boolean {
+  const t = (text || '').trim()
+  const m = t.match(TAG_QUESTION_TAIL)
+  if (!m || m.index == null || m.index === 0) return false
+  const head = t.slice(0, m.index).trim()
+  if (!head) return false
+  if (looksLikeQuestion(head)) return false
+  return FIRST_PERSON.test(head) || GUEST_MONOLOGUE.test(head)
+}
+
 /** Per-line Host/Guest for meeting & interview — STT id is merge-only (#275). */
 export function inferMeetingLineLabel(text: string, scene: ListenScene): string {
   const roleScene = scene === 'interview' ? 'interview' : 'meeting'
@@ -534,7 +570,12 @@ export function inferMeetingLineLabel(text: string, scene: ListenScene): string 
   const guest = speakerLabel(roleScene, 1)
   const t = (text || '').trim()
   if (!t) return ''
-  if (looksLikeQuestion(t)) return host
+  if (looksLikeQuestion(t)) {
+    // 03:33 G7: an oral tag ("…long table, right?") must not override the
+    // first-person narration it hangs off (#281).
+    if (looksLikeGuestTagQuestion(t)) return guest
+    return host
+  }
   if (looksLikeAnswerStart(t)) return guest
   if (HOST_OPEN.test(t)) return host
   if (HOST_CONT.test(t)) return host
