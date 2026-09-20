@@ -5,7 +5,7 @@ from unittest import mock
 from starlette.testclient import TestClient
 
 from server.mailer import send_otp_email
-from server.otp import consume_otp, issue_otp
+from server.otp import OTP_MAX_ATTEMPTS, consume_otp, issue_otp
 
 
 def _email() -> str:
@@ -114,6 +114,37 @@ class OtpApiTests(unittest.TestCase):
             json={"email": email, "code": code_a, "intent": "signup", "consent": True},
         )
         self.assertEqual(verify.status_code, 200, verify.text)
+
+    def test_resend_after_max_wrong_attempts_issues_fresh_code(self):
+        email = _email()
+        self.client.post(
+            "/api/auth/otp/request",
+            json={"email": email, "intent": "signup", "consent": True},
+        )
+        dead_code = self.sent[0][1]
+        for _ in range(OTP_MAX_ATTEMPTS):
+            bad = self.client.post(
+                "/api/auth/otp/verify",
+                json={"email": email, "code": "000000", "intent": "signup", "consent": True},
+            )
+            self.assertEqual(bad.status_code, 401)
+        resend = self.client.post(
+            "/api/auth/otp/request",
+            json={"email": email, "intent": "signup", "consent": True},
+        )
+        self.assertEqual(resend.status_code, 200, resend.text)
+        fresh_code = self.sent[1][1]
+        self.assertNotEqual(dead_code, fresh_code)
+        ok = self.client.post(
+            "/api/auth/otp/verify",
+            json={"email": email, "code": fresh_code, "intent": "signup", "consent": True},
+        )
+        self.assertEqual(ok.status_code, 200, ok.text)
+        replay_dead = self.client.post(
+            "/api/auth/otp/verify",
+            json={"email": email, "code": dead_code, "intent": "signup", "consent": True},
+        )
+        self.assertEqual(replay_dead.status_code, 401)
 
     def test_resend_mail_failure_keeps_existing_code(self):
         email = _email()

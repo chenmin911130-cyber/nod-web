@@ -28,7 +28,7 @@ def _row_reusable(row: EmailOtp, now: datetime) -> bool:
     expires = _aware(row.expires_at)
     if expires is None or expires < now:
         return False
-    if int(row.attempts or 0) > OTP_MAX_ATTEMPTS:
+    if int(row.attempts or 0) >= OTP_MAX_ATTEMPTS:
         return False
     plain = (getattr(row, "code_plain", None) or "").strip()
     return len(plain) == 6
