@@ -95,6 +95,7 @@ private final class NodAuthSheetController: UIViewController, WKNavigationDelega
         content.addUserScript(WKUserScript(source: Self.watchScript, injectionTime: .atDocumentStart, forMainFrameOnly: false))
 
         let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
         config.userContentController = content
         config.defaultWebpagePreferences.preferredContentMode = .mobile
 
@@ -185,6 +186,7 @@ private final class NodAuthSheetController: UIViewController, WKNavigationDelega
       if (window.__nodAuthWatch) return;
       window.__nodAuthWatch = true;
       try { sessionStorage.setItem('nod_native_return', '1'); } catch (e) {}
+      try { localStorage.removeItem('nod_token'); } catch (e) {}
       function send(token) {
         if (!token) return;
         try { window.webkit.messageHandlers.nodAuth.postMessage({ token: String(token) }); } catch (e) {}
@@ -192,8 +194,7 @@ private final class NodAuthSheetController: UIViewController, WKNavigationDelega
       function read() {
         try { return localStorage.getItem('nod_token') || ''; } catch (e) { return ''; }
       }
-      var seen = read();
-      if (seen) { send(seen); return; }
+      var seen = '';
       setInterval(function () {
         var token = read();
         if (token && token !== seen) { seen = token; send(token); }
