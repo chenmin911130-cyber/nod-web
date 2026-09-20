@@ -52,6 +52,7 @@ class EmailOtp(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     email: Mapped[str] = mapped_column(String(255), index=True)
     code_hash: Mapped[str] = mapped_column(String(64), index=True)
+    code_plain: Mapped[str] = mapped_column(String(6), default="")
     intent: Mapped[str] = mapped_column(String(16), default="login")
     name: Mapped[str] = mapped_column(String(120), default="")
     consent: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -257,6 +258,7 @@ def init_db() -> None:
     _add_column_if_missing("usage_sessions", "discarded_at", "TIMESTAMP")
     _add_column_if_missing("usage_sessions", "title_source", "VARCHAR(16) DEFAULT 'preview'")
     _add_column_if_missing("history_items", "speaker", "VARCHAR(64) DEFAULT ''")
+    _add_column_if_missing("email_otps", "code_plain", "VARCHAR(6) DEFAULT ''")
 
 
 @contextmanager

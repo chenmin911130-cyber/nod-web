@@ -16,8 +16,39 @@ def new_otp_code() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
-def issue_otp(email: str, intent: str, name: str = "", consent: bool = False) -> str:
-    code = new_otp_code()
+def _aware(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _row_reusable(row: EmailOtp, now: datetime) -> bool:
+    expires = _aware(row.expires_at)
+    if expires is None or expires < now:
+        return False
+    if int(row.attempts or 0) > OTP_MAX_ATTEMPTS:
+        return False
+    plain = (getattr(row, "code_plain", None) or "").strip()
+    return len(plain) == 6
+
+
+def reusable_otp_code(email: str) -> str | None:
+    now = utcnow()
+    with db_session() as db:
+        row = (
+            db.query(EmailOtp)
+            .filter(EmailOtp.email == email, EmailOtp.used_at.is_(None))
+            .order_by(EmailOtp.created_at.desc())
+            .first()
+        )
+        if row is None or not _row_reusable(row, now):
+            return None
+        return (row.code_plain or "").strip()
+
+
+def persist_otp(email: str, code: str, intent: str, name: str = "", consent: bool = False) -> None:
     now = utcnow()
     with db_session() as db:
         for row in (
@@ -31,21 +62,23 @@ def issue_otp(email: str, intent: str, name: str = "", consent: bool = False) ->
                 id=new_id(),
                 email=email,
                 code_hash=hash_token(code),
+                code_plain=code,
                 intent=intent if intent in {"login", "signup"} else "login",
                 name=(name or "").strip()[:120],
                 consent=bool(consent),
                 expires_at=now + OTP_TTL,
             )
         )
+
+
+def issue_otp(email: str, intent: str, name: str = "", consent: bool = False) -> str:
+    """Create or reuse an OTP row and return the plaintext code (tests / local dev)."""
+    existing = reusable_otp_code(email)
+    if existing:
+        return existing
+    code = new_otp_code()
+    persist_otp(email, code, intent, name, consent)
     return code
-
-
-def _aware(dt: datetime | None) -> datetime | None:
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
 
 
 def consume_otp(email: str, code: str) -> EmailOtp | None:
@@ -71,6 +104,7 @@ def consume_otp(email: str, code: str) -> EmailOtp | None:
         if not hmac.compare_digest(row.code_hash, offered):
             return None
         row.used_at = now
+        row.code_plain = ""
         db.flush()
         db.expunge(row)
         return row

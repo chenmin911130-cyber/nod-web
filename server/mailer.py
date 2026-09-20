@@ -111,6 +111,24 @@ def send_otp_email(to: str, code: str) -> bool:
     return sent
 
 
+def send_otp_no_account_email(to: str) -> bool:
+    signup = f"{PUBLIC_URL.rstrip('/')}/signup"
+    text = (
+        "This email does not have a Nodpilot account yet.\n\n"
+        f"Create one at {signup}\n\n"
+        "In the Nodpilot app, switch to “Need an account?” to register with email."
+    )
+    html = (
+        "<p>This email does not have a Nodpilot account yet.</p>"
+        f"<p><a href='{html_escape.escape(signup)}'>Create an account at nodpilot.com</a></p>"
+        "<p>In the Nodpilot app, switch to “Need an account?” to register with email.</p>"
+    )
+    sent = send_mail(to, "No Nodpilot account for this email", html, text)
+    if not sent:
+        log.info("no-account email was not sent for %s", to)
+    return sent
+
+
 def send_feedback_copy(to_admin: str, from_email: str, message: str) -> None:
     # Both fields are user supplied and land in an inbox we read.
     safe_email = html_escape.escape(from_email or "")
