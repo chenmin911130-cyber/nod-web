@@ -12,8 +12,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from server.db import AuditLog, Feedback, Order, ResetToken, StripeEvent, UsageSession, User, db_session, utcnow
-from server.mailer import send_otp_email, send_reset_email
-from server.otp import OTP_OK, consume_otp, issue_otp
+from server.mailer import send_otp_email, send_otp_no_account_email, send_reset_email
+from server.otp import OTP_OK, consume_otp, persist_otp, reusable_otp_code, new_otp_code
+from server.ratelimit import client_ip
 from server.meter import delete_history_session, delete_user_data, list_history, list_pending_history, plan_of, session_file_key, session_file_url, usage_snapshot
 from server.security import (
     cookie_kwargs,
@@ -32,6 +33,15 @@ from server.settings import CLERK_PUBLISHABLE_KEY, CONTACT_EMAIL, MAIL_FROM, PLA
 
 log = logging.getLogger("nod.api")
 router = APIRouter()
+
+
+def _mask_email(email: str) -> str:
+    local, _, domain = email.partition("@")
+    if not domain:
+        return "***"
+    if not local:
+        return f"***@{domain}"
+    return f"{local[0]}***@{domain}"
 
 
 def _clerk_js_response(name: str) -> RawResponse:
@@ -229,8 +239,8 @@ def register(
 def otp_request(
     body: OtpRequestIn,
     request: Request,
-    _: None = Depends(rate_limit("otp-request", 4, 600)),
-    __: None = Depends(rate_limit_global("otp-request", 20, 600)),
+    _: None = Depends(rate_limit("otp-request", 6, 600)),
+    __: None = Depends(rate_limit_global("otp-request", 300, 600)),
 ):
     email = body.email.strip().lower()
     intent = "signup" if body.intent == "signup" else "login"
@@ -241,14 +251,31 @@ def otp_request(
     with db_session() as db:
         user = db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
         exists = user is not None
-    should_send = intent == "signup" or exists
-    code = issue_otp(email, intent, body.name, body.consent) if should_send else ""
-    sent = send_otp_email(email, code) if code else False
+    ip = client_ip(request)
+    ua = (request.headers.get("user-agent") or "")[:200]
+
+    if intent == "login" and not exists:
+        sent = send_otp_no_account_email(email)
+        if not sent and not is_local_request(request):
+            raise HTTPException(503, "Could not send the code. Try again shortly.")
+        log.info("otp request email=%s intent=%s ip=%s ua=%s", _mask_email(email), intent, ip, ua)
+        return {"ok": True, "message": OTP_OK}
+
+    reusable = reusable_otp_code(email)
+    if reusable:
+        code = reusable
+        sent = send_otp_email(email, code)
+    else:
+        code = new_otp_code()
+        sent = send_otp_email(email, code)
+        if sent:
+            persist_otp(email, code, intent, body.name, body.consent)
     payload = {"ok": True, "message": OTP_OK}
     if is_local_request(request) and code:
         payload["dev_code"] = code
-    elif should_send and not sent and not is_local_request(request):
+    elif not sent and not is_local_request(request):
         raise HTTPException(503, "Could not send the code. Try again shortly.")
+    log.info("otp request email=%s intent=%s ip=%s ua=%s", _mask_email(email), intent, ip, ua)
     return payload
 
 
@@ -258,7 +285,7 @@ def otp_verify(
     request: Request,
     response: Response,
     _: None = Depends(rate_limit("otp-verify", 8, 600)),
-    __: None = Depends(rate_limit_global("otp-verify", 40, 600)),
+    __: None = Depends(rate_limit_global("otp-verify", 600, 600)),
 ):
     email = body.email.strip().lower()
     if not valid_email(email):

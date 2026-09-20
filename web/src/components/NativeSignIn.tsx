@@ -3,6 +3,11 @@ import { registerPlugin } from '@capacitor/core'
 import { accountDeletedNotice, deleteAccountCopy } from '../accountCopy'
 import { api, setToken } from '../auth'
 import { tokenFromAppUrl } from '../native'
+import {
+  NATIVE_SIGNIN_PRIVACY_URL,
+  NATIVE_SIGNIN_TERMS_URL,
+  nativeSignInCopy,
+} from '../nativeSignInCopy'
 import { SIGN_COVERS, nextSignCover, prevSignCover, signCoverById, type SignCoverId } from '../signCovers'
 
 const NodAuth = registerPlugin<{ google: (opts: { url: string }) => Promise<{ url?: string; token?: string }> }>('NodAuth')
@@ -61,6 +66,16 @@ export default function NativeSignIn({ onSignedIn }: { onSignedIn: () => void })
   }
 
   const activeCover = signCoverById(cover)
+  const copy = nativeSignInCopy(typeof navigator !== 'undefined' ? navigator.language : 'en-US')
+
+  const openLegal = async (url: string) => {
+    try {
+      const { Browser } = await import('@capacitor/browser')
+      await Browser.open({ url })
+    } catch {
+      window.open(url, '_blank', 'noopener,noreferrer')
+    }
+  }
 
   const startGoogle = async () => {
     setBusy(true)
@@ -195,6 +210,23 @@ export default function NativeSignIn({ onSignedIn }: { onSignedIn: () => void })
                 autoComplete="email"
               />
             </label>
+            {mode === 'up' && (
+              <p className="native-sign-legal">
+                {copy.signupLegalLead}{' '}
+                <button type="button" className="native-sign-link" onClick={() => void openLegal(NATIVE_SIGNIN_TERMS_URL)}>
+                  {copy.termsLabel}
+                </button>{' '}
+                {copy.signupLegalJoin}{' '}
+                <button
+                  type="button"
+                  className="native-sign-link"
+                  onClick={() => void openLegal(NATIVE_SIGNIN_PRIVACY_URL)}
+                >
+                  {copy.privacyLabel}
+                </button>
+                .
+              </p>
+            )}
             {err && <div className="native-sign-err">{err}</div>}
             <button className="native-sign-go" type="submit" disabled={busy}>
               {busy ? 'Sending…' : 'Email me a code'}

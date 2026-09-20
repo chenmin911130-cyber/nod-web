@@ -289,6 +289,24 @@ html.nod-phone body {
   color: #8aa0b8;
 }
 
+.native-sign-legal {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(244, 248, 252, 0.72);
+}
+
+.native-sign-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #00d2ff;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .native-sign-card input {
   border: 1px solid rgba(244, 248, 252, 0.12);
   background: #0b1016;

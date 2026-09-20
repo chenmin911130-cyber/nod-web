@@ -5,7 +5,7 @@ from unittest import mock
 from starlette.testclient import TestClient
 
 from server.mailer import send_otp_email
-from server.otp import consume_otp, issue_otp
+from server.otp import OTP_MAX_ATTEMPTS, consume_otp, issue_otp
 
 
 def _email() -> str:
@@ -34,18 +34,28 @@ class MailerOtpTests(unittest.TestCase):
 
 class OtpApiTests(unittest.TestCase):
     def setUp(self):
+        from server import ratelimit
         from server.app import app
 
+        ratelimit._hits.clear()
         self.client = TestClient(app)
         self.sent: list[tuple[str, str]] = []
+        self.no_account: list[str] = []
         self.patcher = mock.patch("server.commerce.send_otp_email", side_effect=self._send)
+        self.patcher2 = mock.patch("server.commerce.send_otp_no_account_email", side_effect=self._no_account)
         self.patcher.start()
+        self.patcher2.start()
 
     def tearDown(self):
+        self.patcher2.stop()
         self.patcher.stop()
 
     def _send(self, to: str, code: str) -> bool:
         self.sent.append((to, code))
+        return True
+
+    def _no_account(self, to: str) -> bool:
+        self.no_account.append(to)
         return True
 
     def test_signup_otp_creates_account(self):
@@ -70,13 +80,111 @@ class OtpApiTests(unittest.TestCase):
         self.assertEqual(body["user"]["sign_in"], "email")
 
     def test_login_unknown_email_does_not_send_or_leak(self):
+        from server.db import EmailOtp, db_session
+
         email = _email()
         req = self.client.post("/api/auth/otp/request", json={"email": email, "intent": "login"})
         self.assertEqual(req.status_code, 200, req.text)
         self.assertEqual(req.json()["message"], "Check your email for a 6-digit code. It expires in 10 minutes.")
         self.assertEqual(self.sent, [])
+        self.assertEqual(self.no_account, [email])
+        with db_session() as db:
+            rows = db.query(EmailOtp).filter(EmailOtp.email == email).count()
+        self.assertEqual(rows, 0)
         verify = self.client.post("/api/auth/otp/verify", json={"email": email, "code": "123456", "intent": "login"})
         self.assertEqual(verify.status_code, 401)
+
+    def test_resend_reuses_same_code(self):
+        email = _email()
+        first = self.client.post(
+            "/api/auth/otp/request",
+            json={"email": email, "intent": "signup", "name": "Ada", "consent": True},
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+        code_a = self.sent[0][1]
+        second = self.client.post(
+            "/api/auth/otp/request",
+            json={"email": email, "intent": "signup", "name": "Ada", "consent": True},
+        )
+        self.assertEqual(second.status_code, 200, second.text)
+        code_b = self.sent[1][1]
+        self.assertEqual(code_a, code_b)
+        verify = self.client.post(
+            "/api/auth/otp/verify",
+            json={"email": email, "code": code_a, "intent": "signup", "consent": True},
+        )
+        self.assertEqual(verify.status_code, 200, verify.text)
+
+    def test_resend_after_max_wrong_attempts_issues_fresh_code(self):
+        email = _email()
+        self.client.post(
+            "/api/auth/otp/request",
+            json={"email": email, "intent": "signup", "consent": True},
+        )
+        dead_code = self.sent[0][1]
+        for _ in range(OTP_MAX_ATTEMPTS):
+            bad = self.client.post(
+                "/api/auth/otp/verify",
+                json={"email": email, "code": "000000", "intent": "signup", "consent": True},
+            )
+            self.assertEqual(bad.status_code, 401)
+        resend = self.client.post(
+            "/api/auth/otp/request",
+            json={"email": email, "intent": "signup", "consent": True},
+        )
+        self.assertEqual(resend.status_code, 200, resend.text)
+        fresh_code = self.sent[1][1]
+        self.assertNotEqual(dead_code, fresh_code)
+        ok = self.client.post(
+            "/api/auth/otp/verify",
+            json={"email": email, "code": fresh_code, "intent": "signup", "consent": True},
+        )
+        self.assertEqual(ok.status_code, 200, ok.text)
+        replay_dead = self.client.post(
+            "/api/auth/otp/verify",
+            json={"email": email, "code": dead_code, "intent": "signup", "consent": True},
+        )
+        self.assertEqual(replay_dead.status_code, 401)
+
+    def test_resend_mail_failure_keeps_existing_code(self):
+        email = _email()
+        self.client.post(
+            "/api/auth/otp/request",
+            json={"email": email, "intent": "signup", "consent": True},
+        )
+        code = self.sent[0][1]
+        with mock.patch("server.commerce.send_otp_email", return_value=False):
+            retry = self.client.post(
+                "/api/auth/otp/request",
+                json={"email": email, "intent": "signup", "consent": True},
+            )
+        self.assertEqual(retry.status_code, 503, retry.text)
+        verify = self.client.post(
+            "/api/auth/otp/verify",
+            json={"email": email, "code": code, "intent": "signup", "consent": True},
+        )
+        self.assertEqual(verify.status_code, 200, verify.text)
+
+    def test_login_unknown_email_rate_limited_per_mailbox(self):
+        email = _email()
+        for _ in range(4):
+            res = self.client.post("/api/auth/otp/request", json={"email": email, "intent": "login"})
+            self.assertEqual(res.status_code, 200, res.text)
+        blocked = self.client.post("/api/auth/otp/request", json={"email": email, "intent": "login"})
+        self.assertEqual(blocked.status_code, 429)
+
+    def test_otp_request_global_limit_allows_burst(self):
+        from server import ratelimit
+
+        ratelimit._hits.clear()
+        for i in range(21):
+            email = f"burst.{i}.{secrets.token_hex(4)}@example.com"
+            res = self.client.post(
+                "/api/auth/otp/request",
+                json={"email": email, "intent": "signup", "consent": True},
+                headers={"x-forwarded-for": f"10.0.0.{i % 250 + 1}"},
+            )
+            self.assertEqual(res.status_code, 200, res.text)
 
     def test_existing_user_can_sign_in_with_otp(self):
         email = _email()
