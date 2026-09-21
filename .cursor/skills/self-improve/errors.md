@@ -2,6 +2,13 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-22 · #289–#297 静态审查写成 PASS
+
+- 我以为：diff 对得上执行单、新测试断言落点正确、PR 描述说测试跑过，就可以写 PASS；`test:golden` 不存在标成 blocked「不阻塞」。
+- 实际：四张单都没有「修复前失败」的证据，模块测试结果只有实现方自述；GitHub Actions 自 2026-09-10 起在 repo 级关闭（付费），之后 70 个合并零 CI，`AGENTS.md` 里「核 CI」这步既没做、做了也是空。#289 + #290 都动了 `project.pbxproj`，合并后没人跑过 `check:ios`。真实结论只是「静态审查通过」。
+- 规则：没看到修复前失败 / 修复后通过的原样输出，结论最高写「静态审查通过」，不写 PASS；单里要求的命令仓库里不存在，是写单的错，回头改单，不许放行。一批并行单合完，在 merged main 干净 worktree 跑固定集成命令再关单。
+- 涉及：`docs/agents/ticket-template.md` 验收结论定义 · `AGENTS.md` 分工 · #289 #290 #296 #297
+
 ## 2026-09-14 · #232 锁屏 Watch Save 等打开手机
 
 - 我以为：原生 `URLSession.shared` POST keep 已经不依赖 WKWebView，锁屏后台也能完成，Watch 会收到 `saved`。
