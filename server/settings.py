@@ -64,6 +64,8 @@ TOKEN_DAYS = 14
 
 CLERK_PUBLISHABLE_KEY = (os.environ.get("CLERK_PUBLISHABLE_KEY") or "").strip()
 CLERK_SECRET_KEY = (os.environ.get("CLERK_SECRET_KEY") or "").strip()
+APPLE_BUNDLE_ID = (os.environ.get("APPLE_BUNDLE_ID") or "com.nodpilot.app").strip()
+APPLE_JWKS_URL = (os.environ.get("APPLE_JWKS_URL") or "https://appleid.apple.com/auth/keys").strip()
 
 STRIPE_SECRET_KEY = (os.environ.get("STRIPE_SECRET_KEY") or "").strip()
 STRIPE_WEBHOOK_SECRET = (os.environ.get("STRIPE_WEBHOOK_SECRET") or "").strip()

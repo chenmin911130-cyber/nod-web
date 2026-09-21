@@ -20,7 +20,10 @@ let package = Package(
                 .product(name: "Capacitor", package: "capacitor-swift-pm"),
                 .product(name: "Cordova", package: "capacitor-swift-pm")
             ],
-            path: "ios/Sources/NodAuthPlugin"
+            path: "ios/Sources/NodAuthPlugin",
+            linkerSettings: [
+                .linkedFramework("AuthenticationServices"),
+            ]
         )
     ]
 )

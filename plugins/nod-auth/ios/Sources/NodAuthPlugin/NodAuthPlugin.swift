@@ -1,4 +1,6 @@
+import AuthenticationServices
 import Capacitor
+import CryptoKit
 import UIKit
 import WebKit
 
@@ -8,7 +10,36 @@ public class NodAuthPlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "NodAuth"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "google", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "apple", returnType: CAPPluginReturnPromise),
     ]
+
+    private var appleBridge: AppleAuthBridge?
+
+    @objc func apple(_ call: CAPPluginCall) {
+        guard let nonce = call.getString("nonce"), !nonce.isEmpty else {
+            call.reject("Missing nonce")
+            return
+        }
+        DispatchQueue.main.async {
+            guard let host = self.bridge?.viewController else {
+                call.reject("Could not start Apple sign-in")
+                return
+            }
+            let bridge = AppleAuthBridge(host: host, nonce: nonce) { [weak self] result in
+                self?.appleBridge = nil
+                switch result {
+                case .success(let payload):
+                    call.resolve(payload)
+                case .canceled:
+                    call.reject("canceled")
+                case .failed(let message):
+                    call.reject(message)
+                }
+            }
+            self.appleBridge = bridge
+            bridge.start()
+        }
+    }
 
     @objc func google(_ call: CAPPluginCall) {
         let raw = call.getString("url") ?? "https://nodpilot.com/login?native_return=1"
@@ -48,6 +79,84 @@ private enum NodAuthResult {
     case token(String)
     case canceled
     case failed(String)
+}
+
+private enum AppleAuthOutcome {
+    case success([String: Any])
+    case canceled
+    case failed(String)
+}
+
+private final class AppleAuthBridge: NSObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+    private weak var host: UIViewController?
+    private let rawNonce: String
+    private let finish: (AppleAuthOutcome) -> Void
+
+    init(host: UIViewController, nonce: String, finish: @escaping (AppleAuthOutcome) -> Void) {
+        self.host = host
+        self.rawNonce = nonce
+        self.finish = finish
+        super.init()
+    }
+
+    func start() {
+        let provider = ASAuthorizationAppleIDProvider()
+        let request = provider.createRequest()
+        request.requestedScopes = [.fullName, .email]
+        request.nonce = Self.sha256(rawNonce)
+        let controller = ASAuthorizationController(authorizationRequests: [request])
+        controller.delegate = self
+        controller.presentationContextProvider = self
+        controller.performRequests()
+    }
+
+    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        host?.view.window ?? UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }
+            .first ?? ASPresentationAnchor()
+    }
+
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
+        guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+            finish(.failed("Apple sign-in failed"))
+            return
+        }
+        guard let tokenData = credential.identityToken, let identityToken = String(data: tokenData, encoding: .utf8), !identityToken.isEmpty else {
+            finish(.failed("Apple sign-in failed"))
+            return
+        }
+        var payload: [String: Any] = [
+            "identityToken": identityToken,
+            "user": credential.user,
+        ]
+        if let codeData = credential.authorizationCode, let code = String(data: codeData, encoding: .utf8), !code.isEmpty {
+            payload["authorizationCode"] = code
+        }
+        if let email = credential.email, !email.isEmpty {
+            payload["email"] = email
+        }
+        if let given = credential.fullName?.givenName, !given.isEmpty {
+            payload["givenName"] = given
+        }
+        if let family = credential.fullName?.familyName, !family.isEmpty {
+            payload["familyName"] = family
+        }
+        finish(.success(payload))
+    }
+
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+        let ns = error as NSError
+        if ns.domain == ASAuthorizationError.errorDomain, ns.code == ASAuthorizationError.canceled.rawValue {
+            finish(.canceled)
+            return
+        }
+        finish(.failed(error.localizedDescription))
+    }
+
+    private static func sha256(_ input: String) -> String {
+        let digest = SHA256.hash(data: Data(input.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 private final class WeakScriptHandler: NSObject, WKScriptMessageHandler {

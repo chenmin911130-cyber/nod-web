@@ -109,6 +109,12 @@ class ClerkIn(BaseModel):
     token: str = ""
 
 
+class AppleIn(BaseModel):
+    identity_token: str = ""
+    nonce: str = ""
+    name: str = ""
+
+
 class FeedbackIn(BaseModel):
     email: str = ""
     message: str = Field(min_length=4, max_length=4000)
@@ -122,6 +128,14 @@ class HistoryKeepIn(BaseModel):
 class TtsIn(BaseModel):
     text: str = Field(min_length=1, max_length=800)
     voice: str = "female"
+
+
+def _sign_in_provider(user: User) -> str:
+    if (getattr(user, "apple_sub", None) or "").strip():
+        return "apple"
+    if (user.clerk_id or "").strip():
+        return "google"
+    return "email"
 
 
 def _public_user(user: User) -> dict[str, Any]:
@@ -140,7 +154,7 @@ def _public_user(user: User) -> dict[str, Any]:
         "plans": list(PLANS.values()),
         "stripe_enabled": bool(STRIPE_SECRET_KEY and STRIPE_PRICE_PRO),
         "quota_disabled": bool(snap.get("quota_disabled")),
-        "sign_in": "google" if user.clerk_id else "email",
+        "sign_in": _sign_in_provider(user),
     }
 
 
@@ -398,6 +412,77 @@ def clerk_login(
         db.expunge(user)
     nod_token = _set_session(response, request, user)
     log.info("clerk login user=%s clerk=%s", user.id, clerk_id)
+    return {"ok": True, "token": nod_token, "user": _public_user(user)}
+
+
+@router.post("/api/auth/apple")
+def apple_login(
+    body: AppleIn,
+    request: Request,
+    response: Response,
+    _: None = Depends(rate_limit("apple", 20, 60)),
+):
+    from server.apple_auth import apple_email_verified, apple_name_from_parts, verify_apple_identity_token
+
+    payload = verify_apple_identity_token(body.identity_token, body.nonce)
+    apple_sub = str(payload.get("sub") or "").strip()
+    if not apple_sub:
+        raise HTTPException(401, "Apple sign-in failed")
+    email = ""
+    if apple_email_verified(payload):
+        email = str(payload.get("email") or "").strip().lower()
+    name = (body.name or "").strip() or apple_name_from_parts(
+        str(payload.get("given_name") or ""),
+        str(payload.get("family_name") or ""),
+    )
+    with db_session() as db:
+        user = db.query(User).filter(User.apple_sub == apple_sub, User.deleted_at.is_(None)).first()
+        if user is None and email:
+            user = db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
+        if user is None:
+            if not email:
+                raise HTTPException(401, "Apple sign-in failed")
+            user = User(
+                id=new_id(),
+                email=email,
+                password_hash="",
+                apple_sub=apple_sub,
+                name=name,
+                plan="free",
+                subscription_status="trialing",
+                recording_consent_at=None,
+            )
+            db.add(user)
+            try:
+                db.flush()
+            except IntegrityError:
+                db.rollback()
+                tomb = db.query(User).filter(User.email == email, User.deleted_at.is_not(None)).first()
+                if tomb is None:
+                    raise HTTPException(409, "That email is already registered") from None
+                tomb.email = f"deleted+{tomb.id}@nodpilot.invalid"
+                db.flush()
+                user = User(
+                    id=new_id(),
+                    email=email,
+                    password_hash="",
+                    apple_sub=apple_sub,
+                    name=name,
+                    plan="free",
+                    subscription_status="trialing",
+                    recording_consent_at=None,
+                )
+                db.add(user)
+                db.flush()
+        else:
+            if not (user.apple_sub or "").strip():
+                user.apple_sub = apple_sub
+            if name and not (user.name or "").strip():
+                user.name = name
+        db.flush()
+        db.expunge(user)
+    nod_token = _set_session(response, request, user)
+    log.info("apple login user=%s sub=%s", user.id, apple_sub)
     return {"ok": True, "token": nod_token, "user": _public_user(user)}
 
 
