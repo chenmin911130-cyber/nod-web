@@ -22,8 +22,8 @@ if (NATIVE_APPLE_SIGN_IN_LABEL !== 'Sign in with Apple') {
 if (appleSignInError({ message: 'canceled' }) !== 'Apple sign-in was canceled') {
   throw new Error('Apple canceled mapping')
 }
-if (appleSignInError({ message: 'boom' }) !== 'boom') {
-  throw new Error('Apple error passthrough')
+if (appleSignInError({ message: 'boom' }) !== 'Apple sign-in failed') {
+  throw new Error('Apple error must not leak native message')
 }
 if (appleSignInError({}) !== 'Apple sign-in failed') {
   throw new Error('Apple default error')

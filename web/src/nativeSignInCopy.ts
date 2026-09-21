@@ -7,7 +7,7 @@ export function appleSignInError(ex: unknown): string {
   const err = ex as { message?: string }
   const message = err?.message || ''
   if (/canceled/i.test(message)) return 'Apple sign-in was canceled'
-  return message || 'Apple sign-in failed'
+  return 'Apple sign-in failed'
 }
 
 export type NativeSignInCopy = {

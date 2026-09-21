@@ -431,7 +431,7 @@ def apple_login(
     email = ""
     if apple_email_verified(payload):
         email = str(payload.get("email") or "").strip().lower()
-    name = (body.name or "").strip() or apple_name_from_parts(
+    name = (body.name or "").strip()[:120] or apple_name_from_parts(
         str(payload.get("given_name") or ""),
         str(payload.get("family_name") or ""),
     )
