@@ -1,6 +1,7 @@
 FROM node:20-alpine AS frontend
 WORKDIR /src
 COPY plugins/nod-mic ./plugins/nod-mic
+COPY plugins/nod-auth ./plugins/nod-auth
 COPY web/package.json web/package-lock.json ./web/
 WORKDIR /src/web
 RUN npm ci
