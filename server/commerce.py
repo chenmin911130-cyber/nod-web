@@ -742,6 +742,45 @@ def portal(user: User = Depends(current_user)):
     return {"ok": True, "url": session.url}
 
 
+def _stripe_apply_event(db, etype: str | None, data: dict) -> None:
+    if etype in ("checkout.session.completed", "customer.subscription.updated", "customer.subscription.created"):
+        meta = data.get("metadata") or {}
+        user_id = meta.get("nod_user") or data.get("client_reference_id")
+        sub_id = (
+            data.get("subscription")
+            if isinstance(data.get("subscription"), str)
+            else (data.get("id") if (etype or "").startswith("customer.subscription") else "")
+        )
+        status = data.get("status") or "active"
+        customer = data.get("customer") if isinstance(data.get("customer"), str) else ""
+        user = db.get(User, user_id) if user_id else None
+        if user is None and customer:
+            user = db.query(User).filter(User.stripe_customer_id == customer).first()
+        if user:
+            user.plan = "pro"
+            user.subscription_status = "active" if status in ("active", "trialing") else status
+            if customer:
+                user.stripe_customer_id = customer
+            if sub_id:
+                user.stripe_subscription_id = sub_id
+        oid = meta.get("order_id")
+        if oid:
+            order = db.get(Order, oid)
+            if order:
+                order.status = "paid"
+                order.paid_at = utcnow()
+                order.stripe_payment_intent = str(data.get("payment_intent") or "")
+    elif etype in ("customer.subscription.deleted", "invoice.payment_failed"):
+        customer = data.get("customer") if isinstance(data.get("customer"), str) else ""
+        user = db.query(User).filter(User.stripe_customer_id == customer).first()
+        if user:
+            if etype.endswith("deleted"):
+                user.plan = "free"
+                user.subscription_status = "canceled"
+            else:
+                user.subscription_status = "past_due"
+
+
 @router.post("/api/billing/webhook")
 async def stripe_webhook(request: Request):
     if not STRIPE_SECRET_KEY or not STRIPE_WEBHOOK_SECRET:
@@ -755,49 +794,24 @@ async def stripe_webhook(request: Request):
     except Exception as e:
         raise HTTPException(400, f"Invalid webhook: {e}")
     eid = str(event.get("id") or "")
-    if eid:
-        try:
-            with db_session() as db:
-                db.add(StripeEvent(id=eid, at=utcnow()))
-                db.flush()
-        except IntegrityError:
-            return {"ok": True}
     etype = event.get("type")
     data = event.get("data", {}).get("object", {})
-    if etype in ("checkout.session.completed", "customer.subscription.updated", "customer.subscription.created"):
-        meta = data.get("metadata") or {}
-        user_id = meta.get("nod_user") or data.get("client_reference_id")
-        sub_id = data.get("subscription") if isinstance(data.get("subscription"), str) else (data.get("id") if etype.startswith("customer.subscription") else "")
-        status = data.get("status") or "active"
-        customer = data.get("customer") if isinstance(data.get("customer"), str) else ""
+    try:
         with db_session() as db:
-            user = db.get(User, user_id) if user_id else None
-            if user is None and customer:
-                user = db.query(User).filter(User.stripe_customer_id == customer).first()
-            if user:
-                user.plan = "pro"
-                user.subscription_status = "active" if status in ("active", "trialing") else status
-                if customer:
-                    user.stripe_customer_id = customer
-                if sub_id:
-                    user.stripe_subscription_id = sub_id
-            oid = meta.get("order_id")
-            if oid:
-                order = db.get(Order, oid)
-                if order:
-                    order.status = "paid"
-                    order.paid_at = utcnow()
-                    order.stripe_payment_intent = str(data.get("payment_intent") or "")
-    elif etype in ("customer.subscription.deleted", "invoice.payment_failed"):
-        customer = data.get("customer") if isinstance(data.get("customer"), str) else ""
-        with db_session() as db:
-            user = db.query(User).filter(User.stripe_customer_id == customer).first()
-            if user:
-                if etype.endswith("deleted"):
-                    user.plan = "free"
-                    user.subscription_status = "canceled"
-                else:
-                    user.subscription_status = "past_due"
+            if eid:
+                db.add(StripeEvent(id=eid, at=utcnow()))
+                try:
+                    db.flush()
+                except IntegrityError:
+                    db.rollback()
+                    if db.query(StripeEvent).filter(StripeEvent.id == eid).first():
+                        return {"ok": True}
+                    raise HTTPException(503, "Webhook storage conflict") from None
+            _stripe_apply_event(db, etype, data)
+    except HTTPException:
+        raise
+    except IntegrityError as exc:
+        raise HTTPException(503, "Webhook database conflict") from exc
     return {"ok": True}
 
 
