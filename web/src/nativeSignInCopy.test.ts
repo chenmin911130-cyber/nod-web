@@ -1,6 +1,8 @@
 import {
+  NATIVE_APPLE_SIGN_IN_LABEL,
   NATIVE_SIGNIN_PRIVACY_URL,
   NATIVE_SIGNIN_TERMS_URL,
+  appleSignInError,
   nativeSignInCopy,
 } from './nativeSignInCopy'
 
@@ -12,6 +14,19 @@ if (NATIVE_SIGNIN_TERMS_URL !== 'https://nodpilot.com/terms') {
 }
 if (NATIVE_SIGNIN_PRIVACY_URL !== 'https://nodpilot.com/privacy') {
   throw new Error('native sign-in Privacy URL must point at nodpilot.com/privacy')
+}
+
+if (NATIVE_APPLE_SIGN_IN_LABEL !== 'Sign in with Apple') {
+  throw new Error('Apple sign-in label must stay Sign in with Apple')
+}
+if (appleSignInError({ message: 'canceled' }) !== 'Apple sign-in was canceled') {
+  throw new Error('Apple canceled mapping')
+}
+if (appleSignInError({ message: 'boom' }) !== 'Apple sign-in failed') {
+  throw new Error('Apple error must not leak native message')
+}
+if (appleSignInError({}) !== 'Apple sign-in failed') {
+  throw new Error('Apple default error')
 }
 
 console.log('nativeSignInCopy.test.ts ok')

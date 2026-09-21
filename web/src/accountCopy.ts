@@ -42,7 +42,9 @@ export function accountInitials(name: string, email: string): string {
 }
 
 export function signInLine(signIn: string | undefined): string {
-  return signIn === 'google' ? IPHONE_COPY.accountSignedInGoogle : IPHONE_COPY.accountSignedInEmail
+  if (signIn === 'apple') return IPHONE_COPY.accountSignedInApple
+  if (signIn === 'google') return IPHONE_COPY.accountSignedInGoogle
+  return IPHONE_COPY.accountSignedInEmail
 }
 
 export function listeningLeftLine(usage: {

@@ -74,6 +74,7 @@ A locked or unreadable device is recorded as `unverified`, never as success. Add
 ## Run on a phone + Watch
 
 1. In Xcode, select the **App** target → **Signing & Capabilities**. Choose your Team. Do the same for **WatchApp**.
+   In [Apple Developer](https://developer.apple.com/account/resources/identifiers/list) → Identifiers → `com.nodpilot.app`, enable **Sign in with Apple**. Xcode should show the same capability on the App target after you pull `App/App.entitlements`.
 2. Plug in an iPhone that is paired with an Apple Watch (watchOS 9+). Run the **App** scheme — the Watch app is embedded and installs with it.
 3. Open Nod on the iPhone once and sign in. Confirm the first microphone consent on the phone (same copy as the website).
 4. On the Watch, allow **Microphone**, then tap **Listen**. The Watch captures audio. If the iPhone is nearby, PCM streams over and live captions appear in the phone app. If the phone is out of range, the Watch keeps recording and flushes the leftover audio when you tap Stop. After **Stop**, the session is saved to History and Nod writes the meeting or lecture report on the iPhone. Unlock the phone and open Nod — the Notes tab is already showing the report, including after the app was killed. This is not email or iMessage.

@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState, type FormEvent, type TouchEvent } from 'react'
-import { registerPlugin } from '@capacitor/core'
+import { Capacitor } from '@capacitor/core'
+import { NodAuth } from 'nod-auth'
 import { accountDeletedNotice, deleteAccountCopy } from '../accountCopy'
 import { api, setToken } from '../auth'
 import { tokenFromAppUrl } from '../native'
 import {
+  NATIVE_APPLE_SIGN_IN_LABEL,
   NATIVE_SIGNIN_PRIVACY_URL,
   NATIVE_SIGNIN_TERMS_URL,
+  appleSignInError,
   nativeSignInCopy,
 } from '../nativeSignInCopy'
 import { SIGN_COVERS, nextSignCover, prevSignCover, signCoverById, type SignCoverId } from '../signCovers'
 
-const NodAuth = registerPlugin<{ google: (opts: { url: string }) => Promise<{ url?: string; token?: string }> }>('NodAuth')
+const showAppleSignIn = Capacitor.getPlatform() === 'ios'
 
 function googleError(ex: unknown): string {
   const err = ex as { message?: string; code?: string }
@@ -74,6 +77,30 @@ export default function NativeSignIn({ onSignedIn }: { onSignedIn: () => void })
       await Browser.open({ url })
     } catch {
       window.open(url, '_blank', 'noopener,noreferrer')
+    }
+  }
+
+  const startApple = async () => {
+    setBusy(true)
+    setErr('')
+    try {
+      const nonce = crypto.randomUUID()
+      const result = await NodAuth.apple({ nonce })
+      const displayName = [result.givenName, result.familyName].filter(Boolean).join(' ').trim()
+      const out = await api<{ token: string }>('/api/auth/apple', {
+        method: 'POST',
+        body: JSON.stringify({
+          identity_token: result.identityToken,
+          nonce,
+          name: displayName,
+        }),
+      })
+      setToken(out.token)
+      onSignedIn()
+    } catch (ex) {
+      setErr(appleSignInError(ex))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -182,6 +209,17 @@ export default function NativeSignIn({ onSignedIn }: { onSignedIn: () => void })
               ? 'Sign in with Google or an email code.'
               : 'Create an account with Google or an email code.'}
         </p>
+        {showAppleSignIn ? (
+          <button
+            className="native-sign-apple"
+            type="button"
+            disabled={busy}
+            onClick={() => void startApple()}
+          >
+            <AppleMark />
+            {NATIVE_APPLE_SIGN_IN_LABEL}
+          </button>
+        ) : null}
         <button
           className="native-sign-google"
           type="button"
@@ -270,6 +308,17 @@ export default function NativeSignIn({ onSignedIn }: { onSignedIn: () => void })
         </button>
       </div>
     </div>
+  )
+}
+
+function AppleMark() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M16.365 12.15c-.02-2.14 1.75-3.17 1.83-3.22-1-.14-1.98-.6-2.53-1.22-.57-.63-.88-1.45-.86-2.32-.02-1.24.72-2.39 1.84-2.96 1.54-.8 3.8-.3 4.75 1.16-1.35.82-1.08 2.94.27 3.54-.22.68-.52 1.35-.9 1.98-1.02 1.58-2.12 3.14-3.42 3.14-.65 0-1.05-.38-1.95-.38-.94 0-1.24.39-1.98.39-1.28.02-2.45-1.56-3.45-3.14ZM13.2 3.38c.7-.85 1.17-2.03 1.04-3.21-1 .04-2.21.67-2.93 1.52-.65.75-1.22 1.96-1.07 3.11 1.13.09 2.28-.58 2.96-1.42Z"
+      />
+    </svg>
   )
 }
 

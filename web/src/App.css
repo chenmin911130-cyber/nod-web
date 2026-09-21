@@ -255,19 +255,30 @@ html.nod-phone body {
   color: #8aa0b8;
 }
 
+.native-sign-apple,
 .native-sign-google {
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  border: 1px solid rgba(244, 248, 252, 0.16);
-  background: #10161d;
-  color: #f4f8fc;
   border-radius: 12px;
   padding: 13px 14px;
   font-size: 16px;
   font-weight: 600;
+}
+
+.native-sign-apple {
+  margin-bottom: 10px;
+  border: none;
+  background: #000;
+  color: #fff;
+}
+
+.native-sign-google {
+  border: 1px solid rgba(244, 248, 252, 0.16);
+  background: #10161d;
+  color: #f4f8fc;
 }
 
 .native-sign-or {

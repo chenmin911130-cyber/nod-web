@@ -41,7 +41,7 @@ export type Me = {
   }>
   stripe_enabled: boolean
   quota_disabled?: boolean
-  sign_in?: 'google' | 'email'
+  sign_in?: 'apple' | 'google' | 'email'
 }
 
 import { apiUrl, isNativeApp } from './native'
