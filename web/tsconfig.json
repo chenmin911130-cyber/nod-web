@@ -15,6 +15,7 @@
     "types": ["vite/client"],
     "baseUrl": ".",
     "paths": {
+      "nod-auth": ["./src/nod-auth.d.ts"],
       "nod-mic": ["./src/nod-mic.d.ts"]
     }
   },
