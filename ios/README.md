@@ -4,6 +4,8 @@ The iPhone app is the existing web workspace in a WKWebView, plus a native micro
 
 Xcode only runs on a Mac. This Linux/cloud checkout prepares the project; you compile the IPA on that Mac.
 
+App Store icons must not carry an alpha channel (`sips -g hasAlpha` on the 1024×1024 PNGs must report `no`). If you add or change Required Reason API usage (`UserDefaults`, file timestamps, etc.), update the matching `PrivacyInfo.xcprivacy` in the App, WatchApp, or local Pod that calls it.
+
 ## Package on a Mac (this is the iOS build)
 
 1. Install **Xcode** from the App Store. Open it once and accept the license.
