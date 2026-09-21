@@ -197,6 +197,7 @@ def _ensure_local_user() -> User:
             db.flush()
         elif user.recording_consent_at is None:
             user.recording_consent_at = utcnow()
+        db.flush()
         db.expunge(user)
         return user
 
@@ -409,6 +410,7 @@ def clerk_login(
                 user.clerk_id = clerk_id
             if name and not user.name:
                 user.name = name
+        db.flush()
         db.expunge(user)
     nod_token = _set_session(response, request, user)
     log.info("clerk login user=%s clerk=%s", user.id, clerk_id)
@@ -517,16 +519,20 @@ def reset(
 ):
     if len(body.password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters")
+    from server.otp import _aware
+
     th = hash_token(body.token.strip())
     with db_session() as db:
         row = db.query(ResetToken).filter(ResetToken.token_hash == th).first()
-        if row is None or row.used_at is not None or row.expires_at < utcnow():
+        expires = _aware(row.expires_at) if row else None
+        if row is None or row.used_at is not None or expires is None or expires < utcnow():
             raise HTTPException(400, "This reset link is invalid or expired")
         user = db.get(User, row.user_id)
         if user is None or user.deleted_at is not None:
             raise HTTPException(400, "This reset link is invalid or expired")
         user.password_hash = hash_password(body.password)
         row.used_at = utcnow()
+        db.flush()
         db.expunge(user)
     token = _set_session(response, request, user)
     return {"ok": True, "token": token, "user": _public_user(user)}
