@@ -10,7 +10,7 @@
 
 固定写法，按实际填空：
 
-> 交 <实现代理>。从执行时最新 `origin/main` 开隔离 worktree `.worktrees/<issue-id>/`，不要用当前脏工作区。独立 PR，不合并、不部署、不装机、不 `cap:sync`、不 bump bundle。不与 #<其他单> 混进同一个 PR。
+> 交 <Grok | Composer>（二者规则相同，见 `AGENTS.md` 分工）。从执行时最新 `origin/main` 开隔离 worktree `.worktrees/<issue-id>/`，不要用当前脏工作区。独立 PR，不合并、不部署、不装机、不 `cap:sync`、不 bump bundle。不与 #<其他单> 混进同一个 PR。
 
 ## 1. 触发条件与期望行为
 
