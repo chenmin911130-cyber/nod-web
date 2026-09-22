@@ -6,7 +6,7 @@ import threading
 import time
 from typing import Any
 
-from server.settings import UPLINK_ORPHAN_SECONDS
+from server.settings import LISTEN_OFFLINE_GRACE_SECONDS, UPLINK_ORPHAN_SECONDS
 
 _lock = threading.Lock()
 _by_token: dict[str, Any] = {}
@@ -105,7 +105,9 @@ def reap(now: float) -> None:
                 to_close.append((token, sess))
             elif now - lost >= UPLINK_ORPHAN_SECONDS:
                 to_close.append((token, sess))
-            elif (not uplink_on) and uplink_lost and now - uplink_lost >= UPLINK_DROP_REAP_SECONDS:
+            elif (not uplink_on) and uplink_lost and now - uplink_lost >= max(
+                UPLINK_DROP_REAP_SECONDS, float(LISTEN_OFFLINE_GRACE_SECONDS)
+            ):
                 to_close.append((token, sess))
             elif (not uplink_on) and (not uplink_lost) and now - lost >= UPLINK_DROP_REAP_SECONDS:
                 to_close.append((token, sess))

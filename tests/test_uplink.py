@@ -103,6 +103,9 @@ class ParkKeepTests(unittest.TestCase):
         self.assertIsNone(uplink.get(sess.audio_token))
 
     def test_control_and_uplink_drop_reaps_after_60s(self) -> None:
+        """A live listener survives the old 60s drop until offline grace (#301)."""
+        from server.settings import LISTEN_OFFLINE_GRACE_SECONDS
+
         sess = _session()
         sess._listener = object()
         sess._uplink_connected = False
@@ -110,6 +113,13 @@ class ParkKeepTests(unittest.TestCase):
         sess._uplink_lost_at = time.time() - 61
         uplink.register(sess)
         uplink.park(sess)
+        uplink.reap(time.time())
+        sess.close.assert_not_called()
+        self.assertIs(uplink.get(sess.audio_token), sess)
+
+        past = time.time() - LISTEN_OFFLINE_GRACE_SECONDS - 1
+        sess._control_lost_at = past
+        sess._uplink_lost_at = past
         uplink.reap(time.time())
         sess.close.assert_called_once()
         self.assertIsNone(uplink.get(sess.audio_token))
