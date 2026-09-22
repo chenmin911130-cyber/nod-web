@@ -95,6 +95,7 @@ from server.settings import (
     COOKIE_NAME,
     LISTEN_IDLE_SECONDS,
     LISTEN_MAX_SECONDS,
+    LISTEN_OFFLINE_GRACE_SECONDS,
     LISTEN_ZERO_PCM_SECONDS,
     LISTEN_ZERO_PCM_WATCH_SECONDS,
     PUBLIC_URL,
@@ -3147,6 +3148,9 @@ class Session:
         self._control_owner: object | None = None
         self._control_lost_at = 0.0
         self._uplink_lost_at = 0.0
+        # Last offline-stop status + save offer that a parked control socket
+        # could not receive. Flushed once on the next start/reattach (#301).
+        self._offline_notice: dict | None = None
         self._audio_ws = None
         self._closed = False
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -3329,6 +3333,7 @@ class Session:
         token = getattr(self, "audio_token", None)
         if token:
             self.emit({"type": "audio_uplink", "token": token})
+        self._flush_offline_notice()
 
     def _emit_watch_session(self) -> None:
         """Tell the phone which Watch copy session is current (see `_watch_copy_reset`)."""
@@ -3370,6 +3375,23 @@ class Session:
             self.emit({"type": "error", "text": "Recording buffer full — audio may be incomplete."})
 
         self._replay_pcm_rejection()
+        self._flush_offline_notice()
+
+    def _flush_offline_notice(self) -> None:
+        """Deliver the offline-stop notice a parked phone could not receive.
+
+        Only the status and save offer from ``_abandon_forgotten_listen`` are
+        held. Anything else emitted while parked stays dropped.
+        """
+        notice = getattr(self, "_offline_notice", None)
+        if not isinstance(notice, dict):
+            return
+        self._offline_notice = None
+        text = str(notice.get("status") or "")
+        if text:
+            self.emit({"type": "status", "text": text})
+        if notice.get("save_prompt"):
+            self._offer_save_history()
 
     def _replay_pcm_rejection(self) -> None:
         event = getattr(self, "_pcm_reject_result", None)
@@ -6357,6 +6379,10 @@ class Session:
     def _maybe_stop_forgotten_listen(self) -> None:
         if not self._listener:
             return
+        # A manual pause already tore the listener down; if both flags are set,
+        # leave the pause in charge instead of stopping from this watchdog.
+        if getattr(self, "_paused", False):
+            return
         now = time.time()
         if now - self._idle_check_at < 5:
             return
@@ -6364,11 +6390,9 @@ class Session:
         started = self._listen_started_at or now
         last = self._last_voice_at or started
         if getattr(self, "_listen_accum_sec", 0.0) + (now - started) >= LISTEN_MAX_SECONDS:
-            self._paused = False
-            self._listen_wanted = False
-            self._stop_listening()
-            self.emit({"type": "status", "text": "Listening stopped after 2 hours. Start again if you still need it."})
-            self._offer_save_history()
+            self._abandon_forgotten_listen(
+                "Listening stopped after 2 hours. Start again if you still need it."
+            )
             return
         last_pcm = getattr(self, "_last_pcm_at", 0.0) or now
         zero_limit = (
@@ -6376,19 +6400,67 @@ class Session:
             if getattr(self, "_listen_mic", "phone") == "watch"
             else LISTEN_ZERO_PCM_SECONDS
         )
-        if now - last_pcm >= zero_limit:
-            self._paused = False
-            self._listen_wanted = False
-            self._stop_listening()
-            self.emit({"type": "status", "text": f"No microphone audio received for {int(zero_limit)} seconds — stopped listening. Tap Start to retry."})
-            self._offer_save_history()
+        if self._native_link_down():
+            down_for = self._native_link_down_for(now)
+            if down_for is None:
+                if now - last_pcm >= zero_limit:
+                    self._abandon_forgotten_listen(self._zero_pcm_status(zero_limit))
+                    return
+            elif down_for >= LISTEN_OFFLINE_GRACE_SECONDS:
+                self._abandon_forgotten_listen(self._offline_stop_status(), offline=True)
+                return
+        elif now - last_pcm >= zero_limit:
+            self._abandon_forgotten_listen(self._zero_pcm_status(zero_limit))
             return
         if now - last >= LISTEN_IDLE_SECONDS:
-            self._paused = False
-            self._listen_wanted = False
-            self._stop_listening()
-            self.emit({"type": "status", "text": "Listening stopped after 15 minutes of silence."})
-            self._offer_save_history()
+            self._abandon_forgotten_listen("Listening stopped after 15 minutes of silence.")
+
+    def _native_link_down(self) -> bool:
+        """Native audio socket has attached before and is not connected now."""
+        return (not getattr(self, "_uplink_connected", False)) and bool(
+            getattr(self, "_uplink_seen", False)
+        )
+
+    def _native_link_down_for(self, now: float) -> float | None:
+        """Seconds since the uplink dropped, or None when no clock was recorded.
+
+        A missing uplink clock falls back to the control-drop clock. If neither
+        was recorded, the caller uses the dead-mic rule so a listen cannot run
+        forever with no audio and no drop time.
+        """
+        lost = float(getattr(self, "_uplink_lost_at", 0.0) or 0.0)
+        if lost <= 0:
+            lost = float(getattr(self, "_control_lost_at", 0.0) or 0.0)
+        if lost <= 0:
+            return None
+        return now - lost
+
+    @staticmethod
+    def _zero_pcm_status(zero_limit: float) -> str:
+        return (
+            f"No microphone audio received for {int(zero_limit)} seconds "
+            "— stopped listening. Tap Start to retry."
+        )
+
+    @staticmethod
+    def _offline_stop_status() -> str:
+        return (
+            "Listening stopped — the phone was offline for more than "
+            f"{int(LISTEN_OFFLINE_GRACE_SECONDS)} seconds."
+        )
+
+    def _abandon_forgotten_listen(self, text: str, *, offline: bool = False) -> None:
+        self._paused = False
+        self._listen_wanted = False
+        self._stop_listening()
+        self.emit({"type": "status", "text": text})
+        self._offer_save_history()
+        if not offline:
+            return
+        if getattr(self, "_client_emit", None) is None:
+            self._offline_notice = {"status": text, "save_prompt": True}
+        else:
+            self._offline_notice = None
 
     def _stop_listening(self) -> None:
         if getattr(self, "_stop_flushing", False):

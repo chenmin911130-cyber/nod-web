@@ -157,6 +157,14 @@ LISTEN_ZERO_PCM_WATCH_SECONDS = max(
     LISTEN_ZERO_PCM_SECONDS,
     int(float(os.environ.get("LISTEN_ZERO_PCM_WATCH_SECONDS") or "180")),
 )
+# Native uplink already attached, then the audio socket dropped (phone offline).
+# That is not a dead microphone: keep the listener until this grace expires,
+# then stop with a distinct offline status the phone receives on reattach.
+# A connected uplink — or a client that never opened one — still uses
+# LISTEN_ZERO_PCM_SECONDS.
+LISTEN_OFFLINE_GRACE_SECONDS = max(
+    30, int(float(os.environ.get("LISTEN_OFFLINE_GRACE_SECONDS") or "120"))
+)
 # Parked control-WS sessions with a live native uplink. Default 10 min.
 UPLINK_ORPHAN_SECONDS = max(60, int(float(os.environ.get("UPLINK_ORPHAN_SECONDS") or "600")))
 
