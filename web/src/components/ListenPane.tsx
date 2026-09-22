@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
-import type { CatchNote, Lang, MeetingLine, PairLang } from '../types'
+import type { CaptureState, CatchNote, Lang, MeetingLine, PairLang } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import {
   LISTEN_SCENES,
@@ -38,6 +38,7 @@ import {
   speechChipTitle,
   spokenSettingsValue,
 } from '../iphoneCopy'
+import { listenChromeLinkLabel, type LinkState } from '../linkState'
 import { translateLangDisplayName } from '../langDisplayNames'
 import { ENDED_TAP_SLOP, bottomBarMode, endedDockFromPointer, endedHasContent, endedSheetAvailable, listenAskPlacement, nextComposeDraft, showNotesEmptyHint } from '../listenChrome'
 import { usePhoneChrome } from '../phoneChrome'
@@ -67,6 +68,8 @@ interface Props {
   listening: boolean
   paused?: boolean
   ended: boolean
+  link?: LinkState
+  capture?: CaptureState
   catchNotes: CatchNote[]
   notesRaw: string
   busy: boolean
@@ -1191,6 +1194,16 @@ export default function ListenPane(props: Props) {
     ended: props.ended,
     hasContent,
   })
+  const linkHint = !props.qa
+    ? listenChromeLinkLabel({
+        link: props.link ?? 'online',
+        capture: props.capture ?? 'off',
+        ended: props.ended,
+        linkReconnecting: IPHONE_COPY.linkReconnecting,
+        linkWaitingForNotes: IPHONE_COPY.linkWaitingForNotes,
+      })
+    : ''
+  const linkReconnectingChrome = linkHint && (props.link ?? 'online') === 'reconnecting' && props.capture !== 'off' && !props.ended
   const askPlacement = listenAskPlacement({
     phone,
     qa: Boolean(props.qa),
@@ -1701,7 +1714,7 @@ export default function ListenPane(props: Props) {
   )
 
   return (
-    <div className={`listen-main scene-${props.scene}${biOn ? ' tr-on' : ' tr-off'}${props.ended ? ' ended' : ''}${props.qa ? ' qa' : ''}${ready ? ' iphone-ready' : ''}${endedSheetUi ? ` ended-dock-${endedDock}` : ''}${askPlacement === 'bar' ? ' live-bar' : ''}${askPlacement === 'fab' ? ' ask-fab' : ''}`}>
+    <div className={`listen-main scene-${props.scene}${biOn ? ' tr-on' : ' tr-off'}${props.ended ? ' ended' : ''}${props.qa ? ' qa' : ''}${ready ? ' iphone-ready' : ''}${endedSheetUi ? ` ended-dock-${endedDock}` : ''}${askPlacement === 'bar' ? ' live-bar' : ''}${askPlacement === 'fab' ? ' ask-fab' : ''}${linkReconnectingChrome ? ' link-reconnecting' : ''}`}>
       {ready ? (
         <div className="iphone-stack iphone-ready">
           <div className="iphone-stage">
@@ -1725,6 +1738,11 @@ export default function ListenPane(props: Props) {
       ) : phone ? (
         <div className="iphone-stack">
           {props.actions}
+          {linkHint ? (
+            <p className="iphone-status hold listen-link-hint" aria-live="polite">
+              {linkHint}
+            </p>
+          ) : null}
           {endedSheetUi ? (
             <div className="iphone-ended-compact">
               <button
