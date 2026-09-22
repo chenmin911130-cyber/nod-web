@@ -112,6 +112,7 @@ import {
 import { buildListenPdfDoc, type ListenPdfDoc } from './pdfTemplates'
 import { applyDemoSeed, readDemoScene } from './demoSeed'
 import { quotaLimitText, type QuotaFields } from './quotaCopy'
+import { applyLinkEvent } from './linkState'
 
 function isPendingCatchId(id: string): boolean {
   return id === '__pending__' || id.startsWith('__pending__:')
@@ -262,6 +263,7 @@ const initial: AppState = {
   partialSpeaker: '',
   quota: null as { stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; ok: boolean; sessions: number; session_limit: number; daily_cost_usd: number; daily_cost_limit: number; daily_stt_seconds: number; daily_stt_limit: number; quota_disabled?: boolean } | null,
   listenFlushWait: idleListenFlushWait(),
+  link: 'online',
 }
 
 type Action =
@@ -401,6 +403,7 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case 'engine': {
       const ev = action.ev
+      state = { ...state, link: applyLinkEvent(state.link, ev) }
       if (
         readDemoScene()
         && (ev.type === 'ready' || ev.type === 'keys_status' || ev.type === 'status')
@@ -4273,6 +4276,8 @@ export default function App() {
             listening={listening}
             paused={iphonePaused}
             ended={state.meetingEnded}
+            link={state.link}
+            capture={state.capture}
             catchNotes={state.catchNotes}
             notesRaw={state.notesRaw}
             busy={state.busy}

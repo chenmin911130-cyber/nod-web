@@ -169,6 +169,7 @@ export interface AppState {
     quota_disabled?: boolean
   } | null
   listenFlushWait: ListenFlushWait
+  link: 'online' | 'reconnecting'
 }
 
 // 引擎 → 前端

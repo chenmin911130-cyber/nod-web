@@ -198,6 +198,8 @@ export const EN_IPHONE_COPY = {
   histNoMatch: 'No sessions match that search.',
   histLoadSavedFailed: 'Could not load saved History. Pull to retry.',
   histLoadPendingFailed: 'Could not load unsaved History. Pull to retry.',
+  linkReconnecting: 'Connection lost — reconnecting. Speech during this gap may not be captured.',
+  linkWaitingForNotes: 'Waiting for network to generate notes',
 } as const
 
 export type IphoneCopy = { [K in keyof typeof EN_IPHONE_COPY]: string }
@@ -400,6 +402,8 @@ export const ZH_IPHONE_COPY: IphoneCopy = {
   histNoMatch: '没有匹配的会话。',
   histLoadSavedFailed: '无法加载已保存的 History。下拉重试。',
   histLoadPendingFailed: '无法加载未保存的 History。下拉重试。',
+  linkReconnecting: '连接中断，正在重连… 这段时间的语音可能没有被记录',
+  linkWaitingForNotes: '等待网络恢复后生成笔记',
 }
 
 /** Overlap keys aligned with WatchCopy.swift; other keys fall back to en. */
