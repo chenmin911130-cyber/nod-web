@@ -2423,6 +2423,7 @@ class CloudListener:
         self._sender_exited = threading.Event()
         self._drain_send_failed = False
         self._stt_tx_bytes = 0
+        self._eot_unformatted_at: dict[int, float] = {}
         self._sender_thread: threading.Thread | None = None
         self._pcm_mu = threading.Lock()
 
@@ -2804,6 +2805,35 @@ class CloudListener:
             "n_words": len(words),
         }
 
+    def _record_eot_unformatted(self, turn: int) -> None:
+        self._eot_unformatted_at[turn] = time.monotonic()
+        while len(self._eot_unformatted_at) > 64:
+            del self._eot_unformatted_at[min(self._eot_unformatted_at)]
+
+    def _pcm_backlog_ms(self) -> int:
+        with self._pcm_mu:
+            backlog_bytes = self._q_bytes + len(self._pcm_buf)
+        return int(backlog_bytes // 32)
+
+    def _stt_latency_meta_at_commit(self, data: dict[str, Any], *, formatted: bool) -> dict[str, Any]:
+        now = time.monotonic()
+        out: dict[str, Any] = {"__commit_mono__": now}
+        stt_turn = self._stt_turn_key(data)
+        if formatted:
+            t0 = self._eot_unformatted_at.pop(stt_turn, None)
+            if t0 is not None:
+                out["format_wait_ms"] = int(round((now - t0) * 1000))
+        word_meta = self._turn_word_meta(data)
+        last_word_ms = word_meta.get("last_word_ms")
+        if last_word_ms is not None:
+            try:
+                sent_ms = int(self._stt_tx_bytes // 32)
+                out["asr_lag_ms"] = sent_ms - int(last_word_ms)
+            except (TypeError, ValueError):
+                pass
+        out["backlog_ms"] = self._pcm_backlog_ms()
+        return out
+
     def _note_partial(self, text: str, lang: str | None, speaker: str | None, data: dict[str, Any]) -> None:
         stt_turn = None
         raw = data.get("turn_order")
@@ -2867,6 +2897,7 @@ class CloudListener:
             "revision": revision,
             "formatted": formatted,
             "stop_commit": self._stop.is_set(),
+            **self._stt_latency_meta_at_commit(data, formatted=formatted),
         }
         if self.on_final:
             self.on_final(cleaned, lang, speaker, meta)
@@ -2892,6 +2923,10 @@ class CloudListener:
                 self._note_partial(text, lang, speaker, data)
             if data.get("end_of_turn"):
                 if data.get("turn_is_formatted") is False:
+                    try:
+                        self._record_eot_unformatted(self._stt_turn_key(data))
+                    except (TypeError, ValueError):
+                        pass
                     if self._stop.is_set():
                         self._commit_turn_final(text, lang, speaker, data, formatted=False)
                     elif speechy and self.on_partial:
@@ -4909,8 +4944,35 @@ class Session:
             m["__flushed__"] = True
             self._enqueue_meeting_final(ptxt, plang, speaker, m)
 
+    def _stt_latency_tags(self) -> tuple[int, str | int]:
+        stt = self._stt_cfg().get("stt") or {}
+        speaker_labels = 1 if stt.get("speaker_labels") else 0
+        max_turn_silence = stt.get("max_turn_silence") or 1600
+        return speaker_labels, max_turn_silence
+
+    def _record_stt_latency(self, workspace: str, meta: dict[str, Any], *, hold_ms: int | None = None) -> None:
+        if meta.get("revision"):
+            return
+        from server.stt_latency import record_stt_latency
+
+        speaker_labels, max_turn_silence = self._stt_latency_tags()
+        stream = str(meta.get("stream") or getattr(self._listener, "_stream_id", "") or "")
+        record_stt_latency(
+            workspace=workspace,
+            meta=meta,
+            hold_ms=hold_ms,
+            speaker_labels=speaker_labels,
+            max_turn_silence=max_turn_silence,
+            stream=stream,
+        )
+
     def _emit_meeting_line(self, cleaned: str, lang: str | None, speaker: str | None = None, meta: dict[str, Any] | None = None) -> None:
         meta = meta or {}
+        hold_ms: int | None = None
+        hold_from = meta.get("__hold_from__")
+        if hold_from is not None:
+            hold_ms = int(round((time.monotonic() - float(hold_from)) * 1000))
+        self._record_stt_latency("meeting", meta, hold_ms=hold_ms)
         heard = heard_lang_from_text(cleaned, lang)
         last_piece: dict[str, Any] | None = None
         for piece in split_code_switched(cleaned):
@@ -5204,9 +5266,11 @@ class Session:
                 self._pending_speaker = None
                 self._pending_meta = None
             if _meeting_should_hold(cleaned) and not is_flush:
+                hold_meta = dict(meta)
+                hold_meta["__hold_from__"] = time.monotonic()
                 self._pending_wait = (cleaned, now, lang)
                 self._pending_speaker = speaker
-                self._pending_meta = meta
+                self._pending_meta = hold_meta
                 self._cancel_meeting_timer()
                 timer = threading.Timer(1.0, self._flush_meeting_hold)
                 timer.daemon = True
@@ -7038,6 +7102,7 @@ class Session:
             if self._apply_meeting_revision(cleaned, lang, speaker, meta):
                 return
         if self._workspace == "translate":
+            self._record_stt_latency("translate", meta, hold_ms=None)
             locked = self._effective_stt_lang()
             raw = cleaned
             carry = (getattr(self, "_translate_carry", "") or "").strip()
@@ -7292,7 +7357,15 @@ def health():
             conn.exec_driver_sql("SELECT 1")
     except Exception:
         db_ok = False
-    return {"ok": db_ok, "stt": "assemblyai", "audio": "browser-mic", "auth": not AUTH_DISABLED}
+    from server.stt_latency import STT_LATENCY_WINDOW
+
+    return {
+        "ok": db_ok,
+        "stt": "assemblyai",
+        "audio": "browser-mic",
+        "auth": not AUTH_DISABLED,
+        "stt_latency": STT_LATENCY_WINDOW.snapshot(time.time()),
+    }
 
 
 @app.post("/api/attach/extract")
