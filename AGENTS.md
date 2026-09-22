@@ -80,6 +80,14 @@ Pods project, or either lock half, a `Podfile.lock` that disagrees with
 
 - **Fable**（规划 / 审查）：按 `docs/agents/ticket-template.md` 写 GitHub issue 执行单；读 PR diff 对照 issue §5 逐条核，要求的测试没跑到或注入点不对就不放行，没有「不阻塞的备注」这一档；结论只写「不放行 / 静态审查通过 / 验收通过」之一；核 Railway `/api/health`。不改产品代码，不合并。审查时不要跑本地 pytest / tsc / npm test / e2e、不要起本地服务器或搭复现 harness 来「证明修好了」——实现代理已经跑过并贴了输出；看 diff、PR 里的测试输出、Railway SHA、以及还要不要 `cap:sync` / bundle bump。唯一例外：一批并行单全部合入后，Fable 在 merged `origin/main` 的干净 worktree 跑固定集成命令（`pytest -q`、`npm --prefix web test`，动过原生加 `npm run check:ios`），输出贴到该批最后一张 issue，再关单。只有 diff 与执行单矛盾、CI 红、或用户报了真机问题时才往下查，并且从生产日志（Railway MCP `get-logs`）开始，不要先本地复现。
 - **Grok / Composer**（实现，规则相同）：按指定 issue 从 `origin/main` 开隔离 worktree 实现；动手前先按 issue §2 核根因证据，对不上先在 issue 评论反馈，不硬改；跑该单 §5 列出的每条命令并把命令与原样输出贴进 PR，必须含「修复前失败」和「修复后通过」两段，缺前一段按回归未证明处理；开 PR；不合并。不要用当前脏工作区。不要把两张产品单塞进同一个 PR。不碰 issue §3 的禁改项。
+- **实现者提交前自检**（每条是门，不是建议；任一条没过就不要 `gh pr create` / `git push`）：
+  1. `git merge-base origin/main HEAD` 等于当下 `origin/main`（`git fetch` 之后再比）。不等就先 rebase。
+  2. `git diff --stat origin/main` 只含 issue §3 列的文件。多出来的文件，要么删掉，要么在 PR 里逐个说明为什么必须改。`project.pbxproj` 的 `CURRENT_PROJECT_VERSION`、`cap:sync` 产物、`package-lock.json` 出现在 diff 里几乎总是本地脚本的副作用，`git checkout -- <file>` 撤掉。
+  3. PR 正文用 `.github/PULL_REQUEST_TEMPLATE.md`，「修复前失败」「修复后通过」两段是**从终端粘的原样输出**，不是勾选框、不是转述、不是「已通过」。命令要和 issue §5 那条**逐字一致**。
+  4. 「修复前失败」的失败断言必须就是 issue §1 描述的问题。如果基线上新测试没有失败，说明测试没咬住，回去改测试，不要提交。
+  5. 用户输入进数据库或界面文案之前想两件事：长度（列的 VARCHAR 上限）和来源（原生 / 第三方的原始错误串不能直接给用户看）。
+  6. `gh pr view <n> --json state` 是 `MERGED` 的分支**不再 push**。合并后才发现的漏改，开新 issue / 新 PR；PR 正文只描述已经在这条分支上的提交。
+  7. 发现单外问题（相邻 bug、§3 清单漏列、§5 用例数算错）写进 PR「单外发现」或 issue 评论，不顺手修。
 - **装包 / 交付**：唯一入口是 `npm run cap:ios -- …`，见 `docs/ios-deliver.md`；不要手工拼 `cap sync` / `xcodebuild`。动过 `plugins/nod-*/ios/**` 或 `ios/**/*.swift` 的交付，archive 前必须先跑 `npm run check:ios`（它编译真实 `App` scheme，`test-watch-replay.sh` 的文件清单覆盖不到 `NodWatchPlugin.swift` 一类文件）。
 - 用户说「规划 / 写单 / 验收」→ 按 Fable 职责。用户说「执行 / 按清单做 / 开 PR」→ 按实现者（Grok / Composer）职责；执行单 §0 写明交给谁。实现者不写单、不审查自己的 PR；Fable 不写产品代码。
 - Hermes 工作台不再承担 nod-web 实现，除非用户当场点名。`#33` / `#35` / `#36` 已结束。
