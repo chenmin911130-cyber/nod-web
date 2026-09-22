@@ -6,6 +6,12 @@
 
 Issues and specs live in GitHub Issues for `chenmin911130-cyber/nod-web` via the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
+### 执行单标准
+
+每张交给实现代理的 issue 必须按 `docs/agents/ticket-template.md` 写，§0–§6 缺一节不算执行单：触发条件与期望行为、根因证据（基线 SHA + `文件:行`，未确认项标 `[未确认]`）、修改范围与禁改项、回归测试与边界条件、验收命令与通过标准、执行者质疑条款。验收命令只写仓库里真实存在的脚本（没有 `npm run test:golden`）。执行者发现证据不支持根因，先在 issue 评论反馈，不硬改。审查按 §5 逐条核，单里要求的测试没跑到，PR 不放行。审查结论只有「不放行 / 静态审查通过 / 验收通过」三档，定义见模板「验收结论定义」；没看到修复前失败、修复后通过的输出，最高只能给「静态审查通过」。
+
+**GitHub Actions 已关闭**（付费额度，2026-09 起）。`gh run list` 没有新结果，不要以 CI 作证据，也不要等它。测试证据 = PR 里贴的本地输出 + 合并后集成验证记录。
+
 ### Domain docs
 
 Single-context: one `CONTEXT.md` at the repo root and ADRs in `docs/adr/`. See `docs/agents/domain.md`.
@@ -72,10 +78,10 @@ Pods project, or either lock half, a `Podfile.lock` that disagrees with
 
 ## Division of labor
 
-- **Fable**（规划 / 审查）：写 GitHub issue 执行单；读 PR diff 对照 issue；核 CI 与 Railway `/api/health`。不改产品代码，不合并。审查时不要跑本地 pytest / tsc / npm test / e2e、不要起本地服务器或搭复现 harness 来「证明修好了」——实现代理已经跑过；看 diff、CI（`gh run list`）、Railway SHA、以及还要不要 `cap:sync` / bundle bump。只有 diff 与执行单矛盾、CI 红、或用户报了真机问题时才往下查，并且从生产日志（Railway MCP `get-logs`）开始，不要先本地复现。
-- **Grok**（实现）：按指定 issue 从 `origin/main` 开隔离 worktree 实现；跑该单要求的测试；开 PR；不合并。不要用当前脏工作区。不要把两张产品单塞进同一个 PR。
+- **Fable**（规划 / 审查）：按 `docs/agents/ticket-template.md` 写 GitHub issue 执行单；读 PR diff 对照 issue §5 逐条核，要求的测试没跑到或注入点不对就不放行，没有「不阻塞的备注」这一档；结论只写「不放行 / 静态审查通过 / 验收通过」之一；核 Railway `/api/health`。不改产品代码，不合并。审查时不要跑本地 pytest / tsc / npm test / e2e、不要起本地服务器或搭复现 harness 来「证明修好了」——实现代理已经跑过并贴了输出；看 diff、PR 里的测试输出、Railway SHA、以及还要不要 `cap:sync` / bundle bump。唯一例外：一批并行单全部合入后，Fable 在 merged `origin/main` 的干净 worktree 跑固定集成命令（`pytest -q`、`npm --prefix web test`，动过原生加 `npm run check:ios`），输出贴到该批最后一张 issue，再关单。只有 diff 与执行单矛盾、CI 红、或用户报了真机问题时才往下查，并且从生产日志（Railway MCP `get-logs`）开始，不要先本地复现。
+- **Grok / Composer**（实现，规则相同）：按指定 issue 从 `origin/main` 开隔离 worktree 实现；动手前先按 issue §2 核根因证据，对不上先在 issue 评论反馈，不硬改；跑该单 §5 列出的每条命令并把命令与原样输出贴进 PR，必须含「修复前失败」和「修复后通过」两段，缺前一段按回归未证明处理；开 PR；不合并。不要用当前脏工作区。不要把两张产品单塞进同一个 PR。不碰 issue §3 的禁改项。
 - **装包 / 交付**：唯一入口是 `npm run cap:ios -- …`，见 `docs/ios-deliver.md`；不要手工拼 `cap sync` / `xcodebuild`。动过 `plugins/nod-*/ios/**` 或 `ios/**/*.swift` 的交付，archive 前必须先跑 `npm run check:ios`（它编译真实 `App` scheme，`test-watch-replay.sh` 的文件清单覆盖不到 `NodWatchPlugin.swift` 一类文件）。
-- 用户说「规划 / 写单 / 验收」→ 按 Fable 职责。用户说「执行 / 按清单做 / 开 PR」→ 按 Grok 职责。
+- 用户说「规划 / 写单 / 验收」→ 按 Fable 职责。用户说「执行 / 按清单做 / 开 PR」→ 按实现者（Grok / Composer）职责；执行单 §0 写明交给谁。实现者不写单、不审查自己的 PR；Fable 不写产品代码。
 - Hermes 工作台不再承担 nod-web 实现，除非用户当场点名。`#33` / `#35` / `#36` 已结束。
 
 ### Self-improve
