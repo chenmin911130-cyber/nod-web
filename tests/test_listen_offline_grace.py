@@ -304,6 +304,20 @@ class OfflineGraceReapTests(unittest.TestCase):
         sess.close.assert_called_once()
         self.assertIsNone(uplink.get(sess.audio_token))
 
+    def test_reap_without_uplink_lost_clock_uses_control_grace(self) -> None:
+        """Audio can drop before park, so _uplink_lost_at stays 0 and only the control clock exists."""
+        sess = self._parked()
+        sess._uplink_lost_at = 0.0
+        sess._control_lost_at = time.time() - 90
+        uplink.reap(time.time())
+        sess.close.assert_not_called()
+        self.assertIs(uplink.get(sess.audio_token), sess)
+
+        sess._control_lost_at = time.time() - 130
+        uplink.reap(time.time())
+        sess.close.assert_called_once()
+        self.assertIsNone(uplink.get(sess.audio_token))
+
     def test_reap_closes_immediately_when_listener_is_gone(self) -> None:
         sess = self._parked()
         sess._listener = None

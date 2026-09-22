@@ -109,7 +109,12 @@ def reap(now: float) -> None:
                 UPLINK_DROP_REAP_SECONDS, float(LISTEN_OFFLINE_GRACE_SECONDS)
             ):
                 to_close.append((token, sess))
-            elif (not uplink_on) and (not uplink_lost) and now - lost >= UPLINK_DROP_REAP_SECONDS:
+            # Audio can close before the control socket parks, leaving
+            # _uplink_lost_at at 0. The control-loss clock is the only one,
+            # and a live listener still gets the offline grace.
+            elif (not uplink_on) and (not uplink_lost) and now - lost >= max(
+                UPLINK_DROP_REAP_SECONDS, float(LISTEN_OFFLINE_GRACE_SECONDS)
+            ):
                 to_close.append((token, sess))
         for token, _sess in to_close:
             _parked.pop(token, None)
