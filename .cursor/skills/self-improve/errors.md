@@ -2,6 +2,13 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-23 · #303 正文写了的修法没进 main
+
+- 我以为：PR 正文「补：reap 第四分支」+ 用例名 + 28 passed 输出，等于那段改动在合并进来的树里。
+- 实际：那条提交 `712d324` 是在 #303 合并 4 分钟后才推到分支的，`main` 上 `uplink.py` 第四分支仍是 60s、测试只有 15 条。批次集成时对 `git diff <合并前> <合并后>` 才发现。
+- 规则：审已合并 PR 看 `git diff <base-merge> <merge-commit>` 的树，不看 PR 正文；再 `git log origin/<branch> ^origin/main` 一眼有没有合并后的孤儿提交。正文里提到的用例名，`rg` 一下 merged 树里有没有。
+- 涉及：#303 · #308 · `server/uplink.py`
+
 ## 2026-09-22 · #289–#297 静态审查写成 PASS
 
 - 我以为：diff 对得上执行单、新测试断言落点正确、PR 描述说测试跑过，就可以写 PASS；`test:golden` 不存在标成 blocked「不阻塞」。
