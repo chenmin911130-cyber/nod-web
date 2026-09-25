@@ -324,6 +324,43 @@ class TranslateLatencyLineTests(unittest.TestCase):
             sess._routed_emit({"type": "error", "id": ask_id, "text": "fail"})
         self.assertIn("failed=1", "\n".join(cap.output))
 
+    def test_carry_timer_piece_has_no_cut(self):
+        sess = _translate_session_latency()
+        with self.assertLogs("nod", level="INFO") as cap:
+            sess._log_translate_latency(
+                {"src": "carry_timer", "carry_wait_ms": 2500, "piece": "c1"},
+            )
+        line = next(ln for ln in cap.output if "translate_latency" in ln)
+        self.assertIn("src=carry_timer", line)
+        self.assertNotIn(" cut=", line)
+
+    def test_flush_piece_has_no_cut(self):
+        sess = _translate_session_latency()
+        with self.assertLogs("nod", level="INFO") as cap:
+            sess._log_translate_latency({"src": "flush:stop", "piece": "f1"})
+        line = next(ln for ln in cap.output if "translate_latency" in ln)
+        self.assertIn("src=flush:stop", line)
+        self.assertNotIn(" cut=", line)
+
+    def test_final_piece_defaults_eot(self):
+        sess = _translate_session_latency()
+        with self.assertLogs("nod", level="INFO") as cap:
+            sess._log_translate_latency({"src": "final", "piece": "p1"})
+        line = next(ln for ln in cap.output if "translate_latency" in ln)
+        self.assertIn("cut=eot", line)
+
+    def test_stale_pending_not_logged(self):
+        sess = _translate_session_latency()
+        sess._uplink_pending_ms = 2400
+        sess._uplink_pending_at = time.time() - 60
+        with self.assertLogs("nod", level="INFO") as cap:
+            sess._log_translate_latency({"src": "final", "piece": "p", "cut_reason": "eot"})
+        self.assertNotIn("dev_backlog_ms", "\n".join(cap.output))
+        sess._uplink_pending_at = time.time() - 5
+        with self.assertLogs("nod", level="INFO") as cap2:
+            sess._log_translate_latency({"src": "final", "piece": "p", "cut_reason": "eot"})
+        self.assertIn("dev_backlog_ms=2400", "\n".join(cap2.output))
+
 
 class ClientTimingDispatchTests(unittest.TestCase):
     def test_client_timing_logged(self):
