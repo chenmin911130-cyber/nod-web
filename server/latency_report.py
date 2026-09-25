@@ -165,6 +165,7 @@ def build_report(
             row = {
                 "client": clients.get(sid),
                 "ticks": [],
+                "summaries": 0,
                 "dev_pending": [],
                 "dropped": [],
             }
@@ -200,6 +201,7 @@ def build_report(
             if keep(summary):
                 sid = _stream_id(summary) or ""
                 row = bucket(sid)
+                row["summaries"] = int(row.get("summaries") or 0) + 1
                 if summary.get("client"):
                     row["client"] = str(summary["client"])
                 reason = str(summary.get("reason") or "tick")
@@ -275,6 +277,7 @@ def build_report(
         per_stream[sid] = {
             "client": row["client"],
             "ticks": len(ticks),
+            "summaries": int(row.get("summaries") or 0),
             "rx_rate_p50": _percentile(rates_after if len(ticks) > 1 else rates, 50),
             "uplink_lag_first_ms": lags[0] if lags else None,
             "uplink_lag_last_ms": lags[-1] if lags else None,
@@ -322,6 +325,10 @@ def checks_for(report: dict, *, check_uplink: bool) -> list[dict]:
     if not check_uplink:
         return checks
     for sid, row in report["per_stream"].items():
+        # uplink_ping stream= (empty) is logged while the phone socket is open
+        # and listening is paused or stopped. That bucket is not a stream.
+        if sid == "" and int(row.get("summaries") or 0) < 1:
+            continue
         prefix = f"uplink {sid}"
         ticks_n = int(row.get("ticks") or 0)
         if ticks_n < 2:
@@ -447,11 +454,12 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write("\n")
     else:
         sys.stdout.write(format_text(report, checks) + "\n")
-    if report["insufficient"]:
+    # A real FAIL (including an unfiltered 3007) outranks insufficient data.
+    if any(not check["pass"] and not check.get("insufficient") for check in checks):
+        return 1
+    if report["insufficient"] or any(check.get("insufficient") for check in checks):
         return 2
-    if all(check["pass"] for check in checks):
-        return 0
-    return 1
+    return 0
 
 
 if __name__ == "__main__":

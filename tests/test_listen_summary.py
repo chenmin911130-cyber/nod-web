@@ -153,6 +153,8 @@ class ListenSummarySessionTests(unittest.TestCase):
             if "listen_summary" not in str(msg):
                 return
             logged.append(str(msg))
+            if "reason=tick" not in str(msg):
+                return
             entered.set()
             if not release.wait(timeout=2):
                 raise AssertionError("second caller did not finish")
@@ -174,8 +176,9 @@ class ListenSummarySessionTests(unittest.TestCase):
                 second.join(timeout=3)
         self.assertFalse(first.is_alive())
         self.assertFalse(second.is_alive())
-        self.assertEqual(len(logged), 1)
-        self.assertIn("reason=tick", logged[0])
+        self.assertEqual(len(logged), 2)
+        self.assertEqual(sum("reason=tick" in line for line in logged), 1)
+        self.assertTrue(any("reason=pause" in line for line in logged))
 
     def test_summary_disabled(self):
         sess = _bare_session()

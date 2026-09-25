@@ -4639,14 +4639,16 @@ class Session:
         anchor = int(getattr(self, "_pcm_rx_anchor_bytes", 0) or 0)
         rx_bytes = int(getattr(self, "_pcm_rx_bytes", 0) or 0)
         lag = self._uplink_lag_ms()
+        periodic = final_reason is None
         with self._listen_summary_mu:
-            if getattr(self, "_summary_emit_inflight", False):
+            # Only periodic ticks are deduped. pause/stop must still log
+            # while a tick line is being written.
+            if periodic and getattr(self, "_summary_emit_inflight", False):
                 return
-            if final_reason is None and (now - float(self._summary_last_mono or 0.0)) < interval:
+            if periodic and (now - float(self._summary_last_mono or 0.0)) < interval:
                 return
-            # Claim the window before logging so a second thread cannot emit
-            # the same tick or the same pause/stop line.
-            self._summary_emit_inflight = True
+            if periodic:
+                self._summary_emit_inflight = True
             try:
                 win_mono = float(getattr(self, "_summary_win_mono", 0.0) or 0.0)
                 win_bytes = int(getattr(self, "_summary_win_bytes", 0) or 0)
@@ -4656,7 +4658,8 @@ class Session:
                 self._listen_summary.note_lag(lag)
                 counters = self._listen_summary.fields()
             except Exception:
-                self._summary_emit_inflight = False
+                if periodic:
+                    self._summary_emit_inflight = False
                 raise
         try:
             self._emit_listen_summary(
@@ -4672,8 +4675,9 @@ class Session:
                 lst=lst,
             )
         finally:
-            with self._listen_summary_mu:
-                self._summary_emit_inflight = False
+            if periodic:
+                with self._listen_summary_mu:
+                    self._summary_emit_inflight = False
 
     def _emit_listen_summary(
         self,
