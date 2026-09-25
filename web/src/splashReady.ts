@@ -13,22 +13,42 @@ export type SplashReadyDeps = {
   loadPlugin: () => Promise<NodSplashPlugin | null>
 }
 
+export type NodSplashSources = {
+  importPackage: () => Promise<{ NodSplash?: NodSplashPlugin }>
+  register: () => NodSplashPlugin
+}
+
+const defaultSources: NodSplashSources = {
+  importPackage: () => {
+    const specifier = 'nod-splash'
+    return import(/* @vite-ignore */ specifier) as Promise<{ NodSplash?: NodSplashPlugin }>
+  },
+  register: () => registerPlugin<NodSplashPlugin>('NodSplash'),
+}
+
+/**
+ * A Capacitor plugin is a Proxy that answers every property, `then` included, so it must
+ * never be the value a promise resolves with: it is adopted as a thenable and never settles.
+ */
+function plain(plugin: NodSplashPlugin): NodSplashPlugin {
+  return { splashReady: () => plugin.splashReady() }
+}
+
 /**
  * Resolve the native splash plugin lazily so the web bundle has no hard
  * dependency on the optional `nod-splash` package. The specifier stays opaque to
  * the bundler and Capacitor's own registry is the fallback, so a build without
  * the package still reaches the same native `NodSplash` plugin.
  */
-async function loadNodSplash(): Promise<NodSplashPlugin | null> {
-  const specifier = 'nod-splash'
+export async function loadNodSplash(sources: NodSplashSources = defaultSources): Promise<NodSplashPlugin | null> {
   try {
-    const mod = (await import(/* @vite-ignore */ specifier)) as { NodSplash?: NodSplashPlugin }
-    if (mod?.NodSplash) return mod.NodSplash
+    const mod = await sources.importPackage()
+    if (mod?.NodSplash) return plain(mod.NodSplash)
   } catch {
     /* the package is optional; fall back to the native bridge */
   }
   try {
-    return registerPlugin<NodSplashPlugin>('NodSplash')
+    return plain(sources.register())
   } catch {
     return null
   }
