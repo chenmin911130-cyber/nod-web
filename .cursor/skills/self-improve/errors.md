@@ -2,6 +2,13 @@
 
 Newest first. Read before Watch / listen / Translate / phone-sync work.
 
+## 2026-09-25 · #316 暂停中的无 stream ping 被当成上行流
+
+- 我以为：`--check-uplink` 里 ticks < 2 一律 insufficient，并且 inflight 能挡住同一时刻的 pause/stop。
+- 实际：手机暂停或停听时 socket 仍开着，`uplink_ping stream=` 没有 listener，会落进空 stream 桶。pause/stop 必须在周期 tick 正在写日志时照样打出。insufficient 的退出码是 2，有 FAIL 时优先 1。
+- 规则：少于 2 个 tick 的 insufficient 只打在至少有一条 `listen_summary` 的流上；跳过无 listener 的空 stream 桶。周期 tick 才去重，pause/stop 不去重。
+- 涉及：#316 · `server/latency_report.py` · `Session._maybe_listen_summary`
+
 ## 2026-09-23 · #303 正文写了的修法没进 main
 
 - 我以为：PR 正文「补：reap 第四分支」+ 用例名 + 28 passed 输出，等于那段改动在合并进来的树里。

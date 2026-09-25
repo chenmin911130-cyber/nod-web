@@ -174,6 +174,78 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(code_ok, 0, text_ok)
         self.assertNotIn("FAIL", text_ok)
 
+    def test_3007_counts_unfiltered_with_client_and_uplink(self):
+        lines = [
+            _line(
+                "listen_summary stream=ios1 reason=tick client=ios wall_s=60 rx_rate=1.000 uplink_lag_ms=100 dev_pending_ms=10",
+                minute=0,
+            ),
+            _line(
+                "listen_summary stream=ios1 reason=tick client=ios wall_s=120 rx_rate=1.000 uplink_lag_ms=100 dev_pending_ms=10",
+                minute=1,
+            ),
+            _line("uplink_ping stream=ios1 dropped_ms=0 pending_ms=10"),
+            _line("translate_latency stream=ios1 turn=1 src=final line_span_ms=4000"),
+            _line("assemblyai error code=3007 error=rate exceeded"),
+            json.dumps({"message": "assemblyai close status=3005 reason=other"}),
+        ]
+        blob = "\n".join(lines) + "\n"
+        report = build_report(blob.splitlines(), streams={"other"}, client="ios", min_pieces=1)
+        self.assertEqual(report["stt_3007"], 1)
+        self.assertEqual(report["stt_3007_scope"], "unfiltered")
+        self.assertEqual(report["stt_other_errors"], {"3005": 1})
+        code, text = _run(blob, "--client", "ios", "--check-uplink", "--min-pieces", "1")
+        self.assertEqual(code, 1, text)
+        self.assertIn("stt_3007=1 unfiltered FAIL", text)
+        self.assertNotIn("stt_3007=0", text)
+
+    def test_uplink_fewer_than_two_ticks_is_insufficient(self):
+        lines = [
+            _line(
+                "listen_summary stream=ios1 reason=tick client=ios wall_s=60 rx_rate=1.000 uplink_lag_ms=100 dev_pending_ms=10"
+            ),
+            _line("translate_latency stream=ios1 turn=1 src=final line_span_ms=4000"),
+            _line("uplink_ping stream=ios1 dropped_ms=0 pending_ms=10"),
+        ]
+        code, text = _run("\n".join(lines) + "\n", "--client", "ios", "--check-uplink", "--min-pieces", "1")
+        self.assertEqual(code, 2, text)
+        self.assertIn("uplink ios1 ticks=1 insufficient", text)
+        self.assertNotIn("uplink ios1 rx_rate_p50", text)
+        self.assertNotRegex(text, r"uplink ios1 .*PASS")
+        ping_only = "\n".join(
+            [
+                _line("uplink_ping stream=ios1 dropped_ms=0 pending_ms=10"),
+                _line("translate_latency stream=ios1 turn=1 src=final line_span_ms=4000"),
+            ]
+        ) + "\n"
+        code0, text0 = _run(ping_only, "--check-uplink", "--min-pieces", "1")
+        self.assertEqual(code0, 2, text0)
+        self.assertIn("uplink ios1 ticks=0 insufficient", text0)
+        both = "\n".join(lines + [_line("assemblyai error code=3007 error=rate exceeded")]) + "\n"
+        code_fail, text_fail = _run(both, "--client", "ios", "--check-uplink", "--min-pieces", "1")
+        self.assertEqual(code_fail, 1, text_fail)
+        self.assertIn("stt_3007=1 unfiltered FAIL", text_fail)
+        self.assertIn("uplink ios1 ticks=1 insufficient", text_fail)
+
+    def test_streamless_ping_does_not_fail_healthy_uplink(self):
+        lines = [
+            _line(
+                "listen_summary stream=ios1 reason=tick client=ios wall_s=60 rx_rate=1.000 uplink_lag_ms=100 dev_pending_ms=10",
+                minute=0,
+            ),
+            _line(
+                "listen_summary stream=ios1 reason=tick client=ios wall_s=120 rx_rate=1.000 uplink_lag_ms=100 dev_pending_ms=10",
+                minute=1,
+            ),
+            _line("uplink_ping stream=ios1 dropped_ms=0 pending_ms=10"),
+            _line("translate_latency stream=ios1 turn=1 src=final line_span_ms=4000"),
+            _line("uplink_ping pending_ms=10 dropped_ms=0 stream= client=ios"),
+        ]
+        code, text = _run("\n".join(lines) + "\n", "--check-uplink", "--min-pieces", "1")
+        self.assertEqual(code, 0, text)
+        self.assertNotIn("insufficient", text)
+        self.assertNotIn("FAIL", text)
+
 
 if __name__ == "__main__":
     unittest.main()
