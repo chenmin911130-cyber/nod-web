@@ -4622,7 +4622,7 @@ class Session:
 
     def _maybe_listen_summary(self, final_reason: str | None = None) -> None:
         self._listen_summary_init()
-        from server.stt_latency import format_listen_summary, listen_summary_interval_s
+        from server.stt_latency import listen_summary_interval_s
 
         interval = listen_summary_interval_s()
         if interval <= 0:
@@ -4631,8 +4631,6 @@ class Session:
         if first <= 0:
             return
         now = time.monotonic()
-        if final_reason is None and (now - float(self._summary_last_mono or 0.0)) < interval:
-            return
         lst = getattr(self, "_listener", None)
         if lst is not None:
             sid = str(getattr(lst, "_stream_id", "") or "")
@@ -4640,15 +4638,63 @@ class Session:
                 self._summary_stream = sid
         anchor = int(getattr(self, "_pcm_rx_anchor_bytes", 0) or 0)
         rx_bytes = int(getattr(self, "_pcm_rx_bytes", 0) or 0)
-        dt = now - float(getattr(self, "_summary_win_mono", 0.0) or 0.0)
-        win_bytes = int(getattr(self, "_summary_win_bytes", 0) or 0)
+        lag = self._uplink_lag_ms()
+        with self._listen_summary_mu:
+            if getattr(self, "_summary_emit_inflight", False):
+                return
+            if final_reason is None and (now - float(self._summary_last_mono or 0.0)) < interval:
+                return
+            # Claim the window before logging so a second thread cannot emit
+            # the same tick or the same pause/stop line.
+            self._summary_emit_inflight = True
+            try:
+                win_mono = float(getattr(self, "_summary_win_mono", 0.0) or 0.0)
+                win_bytes = int(getattr(self, "_summary_win_bytes", 0) or 0)
+                self._summary_last_mono = now
+                self._summary_win_mono = now
+                self._summary_win_bytes = rx_bytes
+                self._listen_summary.note_lag(lag)
+                counters = self._listen_summary.fields()
+            except Exception:
+                self._summary_emit_inflight = False
+                raise
+        try:
+            self._emit_listen_summary(
+                final_reason=final_reason,
+                now=now,
+                first=first,
+                anchor=anchor,
+                rx_bytes=rx_bytes,
+                win_mono=win_mono,
+                win_bytes=win_bytes,
+                lag=lag,
+                counters=counters,
+                lst=lst,
+            )
+        finally:
+            with self._listen_summary_mu:
+                self._summary_emit_inflight = False
+
+    def _emit_listen_summary(
+        self,
+        *,
+        final_reason: str | None,
+        now: float,
+        first: float,
+        anchor: int,
+        rx_bytes: int,
+        win_mono: float,
+        win_bytes: int,
+        lag: int | None,
+        counters: dict,
+        lst: Any,
+    ) -> None:
+        from server.stt_latency import format_listen_summary
+
+        dt = now - win_mono
         rx_rate = None
         if dt >= 5:
             rx_rate = f"{(rx_bytes - win_bytes) / 32000 / dt:.3f}"
-        lag = self._uplink_lag_ms()
-        with self._listen_summary_mu:
-            self._listen_summary.note_lag(lag)
-            counters = self._listen_summary.fields()
         backlog_ms = None
         if lst is not None and hasattr(lst, "_pcm_backlog_ms"):
             try:
@@ -4688,9 +4734,6 @@ class Session:
                 }
             )
         )
-        self._summary_last_mono = now
-        self._summary_win_mono = now
-        self._summary_win_bytes = rx_bytes
 
     def _note_translate_timing(self, ev: dict) -> None:
         kind = ev.get("type")

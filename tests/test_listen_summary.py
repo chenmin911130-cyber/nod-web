@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import unittest
 from unittest import mock
@@ -139,6 +140,42 @@ class ListenSummarySessionTests(unittest.TestCase):
             line2 = _summary_lines("\n".join(cap2.output))[0]
             self.assertIn("reason=pause", line2)
             self.assertNotIn("rx_rate=", line2)
+
+    def test_concurrent_callers_log_one_line(self):
+        sess = _bare_session()
+        with mock.patch("server.app.time.monotonic", return_value=8000.0):
+            sess._pcm_rx_note(b"\x00" * 3200)
+        entered = threading.Event()
+        release = threading.Event()
+        logged: list[str] = []
+
+        def blocking_info(_logger, msg, *args, **kwargs):
+            if "listen_summary" not in str(msg):
+                return
+            logged.append(str(msg))
+            entered.set()
+            if not release.wait(timeout=2):
+                raise AssertionError("second caller did not finish")
+
+        def other():
+            if not entered.wait(timeout=2):
+                raise AssertionError("first caller did not log")
+            sess._maybe_listen_summary()
+            sess._maybe_listen_summary("pause")
+            release.set()
+
+        with mock.patch("server.app.time.monotonic", return_value=8060.0):
+            with mock.patch("logging.Logger.info", blocking_info):
+                first = threading.Thread(target=sess._maybe_listen_summary)
+                second = threading.Thread(target=other)
+                first.start()
+                second.start()
+                first.join(timeout=3)
+                second.join(timeout=3)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(len(logged), 1)
+        self.assertIn("reason=tick", logged[0])
 
     def test_summary_disabled(self):
         sess = _bare_session()
@@ -375,14 +412,13 @@ class UplinkWsSummaryTests(unittest.TestCase):
 
 class HealthShaTests(unittest.TestCase):
     def test_health_reports_sha(self):
-        from server.app import app
+        from server.app import health
 
         sha = "accbf29f882a17ed85fd7d2fa313da2c99533708"
         with mock.patch.dict(os.environ, {"RAILWAY_GIT_COMMIT_SHA": sha}):
-            with TestClient(app) as client:
-                body = client.get("/api/health").json()
+            body = health()
         self.assertEqual(body["sha"], "accbf29f882a")
-        os.environ.pop("RAILWAY_GIT_COMMIT_SHA", None)
-        with TestClient(app) as client:
-            body = client.get("/api/health").json()
+        with mock.patch.dict(os.environ):
+            os.environ.pop("RAILWAY_GIT_COMMIT_SHA", None)
+            body = health()
         self.assertEqual(body["sha"], "")

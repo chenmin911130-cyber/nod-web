@@ -230,8 +230,8 @@ def build_report(
                     row["dev_pending"].append(int(ping["dev_pending_ms"]))
             continue
 
-        if allowed is not None:
-            continue
+        # AssemblyAI lines carry no stream id, so they stay in the report
+        # even when --client or --stream drops every other unscoped line.
         err = re.search(r"assemblyai error code=(\d+)", msg)
         closed = re.search(r"assemblyai close status=(\d+)", msg)
         code = err.group(1) if err else (closed.group(1) if closed else None)
@@ -292,6 +292,7 @@ def build_report(
         "carry_wait_p95_ms": _as_int_metric(_percentile([float(v) for v in carry_waits], 95)),
         "carry_timer_share": share,
         "stt_3007": stt_3007,
+        "stt_3007_scope": "unfiltered",
         "stt_other_errors": stt_other,
         "per_stream": per_stream,
         "insufficient": pieces < min_pieces,
@@ -317,10 +318,24 @@ def checks_for(report: dict, *, check_uplink: bool) -> list[dict]:
         ),
         _check("stt_3007", report["stt_3007"], TARGETS["stt_3007_max"], higher_is_worse=True),
     ]
+    checks[-1]["unfiltered"] = True
     if not check_uplink:
         return checks
     for sid, row in report["per_stream"].items():
         prefix = f"uplink {sid}"
+        ticks_n = int(row.get("ticks") or 0)
+        if ticks_n < 2:
+            checks.append(
+                {
+                    "name": f"{prefix} ticks",
+                    "value": ticks_n,
+                    "limit": 2,
+                    "pass": False,
+                    "skip": False,
+                    "insufficient": True,
+                }
+            )
+            continue
         checks.append(
             _check(
                 f"{prefix} rx_rate_p50",
@@ -377,12 +392,18 @@ def _format_value(value: Any) -> str:
 def format_text(report: dict, checks: list[dict]) -> str:
     lines = []
     for check in checks:
+        if check.get("insufficient"):
+            lines.append(f"{check['name']}={_format_value(check['value'])} insufficient")
+            continue
         if check.get("limit") is None:
             lines.append(f"{check['name']}={_format_value(check['value'])}")
             continue
         flag = "SKIP" if check.get("skip") else ("PASS" if check["pass"] else "FAIL")
         op = ">=" if "rx_rate" in check["name"] else "<="
-        lines.append(f"{check['name']}={_format_value(check['value'])} {flag} ({op} {check['limit']})")
+        scope = " unfiltered" if check.get("unfiltered") else ""
+        lines.append(
+            f"{check['name']}={_format_value(check['value'])}{scope} {flag} ({op} {check['limit']})"
+        )
     if report.get("insufficient"):
         lines.append("insufficient data")
     return "\n".join(lines)
