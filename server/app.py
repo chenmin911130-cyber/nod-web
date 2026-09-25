@@ -88,7 +88,6 @@ from server.stt_audio import (
     duration_s,
     error_summary,
     pace_mode_from_env,
-    pace_wait_s,
     take_one_frame,
 )
 from server.logging_setup import backup_now, setup_logging
@@ -2718,9 +2717,6 @@ class CloudListener:
             return False
 
     def _pace_before_send(self, next_audio_s: float) -> None:
-        # Tests patch ``server.app.pace_wait_s`` to return 0 and run the sender at full speed.
-        if pace_wait_s(1.0, 0.0) == 0.0 and pace_wait_s(1.0, 0.5) == 0.0:
-            return
         wait = self._pace.wait_s(time.monotonic(), next_audio_s)
         if wait <= 0:
             return

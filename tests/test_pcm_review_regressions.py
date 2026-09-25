@@ -36,7 +36,7 @@ def test_end_sends_short_tail_without_another_input(payload):
     sess.push_pcm(payload)
     ws = _connected_ws()
     done = threading.Event()
-    with mock.patch('server.app.pace_wait_s', return_value=0):
+    with mock.patch.object(CloudListener, '_pace_before_send', return_value=None):
         sender = start_sender(lst, ws)
         end = threading.Thread(target=lambda: (sess.pcm_end('session', len(payload), 'capture'), done.set()), daemon=True)
         end.start()
@@ -63,7 +63,7 @@ def test_failure_after_success_keeps_only_unsent_suffix_and_short_tail():
             raise RuntimeError('transport failed')
         sent.append(frame)
     ws.send.side_effect = send
-    with mock.patch('server.app.pace_wait_s', return_value=0):
+    with mock.patch.object(CloudListener, '_pace_before_send', return_value=None):
         t = start_sender(old, ws)
         assert not old.drain(timeout=1)
         handoff = old.take_unsent()

@@ -8,13 +8,29 @@ import unittest
 from unittest import mock
 
 from server.app import CloudListener
-from server.stt_audio import PaceClock, catchup_rate_from_env, pace_mode_from_env
+from server.stt_audio import MIN_CHUNK_BYTES, PaceClock, catchup_rate_from_env, pace_mode_from_env
 
 from tests.test_stt_terminate import _connected_ws
 
 SEND_OVERHEAD_S = 0.0005
 SLEEP_OVERSHOOT_S = 0.0003
 FRAME_S = 0.1
+
+
+class _FakeAppTime:
+    """Deterministic ``server.app.time`` with sleep overshoot."""
+
+    def __init__(self) -> None:
+        self._mono = 0.0
+
+    def monotonic(self) -> float:
+        return self._mono
+
+    def sleep(self, duration: float) -> None:
+        self._mono += duration + SLEEP_OVERSHOOT_S
+
+    def time(self) -> float:
+        return self._mono
 
 
 def _run_paced_sends(
@@ -50,9 +66,9 @@ class PaceClockDriftTests(unittest.TestCase):
         now = 0.0
         for _ in range(600):
             w = clock.wait_s(now, FRAME_S)
-            now += w + SEND_OVERHEAD_S
+            now += w + SEND_OVERHEAD_S + SLEEP_OVERSHOOT_S
             if w > 0:
-                now += 0.00076
+                now += SLEEP_OVERSHOOT_S
             clock.record(now, FRAME_S)
         return now - 60.0
 
@@ -121,11 +137,8 @@ class PaceClockGapTests(unittest.TestCase):
     def test_after_silence_realtime_frames_go_immediately(self):
         clock = PaceClock(mode="cumulative", catchup_rate=1.5)
         clock.open(0.0)
-        # In sync at 60 s: cumulative schedule caught up to wall clock.
-        clock._sched = 60.0
-        clock._last_at = 59.9
-        clock._last_dur = FRAME_S
-        clock._audio_sent_s = 60.0
+        for i in range(599):
+            clock.record((i + 1) * FRAME_S, FRAME_S)
         now = 60.0
         for i in range(5):
             arrive = 60.0 + i * FRAME_S
@@ -219,6 +232,37 @@ class CloudListenerPaceTests(unittest.TestCase):
         frames = self._binary_sends(ws)
         self.assertEqual(len(frames), 5)
         self.assertEqual(lst._pcm_backlog_ms(), 0)
+
+    def test_realtime_client_backlog_does_not_grow(self) -> None:
+        fake = _FakeAppTime()
+        lst = self._listener()
+        ws = _connected_ws()
+        send_times: list[float] = []
+
+        def send_side_effect(frame, *args, **kwargs):
+            fake._mono += SEND_OVERHEAD_S
+            if isinstance(frame, (bytes, bytearray)):
+                send_times.append(fake.monotonic())
+            return None
+
+        ws.send.side_effect = send_side_effect
+        lst._ws = ws
+
+        with mock.patch("server.app.time", fake):
+            lst._on_open(ws)
+            open_at = fake.monotonic()
+            for i in range(600):
+                arrive = open_at + i * FRAME_S
+                if fake._mono < arrive:
+                    fake._mono = arrive
+                lst._pcm_buf.extend(b"\x00" * 3200)
+                if len(lst._pcm_buf) >= MIN_CHUNK_BYTES:
+                    lst._send_buffered_frame(final=False)
+
+        self.assertEqual(len(send_times), 600)
+        last_arrive = open_at + 599 * FRAME_S
+        lag_ms = (send_times[-1] - last_arrive) * 1000.0
+        self.assertLess(lag_ms, 50.0)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,10 @@
 """AssemblyAI streaming PCM constraints.
 
-Chunks must be 50–1000 ms of 16 kHz PCM16, and must not arrive faster than
-realtime. Close code 3007 is either a duration violation or a rate exceed.
+Chunks must be 50–1000 ms of 16 kHz PCM16. Toward AssemblyAI, cumulative audio
+sent must not exceed wall time since the streaming session opened; ``PaceClock``
+(default) enforces that budget and caps burst catch-up (see ``NOD_STT_CATCHUP_RATE``).
+Legacy per-frame pacing is available with ``NOD_STT_PACE_MODE=frame``. Close code
+3007 is either a duration violation or a rate exceed.
 
 https://www.assemblyai.com/docs/streaming/common-session-errors-and-closures
 """
