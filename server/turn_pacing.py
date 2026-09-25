@@ -13,9 +13,11 @@ from typing import Any
 
 from server.meeting_lines import false_period, last_sentence_index
 
-_DEFAULT_MIN_MS = 7000
+_DEFAULT_MIN_MS = 3000
 _DEFAULT_GAP_MS = 350
-_DEFAULT_MAX_MS = 15000
+_DEFAULT_MAX_MS = 8000
+_DEFAULT_STALL_MS = 700
+_DEFAULT_CARRY_MAX_MS = 2500
 _CJK_END_RE = re.compile(r"[。！？…]")
 
 
@@ -24,7 +26,12 @@ def turn_pacing_from_env() -> dict[str, int]:
         "min_ms": _env_int("NOD_TR_CUT_MIN_MS", _DEFAULT_MIN_MS),
         "gap_ms": _env_int("NOD_TR_CUT_GAP_MS", _DEFAULT_GAP_MS),
         "max_ms": _env_int("NOD_TR_CUT_MAX_MS", _DEFAULT_MAX_MS),
+        "stall_ms": _env_int("NOD_TR_CUT_STALL_MS", _DEFAULT_STALL_MS),
     }
+
+
+def carry_max_ms_from_env() -> int:
+    return _env_int("NOD_TR_CARRY_MAX_MS", _DEFAULT_CARRY_MAX_MS)
 
 
 def cut_decision(words: list[dict], cfg: dict, force_inflight: bool) -> str:
@@ -41,6 +48,20 @@ def cut_decision(words: list[dict], cfg: dict, force_inflight: bool) -> str:
         return "max"
     if open_ms >= min_ms and gap_ms >= need_gap:
         return "pause"
+    return "none"
+
+
+def cut_decision_timer(open_ms: int, stall_ms: int, cfg: dict, force_inflight: bool) -> str:
+    """Timer-based cut: stall after min_ms silence, or max turn length."""
+    if force_inflight:
+        return "none"
+    min_ms = int((cfg or {}).get("min_ms", _DEFAULT_MIN_MS))
+    max_ms = int((cfg or {}).get("max_ms", _DEFAULT_MAX_MS))
+    stall_thresh = int((cfg or {}).get("stall_ms", _DEFAULT_STALL_MS))
+    if open_ms >= max_ms:
+        return "max"
+    if open_ms >= min_ms and stall_thresh > 0 and stall_ms >= stall_thresh:
+        return "stall"
     return "none"
 
 

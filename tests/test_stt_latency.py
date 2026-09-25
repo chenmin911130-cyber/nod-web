@@ -8,7 +8,7 @@ from unittest import mock
 from starlette.testclient import TestClient
 
 from server.app import CFG, KEYS, CloudListener, Session, app
-from server.stt_latency import LatencyWindow, STT_LATENCY_WINDOW, percentile, record_stt_latency
+from server.stt_latency import LatencyWindow, STT_LATENCY_WINDOW, percentile, record_stt_latency, record_translate_latency
 
 
 def _turn_payload(
@@ -199,6 +199,195 @@ class LatencyWindowThreadTests(unittest.TestCase):
         self.assertEqual(errors, [])
         snap = w.snapshot(base + 1)
         self.assertGreaterEqual(snap["pipeline_ms"]["n"], 200)
+
+
+def _translate_session_latency() -> Session:
+    from tests.test_turn_pacing import _translate_session
+
+    sess = _translate_session()
+    emitted: list[dict] = []
+
+    def routed(ev: dict) -> None:
+        emitted.append(ev)
+        sess._note_translate_timing(ev)
+
+    sess._client_emit = routed
+    sess._routed_emit = Session._routed_emit.__get__(sess, Session)
+    sess._maybe_watch_copy = lambda ev: None
+    sess._maybe_qa_copy = lambda ev: None
+    sess._send_audio_text = lambda *a: None
+    sess._tr_piece = {}
+    sess._tr_piece_mu = threading.Lock()
+    return sess
+
+
+class TranslateTimingConcurrencyTests(unittest.TestCase):
+    def test_chunk_timing_survives_tr_piece_mutation(self):
+        sess = _translate_session_latency()
+        store = sess._tr_piece
+        stop = threading.Event()
+        errors: list[BaseException] = []
+
+        def mutator() -> None:
+            try:
+                i = 0
+                while not stop.is_set():
+                    key = f"p{i}"
+                    with sess._tr_piece_mu:
+                        store[key] = {
+                            "ask_id": "gen-x",
+                            "ask_mono": time.monotonic(),
+                            "submit_mono": time.monotonic(),
+                        }
+                        if len(store) > 64:
+                            del store[next(iter(store))]
+                    i += 1
+            except BaseException as exc:
+                errors.append(exc)
+
+        store["keep"] = {
+            "ask_id": "gen-x",
+            "ask_mono": time.monotonic(),
+            "submit_mono": time.monotonic(),
+        }
+        t = threading.Thread(target=mutator, daemon=True)
+        t.start()
+        for _ in range(500):
+            sess._note_translate_timing({"type": "chunk", "id": "gen-x"})
+        stop.set()
+        t.join(timeout=2.0)
+        self.assertEqual(errors, [])
+
+
+class TranslateLatencyLineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        STT_LATENCY_WINDOW._samples.clear()
+
+    def test_full_piece_latency_line(self):
+        sess = _translate_session_latency()
+        piece_id = "line42"
+        meta = {
+            "stt_turn": 7,
+            "stream": "s9",
+            "cut_reason": "eot",
+            "first_word_ms": 1000,
+            "last_word_ms": 4000,
+            "asr_lag_ms": 50,
+            "backlog_ms": 10,
+            "commit_audio_ms": 500,
+        }
+        sess._start_voice_translate(piece_id, "hello", "en", meta)
+        ask_id = "gen1"
+        with self.assertLogs("nod", level="INFO") as cap:
+            sess._routed_emit({
+                "type": "question",
+                "id": ask_id,
+                "text": f"[NOD_TRANSLATE:{piece_id}]\nTranslate only this line:\nhello",
+            })
+            sess._routed_emit({"type": "chunk", "id": ask_id, "text": "你"})
+            sess._routed_emit({"type": "chunk", "id": ask_id, "text": "好"})
+            sess._routed_emit({"type": "done", "id": ask_id, "ok": True})
+        lines = [ln for ln in "\n".join(cap.output).splitlines() if "translate_latency" in ln]
+        self.assertEqual(len(lines), 1)
+        line = lines[0]
+        self.assertIn(f"piece={piece_id}", line)
+        self.assertIn("cut=eot", line)
+        self.assertIn("queue_wait_ms=", line)
+        self.assertIn("llm_ttft_ms=", line)
+        self.assertIn("llm_total_ms=", line)
+        self.assertIn("speech_to_chunk_ms=", line)
+        snap = STT_LATENCY_WINDOW.snapshot(time.time())
+        self.assertEqual(snap.get("tr_speech_to_chunk_ms", {}).get("n"), 1)
+
+    def test_passthrough_logs_without_llm(self):
+        sess = _translate_session_latency()
+        with self.assertLogs("nod", level="INFO") as cap:
+            sess._log_translate_latency(
+                {"piece": "p1", "cut_reason": "eot", "chars": 3, "lang": "zh"},
+                passthrough=1,
+            )
+        line = "\n".join(cap.output)
+        self.assertIn("passthrough=1", line)
+        self.assertNotIn("llm_ttft_ms=", line)
+
+    def test_error_logs_failed(self):
+        sess = _translate_session_latency()
+        piece_id = "p2"
+        sess._start_voice_translate(piece_id, "x", "en", {"cut_reason": "eot"})
+        ask_id = "g2"
+        with self.assertLogs("nod", level="INFO") as cap:
+            sess._routed_emit({
+                "type": "question",
+                "id": ask_id,
+                "text": f"[NOD_TRANSLATE:{piece_id}]\nx",
+            })
+            sess._routed_emit({"type": "error", "id": ask_id, "text": "fail"})
+        self.assertIn("failed=1", "\n".join(cap.output))
+
+
+class ClientTimingDispatchTests(unittest.TestCase):
+    def test_client_timing_logged(self):
+        sess = Session(lambda _ev: None, json.loads(json.dumps(CFG)), dict(KEYS))
+        with self.assertLogs("nod", level="INFO") as cap:
+            sess.dispatch({"type": "client_timing", "id": "q1", "ttfc_ms": 812, "done_ms": 1500})
+        self.assertIn("translate_client id=q1 ttfc_ms=812 done_ms=1500", "\n".join(cap.output))
+
+    def test_garbage_client_timing_no_crash(self):
+        sess = Session(lambda _ev: None, json.loads(json.dumps(CFG)), dict(KEYS))
+        sess.dispatch({"type": "client_timing", "id": "q1", "ttfc_ms": "nope", "done_ms": None})
+        sess.dispatch({"type": "client_timing"})
+
+
+class UplinkPingPendingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from server import uplink
+
+        uplink.reset()
+
+    def tearDown(self) -> None:
+        from server import uplink
+
+        uplink.reset()
+
+    def test_ping_without_pending_ms(self):
+        from server.app import app
+        from tests.test_uplink import _session
+
+        sess = _session()
+        sess._listener = object()
+        from server import uplink
+
+        uplink.register(sess)
+        client = TestClient(app)
+        with client.websocket_connect(f"/ws/audio?token={sess.audio_token}") as ws:
+            ws.send_text(json.dumps({"type": "ping"}))
+            time.sleep(0.05)
+        self.assertFalse(hasattr(sess, "_uplink_pending_ms"))
+
+    def test_ping_with_pending_ms(self):
+        from server.app import app
+        from tests.test_uplink import _session
+
+        sess = _session()
+        lst = CloudListener(
+            api_key="k",
+            cfg={"stt": {}},
+            on_final=lambda *a: None,
+            on_partial=None,
+            on_error=None,
+            stream_id="st1",
+        )
+        sess._listener = lst
+        from server import uplink
+
+        uplink.register(sess)
+        client = TestClient(app)
+        with self.assertLogs("nod", level="INFO") as cap:
+            with client.websocket_connect(f"/ws/audio?token={sess.audio_token}") as ws:
+                ws.send_text(json.dumps({"type": "ping", "pending_ms": 2400}))
+                time.sleep(0.05)
+        self.assertEqual(sess._uplink_pending_ms, 2400)
+        self.assertIn("uplink_ping pending_ms=2400", "\n".join(cap.output))
 
 
 if __name__ == "__main__":

@@ -79,7 +79,14 @@ from server import think_budget
 # the module does the lookup, the flag says whether to run one.
 from server import think as think_search
 from server.qa_semantic import join_pair
-from server.turn_pacing import cut_decision, split_carry, turn_pacing_from_env, word_span_ms
+from server.turn_pacing import (
+    carry_max_ms_from_env,
+    cut_decision,
+    cut_decision_timer,
+    split_carry,
+    turn_pacing_from_env,
+    word_span_ms,
+)
 from server.stt_audio import (
     MIN_CHUNK_BYTES,
     PaceClock,
@@ -2427,6 +2434,12 @@ class CloudListener:
         self._drain_send_failed = False
         self._stt_tx_bytes = 0
         self._eot_unformatted_at: dict[int, float] = {}
+        self._open_turn_key: int | None = None
+        self._turn_open_mono = 0.0
+        self._partial_text = ""
+        self._partial_changed_mono = 0.0
+        self._cut_reason_by_turn: dict[int, str] = {}
+        self._clock = time.monotonic
         self._sender_thread: threading.Thread | None = None
         self._pcm_mu = threading.Lock()
 
@@ -2562,6 +2575,10 @@ class CloudListener:
         self._drop_sent = False
         self._force_pending = False
         self._force_inflight = 0.0
+        self._open_turn_key = None
+        self._turn_open_mono = 0.0
+        self._partial_text = ""
+        self._partial_changed_mono = 0.0
         with self._pcm_mu:
             self._pcm_buf = bytearray(seeded)
             self._q_bytes = 0
@@ -2627,6 +2644,7 @@ class CloudListener:
     def _sender(self) -> None:
         try:
             while not self._stop.is_set():
+                self._maybe_queue_translate_cut_timer()
                 self._flush_force_endpoint()
                 self._absorb_queue()
                 if self._drain.is_set():
@@ -2781,14 +2799,51 @@ class CloudListener:
         reason = cut_decision(words, self._turn_pacing, self._force_inflight_armed())
         if reason == "none":
             return
+        key = self._stt_turn_key(data)
         self._force_pending = True
+        self._cut_reason_by_turn[key] = reason
+        while len(self._cut_reason_by_turn) > 64:
+            del self._cut_reason_by_turn[min(self._cut_reason_by_turn)]
         open_ms, gap_ms = word_span_ms(words)
         logging.getLogger("nod").info(
-            "translate_cut reason=%s open_ms=%s gap_ms=%s words=%s",
+            "translate_cut reason=%s open_ms=%s gap_ms=%s words=%s src=words",
             reason,
             open_ms,
             gap_ms,
             len(words),
+        )
+
+    def _maybe_queue_translate_cut_timer(self) -> None:
+        if not self._turn_pacing or self._open_turn_key is None or self._force_pending:
+            return
+        if self._force_inflight_armed():
+            return
+        now = self._clock()
+        open_ms = int((now - self._turn_open_mono) * 1000)
+        if self._partial_changed_mono > 0:
+            stall_ms = int((now - self._partial_changed_mono) * 1000)
+        else:
+            stall_ms = open_ms
+        reason = cut_decision_timer(
+            open_ms,
+            stall_ms,
+            self._turn_pacing,
+            False,
+        )
+        if reason == "none":
+            return
+        key = self._open_turn_key
+        self._force_pending = True
+        self._cut_reason_by_turn[key] = reason
+        while len(self._cut_reason_by_turn) > 64:
+            del self._cut_reason_by_turn[min(self._cut_reason_by_turn)]
+        word_count = len(self._partial_text.split()) if self._partial_text else 0
+        logging.getLogger("nod").info(
+            "translate_cut reason=%s open_ms=%s gap_ms=%s words=%s src=timer",
+            reason,
+            open_ms,
+            stall_ms,
+            word_count,
         )
 
     def _stt_turn_key(self, data: dict[str, Any]) -> int:
@@ -2801,6 +2856,17 @@ class CloudListener:
             pass
         self._turn_order += 1
         return self._turn_order
+
+    def _turn_order_in_payload(self, data: dict[str, Any]) -> int | None:
+        """Parse ``turn_order`` without advancing the listener fallback counter."""
+        raw = data.get("turn_order")
+        try:
+            n = int(raw)
+            if n >= 0:
+                return n
+        except (TypeError, ValueError):
+            pass
+        return None
 
     def _turn_word_meta(self, data: dict[str, Any]) -> dict[str, Any]:
         words = data.get("words") or []
@@ -2906,6 +2972,8 @@ class CloudListener:
             "stop_commit": self._stop.is_set(),
             **self._stt_latency_meta_at_commit(data, formatted=formatted),
         }
+        meta["cut_reason"] = self._cut_reason_by_turn.pop(stt_turn, "eot")
+        meta["commit_audio_ms"] = int(self._stt_tx_bytes // 32)
         if self.on_final:
             self.on_final(cleaned, lang, speaker, meta)
 
@@ -2921,9 +2989,22 @@ class CloudListener:
             else:
                 self._maybe_queue_translate_cut(data)
             text = (data.get("utterance") or data.get("transcript") or "").strip()
+            turn_key = self._turn_order_in_payload(data)
+            if data.get("end_of_turn") and turn_key is not None and turn_key == self._open_turn_key:
+                self._open_turn_key = None
             if not text:
                 return
             speechy = bool(re.search(r"[A-Za-z0-9\u00C0-\u024F\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]", text))
+            if not data.get("end_of_turn") and speechy and turn_key is not None:
+                now_mono = self._clock()
+                if turn_key != self._open_turn_key:
+                    self._turn_open_mono = now_mono
+                    self._partial_text = text
+                    self._partial_changed_mono = now_mono
+                    self._open_turn_key = turn_key
+                elif text != self._partial_text:
+                    self._partial_text = text
+                    self._partial_changed_mono = now_mono
             lang = heard_lang_from_turn(data)
             speaker = speaker_from_turn(data)
             if speechy:
@@ -3145,6 +3226,16 @@ class Session:
         self._follow_switch_hits = 0
         self._recent_finals: list[tuple[str, float]] = []
         self._translate_carry = ""
+        self._carry_mu = threading.Lock()
+        self._carry_timer: threading.Timer | None = None
+        self._carry_seq = 0
+        self._carry_created_mono = 0.0
+        self._carry_max_ms = carry_max_ms_from_env()
+        self._tr_piece: dict[str, dict[str, Any]] = {}
+        self._tr_piece_mu = threading.Lock()
+        self._pcm_rx_first_mono = 0.0
+        self._pcm_rx_anchor_bytes = 0
+        self._pcm_rx_reanchor = False
         self._mic_muted = False
         self._workspace = "interview"
         # #196 review fix: the mode the CURRENT usage row was opened with. It is
@@ -3478,6 +3569,7 @@ class Session:
 
     def close(self) -> None:
         self._closed = True
+        self._cancel_carry_timer()
         self._detach_control_emit()
         self._close_audio_uplink()
         uplink.unregister(getattr(self, "audio_token", None))
@@ -3642,7 +3734,7 @@ class Session:
                         if len(hold) + len(pcm) <= STT_PCM_HOLD_MAX:
                             hold.extend(pcm)
                             self._pcm_hold = hold
-                            self._pcm_rx_bytes = getattr(self, "_pcm_rx_bytes", 0) + len(pcm)
+                            self._pcm_rx_note(pcm)
                         self._archive_append(pcm)
                         return False
                     res = lst.push_pcm(pcm)
@@ -3655,7 +3747,7 @@ class Session:
                         return False
                     self._last_pcm_at = time.time()
                     self._archive_append(pcm)
-                    self._pcm_rx_bytes = getattr(self, "_pcm_rx_bytes", 0) + len(pcm)
+                    self._pcm_rx_note(pcm)
                     return True
                 if self._hold_incoming_pcm(pcm):
                     return True
@@ -3671,7 +3763,7 @@ class Session:
                         if len(hold) + len(pcm) <= STT_PCM_HOLD_MAX:
                             hold.extend(pcm)
                             self._pcm_hold = hold
-                            self._pcm_rx_bytes = getattr(self, "_pcm_rx_bytes", 0) + len(pcm)
+                            self._pcm_rx_note(pcm)
                         self._archive_append(pcm)
                         return False
                     res = lst.push_pcm(pcm)
@@ -3681,7 +3773,7 @@ class Session:
                         return False
                     self._last_pcm_at = time.time()
                     self._archive_append(pcm)
-                    self._pcm_rx_bytes = getattr(self, "_pcm_rx_bytes", 0) + len(pcm)
+                    self._pcm_rx_note(pcm)
                     return True
             # No listener and the hold is full. A paused/closed session, or one no
             # longer wanting to listen, legitimately discards stray frames; only a
@@ -3698,6 +3790,17 @@ class Session:
             self._archive_append(pcm)
             self._report_pcm_stalled()
             return False
+
+    def _pcm_rx_note(self, pcm: bytes) -> None:
+        prev = getattr(self, "_pcm_rx_bytes", 0)
+        if getattr(self, "_pcm_rx_reanchor", False):
+            self._pcm_rx_first_mono = time.monotonic()
+            self._pcm_rx_anchor_bytes = prev
+            self._pcm_rx_reanchor = False
+        elif prev == 0 and len(pcm) > 0:
+            self._pcm_rx_first_mono = time.monotonic()
+            self._pcm_rx_anchor_bytes = 0
+        self._pcm_rx_bytes = prev + len(pcm)
 
     def dispatch(self, msg: dict) -> None:
         mtype = msg.get("type")
@@ -3801,6 +3904,22 @@ class Session:
             self.set_translate_to(msg.get("lang") or "zh")
         elif mtype == "ping":
             self.emit({"type": "pong"})
+        elif mtype == "client_timing":
+            tid = msg.get("id")
+            try:
+                ttfc_ms = int(msg.get("ttfc_ms", 0))
+                done_ms = int(msg.get("done_ms", 0))
+            except (TypeError, ValueError):
+                return
+            ttfc_ms = max(0, min(600_000, ttfc_ms))
+            done_ms = max(0, min(600_000, done_ms))
+            if isinstance(tid, str) and tid.strip():
+                logging.getLogger("nod").info(
+                    "translate_client id=%s ttfc_ms=%s done_ms=%s",
+                    tid.strip(),
+                    ttfc_ms,
+                    done_ms,
+                )
         elif mtype == "auth":
             return
         else:
@@ -3883,6 +4002,7 @@ class Session:
             stt["speaker_labels"] = False
         if self._workspace == "translate":
             stt["turn_pacing"] = turn_pacing_from_env()
+            stt["max_turn_silence"] = os.environ.get("NOD_TR_MAX_TURN_SILENCE") or "1200"
         recent = [t for t, _ in self._recent_finals[-6:]]
         stt["context_terms"] = _stt_context_terms(recent)
         stt["context_prompt"] = _stt_context_prompt(recent[-3:])
@@ -3958,7 +4078,7 @@ class Session:
             hold.extend(pcm)
             self._pcm_hold = hold
             self._last_pcm_at = time.time()
-            self._pcm_rx_bytes = getattr(self, "_pcm_rx_bytes", 0) + len(pcm)
+            self._pcm_rx_note(pcm)
         self._archive_append(pcm)
         return True
 
@@ -4226,10 +4346,95 @@ class Session:
         self._recent_finals.append((text, time.time()))
         self._recent_finals = self._recent_finals[-8:]
 
-    def _emit_translate_pieces(self, text: str, heard: str | None, speaker: str | None) -> None:
+    def _translate_carry_init(self) -> None:
+        """Lazy defaults for ``Session.__new__`` test sessions only."""
+        if getattr(self, "_carry_mu", None) is not None:
+            return
+        self._carry_mu = threading.Lock()
+        self._carry_timer = None
+        self._carry_seq = 0
+        self._carry_created_mono = 0.0
+        self._carry_max_ms = carry_max_ms_from_env()
+        self._translate_carry = getattr(self, "_translate_carry", "") or ""
+
+    def _take_translate_carry_locked(self) -> tuple[str, float]:
+        """Take the carried tail under ``_carry_mu`` (clears store + invalidates timer)."""
+        carry = (self._translate_carry or "").strip()
+        created = float(self._carry_created_mono or 0.0)
+        self._cancel_carry_timer()
+        self._translate_carry = ""
+        self._carry_seq += 1
+        return carry, created
+
+    def _cancel_carry_timer(self) -> None:
+        self._translate_carry_init()
+        timer = self._carry_timer
+        self._carry_timer = None
+        if timer:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+
+    def _arm_carry_timer_locked(self) -> None:
+        if self._carry_max_ms <= 0:
+            return
+        seq = self._carry_seq
+        delay = self._carry_max_ms / 1000.0
+        timer = threading.Timer(delay, self._carry_deadline, args=(seq,))
+        timer.daemon = True
+        self._carry_timer = timer
+        timer.start()
+
+    def _set_translate_carry(self, tail: str) -> None:
+        self._translate_carry_init()
+        with self._carry_mu:
+            self._cancel_carry_timer()
+            self._translate_carry = tail or ""
+            if not (tail or "").strip():
+                return
+            self._carry_seq += 1
+            self._carry_created_mono = time.monotonic()
+            self._arm_carry_timer_locked()
+
+    def _carry_deadline(self, seq: int) -> None:
+        self._translate_carry_init()
+        with self._carry_mu:
+            if seq != self._carry_seq:
+                return
+            if getattr(self, "_closed", False):
+                return
+            if getattr(self, "_workspace", "") != "translate":
+                return
+            carry, created = self._take_translate_carry_locked()
+            if not carry:
+                return
+        age_ms = int(round((time.monotonic() - created) * 1000)) if created > 0 else 0
+        logging.getLogger("nod").info(
+            "translate_carry_flush reason=deadline len=%s age_ms=%s",
+            len(carry),
+            age_ms,
+        )
+        locked = self._effective_stt_lang()
+        heard = heard_lang_from_text(carry, locked) if locked else heard_lang_from_text(carry, None)
+        self._emit_translate_pieces(
+            carry,
+            heard,
+            None,
+            meta={"src": "carry_timer", "carry_wait_ms": age_ms},
+        )
+
+    def _emit_translate_pieces(
+        self,
+        text: str,
+        heard: str | None,
+        speaker: str | None,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
         piece_src = (text or "").strip()
         if not piece_src:
             return
+        base_meta = dict(meta or {})
         # 不取消在途翻译：取消会让被中断的句子等 25s 超时重试（双倍 token + 字幕卡死）。
         # 新 final 照常入队，前端 pump 一次只发一条，翻译自然串行。
         self._pending_q.clear()
@@ -4252,6 +4457,7 @@ class Session:
                 originals = {}
                 self._watch_copy_original = originals
             originals[ev["id"]] = piece
+            piece_meta = {**base_meta, "piece": ev["id"]}
             if translate_should_passthrough(piece, (self.cfg.get("ui") or {}).get("translate_to") or "zh", piece_heard):
                 ev["translation"] = piece
                 # This row is already in the caption language, so it supersedes any
@@ -4260,14 +4466,17 @@ class Session:
                 self._watch_copy_ask = ""
                 self.emit(ev)
                 self._emit_watch_copy(ev["id"], original=piece, translation=piece, done=True)
+                self._log_translate_latency(piece_meta, passthrough=1)
                 continue
             self.emit(ev)
-            self._start_voice_translate(ev["id"], piece, piece_heard)
+            self._start_voice_translate(ev["id"], piece, piece_heard, piece_meta)
 
     def _flush_translate_carry(self, reason: str) -> None:
-        carry = (getattr(self, "_translate_carry", "") or "").strip()
-        if not carry:
-            return
+        self._translate_carry_init()
+        with self._carry_mu:
+            carry, _created = self._take_translate_carry_locked()
+            if not carry:
+                return
         logging.getLogger("nod").info(
             "translate_carry_flush reason=%s len=%s",
             reason,
@@ -4276,8 +4485,138 @@ class Session:
         if getattr(self, "_workspace", "") == "translate":
             locked = self._effective_stt_lang()
             heard = heard_lang_from_text(carry, locked) if locked else heard_lang_from_text(carry, None)
-            self._emit_translate_pieces(carry, heard, None)
-        self._translate_carry = ""
+            self._emit_translate_pieces(
+                carry,
+                heard,
+                None,
+                meta={"src": f"flush:{reason}"},
+            )
+
+    def _uplink_lag_ms(self) -> int | None:
+        first = getattr(self, "_pcm_rx_first_mono", 0.0)
+        if first <= 0:
+            return None
+        rx = getattr(self, "_pcm_rx_bytes", 0) - int(getattr(self, "_pcm_rx_anchor_bytes", 0) or 0)
+        if rx < 0:
+            rx = 0
+        return int(round((time.monotonic() - first) * 1000 - rx / 32))
+
+    def _translate_latency_fields(
+        self,
+        rec: dict[str, Any],
+        *,
+        passthrough: int = 0,
+        failed: int | None = None,
+    ) -> dict[str, Any]:
+        first_w = rec.get("first_word_ms")
+        last_w = rec.get("last_word_ms")
+        line_span: int | None = None
+        if first_w is not None and last_w is not None:
+            try:
+                line_span = int(last_w) - int(first_w)
+            except (TypeError, ValueError):
+                line_span = None
+        asr_lag = rec.get("asr_lag_ms")
+        carry_wait = rec.get("carry_wait_ms")
+        queue_wait = rec.get("queue_wait_ms")
+        llm_ttft = rec.get("llm_ttft_ms")
+        speech_to_chunk: int | None = None
+        if any(x is not None for x in (asr_lag, carry_wait, queue_wait, llm_ttft)):
+            speech_to_chunk = sum(int(x or 0) for x in (asr_lag, carry_wait, queue_wait, llm_ttft))
+        dev_backlog = rec.get("dev_backlog_ms")
+        if dev_backlog is None:
+            pending = getattr(self, "_uplink_pending_ms", None)
+            if pending is not None:
+                dev_backlog = int(pending)
+        fields: dict[str, Any] = {
+            "stream": rec.get("stream"),
+            "turn": rec.get("stt_turn") if rec.get("stt_turn") is not None else rec.get("turn_order"),
+            "piece": rec.get("piece"),
+            "src": rec.get("src") or "final",
+            "cut": rec.get("cut_reason") or rec.get("cut") or "eot",
+            "passthrough": passthrough,
+            "first_word_ms": first_w,
+            "last_word_ms": last_w,
+            "commit_audio_ms": rec.get("commit_audio_ms"),
+            "asr_lag_ms": asr_lag,
+            "backlog_ms": rec.get("backlog_ms"),
+            "dev_backlog_ms": dev_backlog,
+            "uplink_lag_ms": self._uplink_lag_ms(),
+            "carry_wait_ms": carry_wait,
+            "queue_wait_ms": queue_wait,
+            "llm_ttft_ms": llm_ttft,
+            "llm_total_ms": rec.get("llm_total_ms"),
+            "speech_to_chunk_ms": speech_to_chunk,
+            "line_span_ms": line_span,
+            "chars": rec.get("chars"),
+            "lang": rec.get("lang"),
+        }
+        if failed is not None:
+            fields["failed"] = failed
+        return fields
+
+    def _log_translate_latency(
+        self,
+        rec: dict[str, Any],
+        *,
+        passthrough: int = 0,
+        failed: int | None = None,
+    ) -> None:
+        from server.stt_latency import record_translate_latency
+
+        record_translate_latency(self._translate_latency_fields(rec, passthrough=passthrough, failed=failed))
+
+    def _note_translate_timing(self, ev: dict) -> None:
+        kind = ev.get("type")
+        mu = getattr(self, "_tr_piece_mu", None)
+        if mu is None:
+            return
+        log_call: tuple[dict, int, int | None] | None = None
+        with mu:
+            store = self._tr_piece
+            if kind == "question":
+                bind = _translate_line_id(ev.get("text") or "")
+                if not bind:
+                    return
+                rec = store.get(bind)
+                if not rec:
+                    return
+                now = time.monotonic()
+                rec["ask_mono"] = now
+                rec["ask_id"] = str(ev.get("id") or "")
+                sub = rec.get("submit_mono")
+                if sub is not None:
+                    # Includes time blocked in check_can_generate (DB) before Pipeline.process_text.
+                    rec["queue_wait_ms"] = int(round((now - float(sub)) * 1000))
+                return
+            ask_id = str(ev.get("id") or "")
+            if kind == "chunk":
+                for rec in list(store.values()):
+                    if rec.get("ask_id") == ask_id and rec.get("llm_ttft_ms") is None:
+                        ask_mono = rec.get("ask_mono")
+                        if ask_mono is not None:
+                            rec["llm_ttft_ms"] = int(round((time.monotonic() - float(ask_mono)) * 1000))
+                        break
+            elif kind == "done":
+                for bind, rec in list(store.items()):
+                    if rec.get("ask_id") != ask_id:
+                        continue
+                    ask_mono = rec.get("ask_mono")
+                    if ask_mono is not None:
+                        rec["llm_total_ms"] = int(round((time.monotonic() - float(ask_mono)) * 1000))
+                    log_call = (dict(rec), 0, None)
+                    store.pop(bind, None)
+                    break
+            elif kind == "error":
+                for bind, rec in list(store.items()):
+                    if rec.get("ask_id") != ask_id:
+                        continue
+                    log_call = (dict(rec), 0, 1)
+                    store.pop(bind, None)
+                    break
+        if log_call is not None:
+            rec, passthrough, failed = log_call
+            self._log_translate_latency(rec, passthrough=passthrough, failed=failed)
 
     def _maybe_follow_speech(self, text: str, heard: str | None) -> None:
         if self._effective_stt_lang():
@@ -5513,6 +5852,8 @@ class Session:
                 self._stop_manual()
             self.emit({"type": "status", "text": "Microphone muted"})
         else:
+            # Re-anchor uplink lag on the next PCM frame after server-side mute.
+            self._pcm_rx_reanchor = True
             self.emit({"type": "status", "text": "Microphone unmuted"})
 
     def start_listen(self, mic: Any = None) -> None:
@@ -5716,6 +6057,7 @@ class Session:
         # incremental `chunk` (control socket) and the full `watch_copy` (audio
         # socket) for one row; without a shared version it duplicates/regresses.
         row = self._maybe_watch_copy(ev)
+        self._note_translate_timing(ev)
         # Live Q&A rides its own lane on the same audio socket: the committed
         # question, the streamed answer, the completion and the failure reach the
         # Watch even when the parked webview cannot push a face (#219 follow-up).
@@ -6157,10 +6499,27 @@ class Session:
             return row
         return None
 
-    def _start_voice_translate(self, pair_id: str, piece: str, heard: str | None) -> None:
+    def _start_voice_translate(
+        self,
+        pair_id: str,
+        piece: str,
+        heard: str | None,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
         ask = getattr(self, "ask", None)
         if not callable(ask):
             return
+        now = time.monotonic()
+        rec = {**(meta or {}), "submit_mono": now, "chars": len(piece), "lang": heard, "piece": pair_id}
+        mu = getattr(self, "_tr_piece_mu", None)
+        if mu is None:
+            self._tr_piece = {pair_id: rec}
+        else:
+            with mu:
+                store = self._tr_piece
+                store[pair_id] = rec
+                while len(store) > 64:
+                    del store[next(iter(store))]
         target = _normalize_translate_to((self.cfg.get("ui") or {}).get("translate_to"))
         target_name = _LANG_NAMES.get(target, "Chinese")
         source_hint = heard or self._effective_stt_lang()
@@ -6354,6 +6713,9 @@ class Session:
             # to the session, and re-pressing Listen must not silently drop it.
             self._qa_reset("new_listen", reset_think=False)
             self._pcm_rx_bytes = 0
+            self._pcm_rx_first_mono = 0.0
+            self._pcm_rx_anchor_bytes = 0
+            self._pcm_rx_reanchor = False
             self._stt_tx_bytes = 0
             self._stt_pending_pcm = b""
             self._pcm_hold = bytearray()
@@ -7055,6 +7417,12 @@ class Session:
         if not self._speech_allowed(text, lang):
             self.emit({"type": "partial", "text": ""})
             return
+        if self._workspace == "translate":
+            self._translate_carry_init()
+            with self._carry_mu:
+                carry = (self._translate_carry or "").strip()
+            if carry:
+                text = join_meeting_text(carry, text)
         ev: dict[str, Any] = {"type": "partial", "text": text}
         if self._workspace == "translate":
             # Locked Translate From: the STT tag may be absent, so emit the
@@ -7112,24 +7480,47 @@ class Session:
             self._record_stt_latency("translate", meta, hold_ms=None)
             locked = self._effective_stt_lang()
             raw = cleaned
-            carry = (getattr(self, "_translate_carry", "") or "").strip()
+            self._translate_carry_init()
+            with self._carry_mu:
+                carry, carry_created = self._take_translate_carry_locked()
+            piece_meta = dict(meta)
+            if carry:
+                piece_meta["src"] = "carry_join"
+                if carry_created > 0:
+                    piece_meta["carry_wait_ms"] = int(
+                        round((time.monotonic() - carry_created) * 1000)
+                    )
             joined = join_meeting_text(carry, raw) if carry else raw
             heard = heard_lang_from_text(joined, locked) if locked else heard_lang_from_text(joined, lang)
-            if carry:
-                head, tail = split_carry(joined)
-                if not head:
-                    self._emit_translate_pieces(joined, heard, speaker)
-                    self._translate_carry = ""
-                    return
-                self._emit_translate_pieces(head, heard, speaker)
-                self._translate_carry = tail
-                return
             head, tail = split_carry(joined)
-            if not head:
-                self._translate_carry = tail
+            if carry and not head:
+                self._emit_translate_pieces(joined, heard, speaker, meta=piece_meta)
+                self._set_translate_carry("")
                 return
-            self._emit_translate_pieces(head, heard, speaker)
-            self._translate_carry = tail
+            if carry:
+                self._emit_translate_pieces(head, heard, speaker, meta=piece_meta)
+                self._set_translate_carry(tail)
+                if tail and self._speech_allowed(tail, heard):
+                    pev: dict[str, Any] = {"type": "partial", "text": tail}
+                    if heard:
+                        pev["language"] = heard
+                    self.emit(pev)
+                return
+            if not head:
+                self._set_translate_carry(tail)
+                if tail and self._speech_allowed(tail, heard):
+                    pev = {"type": "partial", "text": tail}
+                    if heard:
+                        pev["language"] = heard
+                    self.emit(pev)
+                return
+            self._emit_translate_pieces(head, heard, speaker, meta=piece_meta)
+            self._set_translate_carry(tail)
+            if tail and self._speech_allowed(tail, heard):
+                pev = {"type": "partial", "text": tail}
+                if heard:
+                    pev["language"] = heard
+                self.emit(pev)
             return
         else:
             heard = heard_lang_from_text(cleaned, lang)
@@ -7623,6 +8014,19 @@ async def ws_audio(ws: WebSocket):
                     continue
                 mtype = payload.get("type")
                 if mtype == "ping":
+                    pm = payload.get("pending_ms")
+                    if isinstance(pm, (int, float)):
+                        session._uplink_pending_ms = int(pm)
+                        session._uplink_pending_at = time.time()
+                        stream = ""
+                        lst = getattr(session, "_listener", None)
+                        if lst is not None:
+                            stream = getattr(lst, "_stream_id", "") or ""
+                        logging.getLogger("nod").info(
+                            "uplink_ping pending_ms=%s stream=%s",
+                            int(pm),
+                            stream,
+                        )
                     continue
                 if mtype == "pcm_end":
                     await run_in_threadpool(
