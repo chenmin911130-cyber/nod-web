@@ -1,4 +1,7 @@
-import { SPLASH_HIDDEN_FALLBACK_MS, createSplashReadySignal } from './splashReady'
+import { SPLASH_HIDDEN_FALLBACK_MS, createSplashReadySignal, loadNodSplash } from './splashReady'
+import type { NodSplashPlugin } from './splashReady'
+
+const realSetTimeout = globalThis.setTimeout
 
 function eq<T>(got: T, want: T, label: string) {
   if (got !== want) throw new Error(`${label}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`)
@@ -173,6 +176,81 @@ function installFakeEnv(hidden: boolean) {
     'the bounded fallback sends the signal without visibility',
   )
   env.teardown()
+}
+
+/** Same get() shape as @capacitor/core registerPlugin: every unknown property, `then`
+ * included, is a native method wrapper that rejects when the method does not exist. */
+function capacitorProxy(calls: string[]): NodSplashPlugin {
+  return new Proxy({} as NodSplashPlugin, {
+    get(_, prop) {
+      if (prop === '$$typeof') return undefined
+      if (prop === 'toJSON') return () => ({})
+      return () => {
+        calls.push(String(prop))
+        if (prop === 'splashReady') return Promise.resolve()
+        return Promise.reject(new Error(`"NodSplash.${String(prop)}()" is not implemented on ios`))
+      }
+    },
+  })
+}
+
+function within<T>(p: Promise<T>, ms: number): Promise<T | 'pending'> {
+  return Promise.race([p, new Promise<'pending'>((resolve) => realSetTimeout(() => resolve('pending'), ms))])
+}
+
+// The registry fallback hands back a Capacitor proxy; the loader must still settle.
+{
+  const calls: string[] = []
+  const got = await within(
+    loadNodSplash({
+      importPackage: () => Promise.reject(new Error('bare specifier')),
+      register: () => capacitorProxy(calls),
+    }),
+    500,
+  )
+  eq(got === 'pending', false, 'loadNodSplash settles when register() returns a Capacitor proxy')
+  if (got && got !== 'pending') await got.splashReady()
+  eq(calls.includes('splashReady'), true, 'the wrapper reaches the native splashReady')
+  eq(calls.includes('then'), false, 'the proxy is never probed as a thenable')
+}
+
+// The package path returns the same kind of proxy.
+{
+  const calls: string[] = []
+  const got = await within(
+    loadNodSplash({
+      importPackage: async () => ({ NodSplash: capacitorProxy(calls) }),
+      register: () => {
+        throw new Error('not reached')
+      },
+    }),
+    500,
+  )
+  eq(got === 'pending', false, 'loadNodSplash settles when the package exports a Capacitor proxy')
+}
+
+// End to end: a native cold start with the real loader must reach splashReady after paint.
+{
+  const env = installFakeEnv(false)
+  const calls: string[] = []
+  const signal = createSplashReadySignal({
+    isNative: () => true,
+    loadPlugin: () =>
+      loadNodSplash({
+        importPackage: () => Promise.reject(new Error('bare specifier')),
+        register: () => capacitorProxy(calls),
+      }),
+  })
+  signal()
+  await env.drainFrames()
+  env.teardown()
+  await within(
+    (async () => {
+      while (!calls.includes('splashReady')) await new Promise((r) => realSetTimeout(r, 5))
+    })(),
+    500,
+  )
+  eq(calls.filter((c) => c === 'splashReady').length, 1, 'cold start sends the handshake once')
 }
 
 console.log('splashReady.test.ts: ok')
