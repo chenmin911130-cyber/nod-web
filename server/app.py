@@ -2999,7 +2999,7 @@ class CloudListener:
                 now_mono = self._clock()
                 if turn_key != self._open_turn_key:
                     self._turn_open_mono = now_mono
-                    self._partial_text = ""
+                    self._partial_text = text
                     self._partial_changed_mono = now_mono
                     self._open_turn_key = turn_key
                 elif text != self._partial_text:
@@ -4571,6 +4571,7 @@ class Session:
         mu = getattr(self, "_tr_piece_mu", None)
         if mu is None:
             return
+        log_call: tuple[dict, int, int | None] | None = None
         with mu:
             store = self._tr_piece
             if kind == "question":
@@ -4603,16 +4604,19 @@ class Session:
                     ask_mono = rec.get("ask_mono")
                     if ask_mono is not None:
                         rec["llm_total_ms"] = int(round((time.monotonic() - float(ask_mono)) * 1000))
-                    self._log_translate_latency(rec, passthrough=0)
+                    log_call = (dict(rec), 0, None)
                     store.pop(bind, None)
                     break
             elif kind == "error":
                 for bind, rec in list(store.items()):
                     if rec.get("ask_id") != ask_id:
                         continue
-                    self._log_translate_latency(rec, passthrough=0, failed=1)
+                    log_call = (dict(rec), 0, 1)
                     store.pop(bind, None)
                     break
+        if log_call is not None:
+            rec, passthrough, failed = log_call
+            self._log_translate_latency(rec, passthrough=passthrough, failed=failed)
 
     def _maybe_follow_speech(self, text: str, heard: str | None) -> None:
         if self._effective_stt_lang():

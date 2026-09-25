@@ -672,23 +672,30 @@ class TranslateCarrySessionTests(unittest.TestCase):
         partials = [e for e in sess.emit.events if e["type"] == "partial"]
         self.assertFalse(any(p.get("text") == "And then" for p in partials))
 
-    def test_non_atomic_carry_window_duplicates_with_deadline(self):
-        """Documents the pre-fix race: read carry, deadline flush, then join."""
+    def test_on_final_carry_deadline_race_real_path(self):
+        """Real `_on_final`: deadline flush interleaves inside carry_wait_ms window."""
+        import server.app as app_mod
+
         sess = _translate_session()
-        sess._set_translate_carry("We know exactly")
+        sess._carry_max_ms = 0
+        sess._on_final("We know exactly")
         seq = sess._carry_seq
-        with sess._carry_mu:
-            carry = (sess._translate_carry or "").strip()
-            created = sess._carry_created_mono
-        sess._carry_deadline(seq)
-        joined = join_meeting_text(carry, "where to go.")
-        head, _tail = split_carry(joined)
-        if head:
-            sess._emit_translate_pieces(head, "en", None)
+        real_mono = time.monotonic
+        first_mono_after_patch = True
+
+        def mono_shim():
+            nonlocal first_mono_after_patch
+            if first_mono_after_patch:
+                first_mono_after_patch = False
+                sess._carry_deadline(seq)
+            return real_mono()
+
+        with mock.patch.object(app_mod.time, "monotonic", side_effect=mono_shim):
+            sess._on_final("where to go. And then")
         qs = [e for e in sess.emit.events if e["type"] == "question"]
-        self.assertEqual(len(qs), 2)
         texts = [q["text"] for q in qs]
-        self.assertIn("We know exactly", texts)
+        know_count = sum(1 for t in texts if "We know exactly" in t)
+        self.assertEqual(know_count, 1)
         self.assertTrue(any("where to go" in t for t in texts))
 
     def test_take_translate_carry_atomic_with_deadline_race(self):
@@ -702,15 +709,6 @@ class TranslateCarrySessionTests(unittest.TestCase):
         joined = join_meeting_text(carry, "where to go.")
         head, _tail = split_carry(joined)
         sess._emit_translate_pieces(head, "en", None)
-        qs = [e for e in sess.emit.events if e["type"] == "question"]
-        self.assertEqual(len(qs), 1)
-        self.assertIn("We know exactly", qs[0]["text"])
-        self.assertIn("where to go", qs[0]["text"])
-
-    def test_on_final_carry_join_single_question(self):
-        sess = _translate_session()
-        sess._set_translate_carry("We know exactly")
-        sess._on_final("where to go.", "en", None, {})
         qs = [e for e in sess.emit.events if e["type"] == "question"]
         self.assertEqual(len(qs), 1)
         self.assertIn("We know exactly", qs[0]["text"])
