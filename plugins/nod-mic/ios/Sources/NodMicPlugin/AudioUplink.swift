@@ -1,5 +1,49 @@
 import Foundation
 
+/// Phone → server send clock. Cumulative mode is never re-anchored on send completion.
+struct UplinkPacer {
+    enum Mode: String { case cumulative, legacy }
+    var mode: Mode = .cumulative
+    var catchupRate: Double = 1.0
+    var coalesceMax: Int = 1
+    let slack: TimeInterval = 0.3
+    private(set) var nextSendAt: TimeInterval = 0
+
+    mutating func reset() { nextSendAt = 0 }
+
+    func waitBeforeSend(now: TimeInterval) -> TimeInterval {
+        nextSendAt <= 0 ? 0 : max(0, nextSendAt - now)
+    }
+
+    func framesForMessage(pendingFrames: Int) -> Int {
+        guard pendingFrames > 0 else { return 0 }
+        guard mode == .cumulative, pendingFrames >= 2 else { return 1 }
+        return min(pendingFrames, max(1, coalesceMax))
+    }
+
+    mutating func noteSendStarted(now: TimeInterval, audioSeconds: TimeInterval, pendingFramesBefore: Int) {
+        guard mode == .cumulative else { return }
+        let base = nextSendAt <= 0 ? now : max(nextSendAt, now - slack)
+        let rate = pendingFramesBefore >= 2 ? max(1.0, catchupRate) : 1.0
+        nextSendAt = base + audioSeconds / rate
+    }
+
+    mutating func noteSendCompleted(now: TimeInterval, audioSeconds: TimeInterval) {
+        guard mode == .legacy else { return }
+        nextSendAt = now + audioSeconds
+    }
+
+    mutating func apply(config obj: [String: Any]) {
+        if let p = obj["pace"] as? String, let m = Mode(rawValue: p) { mode = m }
+        if let r = (obj["catchup_rate"] as? NSNumber)?.doubleValue { catchupRate = max(1.0, min(2.0, r)) }
+        if let c = (obj["coalesce_max"] as? NSNumber)?.intValue { coalesceMax = max(1, min(10, c)) }
+    }
+
+    #if PCM_REPLAY_TESTING
+    mutating func testingSetNextSendAt(_ t: TimeInterval) { nextSendAt = t }
+    #endif
+}
+
 extension Notification.Name {
     static let nodUplinkState = Notification.Name("nod.uplink.state")
 }
@@ -42,7 +86,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     private var flushWork: DispatchWorkItem?
     private var pumpWork: DispatchWorkItem?
     private var sending = false
-    private var lastSendAt: TimeInterval = 0
+    private var pacer = UplinkPacer()
     private var watchObserver: NSObjectProtocol?
     private var startCompletions: [(Error?) -> Void] = []
     private var startTimeoutWork: DispatchWorkItem?
@@ -52,7 +96,9 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     private let minChunkBytes = 1600 // 50 ms — AssemblyAI 3007 floor
     private let frameBytes = 3200 // 100 ms
     private let maxPendingBytes = 2 * 1024 * 1024
-    private var lastSentAudioSeconds: TimeInterval = 0
+    private var enqueuedBytes = 0
+    private var sentBytes = 0
+    private var droppedBytes = 0
     private var pcmEndId = ""
     private var pcmEndOffset = 0
     private var pcmEndCapture = ""
@@ -128,6 +174,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             self.url = url
             self.bufLock.lock()
             self.acceptingPcm = true
+            self.resetByteCountersLocked()
             self.bufLock.unlock()
             self.stopped = false
             self.reconnectAttempt = 0
@@ -169,8 +216,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             self.pumpWork?.cancel()
             self.pumpWork = nil
             self.sending = false
-            self.lastSendAt = 0
-            self.lastSentAudioSeconds = 0
+            self.pacer = UplinkPacer()
             self.stopPing()
             self.task?.cancel(with: .goingAway, reason: nil)
             self.task = nil
@@ -180,6 +226,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             self.stash.removeAll(keepingCapacity: false)
             self.pending.removeAll(keepingCapacity: false)
             self.pendingBytes = 0
+            self.resetByteCountersLocked()
             self.bufLock.unlock()
             self.pcmEndId = ""
             self.pcmEndCapture = ""
@@ -273,8 +320,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         pumpWork?.cancel()
         pumpWork = nil
         sending = false
-        lastSendAt = 0
-        lastSentAudioSeconds = 0
+        pacer.reset()
         stopPing()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
@@ -284,6 +330,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         stash.removeAll(keepingCapacity: false)
         pending.removeAll(keepingCapacity: false)
         pendingBytes = 0
+        resetByteCountersLocked()
         bufLock.unlock()
         pcmEndId = ""
         pcmEndCapture = ""
@@ -310,6 +357,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func open() {
+        pacer.reset()
         reconnectWork?.cancel()
         reconnectWork = nil
         stopPing()
@@ -322,6 +370,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func append(_ data: Data, dropOldest: Bool) {
+        enqueuedBytes += data.count
         stash.append(data)
         while stash.count >= frameBytes {
             let frame = Data(stash.prefix(frameBytes))
@@ -361,6 +410,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             while pendingBytes > maxPendingBytes, let oldest = pending.first {
                 pending.removeFirst()
                 pendingBytes -= oldest.count
+                droppedBytes += oldest.count
             }
         }
     }
@@ -385,8 +435,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             sendPcmEndIfIdle()
             return
         }
-        let elapsed = Date.timeIntervalSinceReferenceDate - lastSendAt
-        let wait = lastSendAt == 0 ? 0 : max(0, lastSentAudioSeconds - elapsed)
+        let wait = pacer.waitBeforeSend(now: uptime())
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.pumpWork = nil
@@ -429,19 +478,34 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         }
     }
 
+    private func uptime() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+    private func resetByteCountersLocked() {
+        enqueuedBytes = 0
+        sentBytes = 0
+        droppedBytes = 0
+    }
+
     private func sendHead() {
         guard !sending else { return }
         guard isConnected, let task, !stopped else { return }
         bufLock.lock()
-        guard let queued = pending.first else {
+        let before = pending.count
+        let n = pacer.framesForMessage(pendingFrames: before)
+        if n == 0 {
             bufLock.unlock()
             sendPcmEndIfIdle()
             return
         }
+        let batch = Array(pending.prefix(n))
         bufLock.unlock()
+        var joined = Data()
+        for piece in batch { joined.append(piece) }
+        let frame = sendableFrame(joined)
         let consumeCapture = streamCaptureId
         let consumeSession = streamSessionId
-        let frame = sendableFrame(queued)
+        let batchBytes = batch.reduce(0) { $0 + $1.count }
+        pacer.noteSendStarted(now: uptime(), audioSeconds: audioSeconds(frame), pendingFramesBefore: before)
         sending = true
         task.send(.data(frame)) { [weak self] error in
             guard let self else { return }
@@ -452,18 +516,20 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                     return
                 }
                 self.bufLock.lock()
-                if self.pending.first == queued {
-                    self.pending.removeFirst()
-                    self.pendingBytes -= queued.count
+                for piece in batch {
+                    if self.pending.first == piece {
+                        self.pending.removeFirst()
+                        self.pendingBytes -= piece.count
+                    }
                 }
+                self.sentBytes += batchBytes
                 self.bufLock.unlock()
-                self.lastSendAt = Date.timeIntervalSinceReferenceDate
-                self.lastSentAudioSeconds = self.audioSeconds(frame)
+                self.pacer.noteSendCompleted(now: self.uptime(), audioSeconds: self.audioSeconds(frame))
                 NotificationCenter.default.post(
                     name: Notification.Name("nod.uplink.consumed"),
                     object: nil,
                     userInfo: [
-                        "bytes": queued.count,
+                        "bytes": batchBytes,
                         "captureId": consumeCapture,
                         "sessionId": consumeSession,
                     ]
@@ -472,6 +538,10 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             }
         }
     }
+
+    #if PCM_REPLAY_TESTING
+    var pacerForTesting: UplinkPacer { pacer }
+    #endif
 
     private func listen(_ task: URLSessionWebSocketTask) {
         task.receive { [weak self] result in
@@ -556,6 +626,8 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                 object: nil,
                 userInfo: obj
             )
+        case "uplink_config":
+            pacer.apply(config: obj)
         case "qa_copy":
             // Live Q&A has its own server message type but the SAME Watch copy lane:
             // the bridge keeps one current copy (question -> original, answer ->
@@ -573,6 +645,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
 
     private func handleDrop() {
         guard !stopped else { return }
+        pacer.reset()
         sending = false
         pumpWork?.cancel()
         pumpWork = nil
@@ -604,7 +677,24 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         timer.schedule(deadline: .now() + 20, repeating: 20)
         timer.setEventHandler { [weak self] in
             guard let self, let task = self.task, self.isConnected, !self.stopped else { return }
-            task.send(.string("{\"type\":\"ping\"}")) { _ in }
+            self.bufLock.lock()
+            let pendingMs = (self.pendingBytes + self.stash.count) / 32
+            let enqueuedMs = self.enqueuedBytes / 32
+            let sentMs = self.sentBytes / 32
+            let droppedMs = self.droppedBytes / 32
+            self.bufLock.unlock()
+            let payload: [String: Any] = [
+                "type": "ping",
+                "pending_ms": pendingMs,
+                "enqueued_ms": enqueuedMs,
+                "sent_ms": sentMs,
+                "dropped_ms": droppedMs,
+            ]
+            guard JSONSerialization.isValidJSONObject(payload),
+                  let data = try? JSONSerialization.data(withJSONObject: payload),
+                  let text = String(data: data, encoding: .utf8)
+            else { return }
+            task.send(.string(text)) { _ in }
         }
         pingTimer = timer
         timer.resume()
@@ -642,6 +732,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         queue.async { [weak self] in
             guard let self, webSocketTask === self.task else { return }
             if closeCode.rawValue == 4404 {
+                self.pacer.reset()
                 self.stopped = true
                 self.reconnectWork?.cancel()
                 self.reconnectWork = nil
@@ -704,6 +795,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func failHandshake(_ status: Int) {
+        pacer.reset()
         stopped = true
         reconnectWork?.cancel()
         reconnectWork = nil
