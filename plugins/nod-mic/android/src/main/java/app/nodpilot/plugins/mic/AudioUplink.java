@@ -59,8 +59,10 @@ final class AudioUplink {
         ioThread.start();
         io = new Handler(ioThread.getLooper());
     }
-    private long lastSendAt;
-    private double lastSentAudioSeconds;
+    private final UplinkPacer pacer = new UplinkPacer();
+    private long enqueuedBytes;
+    private long sentBytes;
+    private long droppedBytes;
     private final Runnable ping = this::sendPing;
     private final Runnable timeout = this::onStartTimeout;
     private final Runnable pump = this::pump;
@@ -84,6 +86,9 @@ final class AudioUplink {
             url = nextUrl;
             stopped = false;
             reconnectAttempt = 0;
+            enqueuedBytes = 0;
+            sentBytes = 0;
+            droppedBytes = 0;
             startCb = cb;
             io.removeCallbacks(timeout);
             io.postDelayed(timeout, 8000);
@@ -101,8 +106,10 @@ final class AudioUplink {
             pending.clear();
             pendingBytes = 0;
             stash = new byte[0];
-            lastSendAt = 0;
-            lastSentAudioSeconds = 0;
+            pacer.restoreDefaults();
+            enqueuedBytes = 0;
+            sentBytes = 0;
+            droppedBytes = 0;
             socketGen++;
             io.removeCallbacks(ping);
             io.removeCallbacks(timeout);
@@ -119,6 +126,7 @@ final class AudioUplink {
         if (data == null || n <= 0) return;
         synchronized (lock) {
             if (stopped || !enabled) return;
+            enqueuedBytes += n;
             stash = concat(stash, data, n);
             while (stash.length >= FRAME_BYTES) {
                 byte[] frame = slice(stash, 0, FRAME_BYTES);
@@ -134,6 +142,7 @@ final class AudioUplink {
         String target;
         synchronized (lock) {
             if (stopped || url.isEmpty()) return;
+            pacer.reset();
             socketGen++;
             gen = socketGen;
             if (socket != null) {
@@ -173,7 +182,18 @@ final class AudioUplink {
 
                 @Override
                 public void onMessage(WebSocket webSocket, String text) {
-                    /* pcm_end / watch copy are Watch-side; phone listen ignores. */
+                    try {
+                        JSONObject o = new JSONObject(text);
+                        if ("uplink_config".equals(o.optString("type"))) {
+                            synchronized (lock) {
+                                pacer.applyConfig(
+                                    o.has("pace") ? o.optString("pace") : null,
+                                    o.has("catchup_rate") ? o.optDouble("catchup_rate") : null,
+                                    o.has("coalesce_max") ? o.optInt("coalesce_max") : null
+                                );
+                            }
+                        }
+                    } catch (Exception ignored) {}
                 }
 
                 @Override
@@ -220,6 +240,7 @@ final class AudioUplink {
     private void handleDrop(int gen) {
         synchronized (lock) {
             if (stopped || socketGen != gen) return;
+            pacer.reset();
             socketGen++;
             connected = false;
             sending = false;
@@ -238,6 +259,7 @@ final class AudioUplink {
     private void onStartTimeout() {
         synchronized (lock) {
             if (startCb == null) return;
+            pacer.reset();
             stopped = true;
             enabled = false;
             connected = false;
@@ -265,62 +287,104 @@ final class AudioUplink {
         while (pendingBytes > MAX_PENDING && !pending.isEmpty()) {
             byte[] oldest = pending.removeFirst();
             pendingBytes -= oldest.length;
+            droppedBytes += oldest.length;
         }
     }
 
     private void schedulePump() {
         io.removeCallbacks(pump);
-        long waitMs = 0;
+        long waitMs;
         synchronized (lock) {
-            if (lastSendAt != 0) {
-                double elapsed = (System.nanoTime() - lastSendAt) / 1e9;
-                waitMs = Math.max(0, (long) ((lastSentAudioSeconds - elapsed) * 1000));
-            }
+            waitMs = pacer.waitBeforeSendMs(System.nanoTime());
         }
         io.postDelayed(pump, waitMs);
     }
 
     private void pump() {
-        byte[] frame;
+        byte[] msg;
         WebSocket ws;
+        byte[][] batch;
+        int batchBytes;
         synchronized (lock) {
             if (stopped || !connected || sending || socket == null || pending.isEmpty()) return;
-            frame = pending.peekFirst();
-            if (frame == null) return;
-            if (frame.length < MIN_CHUNK) {
-                byte[] padded = new byte[MIN_CHUNK];
-                System.arraycopy(frame, 0, padded, 0, frame.length);
-                frame = padded;
+            if (socket.queueSize() > 3L * FRAME_BYTES) {
+                io.postDelayed(pump, 20);
+                return;
             }
+            int before = pending.size();
+            int n = pacer.framesForMessage(before);
+            if (n <= 0) return;
+            batch = new byte[n][];
+            batchBytes = 0;
+            int i = 0;
+            for (byte[] frame : pending) {
+                if (i >= n) break;
+                batch[i++] = frame;
+                batchBytes += frame.length;
+            }
+            msg = new byte[batchBytes];
+            int off = 0;
+            for (byte[] frame : batch) {
+                System.arraycopy(frame, 0, msg, off, frame.length);
+                off += frame.length;
+            }
+            if (msg.length < MIN_CHUNK) {
+                byte[] padded = new byte[MIN_CHUNK];
+                System.arraycopy(msg, 0, padded, 0, msg.length);
+                msg = padded;
+            }
+            pacer.noteSendStarted(System.nanoTime(), audioNanos(msg.length), before);
             sending = true;
             ws = socket;
         }
-        boolean ok = ws.send(ByteString.of(frame));
+        boolean ok = ws.send(ByteString.of(msg));
         synchronized (lock) {
             sending = false;
             if (!ok) {
                 handleDrop(socketGen);
                 return;
             }
-            byte[] queued = pending.pollFirst();
-            if (queued != null) pendingBytes -= queued.length;
-            lastSendAt = System.nanoTime();
-            lastSentAudioSeconds = frame.length / (double) SAMPLE_BYTES_PER_SEC;
+            for (byte[] frame : batch) {
+                if (pending.peekFirst() == frame) {
+                    pending.pollFirst();
+                    pendingBytes -= frame.length;
+                }
+            }
+            sentBytes += batchBytes;
+            pacer.noteSendCompleted(System.nanoTime(), audioNanos(msg.length));
         }
         schedulePump();
     }
 
+    private static long audioNanos(int bytes) {
+        return (long) bytes * 1_000_000_000L / SAMPLE_BYTES_PER_SEC;
+    }
+
     private void sendPing() {
         WebSocket ws;
+        int pendingMs;
+        long enqueuedMs;
+        long sentMs;
+        long droppedMs;
         synchronized (lock) {
-            if (stopped || !connected) return;
+            if (stopped || !connected || socket == null) return;
             ws = socket;
+            pendingMs = (pendingBytes + stash.length) / 32;
+            enqueuedMs = enqueuedBytes / 32;
+            sentMs = sentBytes / 32;
+            droppedMs = droppedBytes / 32;
         }
-        if (ws != null) {
-            try {
-                ws.send(new JSONObject().put("type", "ping").toString());
-            } catch (Exception ignored) {}
-        }
+        long sockQueueMs = ws.queueSize() / 32;
+        try {
+            ws.send(new JSONObject()
+                .put("type", "ping")
+                .put("pending_ms", pendingMs)
+                .put("enqueued_ms", enqueuedMs)
+                .put("sent_ms", sentMs)
+                .put("dropped_ms", droppedMs)
+                .put("sock_queue_ms", sockQueueMs)
+                .toString());
+        } catch (Exception ignored) {}
         io.postDelayed(ping, 20_000);
     }
 
