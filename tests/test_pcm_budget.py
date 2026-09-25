@@ -48,7 +48,7 @@ class SenderBudgetTests(unittest.TestCase):
         uplink.reset()
         _reset_live_stt()
         # Run the sender as fast as the test's clock allows (no realtime pacing).
-        self._pace = mock.patch("server.app.pace_wait_s", return_value=0.0)
+        self._pace = mock.patch.object(CloudListener, "_pace_before_send", return_value=None)
         self._pace.start()
 
     def tearDown(self) -> None:
