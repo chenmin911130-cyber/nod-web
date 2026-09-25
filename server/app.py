@@ -96,6 +96,7 @@ from server.stt_audio import (
     error_summary,
     pace_mode_from_env,
     take_one_frame,
+    uplink_config_from_env,
 )
 from server.stt_latency import ListenSummary
 from server.logging_setup import backup_now, setup_logging
@@ -8131,6 +8132,19 @@ async def ws_audio(ws: WebSocket):
 
     session._uplink_client = uplink_client_kind(raw_headers.get("user-agent"))
     try:
+        cfg_msg = uplink_config_from_env()
+        if cfg_msg is not None:
+            try:
+                await ws.send_text(json.dumps(cfg_msg))
+                logging.getLogger("nod").info(
+                    "uplink_config pace=%s catchup_rate=%s coalesce_max=%s client=%s",
+                    cfg_msg["pace"],
+                    cfg_msg["catchup_rate"],
+                    cfg_msg["coalesce_max"],
+                    getattr(session, "_uplink_client", ""),
+                )
+            except Exception:
+                pass
         while True:
             message = await ws.receive()
             if message.get("type") == "websocket.disconnect":
