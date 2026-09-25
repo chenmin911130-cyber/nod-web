@@ -517,24 +517,25 @@ def _translate_session() -> Session:
 
 
 class TranslateCarrySessionTests(unittest.TestCase):
-    def test_no_sentence_holds_carry(self):
+    def test_no_sentence_emits_immediately_not_carry(self):
         sess = _translate_session()
         sess._on_final("We know exactly")
         qs = [e for e in sess.emit.events if e["type"] == "question"]
-        self.assertEqual(qs, [])
-        self.assertEqual(sess._translate_carry, "We know exactly")
+        self.assertEqual(len(qs), 1)
+        self.assertEqual(qs[0]["text"], "We know exactly")
+        self.assertEqual(sess._translate_carry, "")
 
-    def test_next_final_emits_joined_head(self):
+    def test_consecutive_finals_each_emit_separate_lines(self):
         sess = _translate_session()
         sess._on_final("We know exactly")
         sess._on_final("where to go. And then")
         qs = [e for e in sess.emit.events if e["type"] == "question"]
-        self.assertEqual(len(qs), 1)
-        want = join_meeting_text("We know exactly", "where to go.")
-        self.assertEqual(qs[0]["text"], want)
-        self.assertEqual(sess._translate_carry, "And then")
+        self.assertEqual(len(qs), 2)
+        self.assertEqual(qs[0]["text"], "We know exactly")
+        self.assertEqual(qs[1]["text"], "where to go. And then")
+        self.assertEqual(sess._translate_carry, "")
 
-    def test_second_join_without_sentence_emits_all(self):
+    def test_third_final_emits_without_joining_prior_tail(self):
         sess = _translate_session()
         sess._on_final("We know exactly")
         sess._on_final("where to go. And then")
@@ -542,14 +543,14 @@ class TranslateCarrySessionTests(unittest.TestCase):
         sess._on_final("keep walking toward")
         qs = [e for e in sess.emit.events if e["type"] == "question"]
         self.assertEqual(len(qs), 1)
-        want = join_meeting_text("And then", "keep walking toward")
-        self.assertEqual(qs[0]["text"], want)
+        self.assertEqual(qs[0]["text"], "keep walking toward")
         self.assertEqual(sess._translate_carry, "")
 
-    def test_stop_listen_flushes_carry(self):
+    def test_stop_listen_does_not_duplicate_after_immediate_emit(self):
         sess = _translate_session()
         sess._on_final("We know exactly")
-        sess.emit.events.clear()
+        n_before = len([e for e in sess.emit.events if e["type"] == "question"])
+        self.assertEqual(n_before, 1)
         sess.stop_listen()
         qs = [e for e in sess.emit.events if e["type"] == "question"]
         self.assertEqual(len(qs), 1)
@@ -567,29 +568,42 @@ class TranslateCarrySessionTests(unittest.TestCase):
         qs = [e for e in sess.emit.events if e["type"] == "question"]
         self.assertEqual(qs, [])
 
-    def test_carry_deadline_flushes_tail(self):
+    def test_on_final_does_not_arm_carry_deadline(self):
         sess = _translate_session()
         sess._translate_carry_init()
         sess._carry_max_ms = 50
-        with self.assertLogs("nod", level="INFO") as cap:
-            sess._on_final("We know exactly")
-            time.sleep(0.15)
+        sess._on_final("We know exactly")
         qs = [e for e in sess.emit.events if e["type"] == "question"]
         self.assertEqual(len(qs), 1)
         self.assertEqual(qs[0]["text"], "We know exactly")
         self.assertEqual(sess._translate_carry, "")
+        self.assertIsNone(getattr(sess, "_carry_timer", None))
+        time.sleep(0.15)
+        qs2 = [e for e in sess.emit.events if e["type"] == "question"]
+        self.assertEqual(len(qs2), 1)
+
+    def test_set_translate_carry_deadline_still_flushes(self):
+        sess = _translate_session()
+        sess._translate_carry_init()
+        sess._carry_max_ms = 50
+        with self.assertLogs("nod", level="INFO") as cap:
+            sess._set_translate_carry("held tail")
+            time.sleep(0.15)
+        qs = [e for e in sess.emit.events if e["type"] == "question"]
+        self.assertEqual(len(qs), 1)
+        self.assertEqual(qs[0]["text"], "held tail")
         self.assertIn("translate_carry_flush reason=deadline", "\n".join(cap.output))
 
-    def test_next_final_before_deadline_cancels_timer(self):
+    def test_consecutive_finals_no_delayed_timer_question(self):
         sess = _translate_session()
         sess._carry_max_ms = 500
         sess._on_final("We know exactly")
         sess._on_final("where to go. And then")
         qs = [e for e in sess.emit.events if e["type"] == "question"]
-        self.assertEqual(len(qs), 1)
+        self.assertEqual(len(qs), 2)
         time.sleep(0.6)
         qs2 = [e for e in sess.emit.events if e["type"] == "question"]
-        self.assertEqual(len(qs2), 1)
+        self.assertEqual(len(qs2), 2)
 
     def test_deadline_seq_guard(self):
         sess = _translate_session()
@@ -601,19 +615,25 @@ class TranslateCarrySessionTests(unittest.TestCase):
         qs = [e for e in sess.emit.events if e["type"] == "question"]
         self.assertEqual(qs, [])
 
-    def test_carry_zero_disables_deadline(self):
+    def test_carry_zero_on_final_still_emits_no_timer(self):
         sess = _translate_session()
         sess._translate_carry_init()
         sess._carry_max_ms = 0
         sess._on_final("We know exactly")
         self.assertIsNone(getattr(sess, "_carry_timer", None))
-        self.assertEqual(sess._translate_carry, "We know exactly")
+        self.assertEqual(sess._translate_carry, "")
+        qs = [e for e in sess.emit.events if e["type"] == "question"]
+        self.assertEqual(len(qs), 1)
+        self.assertEqual(qs[0]["text"], "We know exactly")
 
-    def test_tail_emitted_as_partial(self):
+    def test_tail_not_emitted_as_partial_on_final(self):
         sess = _translate_session()
         sess._on_final("First one. And then")
+        qs = [e for e in sess.emit.events if e["type"] == "question"]
+        self.assertEqual(len(qs), 1)
+        self.assertEqual(qs[0]["text"], "First one. And then")
         partials = [e for e in sess.emit.events if e["type"] == "partial"]
-        self.assertTrue(any(p.get("text") == "And then" for p in partials))
+        self.assertFalse(any(p.get("text") == "And then" for p in partials))
 
     def test_partial_prefixed_with_carry(self):
         sess = _translate_session()
@@ -627,10 +647,10 @@ class TranslateCarrySessionTests(unittest.TestCase):
         partials = [e for e in sess.emit.events if e["type"] == "partial"]
         self.assertEqual(partials[-1]["text"], "solo")
 
-    def test_pause_and_stop_cancel_timer(self):
+    def test_pause_flushes_manual_carry_not_on_final_timer(self):
         sess = _translate_session()
         sess._carry_max_ms = 500
-        sess._on_final("We know exactly")
+        sess._set_translate_carry("We know exactly")
         self.assertIsNotNone(sess._carry_timer)
         sess.pause_listen = Session.pause_listen.__get__(sess, Session)
         sess._handoff_listener = object()
@@ -648,10 +668,10 @@ class TranslateCarrySessionTests(unittest.TestCase):
         qs = [e for e in sess.emit.events if e["type"] == "question"]
         self.assertEqual(len(qs), 1)
 
-    def test_close_cancels_timer(self):
+    def test_close_cancels_manual_carry_timer(self):
         sess = _translate_session()
         sess._carry_max_ms = 500
-        sess._on_final("We know exactly")
+        sess._set_translate_carry("We know exactly")
         with mock.patch.object(sess, "_stop_listening", lambda: None):
             with mock.patch.object(sess, "_detach_control_emit", lambda: None):
                 with mock.patch.object(sess, "_close_audio_uplink", lambda: None):
@@ -665,38 +685,25 @@ class TranslateCarrySessionTests(unittest.TestCase):
         qs = [e for e in sess.emit.events if e["type"] == "question"]
         self.assertEqual(qs, [])
 
-    def test_locked_language_gate_applies_to_tail_partial(self):
+    def test_locked_language_gate_blocks_final_before_carry(self):
         sess = _translate_session()
         sess._speech_allowed = lambda *a, **k: False
         sess._on_final("First one. And then")
+        qs = [e for e in sess.emit.events if e["type"] == "question"]
+        self.assertEqual(qs, [])
         partials = [e for e in sess.emit.events if e["type"] == "partial"]
         self.assertFalse(any(p.get("text") == "And then" for p in partials))
 
-    def test_on_final_carry_deadline_race_real_path(self):
-        """Real `_on_final`: deadline flush interleaves inside carry_wait_ms window."""
-        import server.app as app_mod
-
+    def test_on_final_joins_leftover_carry_from_set_translate_carry(self):
+        """Manual carry (not from _on_final hold) still joins on the next final."""
         sess = _translate_session()
-        sess._carry_max_ms = 0
-        sess._on_final("We know exactly")
-        seq = sess._carry_seq
-        real_mono = time.monotonic
-        first_mono_after_patch = True
-
-        def mono_shim():
-            nonlocal first_mono_after_patch
-            if first_mono_after_patch:
-                first_mono_after_patch = False
-                sess._carry_deadline(seq)
-            return real_mono()
-
-        with mock.patch.object(app_mod.time, "monotonic", side_effect=mono_shim):
-            sess._on_final("where to go. And then")
+        sess._set_translate_carry("We know exactly")
+        sess._on_final("where to go. And then")
         qs = [e for e in sess.emit.events if e["type"] == "question"]
         texts = [q["text"] for q in qs]
-        know_count = sum(1 for t in texts if "We know exactly" in t)
-        self.assertEqual(know_count, 1)
-        self.assertTrue(any("where to go" in t for t in texts))
+        joined = join_meeting_text("We know exactly", "where to go. And then")
+        self.assertEqual(len(qs), 1)
+        self.assertEqual(texts[0], joined)
 
     def test_take_translate_carry_atomic_with_deadline_race(self):
         sess = _translate_session()
@@ -713,6 +720,57 @@ class TranslateCarrySessionTests(unittest.TestCase):
         self.assertEqual(len(qs), 1)
         self.assertIn("We know exactly", qs[0]["text"])
         self.assertIn("where to go", qs[0]["text"])
+
+
+class TranslateNoHoldTests(unittest.TestCase):
+    def test_final_without_sentence_end_emits_immediately(self):
+        sess = _translate_session()
+        sess._on_final("We know exactly")
+        qs = [e for e in sess.emit.events if e["type"] == "question"]
+        self.assertEqual(len(qs), 1)
+        self.assertEqual(qs[0]["text"], "We know exactly")
+        self.assertEqual(sess._translate_carry, "")
+        self.assertIsNone(getattr(sess, "_carry_timer", None))
+
+    def test_final_with_tail_emits_whole_text(self):
+        sess = _translate_session()
+        sess._on_final("First one. And then")
+        qs = [e for e in sess.emit.events if e["type"] == "question"]
+        self.assertEqual(len(qs), 1)
+        self.assertEqual(qs[0]["text"], "First one. And then")
+        partials = [e for e in sess.emit.events if e["type"] == "partial"]
+        self.assertFalse(any(p.get("text") == "And then" for p in partials))
+
+    def test_consecutive_finals_each_emit_once_no_delayed_extra(self):
+        sess = _translate_session()
+        sess._carry_max_ms = 50
+        sess._on_final("We know exactly")
+        sess._on_final("where to go. And then")
+        time.sleep(0.15)
+        qs = [e for e in sess.emit.events if e["type"] == "question"]
+        self.assertEqual(len(qs), 2)
+        self.assertEqual(qs[0]["text"], "We know exactly")
+        self.assertEqual(qs[1]["text"], "where to go. And then")
+
+    def test_question_precedes_stop_and_stop_adds_nothing(self):
+        sess = _translate_session()
+        sess._on_final("We know exactly")
+        qs_before = [e for e in sess.emit.events if e["type"] == "question"]
+        self.assertEqual(len(qs_before), 1)
+        sess.stop_listen()
+        qs_after = [e for e in sess.emit.events if e["type"] == "question"]
+        self.assertEqual(len(qs_after), 1)
+
+    def test_leftover_carry_is_joined_once(self):
+        sess = _translate_session()
+        sess._translate_carry_init()
+        sess._translate_carry = "And then"
+        sess._on_final("we walked.")
+        qs = [e for e in sess.emit.events if e["type"] == "question"]
+        self.assertEqual(len(qs), 1)
+        want = join_meeting_text("And then", "we walked.")
+        self.assertEqual(qs[0]["text"], want)
+        self.assertEqual(sess._translate_carry, "")
 
 
 class SttCfgPacingTests(unittest.TestCase):
