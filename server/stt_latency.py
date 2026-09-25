@@ -95,3 +95,53 @@ def record_stt_latency(
     now = time.time()
     for key in ("format_wait_ms", "asr_lag_ms", "backlog_ms", "hold_ms", "pipeline_ms"):
         STT_LATENCY_WINDOW.add(key, fields.get(key), now)
+
+
+def record_translate_latency(fields: dict[str, Any]) -> None:
+    """One structured line per translated piece (Translate latency A1)."""
+    out: dict[str, Any] = {}
+    for key in (
+        "stream",
+        "turn",
+        "piece",
+        "src",
+        "cut",
+        "passthrough",
+        "first_word_ms",
+        "last_word_ms",
+        "commit_audio_ms",
+        "asr_lag_ms",
+        "backlog_ms",
+        "dev_backlog_ms",
+        "uplink_lag_ms",
+        "carry_wait_ms",
+        "queue_wait_ms",
+        "llm_ttft_ms",
+        "llm_total_ms",
+        "speech_to_chunk_ms",
+        "line_span_ms",
+        "chars",
+        "lang",
+        "failed",
+    ):
+        val = fields.get(key)
+        if val is not None:
+            out[key] = val
+    parts = ["translate_latency"] + [f"{k}={v}" for k, v in out.items()]
+    _log.info(" ".join(parts))
+    now = time.time()
+    for key in (
+        "tr_line_span_ms",
+        "tr_carry_wait_ms",
+        "tr_queue_wait_ms",
+        "tr_llm_ttft_ms",
+        "tr_speech_to_chunk_ms",
+    ):
+        mapped = {
+            "tr_line_span_ms": fields.get("line_span_ms"),
+            "tr_carry_wait_ms": fields.get("carry_wait_ms"),
+            "tr_queue_wait_ms": fields.get("queue_wait_ms"),
+            "tr_llm_ttft_ms": fields.get("llm_ttft_ms"),
+            "tr_speech_to_chunk_ms": fields.get("speech_to_chunk_ms"),
+        }
+        STT_LATENCY_WINDOW.add(key, mapped.get(key), now)
