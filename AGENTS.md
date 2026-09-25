@@ -84,6 +84,17 @@ Pods project, or either lock half, a `Podfile.lock` that disagrees with
 - 用户说「规划 / 写单 / 验收」→ 按 Fable 职责。用户说「执行 / 按清单做 / 开 PR」→ 按实现者（Grok / Composer）职责；执行单 §0 写明交给谁。实现者不写单、不审查自己的 PR；Fable 不写产品代码。
 - Hermes 工作台不再承担 nod-web 实现，除非用户当场点名。`#33` / `#35` / `#36` 已结束。
 
+### 实现者最小改动（Grok / Composer，用户硬性要求）
+
+执行单是改动的上限，不是起点。
+
+- 只改 issue §3「改什么」列出的文件和函数。`git diff --stat origin/main` 里多出一个 §3 没列的文件，就是越界，PR 不放行。
+- 不做单外的事：不重构、不改名、不挪代码、不删「看起来没用」的代码或 import、不改格式 / 注释 / 文案、不动依赖和配置、不顺手修别的 bug。单外发现的问题只在 issue 评论记一笔，不进本 PR。
+- 同样能达到 §1 期望行为时，选改动行数最少的写法。
+- 现有测试只在它断言的正是本单要改的旧行为时才改，只改断言和必要的名字，不重写、不重排无关用例；改了哪些、为什么，PR 里逐条列。
+- 单子不够用（缺文件、§4 的测试做不到、修法要碰 §3 禁改项或 §3 没列的文件），先停下在 issue 评论问，等回复再动，不自己扩大范围。
+- Fable 派单时把本节原文放进给实现者的提示里；审查时 diff 超出 §3 一律「不放行」。
+
 ### Self-improve
 
 Record confirmed agent misses in `.cursor/skills/self-improve/errors.md`. Read that log before Watch / listen / Translate / phone-sync work. After a miss, append one entry. See `.cursor/skills/self-improve/SKILL.md`.
