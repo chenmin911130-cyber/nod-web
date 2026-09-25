@@ -216,7 +216,47 @@ def _translate_session_latency() -> Session:
     sess._maybe_watch_copy = lambda ev: None
     sess._maybe_qa_copy = lambda ev: None
     sess._send_audio_text = lambda *a: None
+    sess._tr_piece = {}
+    sess._tr_piece_mu = threading.Lock()
     return sess
+
+
+class TranslateTimingConcurrencyTests(unittest.TestCase):
+    def test_chunk_timing_survives_tr_piece_mutation(self):
+        sess = _translate_session_latency()
+        store = sess._tr_piece
+        stop = threading.Event()
+        errors: list[BaseException] = []
+
+        def mutator() -> None:
+            try:
+                i = 0
+                while not stop.is_set():
+                    key = f"p{i}"
+                    with sess._tr_piece_mu:
+                        store[key] = {
+                            "ask_id": "gen-x",
+                            "ask_mono": time.monotonic(),
+                            "submit_mono": time.monotonic(),
+                        }
+                        if len(store) > 64:
+                            del store[next(iter(store))]
+                    i += 1
+            except BaseException as exc:
+                errors.append(exc)
+
+        store["keep"] = {
+            "ask_id": "gen-x",
+            "ask_mono": time.monotonic(),
+            "submit_mono": time.monotonic(),
+        }
+        t = threading.Thread(target=mutator, daemon=True)
+        t.start()
+        for _ in range(500):
+            sess._note_translate_timing({"type": "chunk", "id": "gen-x"})
+        stop.set()
+        t.join(timeout=2.0)
+        self.assertEqual(errors, [])
 
 
 class TranslateLatencyLineTests(unittest.TestCase):

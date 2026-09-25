@@ -2857,6 +2857,17 @@ class CloudListener:
         self._turn_order += 1
         return self._turn_order
 
+    def _turn_order_in_payload(self, data: dict[str, Any]) -> int | None:
+        """Parse ``turn_order`` without advancing the listener fallback counter."""
+        raw = data.get("turn_order")
+        try:
+            n = int(raw)
+            if n >= 0:
+                return n
+        except (TypeError, ValueError):
+            pass
+        return None
+
     def _turn_word_meta(self, data: dict[str, Any]) -> dict[str, Any]:
         words = data.get("words") or []
         first_w = words[0] if words else {}
@@ -2978,19 +2989,20 @@ class CloudListener:
             else:
                 self._maybe_queue_translate_cut(data)
             text = (data.get("utterance") or data.get("transcript") or "").strip()
-            turn_key = self._stt_turn_key(data)
-            if data.get("end_of_turn") and turn_key == self._open_turn_key:
+            turn_key = self._turn_order_in_payload(data)
+            if data.get("end_of_turn") and turn_key is not None and turn_key == self._open_turn_key:
                 self._open_turn_key = None
             if not text:
                 return
             speechy = bool(re.search(r"[A-Za-z0-9\u00C0-\u024F\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]", text))
-            if not data.get("end_of_turn") and speechy:
+            if not data.get("end_of_turn") and speechy and turn_key is not None:
                 now_mono = self._clock()
                 if turn_key != self._open_turn_key:
-                    self._open_turn_key = turn_key
                     self._turn_open_mono = now_mono
                     self._partial_text = ""
-                if text != self._partial_text:
+                    self._partial_changed_mono = now_mono
+                    self._open_turn_key = turn_key
+                elif text != self._partial_text:
                     self._partial_text = text
                     self._partial_changed_mono = now_mono
             lang = heard_lang_from_turn(data)
@@ -3214,6 +3226,16 @@ class Session:
         self._follow_switch_hits = 0
         self._recent_finals: list[tuple[str, float]] = []
         self._translate_carry = ""
+        self._carry_mu = threading.Lock()
+        self._carry_timer: threading.Timer | None = None
+        self._carry_seq = 0
+        self._carry_created_mono = 0.0
+        self._carry_max_ms = carry_max_ms_from_env()
+        self._tr_piece: dict[str, dict[str, Any]] = {}
+        self._tr_piece_mu = threading.Lock()
+        self._pcm_rx_first_mono = 0.0
+        self._pcm_rx_anchor_bytes = 0
+        self._pcm_rx_reanchor = False
         self._mic_muted = False
         self._workspace = "interview"
         # #196 review fix: the mode the CURRENT usage row was opened with. It is
@@ -3771,9 +3793,14 @@ class Session:
 
     def _pcm_rx_note(self, pcm: bytes) -> None:
         prev = getattr(self, "_pcm_rx_bytes", 0)
-        self._pcm_rx_bytes = prev + len(pcm)
-        if prev == 0 and len(pcm) > 0:
+        if getattr(self, "_pcm_rx_reanchor", False):
             self._pcm_rx_first_mono = time.monotonic()
+            self._pcm_rx_anchor_bytes = prev
+            self._pcm_rx_reanchor = False
+        elif prev == 0 and len(pcm) > 0:
+            self._pcm_rx_first_mono = time.monotonic()
+            self._pcm_rx_anchor_bytes = 0
+        self._pcm_rx_bytes = prev + len(pcm)
 
     def dispatch(self, msg: dict) -> None:
         mtype = msg.get("type")
@@ -4320,6 +4347,7 @@ class Session:
         self._recent_finals = self._recent_finals[-8:]
 
     def _translate_carry_init(self) -> None:
+        """Lazy defaults for ``Session.__new__`` test sessions only."""
         if getattr(self, "_carry_mu", None) is not None:
             return
         self._carry_mu = threading.Lock()
@@ -4327,8 +4355,16 @@ class Session:
         self._carry_seq = 0
         self._carry_created_mono = 0.0
         self._carry_max_ms = carry_max_ms_from_env()
-        if not hasattr(self, "_translate_carry"):
-            self._translate_carry = ""
+        self._translate_carry = getattr(self, "_translate_carry", "") or ""
+
+    def _take_translate_carry_locked(self) -> tuple[str, float]:
+        """Take the carried tail under ``_carry_mu`` (clears store + invalidates timer)."""
+        carry = (self._translate_carry or "").strip()
+        created = float(self._carry_created_mono or 0.0)
+        self._cancel_carry_timer()
+        self._translate_carry = ""
+        self._carry_seq += 1
+        return carry, created
 
     def _cancel_carry_timer(self) -> None:
         self._translate_carry_init()
@@ -4361,26 +4397,19 @@ class Session:
             self._carry_created_mono = time.monotonic()
             self._arm_carry_timer_locked()
 
-    def _clear_translate_carry_locked(self) -> None:
-        self._cancel_carry_timer()
-        self._translate_carry = ""
-        self._carry_seq += 1
-
     def _carry_deadline(self, seq: int) -> None:
         self._translate_carry_init()
         with self._carry_mu:
             if seq != self._carry_seq:
                 return
-            carry = (self._translate_carry or "").strip()
-            if not carry:
-                return
             if getattr(self, "_closed", False):
                 return
             if getattr(self, "_workspace", "") != "translate":
                 return
-            created = self._carry_created_mono
-            self._clear_translate_carry_locked()
-        age_ms = int(round((time.monotonic() - created) * 1000))
+            carry, created = self._take_translate_carry_locked()
+            if not carry:
+                return
+        age_ms = int(round((time.monotonic() - created) * 1000)) if created > 0 else 0
         logging.getLogger("nod").info(
             "translate_carry_flush reason=deadline len=%s age_ms=%s",
             len(carry),
@@ -4445,10 +4474,9 @@ class Session:
     def _flush_translate_carry(self, reason: str) -> None:
         self._translate_carry_init()
         with self._carry_mu:
-            carry = (getattr(self, "_translate_carry", "") or "").strip()
+            carry, _created = self._take_translate_carry_locked()
             if not carry:
                 return
-            self._clear_translate_carry_locked()
         logging.getLogger("nod").info(
             "translate_carry_flush reason=%s len=%s",
             reason,
@@ -4463,14 +4491,14 @@ class Session:
                 None,
                 meta={"src": f"flush:{reason}"},
             )
-        else:
-            self._translate_carry = ""
 
     def _uplink_lag_ms(self) -> int | None:
         first = getattr(self, "_pcm_rx_first_mono", 0.0)
         if first <= 0:
             return None
-        rx = getattr(self, "_pcm_rx_bytes", 0)
+        rx = getattr(self, "_pcm_rx_bytes", 0) - int(getattr(self, "_pcm_rx_anchor_bytes", 0) or 0)
+        if rx < 0:
+            rx = 0
         return int(round((time.monotonic() - first) * 1000 - rx / 32))
 
     def _translate_latency_fields(
@@ -4540,48 +4568,51 @@ class Session:
 
     def _note_translate_timing(self, ev: dict) -> None:
         kind = ev.get("type")
-        store = getattr(self, "_tr_piece", None)
-        if not isinstance(store, dict):
+        mu = getattr(self, "_tr_piece_mu", None)
+        if mu is None:
             return
-        if kind == "question":
-            bind = _translate_line_id(ev.get("text") or "")
-            if not bind:
+        with mu:
+            store = self._tr_piece
+            if kind == "question":
+                bind = _translate_line_id(ev.get("text") or "")
+                if not bind:
+                    return
+                rec = store.get(bind)
+                if not rec:
+                    return
+                now = time.monotonic()
+                rec["ask_mono"] = now
+                rec["ask_id"] = str(ev.get("id") or "")
+                sub = rec.get("submit_mono")
+                if sub is not None:
+                    # Includes time blocked in check_can_generate (DB) before Pipeline.process_text.
+                    rec["queue_wait_ms"] = int(round((now - float(sub)) * 1000))
                 return
-            rec = store.get(bind)
-            if not rec:
-                return
-            now = time.monotonic()
-            rec["ask_mono"] = now
-            rec["ask_id"] = str(ev.get("id") or "")
-            sub = rec.get("submit_mono")
-            if sub is not None:
-                rec["queue_wait_ms"] = int(round((now - float(sub)) * 1000))
-            return
-        ask_id = str(ev.get("id") or "")
-        if kind == "chunk":
-            for rec in store.values():
-                if rec.get("ask_id") == ask_id and rec.get("llm_ttft_ms") is None:
+            ask_id = str(ev.get("id") or "")
+            if kind == "chunk":
+                for rec in list(store.values()):
+                    if rec.get("ask_id") == ask_id and rec.get("llm_ttft_ms") is None:
+                        ask_mono = rec.get("ask_mono")
+                        if ask_mono is not None:
+                            rec["llm_ttft_ms"] = int(round((time.monotonic() - float(ask_mono)) * 1000))
+                        break
+            elif kind == "done":
+                for bind, rec in list(store.items()):
+                    if rec.get("ask_id") != ask_id:
+                        continue
                     ask_mono = rec.get("ask_mono")
                     if ask_mono is not None:
-                        rec["llm_ttft_ms"] = int(round((time.monotonic() - float(ask_mono)) * 1000))
+                        rec["llm_total_ms"] = int(round((time.monotonic() - float(ask_mono)) * 1000))
+                    self._log_translate_latency(rec, passthrough=0)
+                    store.pop(bind, None)
                     break
-        elif kind == "done":
-            for bind, rec in list(store.items()):
-                if rec.get("ask_id") != ask_id:
-                    continue
-                ask_mono = rec.get("ask_mono")
-                if ask_mono is not None:
-                    rec["llm_total_ms"] = int(round((time.monotonic() - float(ask_mono)) * 1000))
-                self._log_translate_latency(rec, passthrough=0)
-                store.pop(bind, None)
-                break
-        elif kind == "error":
-            for bind, rec in list(store.items()):
-                if rec.get("ask_id") != ask_id:
-                    continue
-                self._log_translate_latency(rec, passthrough=0, failed=1)
-                store.pop(bind, None)
-                break
+            elif kind == "error":
+                for bind, rec in list(store.items()):
+                    if rec.get("ask_id") != ask_id:
+                        continue
+                    self._log_translate_latency(rec, passthrough=0, failed=1)
+                    store.pop(bind, None)
+                    break
 
     def _maybe_follow_speech(self, text: str, heard: str | None) -> None:
         if self._effective_stt_lang():
@@ -5817,6 +5848,8 @@ class Session:
                 self._stop_manual()
             self.emit({"type": "status", "text": "Microphone muted"})
         else:
+            # Re-anchor uplink lag on the next PCM frame after server-side mute.
+            self._pcm_rx_reanchor = True
             self.emit({"type": "status", "text": "Microphone unmuted"})
 
     def start_listen(self, mic: Any = None) -> None:
@@ -6474,13 +6507,15 @@ class Session:
             return
         now = time.monotonic()
         rec = {**(meta or {}), "submit_mono": now, "chars": len(piece), "lang": heard, "piece": pair_id}
-        store = getattr(self, "_tr_piece", None)
-        if not isinstance(store, dict):
-            store = {}
-            self._tr_piece = store
-        store[pair_id] = rec
-        while len(store) > 64:
-            del store[next(iter(store))]
+        mu = getattr(self, "_tr_piece_mu", None)
+        if mu is None:
+            self._tr_piece = {pair_id: rec}
+        else:
+            with mu:
+                store = self._tr_piece
+                store[pair_id] = rec
+                while len(store) > 64:
+                    del store[next(iter(store))]
         target = _normalize_translate_to((self.cfg.get("ui") or {}).get("translate_to"))
         target_name = _LANG_NAMES.get(target, "Chinese")
         source_hint = heard or self._effective_stt_lang()
@@ -6675,6 +6710,8 @@ class Session:
             self._qa_reset("new_listen", reset_think=False)
             self._pcm_rx_bytes = 0
             self._pcm_rx_first_mono = 0.0
+            self._pcm_rx_anchor_bytes = 0
+            self._pcm_rx_reanchor = False
             self._stt_tx_bytes = 0
             self._stt_pending_pcm = b""
             self._pcm_hold = bytearray()
@@ -7441,15 +7478,14 @@ class Session:
             raw = cleaned
             self._translate_carry_init()
             with self._carry_mu:
-                carry = (self._translate_carry or "").strip()
+                carry, carry_created = self._take_translate_carry_locked()
             piece_meta = dict(meta)
             if carry:
                 piece_meta["src"] = "carry_join"
-                piece_meta["carry_wait_ms"] = int(
-                    round((time.monotonic() - self._carry_created_mono) * 1000)
-                )
-                with self._carry_mu:
-                    self._clear_translate_carry_locked()
+                if carry_created > 0:
+                    piece_meta["carry_wait_ms"] = int(
+                        round((time.monotonic() - carry_created) * 1000)
+                    )
             joined = join_meeting_text(carry, raw) if carry else raw
             heard = heard_lang_from_text(joined, locked) if locked else heard_lang_from_text(joined, lang)
             head, tail = split_carry(joined)

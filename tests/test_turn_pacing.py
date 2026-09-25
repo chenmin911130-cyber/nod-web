@@ -298,13 +298,6 @@ class CloudListenerTimerCutTests(unittest.TestCase):
             "transcript": "hello",
             "words": [{"start": 0, "end": 100, "text": "hello"}],
         }))
-        lst._on_message(None, json.dumps({
-            "type": "Turn",
-            "end_of_turn": False,
-            "turn_order": 2,
-            "transcript": "hello",
-            "words": [{"start": 0, "end": 100, "text": "hello"}],
-        }))
         with self.assertLogs("nod", level="INFO") as cap:
             self._run_sender_once(lst)
         self.assertIn("translate_cut reason=stall", "\n".join(cap.output))
@@ -507,6 +500,8 @@ def _translate_session() -> Session:
     sess._listen_gen = 0
     sess._closed = False
     sess._record_stt_latency = lambda *a, **k: None
+    sess._tr_piece = {}
+    sess._tr_piece_mu = threading.Lock()
     qid = iter(range(1, 100))
 
     class _Pipe:
@@ -676,6 +671,50 @@ class TranslateCarrySessionTests(unittest.TestCase):
         sess._on_final("First one. And then")
         partials = [e for e in sess.emit.events if e["type"] == "partial"]
         self.assertFalse(any(p.get("text") == "And then" for p in partials))
+
+    def test_non_atomic_carry_window_duplicates_with_deadline(self):
+        """Documents the pre-fix race: read carry, deadline flush, then join."""
+        sess = _translate_session()
+        sess._set_translate_carry("We know exactly")
+        seq = sess._carry_seq
+        with sess._carry_mu:
+            carry = (sess._translate_carry or "").strip()
+            created = sess._carry_created_mono
+        sess._carry_deadline(seq)
+        joined = join_meeting_text(carry, "where to go.")
+        head, _tail = split_carry(joined)
+        if head:
+            sess._emit_translate_pieces(head, "en", None)
+        qs = [e for e in sess.emit.events if e["type"] == "question"]
+        self.assertEqual(len(qs), 2)
+        texts = [q["text"] for q in qs]
+        self.assertIn("We know exactly", texts)
+        self.assertTrue(any("where to go" in t for t in texts))
+
+    def test_take_translate_carry_atomic_with_deadline_race(self):
+        sess = _translate_session()
+        sess._set_translate_carry("We know exactly")
+        stale_seq = sess._carry_seq
+        with sess._carry_mu:
+            carry, _created = sess._take_translate_carry_locked()
+        self.assertEqual(carry, "We know exactly")
+        sess._carry_deadline(stale_seq)
+        joined = join_meeting_text(carry, "where to go.")
+        head, _tail = split_carry(joined)
+        sess._emit_translate_pieces(head, "en", None)
+        qs = [e for e in sess.emit.events if e["type"] == "question"]
+        self.assertEqual(len(qs), 1)
+        self.assertIn("We know exactly", qs[0]["text"])
+        self.assertIn("where to go", qs[0]["text"])
+
+    def test_on_final_carry_join_single_question(self):
+        sess = _translate_session()
+        sess._set_translate_carry("We know exactly")
+        sess._on_final("where to go.", "en", None, {})
+        qs = [e for e in sess.emit.events if e["type"] == "question"]
+        self.assertEqual(len(qs), 1)
+        self.assertIn("We know exactly", qs[0]["text"])
+        self.assertIn("where to go", qs[0]["text"])
 
 
 class SttCfgPacingTests(unittest.TestCase):
