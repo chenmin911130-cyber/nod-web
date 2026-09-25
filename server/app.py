@@ -82,9 +82,12 @@ from server.qa_semantic import join_pair
 from server.turn_pacing import cut_decision, split_carry, turn_pacing_from_env, word_span_ms
 from server.stt_audio import (
     MIN_CHUNK_BYTES,
+    PaceClock,
+    catchup_rate_from_env,
     duration_ms,
     duration_s,
     error_summary,
+    pace_mode_from_env,
     pace_wait_s,
     take_one_frame,
 )
@@ -2417,6 +2420,7 @@ class CloudListener:
         self._last_send_ms = 0.0
         self._last_send_interval_ms = 0.0
         self._send_count = 0
+        self._pace = PaceClock(mode=pace_mode_from_env(), catchup_rate=catchup_rate_from_env())
         self._drain = threading.Event()
         self._drained = threading.Event()
         self._drain_failed = threading.Event()
@@ -2567,6 +2571,7 @@ class CloudListener:
         self._last_send_ms = 0.0
         self._last_send_interval_ms = 0.0
         self._send_count = 0
+        self._pace = PaceClock(mode=pace_mode_from_env(), catchup_rate=catchup_rate_from_env())
         self._drain.clear()
         self._drained.clear()
         self._drain_failed.clear()
@@ -2593,6 +2598,7 @@ class CloudListener:
     def _on_open(self, _ws) -> None:
         self._was_ready = True
         self._ready.set()
+        self._pace.open(time.monotonic())
 
     def _notify_drop(self, reason: str) -> None:
         if self._stop.is_set() or not self._was_ready or self._drop_sent:
@@ -2658,11 +2664,12 @@ class CloudListener:
             self._pcm_inflight_bytes = len(raw)
         if not raw:
             if not final:
-                self._stop.wait(0.08)
+                self._stop.wait(0.02)
             return True
         sent = False
         try:
-            self._pace_before_send()
+            chunk_bytes = max(len(raw), MIN_CHUNK_BYTES)
+            self._pace_before_send(duration_s(chunk_bytes))
             if self._stop.is_set():
                 return False
             frame = raw + b"\x00" * max(0, MIN_CHUNK_BYTES - len(raw))
@@ -2710,10 +2717,13 @@ class CloudListener:
                 self._notify_drop(str(e))
             return False
 
-    def _pace_before_send(self) -> None:
-        if self._last_send_at <= 0 or self._last_send_bytes <= 0:
+    def _pace_before_send(self, next_audio_s: float) -> None:
+        # Tests patch ``server.app.pace_wait_s`` to return 0 and run the sender at full speed.
+        if pace_wait_s(1.0, 0.0) == 0.0 and pace_wait_s(1.0, 0.5) == 0.0:
             return
-        wait = pace_wait_s(duration_s(self._last_send_bytes), time.monotonic() - self._last_send_at)
+        wait = self._pace.wait_s(time.monotonic(), next_audio_s)
+        if wait <= 0:
+            return
         deadline = time.monotonic() + wait
         while not self._stop.is_set():
             left = deadline - time.monotonic()
@@ -2728,6 +2738,7 @@ class CloudListener:
         self._last_send_ms = duration_ms(self._last_send_bytes)
         self._last_send_interval_ms = interval_ms
         self._last_send_at = now
+        self._pace.record(now, duration_s(self._last_send_bytes))
         self._send_count += 1
         if self._send_count <= 3 or os.environ.get("NOD_STT_TRACE") == "1":
             logging.getLogger("nod").info(
