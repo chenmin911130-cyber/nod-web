@@ -96,7 +96,9 @@ from server.stt_audio import (
     error_summary,
     pace_mode_from_env,
     take_one_frame,
+    uplink_config_from_env,
 )
+from server.stt_latency import ListenSummary
 from server.logging_setup import backup_now, setup_logging
 from server.settings import (
     AUTH_DISABLED,
@@ -3236,6 +3238,14 @@ class Session:
         self._pcm_rx_first_mono = 0.0
         self._pcm_rx_anchor_bytes = 0
         self._pcm_rx_reanchor = False
+        self._listen_summary = ListenSummary()
+        self._listen_summary_mu = threading.Lock()
+        self._summary_last_mono = 0.0
+        self._summary_win_mono = 0.0
+        self._summary_win_bytes = 0
+        self._summary_stream = ""
+        self._uplink_client = ""
+        self._uplink_pending_at = 0.0
         self._mic_muted = False
         self._workspace = "interview"
         # #196 review fix: the mode the CURRENT usage row was opened with. It is
@@ -3690,6 +3700,7 @@ class Session:
             return
         if not self._deliver_pcm(pcm):
             return
+        self._maybe_listen_summary()
         # A terminated session (closed / listen stolen / stopped) still streaming
         # audio is rejected ONCE with its identity, so the Watch's trailing frames
         # end the drain wait instead of silently disappearing into a dead session
@@ -3792,15 +3803,43 @@ class Session:
             return False
 
     def _pcm_rx_note(self, pcm: bytes) -> None:
+        self._listen_summary_init()
         prev = getattr(self, "_pcm_rx_bytes", 0)
+        anchored = False
         if getattr(self, "_pcm_rx_reanchor", False):
             self._pcm_rx_first_mono = time.monotonic()
             self._pcm_rx_anchor_bytes = prev
             self._pcm_rx_reanchor = False
+            anchored = True
         elif prev == 0 and len(pcm) > 0:
             self._pcm_rx_first_mono = time.monotonic()
             self._pcm_rx_anchor_bytes = 0
+            anchored = True
+        if anchored:
+            self._summary_win_mono = self._pcm_rx_first_mono
+            self._summary_win_bytes = prev
+            if self._summary_last_mono == 0:
+                self._summary_last_mono = self._pcm_rx_first_mono
         self._pcm_rx_bytes = prev + len(pcm)
+
+    def _listen_summary_init(self) -> None:
+        """Lazy defaults for ``Session.__new__`` test sessions only."""
+        if getattr(self, "_listen_summary_mu", None) is not None:
+            return
+        self._listen_summary = ListenSummary()
+        self._listen_summary_mu = threading.Lock()
+        if not hasattr(self, "_summary_last_mono"):
+            self._summary_last_mono = 0.0
+        if not hasattr(self, "_summary_win_mono"):
+            self._summary_win_mono = 0.0
+        if not hasattr(self, "_summary_win_bytes"):
+            self._summary_win_bytes = 0
+        if not hasattr(self, "_summary_stream"):
+            self._summary_stream = ""
+        if not hasattr(self, "_uplink_client"):
+            self._uplink_client = ""
+        if not hasattr(self, "_uplink_pending_at"):
+            self._uplink_pending_at = 0.0
 
     def dispatch(self, msg: dict) -> None:
         mtype = msg.get("type")
@@ -4525,15 +4564,17 @@ class Session:
             speech_to_chunk = sum(int(x or 0) for x in (asr_lag, carry_wait, queue_wait, llm_ttft))
         dev_backlog = rec.get("dev_backlog_ms")
         if dev_backlog is None:
-            pending = getattr(self, "_uplink_pending_ms", None)
-            if pending is not None:
-                dev_backlog = int(pending)
+            dev_backlog = self._fresh_uplink_pending_ms()
+        src = rec.get("src") or "final"
+        cut = rec.get("cut_reason") or rec.get("cut")
+        if cut is None and src in ("final", "carry_join"):
+            cut = "eot"
         fields: dict[str, Any] = {
             "stream": rec.get("stream"),
             "turn": rec.get("stt_turn") if rec.get("stt_turn") is not None else rec.get("turn_order"),
             "piece": rec.get("piece"),
-            "src": rec.get("src") or "final",
-            "cut": rec.get("cut_reason") or rec.get("cut") or "eot",
+            "src": src,
+            "cut": cut,
             "passthrough": passthrough,
             "first_word_ms": first_w,
             "last_word_ms": last_w,
@@ -4564,7 +4605,92 @@ class Session:
     ) -> None:
         from server.stt_latency import record_translate_latency
 
-        record_translate_latency(self._translate_latency_fields(rec, passthrough=passthrough, failed=failed))
+        fields = self._translate_latency_fields(rec, passthrough=passthrough, failed=failed)
+        record_translate_latency(fields)
+        self._listen_summary_init()
+        with self._listen_summary_mu:
+            self._listen_summary.note_piece(fields)
+
+    def _fresh_uplink_pending_ms(self) -> int | None:
+        pending = getattr(self, "_uplink_pending_ms", None)
+        if pending is None:
+            return None
+        at = float(getattr(self, "_uplink_pending_at", 0.0) or 0.0)
+        if time.time() - at > 45:
+            return None
+        return int(pending)
+
+    def _maybe_listen_summary(self, final_reason: str | None = None) -> None:
+        self._listen_summary_init()
+        from server.stt_latency import format_listen_summary, listen_summary_interval_s
+
+        interval = listen_summary_interval_s()
+        if interval <= 0:
+            return
+        first = float(getattr(self, "_pcm_rx_first_mono", 0.0) or 0.0)
+        if first <= 0:
+            return
+        now = time.monotonic()
+        if final_reason is None and (now - float(self._summary_last_mono or 0.0)) < interval:
+            return
+        lst = getattr(self, "_listener", None)
+        if lst is not None:
+            sid = str(getattr(lst, "_stream_id", "") or "")
+            if sid:
+                self._summary_stream = sid
+        anchor = int(getattr(self, "_pcm_rx_anchor_bytes", 0) or 0)
+        rx_bytes = int(getattr(self, "_pcm_rx_bytes", 0) or 0)
+        dt = now - float(getattr(self, "_summary_win_mono", 0.0) or 0.0)
+        win_bytes = int(getattr(self, "_summary_win_bytes", 0) or 0)
+        rx_rate = None
+        if dt >= 5:
+            rx_rate = f"{(rx_bytes - win_bytes) / 32000 / dt:.3f}"
+        lag = self._uplink_lag_ms()
+        with self._listen_summary_mu:
+            self._listen_summary.note_lag(lag)
+            counters = self._listen_summary.fields()
+        backlog_ms = None
+        if lst is not None and hasattr(lst, "_pcm_backlog_ms"):
+            try:
+                backlog_ms = int(lst._pcm_backlog_ms())
+            except Exception:
+                backlog_ms = None
+        uplink_seen = bool(getattr(self, "_uplink_seen", False))
+        client = str(getattr(self, "_uplink_client", "") or "")
+        if not client:
+            client = "web" if not uplink_seen else "unknown"
+        ws_name = getattr(self, "_workspace", None) or None
+        stream = str(getattr(self, "_summary_stream", "") or "") or None
+        logging.getLogger("nod").info(
+            format_listen_summary(
+                {
+                    "stream": stream,
+                    "ws": ws_name,
+                    "reason": final_reason or "tick",
+                    "path": "audio" if uplink_seen else "control",
+                    "client": client,
+                    "wall_s": int(now - first),
+                    "rx_audio_s": f"{(rx_bytes - anchor) / 32000:.1f}",
+                    "rx_rate": rx_rate,
+                    "uplink_lag_ms": lag,
+                    "uplink_lag_max_ms": counters.get("uplink_lag_max_ms"),
+                    "dev_pending_ms": self._fresh_uplink_pending_ms(),
+                    "backlog_ms": backlog_ms,
+                    "pieces": counters.get("pieces"),
+                    "span_p50_ms": counters.get("span_p50_ms"),
+                    "span_p90_ms": counters.get("span_p90_ms"),
+                    "carry_wait_max_ms": counters.get("carry_wait_max_ms"),
+                    "carry_timer_pct": counters.get("carry_timer_pct"),
+                    "cut_eot": counters.get("cut_eot"),
+                    "cut_pause": counters.get("cut_pause"),
+                    "cut_max": counters.get("cut_max"),
+                    "cut_stall": counters.get("cut_stall"),
+                }
+            )
+        )
+        self._summary_last_mono = now
+        self._summary_win_mono = now
+        self._summary_win_bytes = rx_bytes
 
     def _note_translate_timing(self, ev: dict) -> None:
         kind = ev.get("type")
@@ -6568,6 +6694,7 @@ class Session:
             if lst is not None:
                 self._collect_handoff(lst)
         self._flush_translate_carry("pause")
+        self._maybe_listen_summary("pause")
         # Flush any held half-sentence, drain the worker (its queued finals may
         # re-open _open_line via _hold_or_emit_meeting), THEN close the open line
         # so the first final after Resume starts a fresh line (issue #29/#31 P1-c).
@@ -6594,6 +6721,7 @@ class Session:
             self._paused = False
             self._last_voice_at = time.time()
             self._listen_started_at = time.time()
+            self._pcm_rx_reanchor = True
             self._start_listening(resume=True)
         else:
             # Not wanted (or manual recording): just clear the paused latch.
@@ -6716,6 +6844,14 @@ class Session:
             self._pcm_rx_first_mono = 0.0
             self._pcm_rx_anchor_bytes = 0
             self._pcm_rx_reanchor = False
+            self._uplink_pending_ms = None
+            self._uplink_pending_at = 0.0
+            self._listen_summary_init()
+            with self._listen_summary_mu:
+                self._listen_summary.reset()
+            self._summary_last_mono = 0.0
+            self._summary_win_mono = 0.0
+            self._summary_win_bytes = 0
             self._stt_tx_bytes = 0
             self._stt_pending_pcm = b""
             self._pcm_hold = bytearray()
@@ -6915,6 +7051,7 @@ class Session:
         meeting = getattr(self, "_workspace", "") == "meeting"
         self._stop_listener(lst, force_endpoint=meeting)
         self._flush_translate_carry("stop")
+        self._maybe_listen_summary("stop")
         try:
             if self._workspace == "interview":
                 self._qa_stop_commit()
@@ -7763,6 +7900,7 @@ def health():
         "audio": "browser-mic",
         "auth": not AUTH_DISABLED,
         "stt_latency": STT_LATENCY_WINDOW.snapshot(time.time()),
+        "sha": (os.environ.get("RAILWAY_GIT_COMMIT_SHA") or "")[:12],
     }
 
 
@@ -7990,7 +8128,23 @@ async def ws_audio(ws: WebSocket):
     session._uplink_connected = True
     session._uplink_seen = True
     session._uplink_lost_at = 0.0
+    from server.stt_latency import uplink_client_kind
+
+    session._uplink_client = uplink_client_kind(raw_headers.get("user-agent"))
     try:
+        cfg_msg = uplink_config_from_env()
+        if cfg_msg is not None:
+            try:
+                await ws.send_text(json.dumps(cfg_msg))
+                logging.getLogger("nod").info(
+                    "uplink_config pace=%s catchup_rate=%s coalesce_max=%s client=%s",
+                    cfg_msg["pace"],
+                    cfg_msg["catchup_rate"],
+                    cfg_msg["coalesce_max"],
+                    getattr(session, "_uplink_client", ""),
+                )
+            except Exception:
+                pass
         while True:
             message = await ws.receive()
             if message.get("type") == "websocket.disconnect":
@@ -8014,19 +8168,29 @@ async def ws_audio(ws: WebSocket):
                     continue
                 mtype = payload.get("type")
                 if mtype == "ping":
-                    pm = payload.get("pending_ms")
-                    if isinstance(pm, (int, float)):
-                        session._uplink_pending_ms = int(pm)
+                    parsed: dict[str, int] = {}
+                    for key in ("pending_ms", "enqueued_ms", "sent_ms", "dropped_ms", "sock_queue_ms"):
+                        val = payload.get(key)
+                        if isinstance(val, bool) or not isinstance(val, (int, float)):
+                            continue
+                        parsed[key] = max(0, min(10**9, int(val)))
+                    if "pending_ms" in parsed:
+                        session._uplink_pending_ms = parsed["pending_ms"]
                         session._uplink_pending_at = time.time()
+                    if parsed:
                         stream = ""
                         lst = getattr(session, "_listener", None)
                         if lst is not None:
                             stream = getattr(lst, "_stream_id", "") or ""
-                        logging.getLogger("nod").info(
-                            "uplink_ping pending_ms=%s stream=%s",
-                            int(pm),
-                            stream,
-                        )
+                        parts = ["uplink_ping"]
+                        for key in ("pending_ms", "enqueued_ms", "sent_ms", "dropped_ms", "sock_queue_ms"):
+                            if key in parsed:
+                                parts.append(f"{key}={parsed[key]}")
+                        rx_ms = int(getattr(session, "_pcm_rx_bytes", 0) or 0) // 32
+                        parts.append(f"rx_ms={rx_ms}")
+                        parts.append(f"stream={stream}")
+                        parts.append(f"client={getattr(session, '_uplink_client', '') or ''}")
+                        logging.getLogger("nod").info(" ".join(parts))
                     continue
                 if mtype == "pcm_end":
                     await run_in_threadpool(

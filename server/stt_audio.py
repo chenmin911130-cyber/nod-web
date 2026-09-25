@@ -57,6 +57,36 @@ def catchup_rate_from_env() -> float:
     return max(1.0, min(2.0, v))
 
 
+def uplink_config_from_env() -> dict | None:
+    """Phone pacing hint sent once on each accepted ``/ws/audio`` socket.
+
+    ``NOD_UPLINK_CONFIG=0`` sends nothing. The phone catch-up rate never exceeds
+    this process's own AssemblyAI forward cap.
+    """
+    if (os.environ.get("NOD_UPLINK_CONFIG") or "1").strip() == "0":
+        return None
+    pace = "legacy" if (os.environ.get("NOD_UPLINK_PACE") or "").strip().lower() == "legacy" else "cumulative"
+    try:
+        rate = float(os.environ.get("NOD_UPLINK_CATCHUP_RATE") or 1.5)
+    except ValueError:
+        rate = 1.5
+    rate = max(1.0, min(2.0, rate, catchup_rate_from_env()))
+    if pace_mode_from_env() == "frame":
+        rate = 1.0
+    try:
+        coalesce = int(os.environ.get("NOD_UPLINK_COALESCE_MAX") or 3)
+    except ValueError:
+        coalesce = 3
+    coalesce = max(1, min(10, coalesce))
+    return {
+        "type": "uplink_config",
+        "v": 1,
+        "pace": pace,
+        "catchup_rate": round(rate, 3),
+        "coalesce_max": coalesce,
+    }
+
+
 class PaceClock:
     """Pacing toward AssemblyAI: cumulative session clock with optional bounded catch-up."""
 
