@@ -7676,35 +7676,7 @@ class Session:
                     )
             joined = join_meeting_text(carry, raw) if carry else raw
             heard = heard_lang_from_text(joined, locked) if locked else heard_lang_from_text(joined, lang)
-            head, tail = split_carry(joined)
-            if carry and not head:
-                self._emit_translate_pieces(joined, heard, speaker, meta=piece_meta)
-                self._set_translate_carry("")
-                return
-            if carry:
-                self._emit_translate_pieces(head, heard, speaker, meta=piece_meta)
-                self._set_translate_carry(tail)
-                if tail and self._speech_allowed(tail, heard):
-                    pev: dict[str, Any] = {"type": "partial", "text": tail}
-                    if heard:
-                        pev["language"] = heard
-                    self.emit(pev)
-                return
-            if not head:
-                self._set_translate_carry(tail)
-                if tail and self._speech_allowed(tail, heard):
-                    pev = {"type": "partial", "text": tail}
-                    if heard:
-                        pev["language"] = heard
-                    self.emit(pev)
-                return
-            self._emit_translate_pieces(head, heard, speaker, meta=piece_meta)
-            self._set_translate_carry(tail)
-            if tail and self._speech_allowed(tail, heard):
-                pev = {"type": "partial", "text": tail}
-                if heard:
-                    pev["language"] = heard
-                self.emit(pev)
+            self._emit_translate_pieces(joined, heard, speaker, meta=piece_meta)
             return
         else:
             heard = heard_lang_from_text(cleaned, lang)
