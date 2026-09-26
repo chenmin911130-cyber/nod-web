@@ -7,6 +7,20 @@ function isTranslateCandidate(line: MeetingLine, asked: Set<string>): boolean {
   return !line.translation && !line.translateFailed && !asked.has(line.id)
 }
 
+export function lineTranslationWaitSince(line: MeetingLine): number {
+  return line.updatedAt ?? line.at ?? 0
+}
+
+/** True when an in-flight meeting-line translate (not queued behind a user ask) should be cancelled on line_update. */
+export function shouldCancelOnExtend(
+  lineId: string,
+  inflightId: string | null,
+  askId: string,
+  bindId: string,
+): boolean {
+  return inflightId === lineId && Boolean(askId) && bindId === lineId
+}
+
 /**
  * Pick the next meeting line to translate: the newest line that has no
  * translation, did not give up (translateFailed), and is not already queued
@@ -14,7 +28,7 @@ function isTranslateCandidate(line: MeetingLine, asked: Set<string>): boolean {
  * so we never re-send it in a tight loop against a misbehaving model.
  *
  * When the oldest untranslated line has waited at least {@link BACKLOG_MS} since
- * its last final text / line_update (`at`), pick the oldest instead so backlog
+ * its last final text / line_update (`updatedAt` or `at`), pick the oldest instead so backlog
  * does not starve older lines.
  */
 export function nextMeetingLineToTranslate(
@@ -26,9 +40,9 @@ export function nextMeetingLineToTranslate(
   let oldestAt = Infinity
   for (const line of lines) {
     if (!isTranslateCandidate(line, asked)) continue
-    const at = line.at ?? 0
-    if (at < oldestAt) {
-      oldestAt = at
+    const waitSince = lineTranslationWaitSince(line)
+    if (waitSince < oldestAt) {
+      oldestAt = waitSince
       oldest = line
     }
   }

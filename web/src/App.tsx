@@ -47,7 +47,7 @@ import {
   type SaveStatus,
 } from './sessionSave'
 import { isTranslateChunk, looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, sttTag, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough, wrongScriptForTarget } from './translateGate'
-import { applyNotesTranslateTo, nextMeetingLineToTranslate } from './meetingTranslate'
+import { applyNotesTranslateTo, nextMeetingLineToTranslate, shouldCancelOnExtend } from './meetingTranslate'
 import { applyLineUpdate, applyLineTranslationRev, staleTranslateDone } from './meetingLines'
 import { doneAffectsInterview } from './interviewDone'
 import AnswerPane from './components/AnswerPane'
@@ -1970,12 +1970,10 @@ export default function App() {
         // stale. Clear its ask/retry and let pump re-pick it under the new rev.
         askedTranslate.current.delete(e.id)
         translateRetries.current.delete(e.id)
-        if (inflightTranslate.current === e.id) {
+        const s = stateRef.current
+        if (shouldCancelOnExtend(e.id, inflightTranslate.current, s.translateAskId, s.translateBindId)) {
           window.api.send({ type: 'cancel_generate' })
-          clearTranslateTimer()
-          inflightTranslate.current = null
           meetingTranslateCancelOnExtend.current += 1
-          dispatch({ type: 'release_translate' })
         }
         queueMicrotask(() => pumpTranslateRef.current())
       }
@@ -2035,12 +2033,15 @@ export default function App() {
           })
           if (outcome === 'accept') {
             if (translated) translateRetries.current.delete(id)
-            if (s.workspaceMode === 'meeting' && line?.at) {
-              console.debug('meeting_translate_latency', {
-                line_id: id,
-                final_to_done_ms: Date.now() - line.at,
-                cancel_on_extend: meetingTranslateCancelOnExtend.current,
-              })
+            if (s.workspaceMode === 'meeting') {
+              const since = line?.updatedAt ?? line?.at
+              if (since) {
+                console.debug('meeting_translate_latency', {
+                  line_id: id,
+                  final_to_done_ms: Date.now() - since,
+                  cancel_on_extend: meetingTranslateCancelOnExtend.current,
+                })
+              }
             }
             dispatch({ type: 'release_translate' })
           } else if (outcome === 'retry') {
