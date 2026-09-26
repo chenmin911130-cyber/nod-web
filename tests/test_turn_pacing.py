@@ -13,6 +13,7 @@ from server.meeting_lines import join_meeting_text
 from server.turn_pacing import (
     cut_decision,
     cut_decision_timer,
+    meeting_turn_pacing_from_env,
     split_carry,
     turn_pacing_from_env,
     word_span_ms,
@@ -22,6 +23,7 @@ from tests.test_stt_terminate import _connected_ws
 
 
 CFG = {"min_ms": 3000, "gap_ms": 350, "max_ms": 8000, "stall_ms": 700}
+MEETING_CFG = {"min_ms": 4500, "gap_ms": 400, "max_ms": 14000, "stall_ms": 700}
 
 
 def _words(open_ms: int, gap_ms: int) -> list[dict]:
@@ -782,9 +784,38 @@ class SttCfgPacingTests(unittest.TestCase):
         self.assertFalse(tr.get("speaker_labels"))
         sess._workspace = "meeting"
         mt = sess._stt_cfg()["stt"]
-        self.assertNotIn("turn_pacing", mt)
+        self.assertEqual(mt["turn_pacing"], MEETING_CFG)
         self.assertTrue(mt.get("speaker_labels"))
         self.assertEqual(mt.get("max_turn_silence"), "1200")
+
+    def test_meeting_has_meeting_pacing(self):
+        sess = _translate_session()
+        sess._workspace = "meeting"
+        mt = sess._stt_cfg()["stt"]
+        self.assertEqual(
+            mt["turn_pacing"],
+            {"min_ms": 4500, "gap_ms": 400, "max_ms": 14000, "stall_ms": 700},
+        )
+
+    def test_translate_pacing_unchanged(self):
+        sess = _translate_session()
+        tr = sess._stt_cfg()["stt"]
+        self.assertEqual(tr["turn_pacing"]["min_ms"], 3000)
+        self.assertEqual(tr["turn_pacing"]["max_ms"], 8000)
+        self.assertEqual(tr.get("max_turn_silence"), "1200")
+
+    def test_meeting_lecture_scene_has_pacing(self):
+        sess = _translate_session()
+        sess._workspace = "meeting"
+        sess.cfg["stt"]["listen_scene"] = "lecture"
+        mt = sess._stt_cfg()["stt"]
+        self.assertEqual(mt["turn_pacing"], MEETING_CFG)
+
+    def test_interview_no_turn_pacing(self):
+        sess = _translate_session()
+        sess._workspace = "interview"
+        stt = sess._stt_cfg()["stt"]
+        self.assertNotIn("turn_pacing", stt)
 
     def test_max_turn_silence_env_override(self):
         sess = _translate_session()
@@ -797,6 +828,90 @@ class SttCfgPacingTests(unittest.TestCase):
         sess._workspace = "interview"
         stt = sess._stt_cfg()["stt"]
         self.assertNotIn("max_turn_silence", stt)
+
+
+class MeetingPacingEnvTests(unittest.TestCase):
+    def test_meeting_pacing_env_override(self):
+        env = {
+            "NOD_MT_CUT_MIN_MS": "5000",
+            "NOD_MT_CUT_GAP_MS": "500",
+            "NOD_MT_CUT_MAX_MS": "15000",
+            "NOD_MT_CUT_STALL_MS": "800",
+        }
+        with mock.patch.dict("os.environ", env):
+            cfg = meeting_turn_pacing_from_env()
+        self.assertEqual(cfg["min_ms"], 5000)
+        self.assertEqual(cfg["gap_ms"], 500)
+        self.assertEqual(cfg["max_ms"], 15000)
+        self.assertEqual(cfg["stall_ms"], 800)
+        with mock.patch.dict("os.environ", {"NOD_MT_CUT_MIN_MS": "nope"}):
+            cfg_bad = meeting_turn_pacing_from_env()
+        self.assertEqual(cfg_bad["min_ms"], 4500)
+        with mock.patch.dict("os.environ", {}, clear=False):
+            tr = turn_pacing_from_env()
+        self.assertEqual(tr["min_ms"], 3000)
+
+
+class MeetingListenerPacingTests(unittest.TestCase):
+    def _partial(self, open_ms: int, gap_ms: int) -> str:
+        words = _words(open_ms, gap_ms)
+        return json.dumps({
+            "type": "Turn",
+            "end_of_turn": False,
+            "transcript": "hello there",
+            "words": words,
+        })
+
+    def _listener(self) -> CloudListener:
+        return CloudListener(
+            api_key="test-key",
+            cfg={"stt": {"turn_pacing": dict(MEETING_CFG)}},
+            on_final=lambda *a: None,
+            on_partial=lambda *a: None,
+            on_error=None,
+        )
+
+    def test_meeting_listener_cuts_on_pause_after_min(self):
+        lst = self._listener()
+        ws = _connected_ws()
+        lst._ws = ws
+        lst._on_message(None, self._partial(4600, 450))
+        self.assertTrue(lst._force_pending)
+        lst._flush_force_endpoint()
+        texts = [
+            json.loads(c[0][0])
+            for c in ws.send.call_args_list
+            if c[0] and isinstance(c[0][0], str)
+        ]
+        self.assertIn({"type": "ForceEndpoint"}, texts)
+        lst2 = self._listener()
+        ws2 = _connected_ws()
+        lst2._ws = ws2
+        lst2._on_message(None, self._partial(4000, 450))
+        self.assertFalse(lst2._force_pending)
+        lst2._flush_force_endpoint()
+        texts2 = [
+            c for c in ws2.send.call_args_list
+            if c[0] and isinstance(c[0][0], str)
+        ]
+        self.assertEqual(texts2, [])
+
+    def test_meeting_listener_hard_cut_at_max(self):
+        lst = self._listener()
+        ws = _connected_ws()
+        lst._ws = ws
+        with self.assertLogs("nod", level="INFO") as cap:
+            lst._on_message(None, self._partial(14100, 50))
+        self.assertTrue(lst._force_pending)
+        lst._flush_force_endpoint()
+        joined = "\n".join(cap.output)
+        self.assertIn("translate_cut reason=max", joined)
+        texts = [
+            json.loads(c[0][0])
+            for c in ws.send.call_args_list
+            if c[0] and isinstance(c[0][0], str)
+        ]
+        self.assertIn({"type": "ForceEndpoint"}, texts)
 
 
 if __name__ == "__main__":
