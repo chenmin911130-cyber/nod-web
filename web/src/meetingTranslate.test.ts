@@ -30,7 +30,7 @@ const lines: MeetingLine[] = [
 ]
 eq(nextMeetingLineToTranslate(lines, asked)?.id, 'c', 'newest untranslated unasked line is chosen')
 eq(nextMeetingLineToTranslate(lines, new Set(['a', 'b', 'c']))?.id, undefined, 'nothing when every line is asked/done/failed')
-const withFailedNewest: MeetingLine[] = [base('z', { translateFailed: true, text: 'gave up' }), base('y', { text: 'ok' })]
+const withFailedNewest: MeetingLine[] = [base('z', { translateFailed: true, text: 'gave up' }), base('y', { text: 'ok.' })]
 eq(nextMeetingLineToTranslate(withFailedNewest, new Set())?.id, 'y', 'a translateFailed line is skipped even when it is the newest')
 eq(nextMeetingLineToTranslate([base('only', { translateFailed: true })], asked)?.id, undefined, 'a lone translateFailed line is not re-selected')
 
@@ -46,7 +46,7 @@ eq(
 )
 eq(
   nextMeetingLineToTranslate(
-    [base('old', { text: 'old', at: now - BACKLOG_MS + 500 }), base('new', { text: 'new', at: now - 100 })],
+    [base('old', { text: 'old.', at: now - BACKLOG_MS + 500 }), base('new', { text: 'new.', at: now - 100 })],
     new Set(),
     now,
   )?.id,
@@ -83,7 +83,7 @@ eq(
   nextMeetingLineToTranslate(
     [
       base('old', { translation: 'done', at: now - BACKLOG_MS - 5000 }),
-      base('new', { at: now - 100 }),
+      base('new', { text: 'new.', at: now - 100 }),
     ],
     new Set(),
     now,
@@ -95,7 +95,7 @@ eq(
   nextMeetingLineToTranslate(
     [
       base('old', { translateFailed: true, at: now - BACKLOG_MS - 5000 }),
-      base('new', { at: now - 100 }),
+      base('new', { text: 'new.', at: now - 100 }),
     ],
     new Set(),
     now,

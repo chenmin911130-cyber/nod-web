@@ -3,8 +3,23 @@ import type { MeetingLine, PairLang } from './types'
 /** Oldest untranslated line waits this long before the picker switches from newest-first to FIFO. */
 export const BACKLOG_MS = 4000
 
+/** Incomplete last line waits this long before auto-translate (no sentence end). */
+export const COMPLETE_QUIET_MS = 2500
+
+const SENTENCE_END_RE = /[.!?…。！？](?:["'”’)）)]*)?\s*$/u
+
 function isTranslateCandidate(line: MeetingLine, asked: Set<string>): boolean {
   return !line.translation && !line.translateFailed && !asked.has(line.id)
+}
+
+export function meetingLineComplete(line: MeetingLine, lines: MeetingLine[], nowMs: number): boolean {
+  const text = line.text.trim()
+  if (!text) return false
+  if (SENTENCE_END_RE.test(text)) return true
+  const idx = lines.findIndex((ln) => ln.id === line.id)
+  if (idx >= 0 && idx < lines.length - 1) return true
+  const waitSince = lineTranslationWaitSince(line)
+  return nowMs - waitSince >= COMPLETE_QUIET_MS
 }
 
 export function lineTranslationWaitSince(line: MeetingLine): number {
@@ -42,6 +57,7 @@ export function nextMeetingLineToTranslate(
   let oldestAt = Infinity
   for (const line of lines) {
     if (!isTranslateCandidate(line, asked)) continue
+    if (!meetingLineComplete(line, lines, nowMs)) continue
     const waitSince = lineTranslationWaitSince(line)
     if (waitSince < oldestAt) {
       oldestAt = waitSince
@@ -52,9 +68,27 @@ export function nextMeetingLineToTranslate(
 
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]
-    if (isTranslateCandidate(line, asked)) return line
+    if (isTranslateCandidate(line, asked) && meetingLineComplete(line, lines, nowMs)) return line
   }
   return undefined
+}
+
+/** Ms until an incomplete last-line candidate becomes quiet-complete; null when nothing to wait for. */
+export function nextMeetingTranslateWakeMs(
+  lines: MeetingLine[],
+  asked: Set<string>,
+  nowMs = Date.now(),
+): number | null {
+  if (nextMeetingLineToTranslate(lines, asked, nowMs) !== undefined) return null
+  let minWake: number | null = null
+  for (const line of lines) {
+    if (!isTranslateCandidate(line, asked)) continue
+    if (meetingLineComplete(line, lines, nowMs)) continue
+    const remaining = COMPLETE_QUIET_MS - (nowMs - lineTranslationWaitSince(line))
+    if (remaining <= 0) continue
+    if (minWake === null || remaining < minWake) minWake = remaining
+  }
+  return minWake
 }
 
 /**
