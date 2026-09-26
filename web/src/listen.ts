@@ -336,6 +336,7 @@ export function visibleSections(scene: ListenScene, doc: NotesDoc): Array<{ id: 
 }
 
 export const MEETING_SPEAKER_OPTIONS = [
+  { id: '1', label: '1 person', chip: '1', count: 1 },
   { id: '2', label: '2 people', chip: '2', count: 2 },
   { id: '3-4', label: '3-4 people', chip: '3–4', count: 4 },
   { id: '5+', label: '5+ people', chip: '5+', count: 6 },
@@ -596,6 +597,7 @@ export function resolveMeetingLineLabel(
   const id = (line.speaker || '').trim()
   if (scene === 'lecture') return id ? resolveSpeakerName(names, id) : ''
   if (id && locked[id] && names[id]) return names[id]
+  if (scene === 'meeting' && meetingSpeakerId() === '1') return ''
   return inferMeetingLineLabel(line.text, scene)
 }
 

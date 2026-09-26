@@ -2,6 +2,7 @@ import { showLineTranslation } from './iphoneCopy'
 import type { CatchNote } from './types'
 import {
   expandSplitMeetingLines,
+  meetingSpeakerId,
   resolveMeetingLineLabel,
   resolveSpeakerName,
   sectionTitle,
@@ -277,6 +278,7 @@ function transcriptGroupKey(
       opts?.speakerNameLocked || {},
     )
     if (label) return label
+    if (scene === 'meeting' && meetingSpeakerId() === '1') return 'solo'
   }
   return speakerKey(line.speaker)
 }
