@@ -43,6 +43,16 @@ eq(
   'c',
   'sentence_end_picked zh',
 )
+eq(
+  nextMeetingLineToTranslate([base('d', { text: 'He said “yes.”', updatedAt: now - 100 })], new Set(), now)?.id,
+  'd',
+  'sentence_end_picked curly en',
+)
+eq(
+  nextMeetingLineToTranslate([base('e', { text: '他说：“好。”', updatedAt: now - 100 })], new Set(), now)?.id,
+  'e',
+  'sentence_end_picked curly zh',
+)
 
 // 3. older_line_picked_when_newer_exists
 eq(

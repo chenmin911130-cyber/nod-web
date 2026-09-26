@@ -6,10 +6,10 @@ export const BACKLOG_MS = 4000
 /** Incomplete last line waits this long before auto-translate (no sentence end). */
 export const COMPLETE_QUIET_MS = 2500
 
-const SENTENCE_END_RE = /[.!?…。！？](?:["'""''）)]*)?\s*$/u
+const SENTENCE_END_RE = /[.!?…。！？](?:["'”’)）)]*)?\s*$/u
 
 function isTranslateCandidate(line: MeetingLine, asked: Set<string>): boolean {
-  return Boolean(line.text.trim()) && !line.translation && !line.translateFailed && !asked.has(line.id)
+  return !line.translation && !line.translateFailed && !asked.has(line.id)
 }
 
 export function meetingLineComplete(line: MeetingLine, lines: MeetingLine[], nowMs: number): boolean {
