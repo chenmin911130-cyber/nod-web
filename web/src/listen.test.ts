@@ -75,7 +75,7 @@ eq(speakersExpected('meeting', 4), 4, 'meeting override 4')
 eq(speakersExpected('meeting', 6), 6, 'meeting override 6')
 eq(speakersExpected('lecture'), 4, 'lecture stays 4')
 eq(speakersExpected('interview', 6), 2, 'interview ignores override')
-eq(MEETING_SPEAKER_OPTIONS.map((o) => o.count).join(','), '2,4,6', 'bucket counts')
+eq(MEETING_SPEAKER_OPTIONS.map((o) => o.count).join(','), '1,2,4,6', 'bucket counts')
 
 eq(speakerLetterIndex('A'), 0, 'A maps to host index')
 eq(speakerLetterIndex('b'), 1, 'B maps to guest index')
