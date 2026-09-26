@@ -11,13 +11,15 @@ export function lineTranslationWaitSince(line: MeetingLine): number {
   return line.updatedAt ?? line.at ?? 0
 }
 
-/** True when an in-flight meeting-line translate (not queued behind a user ask) should be cancelled on line_update. */
+/** True when an in-flight meeting-line translate should be cancelled on line_update. False when a user Ask is pending (cancel_generate would drop it). */
 export function shouldCancelOnExtend(
   lineId: string,
   inflightId: string | null,
   askId: string,
   bindId: string,
+  userAskPending: boolean,
 ): boolean {
+  if (userAskPending) return false
   return inflightId === lineId && Boolean(askId) && bindId === lineId
 }
 

@@ -1386,6 +1386,7 @@ export default function App() {
   const translateFiles = useRef<Map<string, AttachPayload[]>>(new Map())
   const translateTimer = useRef(0)
   const meetingTranslateCancelOnExtend = useRef(0)
+  const meetingTranslateLastCancelledAskId = useRef('')
   const pumpTranslateRef = useRef<() => void>(() => {})
   const generateNotesRef = useRef<() => void>(() => {})
   const exportAfterNotes = useRef(false)
@@ -1971,9 +1972,19 @@ export default function App() {
         askedTranslate.current.delete(e.id)
         translateRetries.current.delete(e.id)
         const s = stateRef.current
-        if (shouldCancelOnExtend(e.id, inflightTranslate.current, s.translateAskId, s.translateBindId)) {
+        if (
+          shouldCancelOnExtend(
+            e.id,
+            inflightTranslate.current,
+            s.translateAskId,
+            s.translateBindId,
+            s.catchNotes.some((n) => isPendingCatchId(n.id)),
+          )
+          && s.translateAskId !== meetingTranslateLastCancelledAskId.current
+        ) {
           window.api.send({ type: 'cancel_generate' })
           meetingTranslateCancelOnExtend.current += 1
+          meetingTranslateLastCancelledAskId.current = s.translateAskId
         }
         queueMicrotask(() => pumpTranslateRef.current())
       }

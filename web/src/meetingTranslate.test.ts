@@ -104,10 +104,11 @@ eq(
   'failed old line does not force oldest-first',
 )
 
-eq(shouldCancelOnExtend('m1', 'm1', 'ask-1', 'm1'), true, 'cancel when in-flight translate ask matches line')
-eq(shouldCancelOnExtend('m1', 'm1', '', 'm1'), false, 'no cancel when translate queued behind user ask (no askId)')
-eq(shouldCancelOnExtend('m1', 'm2', 'ask-1', 'm2'), false, 'no cancel for a different in-flight line')
-eq(shouldCancelOnExtend('m1', 'm1', 'ask-1', 'm2'), false, 'no cancel when bind is another line')
+eq(shouldCancelOnExtend('m1', 'm1', 'ask-1', 'm1', false), true, 'cancel when in-flight translate ask matches line')
+eq(shouldCancelOnExtend('m1', 'm1', '', 'm1', false), false, 'no cancel when translate queued behind user ask (no askId)')
+eq(shouldCancelOnExtend('m1', 'm2', 'ask-1', 'm2', false), false, 'no cancel for a different in-flight line')
+eq(shouldCancelOnExtend('m1', 'm1', 'ask-1', 'm2', false), false, 'no cancel when bind is another line')
+eq(shouldCancelOnExtend('m1', 'm1', 'ask-1', 'm1', true), false, 'no cancel when a user Ask is pending')
 
 // meetingLinesAfterTargetChange: a line that gave up (translateFailed) becomes
 // retryable when the translation target changes — the give-up flag resets (its
