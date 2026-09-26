@@ -47,7 +47,12 @@ import {
   type SaveStatus,
 } from './sessionSave'
 import { isTranslateChunk, looksLikeTarget, matchesLockedFrom, parseHeardLang, routeTranslateChunk, sttTag, translateAskIdAfterDone, translateDoneBelongsToAsk, translateDoneDecision, translateShouldPassthrough, wrongScriptForTarget } from './translateGate'
-import { applyNotesTranslateTo, nextMeetingLineToTranslate, shouldCancelOnExtend } from './meetingTranslate'
+import {
+  applyNotesTranslateTo,
+  nextMeetingLineToTranslate,
+  nextMeetingTranslateWakeMs,
+  shouldCancelOnExtend,
+} from './meetingTranslate'
 import { applyLineUpdate, applyLineTranslationRev, staleTranslateDone } from './meetingLines'
 import { doneAffectsInterview } from './interviewDone'
 import AnswerPane from './components/AnswerPane'
@@ -1388,6 +1393,7 @@ export default function App() {
   const meetingTranslateCancelOnExtend = useRef(0)
   const meetingTranslateLastCancelledAskId = useRef('')
   const pumpTranslateRef = useRef<() => void>(() => {})
+  const meetingTranslateWakeTimer = useRef(0)
   const generateNotesRef = useRef<() => void>(() => {})
   const exportAfterNotes = useRef(false)
   const keepAfterNotes = useRef<KeepAfterNotesJob | null>(null)
@@ -3320,8 +3326,23 @@ export default function App() {
       // 停顿期间回填旧行）。translateFailed 行被跳过，避免对坏模型的重发死循环。
       const next = nextMeetingLineToTranslate(s.meetingLines, askedTranslate.current)
       if (next) {
+        if (meetingTranslateWakeTimer.current) {
+          window.clearTimeout(meetingTranslateWakeTimer.current)
+          meetingTranslateWakeTimer.current = 0
+        }
         askTranslate(next.text, next.id)
         return
+      }
+      const wakeMs = nextMeetingTranslateWakeMs(s.meetingLines, askedTranslate.current)
+      if (meetingTranslateWakeTimer.current) {
+        window.clearTimeout(meetingTranslateWakeTimer.current)
+        meetingTranslateWakeTimer.current = 0
+      }
+      if (wakeMs != null) {
+        meetingTranslateWakeTimer.current = window.setTimeout(() => {
+          meetingTranslateWakeTimer.current = 0
+          pumpTranslateRef.current()
+        }, wakeMs)
       }
       return
     }
@@ -3412,10 +3433,17 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    const clearMeetingTranslateWake = () => {
+      if (meetingTranslateWakeTimer.current) {
+        window.clearTimeout(meetingTranslateWakeTimer.current)
+        meetingTranslateWakeTimer.current = 0
+      }
+    }
     if (state.workspaceMode === 'meeting' && notesBilingualOn(state.notesLang, state.translateOn)) {
       pumpTranslate()
-      return
+      return clearMeetingTranslateWake
     }
+    clearMeetingTranslateWake()
     if (state.workspaceMode !== 'translate') return
     pumpTranslate()
   }, [state.translatePairs, state.meetingLines, state.translateOn, state.notesLang, state.workspaceMode, pumpTranslate])
