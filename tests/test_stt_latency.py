@@ -132,6 +132,48 @@ class CloudListenerLatencyTests(unittest.TestCase):
         self.assertIn("stt_latency", joined)
         self.assertNotIn(secret, joined)
 
+    def test_meeting_turn_span_ms_from_word_timings(self):
+        STT_LATENCY_WINDOW._samples.clear()
+        meta = {
+            "stt_turn": 1,
+            "first_word_ms": 1000,
+            "last_word_ms": 3500,
+            "__commit_mono__": time.monotonic(),
+            "stream": "s1",
+        }
+        with self.assertLogs("nod", level="INFO") as cap:
+            record_stt_latency(
+                workspace="meeting",
+                meta=meta,
+                hold_ms=None,
+                speaker_labels=0,
+                max_turn_silence=1600,
+                stream="s1",
+            )
+        joined = "\n".join(cap.output)
+        self.assertIn("turn_span_ms=2500", joined)
+
+    def test_translate_log_omits_turn_span_ms(self):
+        STT_LATENCY_WINDOW._samples.clear()
+        meta = {
+            "stt_turn": 1,
+            "first_word_ms": 1000,
+            "last_word_ms": 3500,
+            "__commit_mono__": time.monotonic(),
+            "stream": "s1",
+        }
+        with self.assertLogs("nod", level="INFO") as cap:
+            record_stt_latency(
+                workspace="translate",
+                meta=meta,
+                hold_ms=None,
+                speaker_labels=0,
+                max_turn_silence=1600,
+                stream="s1",
+            )
+        joined = "\n".join(cap.output)
+        self.assertNotIn("turn_span_ms", joined)
+
 
 class SessionHoldLatencyTests(unittest.TestCase):
     def setUp(self) -> None:

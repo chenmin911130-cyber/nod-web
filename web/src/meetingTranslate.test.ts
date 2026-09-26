@@ -1,4 +1,9 @@
-import { meetingLinesAfterTargetChange, nextMeetingLineToTranslate } from './meetingTranslate'
+import {
+  BACKLOG_MS,
+  meetingLinesAfterTargetChange,
+  nextMeetingLineToTranslate,
+  shouldCancelOnExtend,
+} from './meetingTranslate'
 import { parseHeardLang } from './translateGate'
 import type { MeetingLine } from './types'
 
@@ -28,6 +33,82 @@ eq(nextMeetingLineToTranslate(lines, new Set(['a', 'b', 'c']))?.id, undefined, '
 const withFailedNewest: MeetingLine[] = [base('z', { translateFailed: true, text: 'gave up' }), base('y', { text: 'ok' })]
 eq(nextMeetingLineToTranslate(withFailedNewest, new Set())?.id, 'y', 'a translateFailed line is skipped even when it is the newest')
 eq(nextMeetingLineToTranslate([base('only', { translateFailed: true })], asked)?.id, undefined, 'a lone translateFailed line is not re-selected')
+
+const now = 1_000_000
+eq(
+  nextMeetingLineToTranslate(
+    [base('old', { text: 'old', at: now - BACKLOG_MS - 1 }), base('new', { text: 'new', at: now - 100 })],
+    new Set(),
+    now,
+  )?.id,
+  'old',
+  'backlog >= BACKLOG_MS picks oldest untranslated',
+)
+eq(
+  nextMeetingLineToTranslate(
+    [base('old', { text: 'old', at: now - BACKLOG_MS + 500 }), base('new', { text: 'new', at: now - 100 })],
+    new Set(),
+    now,
+  )?.id,
+  'new',
+  'no backlog picks newest untranslated',
+)
+eq(nextMeetingLineToTranslate([], new Set(), now)?.id, undefined, 'empty list yields nothing')
+eq(
+  nextMeetingLineToTranslate(
+    [
+      base('old', { text: 'old', at: now - BACKLOG_MS }),
+      base('new', { text: 'new', at: now - 100 }),
+    ],
+    new Set(),
+    now,
+  )?.id,
+  'old',
+  'exact BACKLOG_MS boundary picks oldest',
+)
+const tieWait = now - BACKLOG_MS - 50
+eq(
+  nextMeetingLineToTranslate(
+    [
+      base('first', { at: tieWait, updatedAt: tieWait }),
+      base('second', { at: tieWait, updatedAt: tieWait }),
+    ],
+    new Set(),
+    now,
+  )?.id,
+  'first',
+  'tie on wait time picks earlier line in list',
+)
+eq(
+  nextMeetingLineToTranslate(
+    [
+      base('old', { translation: 'done', at: now - BACKLOG_MS - 5000 }),
+      base('new', { at: now - 100 }),
+    ],
+    new Set(),
+    now,
+  )?.id,
+  'new',
+  'translated old line does not force oldest-first',
+)
+eq(
+  nextMeetingLineToTranslate(
+    [
+      base('old', { translateFailed: true, at: now - BACKLOG_MS - 5000 }),
+      base('new', { at: now - 100 }),
+    ],
+    new Set(),
+    now,
+  )?.id,
+  'new',
+  'failed old line does not force oldest-first',
+)
+
+eq(shouldCancelOnExtend('m1', 'm1', 'ask-1', 'm1', false), true, 'cancel when in-flight translate ask matches line')
+eq(shouldCancelOnExtend('m1', 'm1', '', 'm1', false), false, 'no cancel when translate queued behind user ask (no askId)')
+eq(shouldCancelOnExtend('m1', 'm2', 'ask-1', 'm2', false), false, 'no cancel for a different in-flight line')
+eq(shouldCancelOnExtend('m1', 'm1', 'ask-1', 'm2', false), false, 'no cancel when bind is another line')
+eq(shouldCancelOnExtend('m1', 'm1', 'ask-1', 'm1', true), false, 'no cancel when a user Ask is pending')
 
 // meetingLinesAfterTargetChange: a line that gave up (translateFailed) becomes
 // retryable when the translation target changes — the give-up flag resets (its

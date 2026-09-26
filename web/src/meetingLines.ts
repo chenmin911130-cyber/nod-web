@@ -14,7 +14,9 @@ export function applyLineUpdate(
   lang?: string,
   speaker?: string,
   rev = 0,
+  updatedAt?: number,
 ): MeetingLine[] {
+  const touched = updatedAt ?? Date.now()
   return lines.map((ln) =>
     ln.id === id
       ? {
@@ -25,6 +27,7 @@ export function applyLineUpdate(
           translation: '',
           translateFailed: false,
           rev,
+          updatedAt: touched,
         }
       : ln,
   )

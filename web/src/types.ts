@@ -69,6 +69,8 @@ export interface MeetingLine {
   text: string
   marked?: boolean
   at?: number
+  /** Last final text or line_update; backlog wait + translate latency (does not replace `at`). */
+  updatedAt?: number
   translation?: string
   speaker?: string
   /** Set when translation gave up after the retry budget; pump skips it. */

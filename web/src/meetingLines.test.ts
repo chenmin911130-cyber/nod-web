@@ -11,10 +11,12 @@ function eq<T>(got: T, want: T, label?: string) {
 // stale translation + give-up flag, keeps ts; unknown id is ignored.
 {
   const lines: MeetingLine[] = [
-    { id: 'm1', ts: '0:01', text: 'So one of the significant', translation: '所以其中一个重要', rev: 0, lang: 'en' },
+    { id: 'm1', ts: '0:01', text: 'So one of the significant', translation: '所以其中一个重要', rev: 0, lang: 'en', at: 1111 },
     { id: 'm2', ts: '0:05', text: 'Next line.', translation: '下一行', rev: 0 },
   ]
-  const out = applyLineUpdate(lines, 'm1', 'So one of the significant features', 'en', 'A', 1)
+  const out = applyLineUpdate(lines, 'm1', 'So one of the significant features', 'en', 'A', 1, 9999)
+  eq(out[0].at, 1111, 'at unchanged on line_update')
+  eq(out[0].updatedAt, 9999, 'updatedAt set on line_update')
   eq(out[0].text, 'So one of the significant features', 'text replaced')
   eq(out[0].rev, 1, 'rev bumped')
   eq(out[0].translation, '', 'stale translation cleared')
@@ -53,3 +55,5 @@ function eq<T>(got: T, want: T, label?: string) {
 eq(staleTranslateDone('m1', 0, { id: 'm1', ts: '0:01', rev: 1, text: 'x' }), true, 'extended line makes a done stale')
 eq(staleTranslateDone('m1', 1, { id: 'm1', ts: '0:01', rev: 1, text: 'x' }), false, 'matching rev done is live')
 eq(staleTranslateDone('m1', 0, undefined), false, 'no line -> not stale')
+
+console.log('meetingLines ok')
