@@ -83,6 +83,7 @@ from server.turn_pacing import (
     carry_max_ms_from_env,
     cut_decision,
     cut_decision_timer,
+    meeting_turn_pacing_from_env,
     split_carry,
     turn_pacing_from_env,
     word_span_ms,
@@ -4035,6 +4036,7 @@ class Session:
         if self._workspace == "meeting":
             stt["max_turn_silence"] = "1200"
             stt["speaker_labels"] = True
+            stt["turn_pacing"] = meeting_turn_pacing_from_env()
             if not stt.get("speakers_expected"):
                 stt["speakers_expected"] = 4 if scene == "lecture" else 2
         else:

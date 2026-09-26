@@ -30,6 +30,21 @@ def turn_pacing_from_env() -> dict[str, int]:
     }
 
 
+_MT_DEFAULT_MIN_MS = 4500
+_MT_DEFAULT_GAP_MS = 400
+_MT_DEFAULT_MAX_MS = 14000
+_MT_DEFAULT_STALL_MS = 700
+
+
+def meeting_turn_pacing_from_env() -> dict[str, int]:
+    return {
+        "min_ms": _env_int("NOD_MT_CUT_MIN_MS", _MT_DEFAULT_MIN_MS),
+        "gap_ms": _env_int("NOD_MT_CUT_GAP_MS", _MT_DEFAULT_GAP_MS),
+        "max_ms": _env_int("NOD_MT_CUT_MAX_MS", _MT_DEFAULT_MAX_MS),
+        "stall_ms": _env_int("NOD_MT_CUT_STALL_MS", _MT_DEFAULT_STALL_MS),
+    }
+
+
 def carry_max_ms_from_env() -> int:
     return _env_int("NOD_TR_CARRY_MAX_MS", _DEFAULT_CARRY_MAX_MS)
 
