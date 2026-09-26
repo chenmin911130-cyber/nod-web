@@ -1385,6 +1385,7 @@ export default function App() {
   const translateRetries = useRef<Map<string, number>>(new Map())
   const translateFiles = useRef<Map<string, AttachPayload[]>>(new Map())
   const translateTimer = useRef(0)
+  const meetingTranslateCancelOnExtend = useRef(0)
   const pumpTranslateRef = useRef<() => void>(() => {})
   const generateNotesRef = useRef<() => void>(() => {})
   const exportAfterNotes = useRef(false)
@@ -1969,6 +1970,13 @@ export default function App() {
         // stale. Clear its ask/retry and let pump re-pick it under the new rev.
         askedTranslate.current.delete(e.id)
         translateRetries.current.delete(e.id)
+        if (inflightTranslate.current === e.id) {
+          window.api.send({ type: 'cancel_generate' })
+          clearTranslateTimer()
+          inflightTranslate.current = null
+          meetingTranslateCancelOnExtend.current += 1
+          dispatch({ type: 'release_translate' })
+        }
         queueMicrotask(() => pumpTranslateRef.current())
       }
       if (e.type === 'question' && stateRef.current.workspaceMode === 'translate') {
@@ -2027,6 +2035,13 @@ export default function App() {
           })
           if (outcome === 'accept') {
             if (translated) translateRetries.current.delete(id)
+            if (s.workspaceMode === 'meeting' && line?.at) {
+              console.debug('meeting_translate_latency', {
+                line_id: id,
+                final_to_done_ms: Date.now() - line.at,
+                cancel_on_extend: meetingTranslateCancelOnExtend.current,
+              })
+            }
             dispatch({ type: 'release_translate' })
           } else if (outcome === 'retry') {
             translateRetries.current.set(id, retries)

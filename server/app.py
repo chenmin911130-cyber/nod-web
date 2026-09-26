@@ -5486,11 +5486,19 @@ class Session:
         )
 
     def _emit_meeting_line(self, cleaned: str, lang: str | None, speaker: str | None = None, meta: dict[str, Any] | None = None) -> None:
-        meta = meta or {}
+        meta = dict(meta or {})
         hold_ms: int | None = None
         hold_from = meta.get("__hold_from__")
         if hold_from is not None:
             hold_ms = int(round((time.monotonic() - float(hold_from)) * 1000))
+        if meta.get("turn_span_ms") is None:
+            fw = meta.get("first_word_ms")
+            lw = meta.get("last_word_ms")
+            if fw is not None and lw is not None:
+                try:
+                    meta["turn_span_ms"] = int(lw) - int(fw)
+                except (TypeError, ValueError):
+                    pass
         self._record_stt_latency("meeting", meta, hold_ms=hold_ms)
         heard = heard_lang_from_text(cleaned, lang)
         last_piece: dict[str, Any] | None = None

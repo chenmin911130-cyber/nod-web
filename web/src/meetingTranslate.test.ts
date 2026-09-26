@@ -1,4 +1,4 @@
-import { meetingLinesAfterTargetChange, nextMeetingLineToTranslate } from './meetingTranslate'
+import { BACKLOG_MS, meetingLinesAfterTargetChange, nextMeetingLineToTranslate } from './meetingTranslate'
 import { parseHeardLang } from './translateGate'
 import type { MeetingLine } from './types'
 
@@ -28,6 +28,27 @@ eq(nextMeetingLineToTranslate(lines, new Set(['a', 'b', 'c']))?.id, undefined, '
 const withFailedNewest: MeetingLine[] = [base('z', { translateFailed: true, text: 'gave up' }), base('y', { text: 'ok' })]
 eq(nextMeetingLineToTranslate(withFailedNewest, new Set())?.id, 'y', 'a translateFailed line is skipped even when it is the newest')
 eq(nextMeetingLineToTranslate([base('only', { translateFailed: true })], asked)?.id, undefined, 'a lone translateFailed line is not re-selected')
+
+const now = 1_000_000
+eq(
+  nextMeetingLineToTranslate(
+    [base('old', { text: 'old', at: now - BACKLOG_MS - 1 }), base('new', { text: 'new', at: now - 100 })],
+    new Set(),
+    now,
+  )?.id,
+  'old',
+  'backlog >= BACKLOG_MS picks oldest untranslated',
+)
+eq(
+  nextMeetingLineToTranslate(
+    [base('old', { text: 'old', at: now - BACKLOG_MS + 500 }), base('new', { text: 'new', at: now - 100 })],
+    new Set(),
+    now,
+  )?.id,
+  'new',
+  'no backlog picks newest untranslated',
+)
+eq(nextMeetingLineToTranslate([], new Set(), now)?.id, undefined, 'empty list yields nothing')
 
 // meetingLinesAfterTargetChange: a line that gave up (translateFailed) becomes
 // retryable when the translation target changes — the give-up flag resets (its

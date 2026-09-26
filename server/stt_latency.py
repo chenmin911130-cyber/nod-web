@@ -77,6 +77,16 @@ def record_stt_latency(
     if commit_mono is not None:
         pipeline_ms = int(round((time.monotonic() - float(commit_mono)) * 1000))
 
+    turn_span_ms = meta.get("turn_span_ms")
+    if workspace == "meeting" and turn_span_ms is None:
+        first_w = meta.get("first_word_ms")
+        last_w = meta.get("last_word_ms")
+        if first_w is not None and last_w is not None:
+            try:
+                turn_span_ms = int(last_w) - int(first_w)
+            except (TypeError, ValueError):
+                turn_span_ms = None
+
     fields: dict[str, Any] = {
         "ws": workspace,
         "turn": meta.get("stt_turn") if meta.get("stt_turn") is not None else meta.get("turn_order"),
@@ -90,6 +100,8 @@ def record_stt_latency(
         "max_turn_silence": max_turn_silence,
         "stream": stream,
     }
+    if workspace == "meeting" and turn_span_ms is not None:
+        fields["turn_span_ms"] = turn_span_ms
     parts = ["stt_latency"] + [f"{k}={v}" for k, v in fields.items() if v is not None]
     _log.info(" ".join(parts))
 
