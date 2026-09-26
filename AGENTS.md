@@ -84,6 +84,18 @@ Pods project, or either lock half, a `Podfile.lock` that disagrees with
 - 用户说「规划 / 写单 / 验收」→ 按 Fable 职责。用户说「执行 / 按清单做 / 开 PR」→ 按实现者（Grok / Composer）职责；执行单 §0 写明交给谁。实现者不写单、不审查自己的 PR；Fable 不写产品代码。
 - Hermes 工作台不再承担 nod-web 实现，除非用户当场点名。`#33` / `#35` / `#36` 已结束。
 
+### loop task（工作流名）
+
+用户说「loop task：<问题>」或「走 loop task」时，按下面顺序走完，不跳步：
+
+1. 调查：相关领域先读 `.cursor/skills/self-improve/errors.md`；从生产日志（Railway `get-logs`）和 `origin/main` 代码取证，只取需要的片段。
+2. 写单：按 `docs/agents/ticket-template.md` 写 GitHub issue，§0 默认交 Composer，用户点名才交 Grok。
+3. 派单：用子代理（Composer / Grok 模型）在后台执行；提示里给 issue 号、「实现者最小改动」原文、§5 两段输出要求。
+4. 审查：只看 diff 和 PR 里的测试输出，按 §5 逐条核，结论「不放行 / 静态审查通过 / 验收通过」写进 PR 评论。
+5. 合并：用户同意后 squash 合并；服务端改动核 Railway `/api/health` SHA，§5 要求线上复测的拉日志复测。
+6. 交付：动了 `web/`、`ios/`、`plugins/` 才打 TestFlight（build 号 = 上一版 + 1，见下文）；纯服务端不打包。
+7. 收尾：一轮做完提醒用户开新对话，交接靠 issue / PR，不靠长对话。
+
 ### 实现者最小改动（Grok / Composer，用户硬性要求）
 
 执行单是改动的上限，不是起点。
