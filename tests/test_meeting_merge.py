@@ -554,10 +554,10 @@ class MeetingEmitTests(unittest.TestCase):
         clk = _Clock()
         with mock.patch("server.app.time.time", clk):
             self._drive_hold(sess, "it feels like one message, but", speaker="A",
-                             meta={"first_word_ms": 23500, "last_word_ms": 33000, "n_words": 30})
+                             meta={"first_word_ms": 23500, "last_word_ms": 33000, "n_words": 20})
             clk.advance(10)
             self._drive_hold(sess, "Under the hood it is a real worker chain", speaker="A",
-                             meta={"first_word_ms": 33400, "last_word_ms": 43000, "n_words": 34})
+                             meta={"first_word_ms": 33400, "last_word_ms": 43000, "n_words": 20})
         qs = _events(sess, "question")
         ups = _events(sess, "line_update")
         self.assertEqual(len(qs), 1)
