@@ -241,8 +241,8 @@ eq(notesTranscriptTooThin([]), true, 'empty is thin')
 eq(notesTranscriptTooThin([{ text: 'Only one short line.' }]), true, 'one line is thin')
 eq(
   notesTranscriptTooThin([
-    { text: 'First line with enough words to count.' },
-    { text: 'Second line continues the meeting transcript with more detail here.' },
+    { text: 'First line with enough words to count for meeting notes.' },
+    { text: 'Second line continues the meeting transcript with more detail and extra context here.' },
   ]),
   false,
   'two substantive lines are not thin',
