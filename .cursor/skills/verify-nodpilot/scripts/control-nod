@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# Drive a local, hermetic Nodpilot instance for verification. See ../SKILL.md.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HERE/../../../.." && pwd)"
+HOME_DIR="${NOD_VERIFY_HOME:-/tmp/nod-verify}"
+PORT="${NOD_VERIFY_PORT:-9420}"
+FAKE_PORT="${NOD_VERIFY_FAKE_PORT:-9421}"
+STATE="$HOME_DIR/instance.env"
+PY="$ROOT/.venv/bin/python"
+
+die() { echo "control-nod: $*" >&2; exit 1; }
+load() { [[ -f "$STATE" ]] || die "no instance (run: control-nod up)"; source "$STATE"; }
+listener() { lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1 | grep .; }
+alive() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
+
+cmd_up() {
+  local rebuild=0
+  [[ "${1:-}" == "--rebuild" ]] && rebuild=1
+  [[ -x "$PY" ]] || die "missing $PY (python3 -m venv .venv && .venv/bin/pip install -r requirements.txt)"
+  [[ -d "$ROOT/web/node_modules" ]] || die "missing web/node_modules (cd web && npm ci)"
+  if [[ -f "$STATE" ]]; then
+    source "$STATE"
+    if alive "${SERVER_PID:-}"; then die "instance already running (pid $SERVER_PID, port $PORT). control-nod down first"; fi
+  fi
+  if listener "$PORT" >/dev/null || listener "$FAKE_PORT" >/dev/null; then
+    die "port $PORT or $FAKE_PORT is taken by a process this run did not start"
+  fi
+  mkdir -p "$HOME_DIR"
+  local sha; sha="$(git -C "$ROOT" rev-parse HEAD)"
+  if [[ $rebuild == 1 || ! -f "$ROOT/web/dist/app.html" || "$(cat "$ROOT/web/dist/.verify-sha" 2>/dev/null)" != "$sha" ]]; then
+    echo "building web/dist at $sha"
+    npm --prefix "$ROOT/web" run build >"$HOME_DIR.build.log" 2>&1 || { tail -40 "$HOME_DIR.build.log"; die "web build failed"; }
+    echo "$sha" >"$ROOT/web/dist/.verify-sha"
+  fi
+  local run_id; run_id="$(date -u +%Y%m%dT%H%M%SZ)"
+  local run="$HOME_DIR/runs/$run_id" data="$HOME_DIR/data-$run_id"
+  mkdir -p "$run" "$data"
+  cd "$ROOT"
+  NOD_FAKE_LOG="$run/fake-providers.jsonl" nohup "$PY" -m uvicorn fake_providers:app --app-dir "$HERE" \
+    --host 127.0.0.1 --port "$FAKE_PORT" --log-level warning >"$run/fake-providers.log" 2>&1 &
+  local fake_pid=$!
+  DATA_DIR="$data" QUOTA_DISABLED=1 ADMIN_TOKEN="verify-admin-token" AUTH_SECRET="verify-auth-secret-$run_id" \
+    nohup "$PY" "$HERE/launch_server.py" --port "$PORT" --fake-port "$FAKE_PORT" >"$run/server.log" 2>&1 &
+  local server_pid=$!
+  cat >"$STATE" <<EOF
+RUN_ID=$run_id
+RUN_DIR=$run
+DATA_DIR=$data
+SERVER_PID=$server_pid
+FAKE_PID=$fake_pid
+PORT=$PORT
+FAKE_PORT=$FAKE_PORT
+BUILD_SHA=$sha
+ADMIN_TOKEN=verify-admin-token
+EOF
+  for _ in $(seq 1 60); do
+    if curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1 && curl -fsS "http://127.0.0.1:$FAKE_PORT/_control/health" >/dev/null 2>&1; then
+      echo "ready: http://127.0.0.1:$PORT  run=$run"
+      return 0
+    fi
+    alive "$server_pid" || { tail -30 "$run/server.log"; die "server exited"; }
+    sleep 1
+  done
+  tail -30 "$run/server.log"; die "server not ready after 60s"
+}
+
+cmd_doctor() {
+  load
+  local ok=1
+  alive "$SERVER_PID" && echo "server pid $SERVER_PID alive" || { echo "FAIL server pid $SERVER_PID dead"; ok=0; }
+  alive "$FAKE_PID" && echo "fake pid $FAKE_PID alive" || { echo "FAIL fake pid $FAKE_PID dead"; ok=0; }
+  local owner; owner="$(listener "$PORT" || true)"
+  [[ "$owner" == "$SERVER_PID" ]] && echo "port $PORT owned by our server" || { echo "FAIL port $PORT owner=${owner:-none}"; ok=0; }
+  local health; health="$(curl -fsS "http://127.0.0.1:$PORT/api/health" || echo '{}')"
+  echo "health: $health"
+  echo "$health" | grep -q '"ok":true' || ok=0
+  grep -q "llm->http://127.0.0.1:$FAKE_PORT" "$RUN_DIR/server.log" && echo "providers routed to fakes" || { echo "FAIL fakes not wired"; ok=0; }
+  local head; head="$(git -C "$ROOT" rev-parse HEAD)"
+  [[ "$head" == "$BUILD_SHA" ]] && echo "build sha $BUILD_SHA == HEAD" || echo "WARN built $BUILD_SHA, HEAD is $head (control-nod down && up --rebuild)"
+  echo "run dir: $RUN_DIR"
+  [[ $ok == 1 ]] && echo "DOCTOR OK" || die "DOCTOR FAILED"
+}
+
+cmd_drive() {
+  load
+  NOD_BASE="http://127.0.0.1:$PORT" NOD_FAKE="http://127.0.0.1:$FAKE_PORT" NOD_RUN_DIR="$RUN_DIR" \
+    NOD_ADMIN_TOKEN="$ADMIN_TOKEN" NODE_PATH="$ROOT/web/node_modules" \
+    node "$HERE/drive.mjs" "$@"
+}
+
+cmd_api() {
+  load
+  local path="${1:?usage: control-nod api <path> [curl args...]}"; shift
+  curl -sS -w '\nHTTP %{http_code}\n' "http://127.0.0.1:$PORT$path" "$@"
+}
+
+cmd_suites() {
+  load
+  local out="$RUN_DIR/suites"; mkdir -p "$out"
+  (cd "$ROOT" && NOD_SKIP_DOTENV=1 "$PY" -m pytest -q >"$out/pytest.txt" 2>&1; echo "exit=$?" >>"$out/pytest.txt") || true
+  (cd "$ROOT" && npm --prefix web test >"$out/web-unit.txt" 2>&1; echo "exit=$?" >>"$out/web-unit.txt") || true
+  tail -3 "$out/pytest.txt"; tail -3 "$out/web-unit.txt"
+}
+
+cmd_prod_health() {
+  # Read-only: two GETs, nothing else. Never POST to production.
+  local out="${RUN_DIR:-$HOME_DIR}/prod-health.txt"
+  [[ -f "$STATE" ]] && source "$STATE" && out="$RUN_DIR/prod-health.txt"
+  {
+    echo "GET https://nodpilot.com/api/health"; curl -sS -m 15 -w '\nHTTP %{http_code}\n' https://nodpilot.com/api/health
+    echo "GET https://nodpilot.com/"; curl -sS -m 15 -o /dev/null -w 'HTTP %{http_code} bytes=%{size_download}\n' https://nodpilot.com/
+  } | tee "$out"
+}
+
+cmd_down() {
+  [[ -f "$STATE" ]] || { echo "nothing to stop"; return 0; }
+  source "$STATE"
+  for pid in "$SERVER_PID" "$FAKE_PID"; do alive "$pid" && kill "$pid" && echo "stopping $pid"; done
+  for _ in $(seq 1 20); do alive "$SERVER_PID" || alive "$FAKE_PID" || break; sleep 0.5; done
+  for pid in "$SERVER_PID" "$FAKE_PID"; do alive "$pid" && kill -9 "$pid" && echo "killed $pid after 10s"; done
+  rm -rf "$DATA_DIR" "$STATE"
+  echo "evidence kept at $RUN_DIR"
+}
+
+case "${1:-}" in
+  up) shift; cmd_up "$@" ;;
+  doctor) cmd_doctor ;;
+  drive) shift; cmd_drive "$@" ;;
+  api) shift; cmd_api "$@" ;;
+  suites) cmd_suites ;;
+  prod-health) cmd_prod_health ;;
+  down) cmd_down ;;
+  *) echo "usage: control-nod {up [--rebuild]|doctor|drive <scenario...|all|list>|api <path>|suites|prod-health|down}"; exit 2 ;;
+esac
