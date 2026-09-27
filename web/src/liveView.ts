@@ -292,9 +292,9 @@ export function mergeGroupDisplayLines(lines: TranscriptGroupLine[]): Transcript
   return [{ ...lines[0], text, translation: last.translation, translateFailed: last.translateFailed }]
 }
 
-/** Join rapid STT fragments within one speaker group into one card. */
+/** Transcript tab: one card per server line (speaker grouping unchanged). */
 export function transcriptDisplayLines(_scene: ListenScene, lines: TranscriptGroupLine[]): TranscriptGroupLine[] {
-  return mergeGroupDisplayLines(lines)
+  return lines
 }
 
 /** Same-speaker runs merge in Live; speaker changes still start a new bubble. */

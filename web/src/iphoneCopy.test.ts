@@ -25,6 +25,7 @@ import {
   recClock,
   sameSpokenLine,
   spokenSettingsValue,
+  bilingualTapAction,
   showCardTranslation,
   showLineTranslation,
   showLiveTranslation,
@@ -161,6 +162,15 @@ eq(showCardTranslation({ open: false, original: 'Hello', translation: '你好' }
 eq(showCardTranslation({ open: true, original: 'Hello', translation: '你好' }), true, 'open card shows translation')
 eq(showCardTranslation({ open: true, original: 'Hello', translation: 'Hello', pending: false }), false, 'open card hides same-language duplicate')
 eq(showCardTranslation({ open: true, original: 'Hello', translation: '', pending: true }), true, 'open card shows pending ellipsis')
+eq(showCardTranslation({ open: false, bilingual: true, original: 'Hello', translation: '你好' }), true, 'bilingual on shows translation on closed card')
+eq(showCardTranslation({ open: false, bilingual: true, original: 'Hello', translation: 'Hello' }), false, 'bilingual on hides same-language duplicate on closed card')
+eq(showCardTranslation({ open: false, bilingual: true, original: 'Hello', translation: '', pending: true }), true, 'bilingual on shows pending ellipsis on closed card')
+eq(showCardTranslation({ open: false, bilingual: true, original: 'Hello', translation: '', pending: false }), false, 'bilingual on hides empty translation on closed card')
+eq(showCardTranslation({ open: false, bilingual: false, original: 'Hello', translation: '你好' }), false, 'bilingual off keeps closed card without translation')
+eq(bilingualTapAction(true, false), 'hint', 'Auto notes language shows hint instead of toggling off')
+eq(bilingualTapAction(true, true), 'hint', 'Auto notes language shows hint instead of toggling on')
+eq(bilingualTapAction(false, false), 'on', 'unlocked tap turns bilingual on')
+eq(bilingualTapAction(false, true), 'off', 'unlocked tap turns bilingual off')
 eq(IPHONE_COPY.emptyTranscript, 'Waiting for speech…', 'Transcript empty waits for speech')
 eq(IPHONE_COPY.fullTranscript, 'Full transcript', 'Transcript header title')
 eq(IPHONE_COPY.allCapturedSpeech, 'All captured speech', 'Transcript header subtitle')
