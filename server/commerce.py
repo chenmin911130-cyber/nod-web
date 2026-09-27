@@ -283,7 +283,7 @@ def otp_request(
     else:
         code = new_otp_code()
         sent = send_otp_email(email, code)
-        if sent:
+        if sent or is_local_request(request):
             persist_otp(email, code, intent, body.name, body.consent)
     payload = {"ok": True, "message": OTP_OK}
     if is_local_request(request) and code:
