@@ -5507,7 +5507,7 @@ class Session:
             if speaker:
                 qev["speaker"] = speaker
             self.emit(qev)
-            self._remember_stt_turn(meta, qev["id"])
+            self._remember_stt_turn(meta, qev["id"], piece)
             if self.user_id and self.usage_session_id:
                 from server.meter import save_history
 
@@ -5650,14 +5650,15 @@ class Session:
             except Exception:
                 logging.getLogger("nod").exception("seal open line history save failed")
 
-    def _remember_stt_turn(self, meta: dict[str, Any] | None, line_id: str) -> None:
+    def _remember_stt_turn(self, meta: dict[str, Any] | None, line_id: str, text: str) -> None:
         if not meta or meta.get("stt_turn") is None or not line_id:
             return
         by = getattr(self, "_stt_line_by_turn", None)
         if by is None:
             self._stt_line_by_turn = {}
             by = self._stt_line_by_turn
-        by[(meta.get("listener_id"), meta.get("stt_turn"))] = line_id
+        key = (meta.get("listener_id"), meta.get("stt_turn"))
+        by[key] = line_id if text == meta.get("__turn_text__") else None
 
     def _apply_meeting_revision(
         self,
@@ -5667,15 +5668,21 @@ class Session:
         meta: dict[str, Any],
     ) -> bool:
         key = (meta.get("listener_id"), meta.get("stt_turn"))
-        qid = getattr(self, "_stt_line_by_turn", {}).get(key)
-        if qid:
-            self._revise_meeting_line(qid, cleaned, lang, speaker, meta)
+        by = getattr(self, "_stt_line_by_turn", {})
+        if key in by and by[key]:
+            self._revise_meeting_line(by[key], cleaned, lang, speaker, meta)
             return True
         replaced_hold = False
+        held_partial = False
         with self._meeting_lock:
             ptxt, pts, plang = self._pending_wait
             pmeta = getattr(self, "_pending_meta", None) or {}
-            if ptxt and pmeta.get("stt_turn") is not None and pmeta.get("stt_turn") == meta.get("stt_turn"):
+            same_hold = (
+                bool(ptxt)
+                and pmeta.get("stt_turn") is not None
+                and pmeta.get("stt_turn") == meta.get("stt_turn")
+            )
+            if same_hold and ptxt == pmeta.get("__turn_text__"):
                 self._pending_wait = (cleaned, pts, lang or plang)
                 merged = dict(pmeta)
                 merged.update(meta)
@@ -5683,12 +5690,18 @@ class Session:
                 if speaker:
                     self._pending_speaker = speaker
                 replaced_hold = True
+            elif same_hold:
+                held_partial = True
         if replaced_hold:
             self.emit({"type": "partial", "text": cleaned})
             return True
-        open_line = getattr(self, "_open_line", None)
-        if open_line and open_line.get("id"):
-            self._revise_meeting_line(str(open_line["id"]), cleaned, lang, speaker, meta)
+        if held_partial or (key in by and by[key] is None):
+            reason = "held_partial" if held_partial else "merged_or_split"
+            logging.getLogger("nod").info(
+                "meeting_revision decision=skip reason=%s stt_turn=%s",
+                reason,
+                meta.get("stt_turn"),
+            )
             return True
         return False
 
@@ -5821,6 +5834,11 @@ class Session:
                 )
                 if decision == "extend" and decide_prev:
                     prev = decide_prev
+                    by_turn = getattr(self, "_stt_line_by_turn", None)
+                    if by_turn:
+                        for turn_key, mapped in list(by_turn.items()):
+                            if mapped == prev["id"]:
+                                by_turn[turn_key] = None
                     gap = meeting_gap_ms(prev, nxt_open, now)
                     gap_ms_val = gap[0] if gap else None
                     if split_at is not None and split_at > 0:
@@ -7678,6 +7696,9 @@ class Session:
         else:
             heard = heard_lang_from_text(cleaned, lang)
         if self._workspace == "meeting":
+            meta["__turn_text__"] = cleaned
+            if meta.get("stt_turn") is not None:
+                self._stt_line_by_turn[(meta.get("listener_id"), meta.get("stt_turn"))] = None
             self._enqueue_meeting_final(cleaned, lang, speaker, meta)
             return
         # #191 review fix: NO length / similarity / echo prefilter on the automatic
