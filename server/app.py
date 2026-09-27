@@ -5731,7 +5731,7 @@ class Session:
             from server.meter import update_history_text
 
             try:
-                update_history_text(self.user_id, self.usage_session_id, qid, cleaned, speaker or "")
+                update_history_text(self.user_id, self.usage_session_id, qid, cleaned, speaker=speaker or "")
             except Exception:
                 logging.getLogger("nod").exception("listen_flush history revise failed")
                 if getattr(self, "_stop_flushing", False):
@@ -5902,7 +5902,7 @@ class Session:
                 from server.meter import update_history_text
 
                 try:
-                    update_history_text(self.user_id, self.usage_session_id, line_id, merged, pspeaker or "")
+                    update_history_text(self.user_id, self.usage_session_id, line_id, merged, speaker=pspeaker or "")
                 except Exception:
                     logging.getLogger("nod").exception("listen_flush history update failed")
                     if getattr(self, "_stop_flushing", False):
