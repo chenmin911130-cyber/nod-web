@@ -7698,7 +7698,7 @@ class Session:
         if self._workspace == "meeting":
             meta["__turn_text__"] = cleaned
             if meta.get("stt_turn") is not None:
-                self._stt_line_by_turn.setdefault((meta.get("listener_id"), meta.get("stt_turn")), None)
+                self._stt_line_by_turn[(meta.get("listener_id"), meta.get("stt_turn"))] = None
             self._enqueue_meeting_final(cleaned, lang, speaker, meta)
             return
         # #191 review fix: NO length / similarity / echo prefilter on the automatic

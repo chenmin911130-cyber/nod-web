@@ -277,3 +277,22 @@ class MeetingRevisionScopeTests(unittest.TestCase):
         self.assertEqual(_events(partial, "question")[0]["text"], "I think, better")
         self.assertEqual(_events(partial, "line_update"), [])
         self.assertFalse(any(e.get("text") == revised for e in partial.emit.events))
+
+    def test_revision_ignores_stale_key_from_previous_stream(self):
+        sess = _meeting()
+        sess._stt_line_by_turn = {(7, 0): "old-line-from-previous-stream"}
+        clk = _Clock()
+        merged = "but and then the feature sets shipped"
+        with mock.patch("server.app.time.time", clk):
+            _feed(sess, "but", _meta(0, 1000, 1400, 1))
+            _wait_pending(sess, "but")
+            clk.advance(0.5)
+            _feed(sess, "and then the feature sets shipped", _meta(1, 1900, 8000, 6))
+            _wait_for(sess, "question", 1)
+            _feed(sess, "But.", _meta(0, 1000, 1600, 1, revision=True))
+            time.sleep(0.15)
+        self.assertEqual(_events(sess, "line_update"), [])
+        self.assertIsNone(sess._stt_line_by_turn[(7, 0)])
+        questions = _events(sess, "question")
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["text"], merged)
