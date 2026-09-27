@@ -5641,17 +5641,11 @@ class Session:
         heard = heard_lang_from_text(text, lang)
         self._maybe_follow_speech(text, heard)
         self._remember_final(text)
-        qev: dict[str, Any] = {"type": "question", "id": qid, "text": text}
-        if heard:
-            qev["language"] = heard
-        if speaker:
-            qev["speaker"] = speaker
-        self.emit(qev)
         if self.user_id and self.usage_session_id:
-            from server.meter import save_history
+            from server.meter import update_history_text
 
             try:
-                save_history(self.user_id, self.usage_session_id, "transcript", text, qid, speaker or "")
+                update_history_text(self.user_id, self.usage_session_id, qid, text, speaker=speaker or "")
             except Exception:
                 logging.getLogger("nod").exception("seal open line history save failed")
 
