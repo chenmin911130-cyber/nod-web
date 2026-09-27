@@ -4,7 +4,8 @@ Execution tickets A and B, one per bug, plus a small Ticket C for a related bug 
 
 - Baseline: `origin/main` `5fa1bfe53292ef6dc068f7d818df4e6595d902ad` (`5fa1bfe`). Every `file:line` below is at this SHA.
 - Reproduced on 2026-09-27 at app code equal to that baseline: `control-nod drive meeting-pause-resume mode-isolation` gave `FAIL` for both. Evidence: `/tmp/nod-verify/runs/20260927T004706Z/scenarios/`.
-- Baseline harness tally (`control-nod drive all`, local scenarios): PASS 17, FAIL 3 (`auth-otp`, `meeting-pause-resume`, `mode-isolation`), NOT VERIFIABLE 4 (`auth-clerk`, `tts`, `billing`, `native-apps`).
+- Baseline harness tally (`control-nod drive all`, local scenarios): PASS 17, FAIL 4 (`auth-otp`, `meeting-pause-resume`, `mode-isolation`, `history-open-isolation`), NOT VERIFIABLE 4 (`auth-clerk`, `tts`, `billing`, `native-apps`). `history-open-isolation` was added on PR #339 and confirmed failing on `5fa1bfe` (run `/tmp/nod-verify/runs/20260927T005705Z`: 1 Meeting line shown in Translate, 3 translate asks).
+- Harness delivery. The harness lives on the PR #339 branch (`cursor/verify-nodpilot-skill-0536`), not on `origin/main`. Implementers branch from `origin/main` and bring the harness in uncommitted, for proof only: `git -C <worktree> checkout origin/cursor/verify-nodpilot-skill-0536 -- .cursor/skills/verify-nodpilot && git -C <worktree> reset -q .cursor/skills/verify-nodpilot`. Remove it before committing (`rm -rf .cursor/skills/verify-nodpilot` if `origin/main` does not have it). No ticket's PR may contain harness files; every PR holds only app code and tests.
 
 | Ticket | Bug | Implementer | Why |
 |---|---|---|---|
@@ -70,10 +71,10 @@ Before the fix, the first four tests must fail (two `question` events, two rows)
 
 - `pytest tests/test_meeting_seal_no_duplicate.py tests/test_meeting_merge.py tests/test_listen_attach_279.py tests/test_stt_terminate.py tests/test_pcm_drain.py tests/test_turn_pacing.py tests/test_phase.py` → before the fix, the new tests fail on their duplicate assertions; after the fix, all pass, with the five new test names listed.
 - `pytest -q` → no new failures compared with the baseline run on `5fa1bfe` (list any baseline failures by name next to the result).
-- Harness, from the worktree (the skill resolves the repo root from its own path):
+- Harness, from the worktree with the harness checked out uncommitted (see "Harness delivery"; the skill resolves the repo root from its own path):
   - `C=.cursor/skills/verify-nodpilot/scripts/control-nod; $C up && $C doctor`
   - `$C drive meeting-pause-resume` → before the fix FAIL with the three duplicate steps; after the fix PASS with all seven steps ok.
-  - `$C drive all` → the only status change from the baseline tally is `meeting-pause-resume` FAIL → PASS. Expected after the fix: PASS 18, FAIL 2 (`auth-otp`, `mode-isolation`), NOT VERIFIABLE 4. `meeting-live`, `meeting-notes-ask`, `scene-lecture`, `history`, `export-pdf` must stay PASS.
+  - `$C drive all` → the only status change from the baseline tally is `meeting-pause-resume` FAIL → PASS. Expected after the fix: PASS 18, FAIL 3 (`auth-otp`, `mode-isolation`, `history-open-isolation`), NOT VERIFIABLE 4. `meeting-live`, `meeting-notes-ask`, `scene-lecture`, `history`, `export-pdf` must stay PASS.
   - `$C down`. Paste the `drive` summaries and the path of the evidence run.
 - `git diff --stat origin/main` → only `server/app.py` and `tests/test_meeting_seal_no_duplicate.py`.
 - **Pass criterion.** After a Pause, a fresh DB read shows one `transcript` row per line id, holding the line's latest (merged) text, and the `/ws` capture of `meeting-pause-resume` shows one `question` frame per line id.
@@ -94,7 +95,7 @@ Before the fix, the first four tests must fail (two `question` events, two rows)
 
 - **Trigger, path 1 (launch restore).** Record a Meeting, press Stop, leave the `Save to History?` choice undecided. Open the app in a different browser on the same account (its `localStorage` has no dismissed id), then switch to the Translate tab.
 - **Trigger, path 2 (open from History).** Record and Save a Meeting, press New session, open that Meeting from History, then switch to the Translate tab.
-- **Now.** Translate shows the Meeting's lines as caption rows and sends one translate `ask` per line (3 for a 3-line Meeting), spending the user's LLM quota. Harness: `mode-isolation` fails `new browser, same account: Translate shows 1 Meeting line(s)` and `Translate sent 3 translate request(s)`. A throwaway probe of path 2 (see §4) measured 0 asks before opening the session and 3 after.
+- **Now.** Translate shows the Meeting's lines as caption rows and sends one translate `ask` per line (3 for a 3-line Meeting), spending the user's LLM quota. Harness: `mode-isolation` fails `new browser, same account: Translate shows 1 Meeting line(s)` and `Translate sent 3 translate request(s)` (path 1); `history-open-isolation` fails `after opening: Translate shows 1 Meeting line(s)` and `after opening: 3 new translate ask(s)` (path 2).
 - **Expected.** Restoring a Meeting, Lecture, or Live Q&A session never adds rows to the Translate view and never triggers translate requests there. The Meeting still restores in Listen as today (lines, notes, Save banner). Restoring a Translate session still restores its caption pairs.
 
 ### 2. Root cause evidence
@@ -112,13 +113,12 @@ Before the fix, the first four tests must fail (two `question` events, two rows)
 - **Change.**
   - `web/src/historyRestore.ts` `restoreFromSession` only: return caption `pairs` only when `mode === 'translate'`, and `pairs: []` for every other mode. Leave `lines`, `turns`, `notes`, `summary`, `elapsedMs`, and the qid-matched translation logic unchanged.
   - `web/src/historyRestore.test.ts`: change the assertions at `:256-257` and `:274-275` to the new expectation (Meeting restore returns zero pairs), keeping the line-translation assertions around them; add the tests in §4. List each changed assertion and why in the PR.
-  - `.cursor/skills/verify-nodpilot/scripts/drive.mjs`: add one scenario `history-open-isolation` (path 2 in §1) in the style of `mode-isolation`. Do not edit other scenarios or helpers.
-  - `.cursor/skills/verify-nodpilot/features/listen-meeting.md`: add one `Sub-features` line for `history-open-isolation`.
 - **Do not change.**
   - `web/src/App.tsx` (the `restore_session` reducer, `pumpTranslate`, `restoreHistory`, `checkPendingRestore`).
   - `restoreLaunchSurface`, the dismissed-id storage, or when the launch restore fires.
   - `TranslatePane`, `HistoryPane`, PDF export, any server file, native code.
   - Other assertions in `historyRestore.test.ts`, including the Translate-session pair tests at `:14-35`.
+  - `.cursor/skills/verify-nodpilot/**`. The implementer runs the harness (see "Harness delivery" at the top) but never edits or commits it.
 
 ### 4. Regression tests and edge cases
 
@@ -131,20 +131,20 @@ In `web/src/historyRestore.test.ts`, call `restoreFromSession` with a literal se
 - A session with no `mode` (legacy) returns zero pairs, because `modeOf` maps it to `meeting`.
 - A `mode: 'translate'` session still returns one pair per transcript with its translation and timestamps (existing `:14-35` stays green unchanged).
 
-New harness scenario `history-open-isolation`: register a user, record the default three-line Meeting, Stop, Save, press `New session`, switch to Translate and record the translate `ask` count and Meeting-line count (both 0), switch back to Listen, open the session from `History`, switch to Translate, wait 3 s, and assert zero Meeting lines shown and zero new translate asks. Save screenshots before and after. On the baseline this scenario must FAIL (3 asks, 1 line matched); that is the "before" evidence for the UI path.
+UI-path proof uses two existing harness scenarios on PR #339: `mode-isolation` (path 1) and `history-open-isolation` (path 2). `history-open-isolation` records a three-line Meeting, saves it, presses `New session`, checks Translate is empty, opens the session from `History`, switches to Translate, and asserts zero Meeting lines and zero new translate asks. Both FAIL on the baseline; rerun them before the fix to capture the "before" evidence.
 
 ### 5. Acceptance commands and pass criteria
 
 - `(cd web && npx tsx src/historyRestore.test.ts)` → before the fix, the new zero-pairs assertions fail; after the fix, the file passes.
 - `npm --prefix web test` → passes (it passed on the baseline).
 - `npm --prefix web run build` → succeeds (type check plus bundle).
-- Harness, from the worktree:
+- Harness, from the worktree with the harness checked out uncommitted (see "Harness delivery"):
   - `C=.cursor/skills/verify-nodpilot/scripts/control-nod; $C up --rebuild && $C doctor` (the client must be rebuilt).
   - Before the fix: `$C drive mode-isolation history-open-isolation` → both FAIL.
   - After the fix: the same command → both PASS.
-  - `$C drive all` → the only status changes from the baseline tally are `mode-isolation` FAIL → PASS and the new `history-open-isolation` PASS. Expected: PASS 19, FAIL 2 (`auth-otp`, `meeting-pause-resume`), NOT VERIFIABLE 4. `translate-typed`, `translate-voice`, `history`, `meeting-live`, `export-pdf` must stay PASS.
+  - `$C drive all` → the only status changes from the baseline tally are `mode-isolation` and `history-open-isolation` FAIL → PASS. Expected: PASS 19, FAIL 2 (`auth-otp`, `meeting-pause-resume`), NOT VERIFIABLE 4. `translate-typed`, `translate-voice`, `history`, `meeting-live`, `export-pdf` must stay PASS.
   - `$C down`. Paste the summaries and the evidence run path.
-- `git diff --stat origin/main` → only the four files in §3.
+- `git diff --stat origin/main` → only `web/src/historyRestore.ts` and `web/src/historyRestore.test.ts`.
 - **Pass criterion.** In both restore paths, the `/ws` capture after switching to Translate contains no translate `ask`, the screenshot shows the empty Translate state, and restoring a Translate session still shows its pairs (`translate-typed` and the `:14-35` unit test).
 
 ### 6. Implementer challenge clause
