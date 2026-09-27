@@ -137,7 +137,8 @@ class WatchCopyTests(unittest.TestCase):
         first.emit({"type": "chunk", "id": "ask-1", "text": "你好"})
         second, _events2, audio2 = self._session()
         second._send_audio_text = audio2.append
-        second._emit_watch_copy("pair-2", original="Again", translation="再来", done=True)
+        with mock.patch("server.app.time.time", return_value=audio[-1]["seq"] / 1000 + 1):
+            second._emit_watch_copy("pair-2", original="Again", translation="再来", done=True)
         self.assertGreater(audio2[0]["seq"], audio[-1]["seq"])
         self.assertNotEqual(audio2[0]["session_id"], audio[-1]["session_id"])
         self.assertTrue(audio[-1]["session_id"])
