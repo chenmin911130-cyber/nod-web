@@ -496,7 +496,7 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
     } else if (item.kind === 'translate') {
       // A meeting/lecture translation whose qid matches a transcript line hangs
       // on that line. Translate-mode rows (and unmatched/legacy rows) keep the
-      // sequential pairing that feeds TranslatePairs.
+      // sequential pairing; only Translate-mode sessions turn it into TranslatePairs.
       if (mode !== 'translate' && item.qid && lineByQid.has(item.qid)) {
         matchedTranslations.push({ qid: item.qid, text })
       } else {

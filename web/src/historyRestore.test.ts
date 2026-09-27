@@ -255,8 +255,7 @@ eq(mPay.lines.length.toString(), '1', 'one meeting line restored')
 eq(mPay.lines[0].translation || '', '所以其中重要', 'meeting line carries its qid-attached translation')
 eq(mPay.pairs.length.toString(), '0', 'meeting restore must not fill Translate pairs')
 
-// A translate row with NO matching transcript qid (legacy) still falls back to the
-// sequential pairing that feeds TranslatePairs.
+// A legacy Meeting translate row with no matching transcript qid no longer surfaces as TranslatePairs.
 const legacy: HistorySession = {
   id: 'lg',
   mode: 'meeting',
