@@ -511,6 +511,7 @@ class MeetingStopFlushTests(unittest.TestCase):
         ))
         lst.stop = mock.Mock()
         sess._listener = lst
+        sess._listen_wanted = False  # callers clear this before _stop_listening
         sess._stop_listening()
         kinds = [c.args[0].get("type") for c in sess.emit.call_args_list]
         self.assertIn("listen_flush", kinds)
