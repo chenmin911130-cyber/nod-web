@@ -431,6 +431,37 @@ def('mode-isolation', 'An unsaved Meeting must not reappear inside Translate aft
   await s2.close()
 })
 
+def('history-open-isolation', 'A saved Meeting opened from History must not appear in, or be translated by, Translate', async (c) => {
+  const s = await session(c)
+  await speakMeeting(s, c)
+  await stopListening(s.page)
+  const dlg = s.page.getByRole('dialog', { name: 'Save to History?' })
+  if (await seen(dlg, 8000)) await dlg.getByRole('button', { name: 'Save', exact: true }).click()
+  await sleep(1500)
+  await btn(s.page, 'New session').click()
+  await sleep(800)
+  const translateAsks = () => s.ws.typed('out', 'ask').filter((m) => m.mode === 'translate').length
+  await s.page.getByRole('tab', { name: 'Translate' }).click()
+  await sleep(1500)
+  await shot(s.page, c, '1-translate-before-open')
+  const asksBefore = translateAsks()
+  const linesBefore = await s.page.getByText(MEETING_LINES[0].text).count()
+  c.ok(asksBefore === 0 && linesBefore === 0, `before opening: ${linesBefore} Meeting line(s), ${asksBefore} translate ask(s) in Translate`)
+  await s.page.getByRole('tab', { name: 'Listen' }).click()
+  await btn(s.page, 'History').click()
+  const pane = s.page.getByRole('dialog', { name: 'History' })
+  await pane.getByRole('listitem').first().getByRole('button').first().click()
+  c.ok(await seen(s.page.getByText(MEETING_LINES[1].text), 8000), 'opening the saved Meeting restores it in Listen')
+  await s.page.getByRole('tab', { name: 'Translate' }).click()
+  await sleep(3000)
+  await shot(s.page, c, '2-translate-after-open')
+  const shown = await s.page.getByText(MEETING_LINES[0].text).count()
+  c.ok(shown === 0, `after opening: Translate shows ${shown} Meeting line(s) (expected 0)`)
+  const newAsks = translateAsks() - asksBefore
+  c.ok(newAsks === 0, `after opening: ${newAsks} new translate ask(s) (expected 0)`)
+  await s.close()
+})
+
 def('history', 'History: saved session listed, search filters, open restores transcript, delete removes it', async (c) => {
   const s = await session(c)
   await speakMeeting(s, c)

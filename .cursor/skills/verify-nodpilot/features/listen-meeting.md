@@ -10,6 +10,7 @@ The default workspace. The user presses Start, speaks, and sees a live transcrip
 - `scene-lecture` covers switching the scene to Lecture and the notes prompt naming the lecture template.
 - `export-pdf` covers Export PDF downloading a file that starts with `%PDF-`.
 - `mode-isolation` covers an unsaved Meeting not appearing in Translate after a reload or in a new browser on the same account, and no translate requests for it.
+- `history-open-isolation` covers a saved Meeting opened from History not appearing in Translate, and no translate requests for it.
 
 ## How to get to it (user POV)
 
