@@ -37,3 +37,4 @@ Preconditions:
 - The fake emits a line per 2 s of PCM. A scenario that speaks three lines needs about 6 s of listening before Stop.
 - A notes reply that is not recognized comes back as `Mock answer from the fake DeepSeek provider.`; extend `reply_for()` in `fake_providers.py` rather than loosening the assertion.
 - History titles come from a separate title prompt; the fake answers it with the generic reply, so titles read `Mock answer…`.
+- Not driven yet: `Record` (F2 manual recording), `Stop + Report`, `Don't save`, the `Bilingual` switch with a concrete Notes language, `Number of speakers`, and the phone layout (`Start listening`). Add a scenario before claiming any of them works.
