@@ -146,6 +146,25 @@ class OtpApiTests(unittest.TestCase):
         )
         self.assertEqual(replay_dead.status_code, 401)
 
+    def test_local_dev_code_verifies_without_mail(self):
+        email = _email()
+        with mock.patch("server.commerce.send_otp_email", return_value=False):
+            with mock.patch("server.commerce.is_local_request", return_value=True):
+                req = self.client.post(
+                    "/api/auth/otp/request",
+                    json={"email": email, "intent": "signup", "name": "Ada", "consent": True},
+                )
+        self.assertEqual(req.status_code, 200, req.text)
+        dev_code = req.json().get("dev_code")
+        self.assertIsNotNone(dev_code)
+        self.assertEqual(len(dev_code), 6)
+        verify = self.client.post(
+            "/api/auth/otp/verify",
+            json={"email": email, "code": dev_code, "intent": "signup", "consent": True},
+        )
+        self.assertEqual(verify.status_code, 200, verify.text)
+        self.assertTrue(verify.json()["created"])
+
     def test_resend_mail_failure_keeps_existing_code(self):
         email = _email()
         self.client.post(
