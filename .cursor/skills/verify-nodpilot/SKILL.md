@@ -30,7 +30,7 @@ $C up            # builds web/dist if HEAD changed, starts fakes :9421 and serve
 $C up --rebuild  # force a web rebuild
 ```
 
-Ready when it prints `ready: http://127.0.0.1:9420  run=/tmp/nod-verify/runs/<id>`. Ports come from `NOD_VERIFY_PORT` / `NOD_VERIFY_FAKE_PORT`; state lives in `NOD_VERIFY_HOME` (default `/tmp/nod-verify`). One instance per `NOD_VERIFY_HOME`; `up` refuses to start over a live instance or a port it did not open.
+Ready when it prints `ready: http://127.0.0.1:9420  run=/tmp/nod-verify/runs/<id>`. In an agent shell tool that reaps a command's children when the call returns, run `up`, `drive`, and `down` in one call (`$C up && $C drive <ids>; $C down`); otherwise the next call gets `ECONNREFUSED`. Ports come from `NOD_VERIFY_PORT` / `NOD_VERIFY_FAKE_PORT`; state lives in `NOD_VERIFY_HOME` (default `/tmp/nod-verify`). One instance per `NOD_VERIFY_HOME`; `up` refuses to start over a live instance or a port it did not open.
 
 ## Doctor
 
