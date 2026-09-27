@@ -32,6 +32,7 @@ import {
   notesPageTitle,
   notesSettingsValue,
   sceneHelpText,
+  bilingualTapAction,
   showCardTranslation,
   showLineTranslation,
   speakerSuggestText,
@@ -1027,6 +1028,7 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
   const showTr = cardMode
     ? showCardTranslation({
       open: Boolean(p.cardOpen),
+      bilingual: p.translateOn,
       original: p.text,
       translation: p.translation,
       pending: p.busy,
@@ -1043,7 +1045,7 @@ const LineRow = memo(function LineRow(p: LineRowProps) {
   // ellipsis row. (showLineTranslation returns false for an empty translation,
   // so this is separate from showTr; switching the target re-arms it.)
   const showFailed = cardMode
-    ? Boolean(p.cardOpen && p.translateFailed)
+    ? Boolean((p.cardOpen || p.translateOn) && p.translateFailed)
     : p.translateFailed && p.translateOn
   if (p.actions) {
     return (
@@ -1116,6 +1118,8 @@ export default function ListenPane(props: Props) {
   const [notesW, setNotesW] = useState(() => readNotesW(props.scene))
   const [dragging, setDragging] = useState(false)
   const [openedLine, setOpenedLine] = useState('')
+  const [biHint, setBiHint] = useState('')
+  const biHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const stacked = useStackedLayout()
   const leftRef = useRef<HTMLDivElement>(null)
   const rightRef = useRef<HTMLDivElement>(null)
@@ -1238,6 +1242,24 @@ export default function ListenPane(props: Props) {
   useEffect(() => {
     if (!endedSheetUi) setEndedDock('default')
   }, [endedSheetUi])
+
+  useEffect(() => () => {
+    if (biHintTimer.current) clearTimeout(biHintTimer.current)
+  }, [])
+
+  const onPhoneBilingualTap = () => {
+    const action = bilingualTapAction(biLocked, props.translateOn)
+    if (action === 'hint') {
+      if (biHintTimer.current) clearTimeout(biHintTimer.current)
+      setBiHint(IPHONE_COPY.bilingualNeedsNotesLang)
+      biHintTimer.current = setTimeout(() => {
+        biHintTimer.current = null
+        setBiHint('')
+      }, 2500)
+      return
+    }
+    props.onTranslate(action === 'on')
+  }
 
   const onEndedResizeDown = (e: ReactPointerEvent<HTMLElement>) => {
     if (!endedSheetUi) return
@@ -1857,18 +1879,37 @@ export default function ListenPane(props: Props) {
             <section className="listen-pane">
               {phone ? (
                 <div className="iphone-tr-head">
-                  <CopyButton
-                    className="iphone-tr-copy-all"
-                    leadingIcon
-                    idle={IPHONE_COPY.copyLine}
-                    text={transcriptPlainText({
-                      lines: props.lines,
-                      speakerNames: props.speakerNames,
-                      speakerNameLocked: locked,
-                      scene: props.scene,
-                      translateOn: biOn,
-                    })}
-                  />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
+                    <CopyButton
+                      className="iphone-tr-copy-all"
+                      leadingIcon
+                      idle={IPHONE_COPY.copyLine}
+                      text={transcriptPlainText({
+                        lines: props.lines,
+                        speakerNames: props.speakerNames,
+                        speakerNameLocked: locked,
+                        scene: props.scene,
+                        translateOn: biOn,
+                      })}
+                    />
+                    <button
+                      type="button"
+                      className={`iphone-tr-bi${biOn ? ' on' : ''}`}
+                      role="switch"
+                      aria-checked={biOn}
+                      aria-label={IPHONE_COPY.bilingualLabel}
+                      aria-disabled={biLocked}
+                      title={bilingualButtonTitle(biOn, props.notesTranslateTo)}
+                      onClick={onPhoneBilingualTap}
+                    >
+                      <TranslateIcon />
+                    </button>
+                  </div>
+                  {biHint ? (
+                    <p className="iphone-tr-bi-hint" role="status">
+                      {biHint}
+                    </p>
+                  ) : null}
                 </div>
               ) : (
                 <div className="listen-kicker">

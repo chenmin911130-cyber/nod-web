@@ -173,14 +173,20 @@ export function showLineTranslation(input: {
 /** Transcript card tap: one open card may show translation even when bilingual is off. */
 export function showCardTranslation(input: {
   open: boolean
+  bilingual?: boolean
   original: string
   translation: string
   pending?: boolean
 }): boolean {
-  if (!input.open) return false
+  if (!input.open && !input.bilingual) return false
   const tr = input.translation.trim()
   if (!tr) return Boolean(input.pending)
   return !sameSpokenLine(input.original, tr)
+}
+
+export function bilingualTapAction(locked: boolean, translateOn: boolean): 'hint' | 'on' | 'off' {
+  if (locked) return 'hint'
+  return translateOn ? 'off' : 'on'
 }
 
 export function moreMenuEnabled(input: { hasContent: boolean; canSave: boolean }): {

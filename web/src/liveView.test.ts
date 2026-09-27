@@ -476,19 +476,19 @@ eq(
   'meeting-style Live does not merge consecutive turns',
 )
 
-eq(
-  transcriptDisplayLines('meeting', [
-    { id: '1', ts: '0:34', text: 'what is the one big thing you have learned', speaker: 'A' },
-    { id: '2', ts: '0:36', text: 'about wielding power?', speaker: 'A' },
-  ]).length,
-  1,
-  'meeting transcript merges same-speaker fragments into one card',
-)
+const meetingTranscriptLines = transcriptDisplayLines('meeting', [
+  { id: '1', ts: '0:34', text: 'what is the one big thing you have learned', speaker: 'A' },
+  { id: '2', ts: '0:36', text: 'about wielding power?', speaker: 'A' },
+])
+eq(meetingTranscriptLines.length, 2, 'meeting transcript keeps one card per server line')
+eq(meetingTranscriptLines[0]?.text, 'what is the one big thing you have learned', 'meeting transcript keeps first line text')
+eq(meetingTranscriptLines[1]?.text, 'about wielding power?', 'meeting transcript keeps second line text')
+eq(meetingTranscriptLines[1]?.id, '2', 'meeting transcript keeps second line id')
 eq(
   transcriptDisplayLines('lecture', [
     { id: '1', ts: '0:40', text: 'Part one.', speaker: 'A' },
     { id: '2', ts: '0:42', text: 'Part two.', speaker: 'A' },
   ]).length,
-  1,
-  'lecture transcript still merges same-speaker fragments',
+  2,
+  'lecture transcript keeps one card per server line',
 )
