@@ -521,12 +521,15 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
     sources: sourcesById.get(q.id),
   }))
 
-  const pairs: TranslatePair[] = originals.map((row, i) => ({
-    id: row.id,
-    ts: row.ts,
-    original: row.text,
-    translation: translations[i] || '',
-  }))
+  const pairs: TranslatePair[] =
+    mode === 'translate'
+      ? originals.map((row, i) => ({
+          id: row.id,
+          ts: row.ts,
+          original: row.text,
+          translation: translations[i] || '',
+        }))
+      : []
 
   return {
     mode,

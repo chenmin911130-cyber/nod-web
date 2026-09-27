@@ -253,8 +253,7 @@ const meeting: HistorySession = {
 const mPay = restoreFromSession(meeting)
 eq(mPay.lines.length.toString(), '1', 'one meeting line restored')
 eq(mPay.lines[0].translation || '', '所以其中重要', 'meeting line carries its qid-attached translation')
-eq(mPay.pairs.length.toString(), '1', 'pairs fallback keeps the source row')
-eq(mPay.pairs[0].translation, '', 'the qid-matched translation is not duplicated into pairs')
+eq(mPay.pairs.length.toString(), '0', 'meeting restore must not fill Translate pairs')
 
 // A translate row with NO matching transcript qid (legacy) still falls back to the
 // sequential pairing that feeds TranslatePairs.
@@ -271,9 +270,56 @@ const legacy: HistorySession = {
   ],
 }
 const lgPay = restoreFromSession(legacy)
-eq(lgPay.pairs.length.toString(), '1', 'unmatched translate falls back to sequential pairs')
-eq(lgPay.pairs[0].translation, '你好世界', 'legacy no-qid pair keeps its translation')
+eq(lgPay.pairs.length.toString(), '0', 'meeting legacy unmatched translate must not surface as pairs')
 eq(lgPay.lines[0].translation || '', '', 'no qid match -> line translation stays empty')
+
+const meetingTwo: HistorySession = {
+  id: 'm2',
+  mode: 'meeting',
+  scene: 'meeting',
+  title: 't',
+  started_at: null,
+  stt_seconds: 0,
+  items: [
+    { kind: 'transcript', text: 'Line one', qid: 'x1', at: at(11, 5) },
+    { kind: 'transcript', text: 'Line two', qid: 'x2', at: at(11, 6) },
+  ],
+}
+const m2Pay = restoreFromSession(meetingTwo)
+eq(m2Pay.lines.length.toString(), '2', 'meeting restores both transcript lines')
+eq(m2Pay.pairs.length.toString(), '0', 'meeting with two lines returns zero pairs')
+
+const interviewSession: HistorySession = {
+  id: 'iv',
+  mode: 'interview',
+  scene: 'interview',
+  title: 't',
+  started_at: null,
+  stt_seconds: 0,
+  items: [{ kind: 'transcript', text: 'Question context', qid: 'i1', at: at(11, 5) }],
+}
+eq(restoreFromSession(interviewSession).pairs.length.toString(), '0', 'interview session returns zero pairs')
+
+const lectureSession: HistorySession = {
+  id: 'lec',
+  mode: 'meeting',
+  scene: 'lecture',
+  title: 't',
+  started_at: null,
+  stt_seconds: 0,
+  items: [{ kind: 'transcript', text: 'Lecture note', qid: 'l1', at: at(11, 5) }],
+}
+eq(restoreFromSession(lectureSession).pairs.length.toString(), '0', 'lecture session returns zero pairs')
+
+const noModeSession = {
+  id: 'nom',
+  scene: 'meeting',
+  title: 't',
+  started_at: null,
+  stt_seconds: 0,
+  items: [{ kind: 'transcript', text: 'Legacy line', qid: 'n1', at: at(11, 5) }],
+} as HistorySession
+eq(restoreFromSession(noModeSession).pairs.length.toString(), '0', 'legacy no-mode session maps to meeting and returns zero pairs')
 
 // ---- #36: one Save UI per session + restore dedupe ----
 
