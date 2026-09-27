@@ -117,7 +117,9 @@ cmd_prod_health() {
 cmd_down() {
   [[ -f "$STATE" ]] || { echo "nothing to stop"; return 0; }
   source "$STATE"
-  for pid in "$SERVER_PID" "$FAKE_PID"; do alive "$pid" && kill "$pid" && echo "stopped $pid"; done
+  for pid in "$SERVER_PID" "$FAKE_PID"; do alive "$pid" && kill "$pid" && echo "stopping $pid"; done
+  for _ in $(seq 1 20); do alive "$SERVER_PID" || alive "$FAKE_PID" || break; sleep 0.5; done
+  for pid in "$SERVER_PID" "$FAKE_PID"; do alive "$pid" && kill -9 "$pid" && echo "killed $pid after 10s"; done
   rm -rf "$DATA_DIR" "$STATE"
   echo "evidence kept at $RUN_DIR"
 }
