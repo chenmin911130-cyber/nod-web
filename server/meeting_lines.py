@@ -27,6 +27,14 @@ _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30FF\uac00-\ud7af]")
 # final arrived 81ms later from the same speaker, which used to come back as
 # ``new/closed`` and fragment one continuous turn.
 _CLOSED_CONTINUATION_MS = 1200.0
+# Soft character caps are inclusive (`len >= cap`). Age, hard chars, hard words,
+# and split_index's "over the soft cap" check stay exclusive (`>`), like the old fallback.
+_LINE_SOFT_CHARS_LATIN = 200
+_LINE_SOFT_CHARS_CJK = 80
+_LINE_HARD_CHARS_LATIN = 320
+_LINE_HARD_CHARS_CJK = 120
+_LINE_HARD_WORDS = 55
+_LINE_MAX_AGE_S = 12.0
 _ASK_TAIL = re.compile(
     r"\b(what|why|how|when|where|who|which)\b[^?.!]*$|"
     r"(吗[.。!！]?$|呢[.。!！]?$|怎么|为什么)",
@@ -572,6 +580,27 @@ def _tight_same_speaker_continuation(prev_open: dict[str, Any], nxt: dict[str, A
     return 0.0 <= gap_ms_val <= _CLOSED_CONTINUATION_MS
 
 
+def _line_char_cap(text: str, *, hard: bool) -> int:
+    """Soft / hard character cap. Any CJK character selects the CJK threshold."""
+    if is_cjk(text):
+        return _LINE_HARD_CHARS_CJK if hard else _LINE_SOFT_CHARS_CJK
+    return _LINE_HARD_CHARS_LATIN if hard else _LINE_SOFT_CHARS_LATIN
+
+
+def _open_age_s(prev_open: dict[str, Any], now: float) -> float:
+    """Line age in seconds, same fallback as the hard-cap check (missing → 0)."""
+    return (prev_open.get("last_final_at") or prev_open.get("opened_at") or now) - (
+        prev_open.get("opened_at") or now
+    )
+
+
+def _reached_soft_cap(prev_open: dict[str, Any], now: float) -> bool:
+    text = prev_open.get("text") or ""
+    if len(text) >= _line_char_cap(text, hard=False):
+        return True
+    return _open_age_s(prev_open, now) > _LINE_MAX_AGE_S
+
+
 def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -> tuple[str, str]:
     """``("extend"|"new", reason)``.
 
@@ -579,8 +608,10 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
     ``false_period``, ``date_continuation``, ``gap``, ``speaker``, ``open_age``,
     ``chars``, ``words``, ``split`` (the next turn carries a sentence end to close
     on), ``closed_continuation`` (a closed line absorbed a same-speaker follow-up,
-    #279), or ``no_open`` / ``closed`` for the trivial new cases, else ``ok``. The
-    caller logs ``split_at`` / ``tail_len`` separately when §1.1 actually splits.
+    #279), ``closed_cap`` (that follow-up was refused because the line is already
+    at the soft cap, #332), or ``no_open`` / ``closed`` for the trivial new cases,
+    else ``ok``. The caller logs ``split_at`` / ``tail_len`` separately when §1.1
+    actually splits.
     """
     if not prev_open:
         return "new", "no_open"
@@ -588,6 +619,8 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
         return "extend", "date_continuation"
     if prev_open.get("closed"):
         if _tight_same_speaker_continuation(prev_open, nxt, now):
+            if _reached_soft_cap(prev_open, now):
+                return "new", "closed_cap"
             return "extend", "closed_continuation"
         return "new", "closed"
     ptxt = prev_open.get("text", "") or ""
@@ -606,6 +639,8 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
                 if not p or not n or p == n:
                     return "extend", "phrase_continuation"
             elif (not p or not n or p == n) and starts_lower_latin(nxt_text):
+                if _reached_soft_cap(prev_open, now):
+                    return "new", "closed_cap"
                 return "extend", "same_speaker_continuation"
             else:
                 return "new", "ends_sentence"
@@ -638,12 +673,12 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
 
     # Pathological caps (#33 §1.2): only reached when >=3 turns carried NO sentence
     # end. They are measured on the PREVIOUS line's own age, not the live clock.
-    open_age = (prev_open.get("last_final_at") or prev_open.get("opened_at") or now) - (prev_open.get("opened_at") or now)
-    if open_age > 30:
+    open_age = _open_age_s(prev_open, now)
+    if open_age > _LINE_MAX_AGE_S:
         reason = "open_age"
-    elif len(ptxt) + len(nxt_text) > 900:
+    elif len(ptxt) + len(nxt_text) > _line_char_cap(ptxt + nxt_text, hard=True):
         reason = "chars"
-    elif (prev_open.get("n_words") or 0) + (nxt.get("n_words") or 0) > 150:
+    elif (prev_open.get("n_words") or 0) + (nxt.get("n_words") or 0) > _LINE_HARD_WORDS:
         reason = "words"
     else:
         reason = None
@@ -662,6 +697,29 @@ def _decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -
     if last_sentence_index(nxt_text) is not None:
         return "extend", "split"
     return "extend", "ok"
+
+
+def split_index(prev_text: str, incoming: str) -> int | None:
+    """Index just after the sentence end Meeting should absorb (#332).
+
+    Default is the last real end (``skip_false_period=True``). When
+    ``len(prev_text) + that index`` is strictly over the previous line's soft
+    character cap, return the first real end instead. ``None`` when ``incoming``
+    has no real sentence end. An empty ``prev_text`` stays on the last end.
+    """
+    last = last_sentence_index(incoming, skip_false_period=True)
+    if last is None:
+        return None
+    prev = prev_text or ""
+    if prev and len(prev) + last > _line_char_cap(prev, hard=False):
+        text = incoming or ""
+        for match in _SENTENCE_END_RE.finditer(text):
+            if not _is_real_sentence_end(text, match):
+                continue
+            if false_period(text[: match.end()]):
+                continue
+            return match.end()
+    return last
 
 
 def decide(prev_open: dict[str, Any] | None, nxt: dict[str, Any], now: float) -> str:

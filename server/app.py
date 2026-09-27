@@ -70,6 +70,7 @@ from server.meeting_lines import (
     join_meeting_text,
     last_sentence_index as meeting_last_sentence_index,
     segment_meta as meeting_segment_meta,
+    split_index as meeting_split_index,
     split_meeting_turn,
     tail_meta as meeting_tail_meta,
 )
@@ -5809,7 +5810,7 @@ class Session:
                 decide_prev = self._open_line
                 # §1.1: does the incoming turn carry a sentence end to close on?
                 split_at = (
-                    meeting_last_sentence_index(cleaned, skip_false_period=True)
+                    meeting_split_index(decide_prev.get("text") or "", cleaned)
                     if (decision == "extend" and decide_prev)
                     else None
                 )
