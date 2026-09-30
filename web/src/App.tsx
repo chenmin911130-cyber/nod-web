@@ -9,7 +9,7 @@ import { siteUrl } from './siteOrigin'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
-import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberHistoryDiscarded, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachState, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, modeIsSaveEligible, sessionIsSaveEligible, sessionIsUnsaved, sessionShouldOfferSave, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
+import { restoreFromSession, restoreLaunchSurface, parseRestoreDismissed, rememberHistoryDiscarded, rememberRestoreDismissed, serializeRestoreDismissed, RESTORE_DISMISSED_KEY, applyMeetingResume, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession, restoreAttachState, restoreAttachedClock, restoreElapsedMs, restoreSessionClock, resumeResetsKept, modeIsSaveEligible, sessionIsSaveEligible, sessionIsUnsaved, sessionCanSaveManually, sessionShouldOpenSavePrompt, shouldMarkKeptOnAck } from './historyRestore'
 import { flushPendingKeepMessage, keepHistoryMessage, watchDiscardCommand, watchFailKeepNativeFace, watchJsFailMayApply, watchKeepNotesWait, watchNativeSaveReduce, watchPhoneStatusMayPush, watchSaveCommand, watchSaveKeepTarget, watchSaveRepeatAction, watchSaveShouldSendKeepHistory, watchSaveStatusPayload, watchStopShouldAutoKeepHistory, watchStopShouldOpenPhoneSave, type NativeWatchSaveFace } from './watchSave'
 import { watchLangPair, watchStatusMode } from './watchFace'
 import { LISTEN_TAKEN_TEXT, shouldReleaseListen } from './listenTaken'
@@ -41,9 +41,11 @@ import {
   leaveActionStillArmed,
   markOffered,
   engineSavePromptOpensUi,
+  pendingDiscardOutcome,
   savePromptSurface,
   setPendingAfterSave,
   type KeepAfterNotesJob,
+  type PendingDiscardTrigger,
   type SaveBook,
   type SaveStatus,
 } from './sessionSave'
@@ -1226,6 +1228,11 @@ export default function App() {
   const [leaveSheetOpen, setLeaveSheetOpen] = useState(false)
   const [saveBannerOpen, setSaveBannerOpen] = useState(false)
   const [offlineStopped, setOfflineStopped] = useState(false)
+  const [pendingDiscard, setPendingDiscard] = useState(false)
+  const [discardSecondsLeft, setDiscardSecondsLeft] = useState(5)
+  const pendingDiscardRef = useRef(false)
+  const discardTimerRef = useRef(0)
+  const settlePendingDiscardRef = useRef<(trigger: PendingDiscardTrigger) => void>(() => undefined)
   const dismissedRestoreIds = useRef<string[]>(loadRestoreDismissed())
   const persistRestoreDismissed = (id: string) => {
     const next = rememberRestoreDismissed(dismissedRestoreIds.current, id)
@@ -1292,6 +1299,7 @@ export default function App() {
     if (!next.offered) skipOfferSavePromptRef.current = false
   }
   const startOrResumeMeeting = (s: AppState) => {
+    settlePendingDiscardRef.current('continue')
     setOfflineStopped(false)
     if (s.meetingStartedAt == null) {
       dispatch({ type: 'listen_new' })
@@ -2334,6 +2342,7 @@ export default function App() {
       return
     }
     if (historyKeptRef.current) {
+      settlePendingDiscardRef.current('history')
       setHistoryOpen(true)
       return
     }
@@ -2576,6 +2585,11 @@ export default function App() {
   offerSaveAfterMeetingStopRef.current = offerSaveAfterMeetingStop
 
   const handleNewSession = useCallback(() => {
+    if (pendingDiscardRef.current) {
+      pendingNewAfterSave.current = true
+      settlePendingDiscardRef.current('new')
+      return
+    }
     const s = stateRef.current
     const decision = decideNewSession({
       capture: s.capture,
@@ -2632,8 +2646,75 @@ export default function App() {
   }, [])
   performDeleteRef.current = performDelete
 
+  const clearDiscardTimer = () => {
+    if (discardTimerRef.current) {
+      window.clearTimeout(discardTimerRef.current)
+      discardTimerRef.current = 0
+    }
+  }
+
+  const discardCurrentSession = () => {
+    setSavePrompt(false)
+    const restoredId = pendingRestoreId.current
+    pendingRestoreId.current = null
+    if (restoredId) {
+      // Recovered session: discard it by id (not the live usage id).
+      markHistoryKept(false)
+      rememberHistoryDiscarded(restoredId)
+      discardWatchSave(restoredId)
+      window.api.send({ type: 'discard_history', id: restoredId })
+      return
+    }
+    const leavingSignOut = saveBookRef.current.pendingAfterSave === 'signout'
+    const leavingDelete = saveBookRef.current.pendingAfterSave === 'delete'
+    markHistoryKept(false)
+    const liveId = saveBookRef.current.liveId || ''
+    if (liveId) {
+      rememberHistoryDiscarded(liveId)
+      discardWatchSave(liveId)
+    }
+    window.api.send(watchDiscardCommand(liveId || undefined))
+    commitBook(setPendingAfterSave(saveBookRef.current, 'none'))
+    if (pendingNewAfterSave.current) {
+      pendingNewAfterSave.current = false
+      doClear()
+      dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.moreNew } })
+    } else if (leavingSignOut) {
+      performSignOut()
+    } else if (leavingDelete) {
+      performDelete()
+    }
+  }
+
+  const settlePendingDiscard = (trigger: PendingDiscardTrigger) => {
+    if (!pendingDiscardRef.current) return
+    const outcome = pendingDiscardOutcome(trigger)
+    clearDiscardTimer()
+    pendingDiscardRef.current = false
+    setPendingDiscard(false)
+    if (outcome === 'cancel') return
+    setSaveBannerOpen(false)
+    discardCurrentSession()
+  }
+  settlePendingDiscardRef.current = settlePendingDiscard
+
+  const beginPendingDiscard = () => {
+    clearDiscardTimer()
+    pendingDiscardRef.current = true
+    setPendingDiscard(true)
+    setDiscardSecondsLeft(5)
+    discardTimerRef.current = window.setTimeout(() => {
+      settlePendingDiscardRef.current('expire')
+    }, 5000)
+  }
+
   const handleDeleteConfirm = useCallback(() => {
     if (deletingRef.current) return
+    if (pendingDiscardRef.current) {
+      commitBook(setPendingAfterSave(saveBookRef.current, 'delete'))
+      settlePendingDiscardRef.current('delete')
+      return
+    }
     const s = stateRef.current
     const gate = signOutGate({
       listening: sessionListening({ capture: s.capture }),
@@ -2660,6 +2741,11 @@ export default function App() {
   }, [performDelete])
 
   const handleSignOut = useCallback(() => {
+    if (pendingDiscardRef.current) {
+      commitBook(setPendingAfterSave(saveBookRef.current, 'signout'))
+      settlePendingDiscardRef.current('signout')
+      return
+    }
     const s = stateRef.current
     const gate = signOutGate({
       listening: sessionListening({ capture: s.capture }),
@@ -3046,6 +3132,7 @@ export default function App() {
       dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.stopListeningFirst } })
       return
     }
+    if (mode !== s.workspaceMode) settlePendingDiscardRef.current('workspace')
     if (s.stealth && mode !== 'interview') {
       window.api.setStealth(false)
       dispatch({ type: 'stealth', on: false })
@@ -3616,6 +3703,20 @@ export default function App() {
     }
   }, [])
 
+  useEffect(() => {
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') settlePendingDiscardRef.current('hidden')
+    }
+    document.addEventListener('visibilitychange', onHidden)
+    return () => {
+      document.removeEventListener('visibilitychange', onHidden)
+      if (discardTimerRef.current) {
+        window.clearTimeout(discardTimerRef.current)
+        discardTimerRef.current = 0
+      }
+    }
+  }, [])
+
   const handleSummary = useCallback(() => {
     generateNotes()
   }, [generateNotes])
@@ -4012,16 +4113,20 @@ export default function App() {
         started: state.meetingStartedAt != null,
         ended: state.meetingEnded,
       })}
-      onOpenHistory={() => setHistoryOpen(true)}
+      onOpenHistory={() => {
+        settlePendingDiscardRef.current('history')
+        setHistoryOpen(true)
+      }}
       onNewSession={handleNewSession}
       onSaveSession={() => {
         if (historyKept) {
+          settlePendingDiscardRef.current('history')
           setHistoryOpen(true)
           return
         }
         saveLiveSession()
       }}
-      canSaveSession={sessionShouldOfferSave({
+      canSaveSession={sessionCanSaveManually({
         workspaceMode: state.workspaceMode,
         ended: state.meetingEnded,
         kept: historyKept,
@@ -4035,7 +4140,7 @@ export default function App() {
   )
 
   const iphonePaused = state.capture === 'paused'
-  const canSaveSession = sessionShouldOfferSave({
+  const canSaveSession = sessionCanSaveManually({
     workspaceMode: state.workspaceMode,
     ended: state.meetingEnded,
     kept: historyKept,
@@ -4068,12 +4173,16 @@ export default function App() {
         // mode; this keeps any other caller from opening a save for it.
         if (stateRef.current.workspaceMode === 'translate') return
         if (historyKept) {
+          settlePendingDiscardRef.current('history')
           setHistoryOpen(true)
           return
         }
         saveLiveSession()
       }}
-      onHistory={() => setHistoryOpen(true)}
+      onHistory={() => {
+        settlePendingDiscardRef.current('history')
+        setHistoryOpen(true)
+      }}
       onNew={handleNewSession}
     />
   ) : null
@@ -4099,7 +4208,10 @@ export default function App() {
         onMicMuted={handleMicMuted}
         onStealth={handleStealth}
         onFullScreen={() => dispatch({ type: 'view', view: 'fullscreen' })}
-        onOpenHistory={() => setHistoryOpen(true)}
+        onOpenHistory={() => {
+          settlePendingDiscardRef.current('history')
+          setHistoryOpen(true)
+        }}
         onMore={() => setMoreOpen(true)}
         accountInitials={accountInitials(me?.name || '', me?.email || '')}
         onAccount={() => setAccountOpen(true)}
@@ -4196,38 +4308,7 @@ export default function App() {
               }
             : undefined
         }
-        onDiscard={() => {
-          setSavePrompt(false)
-          const restoredId = pendingRestoreId.current
-          pendingRestoreId.current = null
-          if (restoredId) {
-            // Recovered session: discard it by id (not the live usage id).
-            markHistoryKept(false)
-            rememberHistoryDiscarded(restoredId)
-            discardWatchSave(restoredId)
-            window.api.send({ type: 'discard_history', id: restoredId })
-            return
-          }
-          const leavingSignOut = saveBookRef.current.pendingAfterSave === 'signout'
-          const leavingDelete = saveBookRef.current.pendingAfterSave === 'delete'
-          markHistoryKept(false)
-          const liveId = saveBookRef.current.liveId || ''
-          if (liveId) {
-            rememberHistoryDiscarded(liveId)
-            discardWatchSave(liveId)
-          }
-          window.api.send(watchDiscardCommand(liveId || undefined))
-          commitBook(setPendingAfterSave(saveBookRef.current, 'none'))
-          if (pendingNewAfterSave.current) {
-            pendingNewAfterSave.current = false
-            doClear()
-            dispatch({ type: 'engine', ev: { type: 'status', text: IPHONE_COPY.moreNew } })
-          } else if (leavingSignOut) {
-            performSignOut()
-          } else if (leavingDelete) {
-            performDelete()
-          }
-        }}
+        onDiscard={() => discardCurrentSession()}
       />
       <div className={`workspace${study ? ' study' : ''}${study && railOn ? ' rail-on' : ''}`}>
         {study && !railOn && (
@@ -4422,12 +4503,21 @@ export default function App() {
               saveBannerOpen && saveBook.status !== 'saved' ? (
                 <SaveBanner
                   status={saveBook.status}
+                  undo={
+                    pendingDiscard && saveBook.status === 'undecided'
+                      ? { onUndo: () => settlePendingDiscardRef.current('undo'), secondsLeft: discardSecondsLeft }
+                      : undefined
+                  }
                   onSave={() => saveLiveSession()}
                   onNotNow={() => {
-                    setSaveBannerOpen(false)
-                    pendingNewAfterSave.current = false
-                    commitBook(setPendingAfterSave(saveBookRef.current, 'none'))
-                    persistRestoreDismissed(saveBookRef.current.liveId || pendingRestoreId.current || '')
+                    if (saveBookRef.current.status === 'failed') {
+                      setSaveBannerOpen(false)
+                      pendingNewAfterSave.current = false
+                      commitBook(setPendingAfterSave(saveBookRef.current, 'none'))
+                      persistRestoreDismissed(saveBookRef.current.liveId || pendingRestoreId.current || '')
+                      return
+                    }
+                    beginPendingDiscard()
                   }}
                   onRetry={() => saveLiveSession()}
                 />
