@@ -1232,6 +1232,7 @@ export default function App() {
   const [discardSecondsLeft, setDiscardSecondsLeft] = useState(5)
   const pendingDiscardRef = useRef(false)
   const discardTimerRef = useRef(0)
+  const discardTickRef = useRef(0)
   const settlePendingDiscardRef = useRef<(trigger: PendingDiscardTrigger) => void>(() => undefined)
   const dismissedRestoreIds = useRef<string[]>(loadRestoreDismissed())
   const persistRestoreDismissed = (id: string) => {
@@ -2283,6 +2284,7 @@ export default function App() {
   }
 
   const saveLiveSession = (opts?: { content?: boolean; audio?: boolean; fromPrompt?: boolean; fromWatch?: boolean; sessionId?: string }) => {
+    settlePendingDiscardRef.current('save')
     if (opts?.fromWatch) {
       const target = watchSaveKeepTarget({
         requestedId: opts.sessionId || '',
@@ -2651,6 +2653,10 @@ export default function App() {
       window.clearTimeout(discardTimerRef.current)
       discardTimerRef.current = 0
     }
+    if (discardTickRef.current) {
+      window.clearInterval(discardTickRef.current)
+      discardTickRef.current = 0
+    }
   }
 
   const discardCurrentSession = () => {
@@ -2703,6 +2709,9 @@ export default function App() {
     pendingDiscardRef.current = true
     setPendingDiscard(true)
     setDiscardSecondsLeft(5)
+    discardTickRef.current = window.setInterval(() => {
+      setDiscardSecondsLeft((n) => Math.max(0, n - 1))
+    }, 1000)
     discardTimerRef.current = window.setTimeout(() => {
       settlePendingDiscardRef.current('expire')
     }, 5000)

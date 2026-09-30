@@ -348,5 +348,6 @@ eq(pendingDiscardOutcome('workspace'), 'commit', 'switching workspace commits th
 eq(pendingDiscardOutcome('signout'), 'commit', 'sign out commits the discard')
 eq(pendingDiscardOutcome('delete'), 'commit', 'delete account commits the discard')
 eq(pendingDiscardOutcome('hidden'), 'commit', 'backgrounding commits the discard')
+eq(pendingDiscardOutcome('save'), 'cancel', 'saving cancels the discard countdown')
 
 console.log('sessionSave.test.ts ok')

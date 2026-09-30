@@ -188,6 +188,7 @@ export function savePromptSurface(input: {
 export type PendingDiscardTrigger =
   | 'undo'
   | 'continue'
+  | 'save'
   | 'expire'
   | 'new'
   | 'history'
@@ -196,9 +197,9 @@ export type PendingDiscardTrigger =
   | 'delete'
   | 'hidden'
 
-/** Undo and Continue drop the countdown. Every other leave commits the discard. */
+/** Undo, Continue, and Save drop the countdown. Every other leave commits the discard. */
 export function pendingDiscardOutcome(trigger: PendingDiscardTrigger): 'cancel' | 'commit' {
-  if (trigger === 'undo' || trigger === 'continue') return 'cancel'
+  if (trigger === 'undo' || trigger === 'continue' || trigger === 'save') return 'cancel'
   return 'commit'
 }
 

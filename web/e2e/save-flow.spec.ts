@@ -71,6 +71,35 @@ test.describe('Phone save banner and paused Save', () => {
     expect(phone.keeps[0]).toMatchObject({ type: 'keep_history', id: 's1' })
   })
 
+  test('countdown shows 5 and ticks down', async ({ page }) => {
+    const phone = await openPhone(page)
+    await reachSaveBanner(page, phone.send)
+    await page.getByRole('button', { name: "Don't save" }).click()
+    const detail = page.locator('.save-banner-detail')
+    await expect(detail).toHaveText('5')
+    await page.waitForTimeout(2200)
+    const n = Number((await detail.textContent())?.trim())
+    expect(n).toBeLessThanOrEqual(3)
+  })
+
+  test('Save during the countdown keeps the session and does not discard', async ({ page }) => {
+    const phone = await openPhone(page)
+    await reachSaveBanner(page, phone.send)
+    await page.getByRole('button', { name: "Don't save" }).click()
+    await expect(page.getByRole('button', { name: 'Undo' })).toBeVisible()
+    await page.getByRole('button', { name: 'More', exact: true }).click()
+    const save = page.getByRole('dialog', { name: 'More' }).getByRole('button', { name: /^Save/ })
+    await expect(save).toBeEnabled()
+    await save.click()
+    const confirm = page.getByRole('dialog', { name: 'Save to History?' })
+    await expect(confirm).toBeVisible()
+    await confirm.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect.poll(() => phone.keeps.length).toBe(1)
+    expect(phone.keeps[0]).toMatchObject({ type: 'keep_history', id: 's1' })
+    await page.waitForTimeout(6000)
+    expect(phone.discards).toEqual([])
+  })
+
   test('Save stays disabled while recording', async ({ page }) => {
     const phone = await openPhone(page)
     phone.send({ type: 'phase', capture: 'listening', engine: 'idle' })
