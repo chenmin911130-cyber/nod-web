@@ -373,6 +373,7 @@ export default function TitleBar(props: Props) {
             aria-label={IPHONE_COPY.moreNew}
           >
             <span className="tb-new-ring" aria-hidden="true">+</span>
+            <span className="tb-new-label">{IPHONE_COPY.newShort}</span>
           </button>
         ) : null}
         {phone ? (
