@@ -339,5 +339,7 @@ eq(zh.toastPaused, '已暂停 · 准备好再继续', 'zh pause toast')
 eq(zh.histToday, '今天', 'zh history today')
 eq(zh.histUntitled, '未命名', 'zh history untitled')
 eq(IPHONE_COPY.moreNew, 'New session', 'moreNew stays en in node tests')
+eq(IPHONE_COPY.newShort, 'New', 'en compact New label beside ring')
+eq(zh.newShort, '新建', 'zh compact New label beside ring')
 
 console.log('iphoneCopy.test.ts ok')
