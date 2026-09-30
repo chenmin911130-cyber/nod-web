@@ -543,6 +543,9 @@ function IphoneSettingsList({
         <span className="iphone-settings-value">{spokenSettingsValue(speechLang)}</span>
         <SettingsChevron />
       </button>
+      {speechLang !== 'auto' ? (
+        <p className="iphone-settings-help">{IPHONE_COPY.speechLockHelp}</p>
+      ) : null}
       {qa ? null : (
         <button type="button" className="iphone-settings-row" ref={notesRef} aria-haspopup="dialog" onClick={onNotes}>
           <ChipNotes />

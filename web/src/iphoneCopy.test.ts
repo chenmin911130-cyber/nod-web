@@ -351,5 +351,11 @@ eq(zh.histUntitled, '未命名', 'zh history untitled')
 eq(IPHONE_COPY.moreNew, 'New session', 'moreNew stays en in node tests')
 eq(IPHONE_COPY.newShort, 'New', 'en compact New label beside ring')
 eq(zh.newShort, '新建', 'zh compact New label beside ring')
+eq(
+  IPHONE_COPY.speechLockHelp,
+  'Only the selected language is transcribed. For mixed languages, choose Auto-detect.',
+  'en speech lock help',
+)
+eq(zh.speechLockHelp, '只转写所选语言；多语言场合请选自动识别。', 'zh speech lock help')
 
 console.log('iphoneCopy.test.ts ok')
