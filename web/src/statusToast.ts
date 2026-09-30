@@ -23,6 +23,10 @@ export function statusIsStickyUplink(text: string): boolean {
   return t === IPHONE_COPY.uplinkUnavailable || t === IPHONE_COPY.uplinkFailed
 }
 
+export function statusIsOfflineStop(text: string): boolean {
+  return text.trim().startsWith('Listening stopped — the phone was offline')
+}
+
 export function statusShouldOverlayToast(text: string): boolean {
   return !statusIsAmbient(text) && !statusIsStickyUplink(text)
 }

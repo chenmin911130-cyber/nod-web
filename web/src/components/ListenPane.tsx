@@ -107,6 +107,7 @@ interface Props {
   translatingLineId?: string
   actions?: ReactNode
   saveBanner?: ReactNode
+  offlineResumeHint?: string
   showSavedLine?: boolean
 }
 
@@ -2234,21 +2235,44 @@ export default function ListenPane(props: Props) {
           </div>
             </>
           ) : null}
-          {props.saveBanner}
-          {phone && !props.qa && props.onStart ? (
-            <ListenRecordBar
-              mode={barMode}
-              elapsedMs={props.elapsedMs || 0}
-              startLabel={IPHONE_COPY.startListening}
-              stopLabel={IPHONE_COPY.stop}
-              continueLabel={IPHONE_COPY.continueRecording}
-              onStart={props.onStart}
-              onPause={props.onPause}
-              onResume={props.onResume}
-              onStop={props.onStop}
-              onContinue={props.onContinue}
-            />
-          ) : null}
+          {props.offlineResumeHint ? (
+            <>
+              {phone && !props.qa && props.onStart ? (
+                <ListenRecordBar
+                  mode={barMode}
+                  elapsedMs={props.elapsedMs || 0}
+                  startLabel={IPHONE_COPY.startListening}
+                  stopLabel={IPHONE_COPY.stop}
+                  continueLabel={IPHONE_COPY.continueRecording}
+                  onStart={props.onStart}
+                  onPause={props.onPause}
+                  onResume={props.onResume}
+                  onStop={props.onStop}
+                  onContinue={props.onContinue}
+                />
+              ) : null}
+              <p className="iphone-settings-help">{props.offlineResumeHint}</p>
+              {props.saveBanner}
+            </>
+          ) : (
+            <>
+              {props.saveBanner}
+              {phone && !props.qa && props.onStart ? (
+                <ListenRecordBar
+                  mode={barMode}
+                  elapsedMs={props.elapsedMs || 0}
+                  startLabel={IPHONE_COPY.startListening}
+                  stopLabel={IPHONE_COPY.stop}
+                  continueLabel={IPHONE_COPY.continueRecording}
+                  onStart={props.onStart}
+                  onPause={props.onPause}
+                  onResume={props.onResume}
+                  onStop={props.onStop}
+                  onContinue={props.onContinue}
+                />
+              ) : null}
+            </>
+          )}
           </div>
         </>
       )}

@@ -60,7 +60,7 @@ import AnswerPane from './components/AnswerPane'
 import ListenPane from './components/ListenPane'
 import TranslatePane from './components/TranslatePane'
 import StatusToast, { UplinkStatusBanner } from './components/StatusToast'
-import { nextStatusText } from './statusToast'
+import { nextStatusText, statusIsOfflineStop } from './statusToast'
 import { copyFlashText, useCopyFlash } from './copyFeedback'
 import AutoOverlay from './components/AutoOverlay'
 import KeySetup from './components/KeySetup'
@@ -1225,6 +1225,7 @@ export default function App() {
   const [savePromptMode, setSavePromptMode] = useState<'discard' | 'cancel'>('discard')
   const [leaveSheetOpen, setLeaveSheetOpen] = useState(false)
   const [saveBannerOpen, setSaveBannerOpen] = useState(false)
+  const [offlineStopped, setOfflineStopped] = useState(false)
   const dismissedRestoreIds = useRef<string[]>(loadRestoreDismissed())
   const persistRestoreDismissed = (id: string) => {
     const next = rememberRestoreDismissed(dismissedRestoreIds.current, id)
@@ -1291,6 +1292,7 @@ export default function App() {
     if (!next.offered) skipOfferSavePromptRef.current = false
   }
   const startOrResumeMeeting = (s: AppState) => {
+    setOfflineStopped(false)
     if (s.meetingStartedAt == null) {
       dispatch({ type: 'listen_new' })
       markHistoryKept(false)
@@ -1339,6 +1341,7 @@ export default function App() {
     setWatchReportReveal((n) => n + 1)
   }
   const startListen = (opts?: { fromWatch?: boolean }) => {
+    setOfflineStopped(false)
     if (!opts?.fromWatch) takePhoneMic()
     listenWanted.current = true
     // Starting a fresh listen abandons any pending recovery of a previously
@@ -1436,6 +1439,7 @@ export default function App() {
   const [meetingSpeakersId, setMeetingSpeakersId] = useState<MeetingSpeakerId>(() => meetingSpeakerId())
   const [moreOpen, setMoreOpen] = useState(false)
   const restoreHistory = useCallback((session: HistorySession) => {
+    if (session.id !== saveBookRef.current.liveId) setOfflineStopped(false)
     const s = stateRef.current
     if (s.busy || s.capture !== 'off' || listenWanted.current) {
       dispatch({
@@ -1954,6 +1958,13 @@ export default function App() {
         || e.type === 'disconnected'
       ) {
         handleEngineKeepRef.current(e)
+      }
+      if (e.type === 'status' && statusIsOfflineStop(e.text || '')) {
+        setOfflineStopped(true)
+        const s = stateRef.current
+        if (s.workspaceMode === 'meeting' && s.meetingStartedAt != null && !s.meetingEnded) {
+          dispatch({ type: 'meeting_ended' })
+        }
       }
       const translateAskBefore = stateRef.current.translateAskId
       dispatch({ type: 'engine', ev: e })
@@ -2519,6 +2530,7 @@ export default function App() {
   // Clears UI + sends WS clear (server turn_reset). Does NOT DELETE history —
   // discard is only SavePrompt / Leave discard / Watch discard / History delete.
   const doClear = useCallback(() => {
+    setOfflineStopped(false)
     submitsRef.current.clear()
     spokenTranslate.current.clear()
     stopSpeech()
@@ -4403,6 +4415,9 @@ export default function App() {
             onExportPdf={() => { void handleExportPdf() }}
             actions={phoneActions}
             showSavedLine={phone && state.workspaceMode === 'meeting' && historyKept && meetingHasSaveableContent(state)}
+            offlineResumeHint={
+              offlineStopped && state.meetingEnded ? IPHONE_COPY.offlineResumeHint : undefined
+            }
             saveBanner={
               saveBannerOpen && saveBook.status !== 'saved' ? (
                 <SaveBanner

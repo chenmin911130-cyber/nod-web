@@ -1,5 +1,5 @@
 import { IPHONE_COPY } from './iphoneCopy'
-import { nextStatusText, statusIsAmbient, statusIsStickyUplink, statusShouldOverlayToast } from './statusToast'
+import { nextStatusText, statusIsAmbient, statusIsOfflineStop, statusIsStickyUplink, statusShouldOverlayToast } from './statusToast'
 
 function eq<T>(got: T, want: T, label: string) {
   if (got !== want) throw new Error(`${label}: got ${got}, want ${want}`)
@@ -27,5 +27,14 @@ eq(nextStatusText(IPHONE_COPY.uplinkUnavailable, IPHONE_COPY.uplinkUnavailable),
 eq(nextStatusText(IPHONE_COPY.uplinkUnavailable, 'Listening'), IPHONE_COPY.uplinkUnavailable, 'Listening does not 2s-dismiss the uplink banner')
 eq(nextStatusText(IPHONE_COPY.uplinkUnavailable, ''), '', 'successful uplink clears the banner')
 eq(nextStatusText(IPHONE_COPY.uplinkUnavailable, 'Microphone is silent'), 'Microphone is silent', 'a later non-ambient status replaces the uplink banner')
+
+eq(
+  statusIsOfflineStop('Listening stopped — the phone was offline for more than 120 seconds.'),
+  true,
+  'offline stop status is recognized',
+)
+eq(statusIsOfflineStop('Listening stopped after 15 minutes of silence.'), false, 'silence stop is not offline stop')
+eq(statusIsOfflineStop('Listening paused'), false, 'paused is not offline stop')
+eq(statusIsOfflineStop(''), false, 'empty is not offline stop')
 
 console.log('statusToast.test.ts ok')
