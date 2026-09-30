@@ -183,3 +183,50 @@ def test_bare_bi_old_client_keeps_chinese_if_unclear():
     sys_msg = pipe._build_messages(q, "listen_ask")[0]["content"]
     assert "Chinese if unclear" in sys_msg
     assert "Japanese translation" not in sys_msg
+
+
+def test_auto_unlocked_deja_vu_marker_pins_english_not_french():
+    transcript = EN_TRANSCRIPT + "\nSomeone mentioned déjà vu in the recap."
+    body = _auto_body(CHIP, transcript)
+    assert listen_ask_lang(body) == "en"
+    sys_msg = _system("[NOD_ASK:auto]\n" + body)
+    assert "English only" in sys_msg
+    assert "French" not in sys_msg
+
+
+def test_auto_unlocked_a_la_carte_pins_english():
+    transcript = EN_TRANSCRIPT + "\nWe ordered à la carte for the team dinner."
+    body = _auto_body(CHIP, transcript)
+    assert listen_ask_lang(body) == "en"
+    sys_msg = _system("[NOD_ASK:auto]\n" + body)
+    assert "English only" in sys_msg
+    assert "French" not in sys_msg
+
+
+def test_auto_unlocked_mixed_room_french_marker_pins_english():
+    transcript = "00:02 Guest  OK OK 好\n00:05 Host  Yes 对 à la"
+    body = _auto_body(CHIP, transcript)
+    assert listen_ask_lang(body) == "en"
+    sys_msg = _system("[NOD_ASK:auto]\n" + body)
+    assert "English only" in sys_msg
+    assert "French" not in sys_msg
+
+
+def test_auto_unlocked_french_question_empty_transcript_pins_english():
+    body = _auto_body("Ça va, pourquoi?", "(empty)")
+    assert listen_ask_lang(body) == "en"
+    sys_msg = _system("[NOD_ASK:auto]\n" + body)
+    assert "English only" in sys_msg
+    assert "French" not in sys_msg
+
+
+def test_auto_unlocked_pure_chinese_transcript_stays_chinese():
+    assert listen_ask_lang(_auto_body(CHIP, ZH_TRANSCRIPT)) == "zh"
+
+
+def test_locked_french_transcript_stays_french():
+    fr_transcript = "Bonjour, nous lançons la beta vendredi. Alice rédige les notes."
+    body = _auto_body(CHIP, fr_transcript)
+    assert listen_ask_lang(body, locked="fr") == "fr"
+    sys_msg = _system("[NOD_ASK:auto]\n" + body, stt_language="fr")
+    assert "French only" in sys_msg
