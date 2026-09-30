@@ -131,8 +131,8 @@ export async function downloadPdf(title: string, blocks: PdfBlock[], options: Pd
   const { bytes, name } = await renderPdfFile(title, blocks, options)
   const { isNativeApp } = await import('./native')
   if (isNativeApp()) {
-    const { saveNativeFiles } = await import('./watch')
-    await saveNativeFiles([{ bytes, name }])
+    const { shareNativeFile } = await import('./watch')
+    await shareNativeFile({ bytes, name })
     return name
   }
   const url = URL.createObjectURL(new Blob([bytes.slice().buffer], { type: 'application/pdf' }))
