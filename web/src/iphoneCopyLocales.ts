@@ -38,6 +38,8 @@ export const EN_IPHONE_COPY = {
   setupDone: 'Done',
   speechAutoTitle: 'Auto-detect',
   speechAutoHelp: 'Detect automatically',
+  speechLockHelp:
+    'Only the selected language is transcribed. For mixed languages, choose Auto-detect.',
   notesAutoTitle: 'Auto',
   notesAutoHelp: 'Follow speech',
   listeningEmpty: 'Listening…',
@@ -245,6 +247,7 @@ export const ZH_IPHONE_COPY: IphoneCopy = {
   setupDone: '完成',
   speechAutoTitle: '自动识别',
   speechAutoHelp: '自动检测',
+  speechLockHelp: '只转写所选语言；多语言场合请选自动识别。',
   notesAutoTitle: '自动',
   notesAutoHelp: '跟随说话语言',
   listeningEmpty: '正在听…',
