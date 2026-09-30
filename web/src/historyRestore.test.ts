@@ -1,4 +1,4 @@
-import { applyMeetingResume, assembleHistoryList, elapsedMsFromTranscriptTs, groupHistoryByDay, historyDurationLabel, historyRowStatus, historyRowTitle, historyRowWhen, historySessionMatches, localCaptureCanAppear, localCaptureHistoryId, mergeLocalCaptures, mergePendingHistory, modeIsSaveEligible, overlayNativeSaveJobs, parseRestoreDismissed, rememberRestoreDismissed, restoreAttachState, restoreAttachedClock, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionIsSaveEligible, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, sessionShowsUnsaved, shouldOfferSaveOnce, startMeetingKind, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession } from './historyRestore'
+import { applyMeetingResume, assembleHistoryList, elapsedMsFromTranscriptTs, groupHistoryByDay, historyDurationLabel, historyRowStatus, historyRowTitle, historyRowWhen, historySessionMatches, localCaptureCanAppear, localCaptureHistoryId, mergeLocalCaptures, mergePendingHistory, modeIsSaveEligible, overlayNativeSaveJobs, parseRestoreDismissed, rememberRestoreDismissed, restoreAttachState, restoreAttachedClock, restoreElapsedMs, restoreFromSession, restoreIdOfferable, restoreLaunchSurface, restoreOfferBody, restoreSessionClock, restoreShouldNotAsk, resumeResetsKept, serializeRestoreDismissed, sessionCanSaveManually, sessionIsSaveEligible, sessionIsUnsaved, sessionSaveKeep, sessionShouldOfferSave, sessionShouldOpenSavePrompt, sessionShowsUnsaved, shouldOfferSaveOnce, startMeetingKind, attachRestoreIsCurrent, mergeAttachedLines, pickAttachedSession } from './historyRestore'
 import type { HistorySession } from './components/HistoryPane'
 
 function at(h: number, m: number, s = 0): string {
@@ -116,6 +116,24 @@ if (!sessionShouldOfferSave({ workspaceMode: 'meeting', ended: true, kept: false
 }
 if (sessionShouldOfferSave({ workspaceMode: 'meeting', ended: false, kept: false, hasContent: true, listening: false, paused: true })) {
   throw new Error('paused Meeting must not offer Save')
+}
+if (!sessionCanSaveManually({ workspaceMode: 'meeting', ended: false, kept: false, hasContent: true, listening: false, paused: true })) {
+  throw new Error('paused unsaved Meeting with content can be saved from More')
+}
+if (sessionCanSaveManually({ workspaceMode: 'meeting', ended: false, kept: false, hasContent: true, listening: true, paused: false })) {
+  throw new Error('live recording cannot be saved manually')
+}
+if (sessionCanSaveManually({ workspaceMode: 'meeting', ended: false, kept: true, hasContent: true, listening: false, paused: true })) {
+  throw new Error('an already saved session cannot be saved manually')
+}
+if (sessionCanSaveManually({ workspaceMode: 'meeting', ended: false, kept: false, hasContent: false, listening: false, paused: true })) {
+  throw new Error('an empty session cannot be saved manually')
+}
+if (sessionCanSaveManually({ workspaceMode: 'meeting', ended: false, kept: false, hasContent: true, listening: false, paused: true, sessionMode: 'translate' })) {
+  throw new Error('a Translate session cannot be saved manually')
+}
+if (!sessionCanSaveManually({ workspaceMode: 'meeting', ended: true, kept: false, hasContent: true, listening: false, paused: false })) {
+  throw new Error('an ended unsaved Meeting with content can be saved manually')
 }
 if (!sessionShouldOfferSave({ workspaceMode: 'meeting', ended: true, kept: false, hasContent: true, listening: false })) {
   throw new Error('Stop with content must offer Save')

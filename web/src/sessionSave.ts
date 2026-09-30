@@ -185,6 +185,24 @@ export function savePromptSurface(input: {
   return input.phone ? 'banner' : 'modal'
 }
 
+export type PendingDiscardTrigger =
+  | 'undo'
+  | 'continue'
+  | 'save'
+  | 'expire'
+  | 'new'
+  | 'history'
+  | 'workspace'
+  | 'signout'
+  | 'delete'
+  | 'hidden'
+
+/** Undo, Continue, and Save drop the countdown. Every other leave commits the discard. */
+export function pendingDiscardOutcome(trigger: PendingDiscardTrigger): 'cancel' | 'commit' {
+  if (trigger === 'undo' || trigger === 'continue' || trigger === 'save') return 'cancel'
+  return 'commit'
+}
+
 /**
  * Engine `save_prompt` after a local End offer must bind the session id but
  * not open a second Save / Not now. A first offer from the server (idle stop,

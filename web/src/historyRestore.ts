@@ -65,6 +65,21 @@ export function sessionShouldOfferSave(input: {
   return input.ended || !input.listening
 }
 
+/** More → Save. Same gates as sessionShouldOfferSave, except Pause may save. */
+export function sessionCanSaveManually(input: {
+  workspaceMode: string
+  ended: boolean
+  kept: boolean
+  hasContent: boolean
+  listening?: boolean
+  paused?: boolean
+  sessionMode?: string
+}): boolean {
+  if (!modeIsSaveEligible(input.sessionMode)) return false
+  if (input.workspaceMode !== 'meeting' || input.kept || !input.hasContent) return false
+  return !input.listening || Boolean(input.paused)
+}
+
 /** Engine save_prompt only opens the Meeting / Lecture dialog, never after Keep or Pause. */
 export function sessionShouldOpenSavePrompt(input: {
   workspaceMode: string

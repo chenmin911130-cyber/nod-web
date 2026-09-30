@@ -15,6 +15,7 @@ import {
   leaveActionStillArmed,
   savePromptSurface,
   engineSavePromptOpensUi,
+  pendingDiscardOutcome,
   setPendingAfterSave,
 } from './sessionSave'
 
@@ -337,5 +338,16 @@ eq(
   const lateError = applyKeepFailed(saved, 'error')
   eq(lateError.status, 'saved', 'late history_keep_failed must not regress saved')
 }
+
+eq(pendingDiscardOutcome('undo'), 'cancel', 'undo cancels the discard countdown')
+eq(pendingDiscardOutcome('continue'), 'cancel', 'continue cancels the discard countdown')
+eq(pendingDiscardOutcome('expire'), 'commit', 'expire commits the discard')
+eq(pendingDiscardOutcome('new'), 'commit', 'new session commits the discard')
+eq(pendingDiscardOutcome('history'), 'commit', 'opening History commits the discard')
+eq(pendingDiscardOutcome('workspace'), 'commit', 'switching workspace commits the discard')
+eq(pendingDiscardOutcome('signout'), 'commit', 'sign out commits the discard')
+eq(pendingDiscardOutcome('delete'), 'commit', 'delete account commits the discard')
+eq(pendingDiscardOutcome('hidden'), 'commit', 'backgrounding commits the discard')
+eq(pendingDiscardOutcome('save'), 'cancel', 'saving cancels the discard countdown')
 
 console.log('sessionSave.test.ts ok')
