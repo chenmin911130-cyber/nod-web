@@ -78,8 +78,14 @@ def listen_ask_lang(body: str, locked: str | None = None) -> str | None:
         return confident
     locked_lang = _normalize_stt_lang(locked)
     if transcript:
-        return locked_lang or detect_question_lang(transcript)
-    return locked_lang or detect_question_lang(question) or None
+        if locked_lang:
+            return locked_lang
+        guess = detect_question_lang(transcript)
+        return guess if guess in _STT_AUTO_LANGS else "en"
+    if locked_lang:
+        return locked_lang
+    guess = detect_question_lang(question)
+    return guess if guess in _STT_AUTO_LANGS else "en"
 
 
 def _confident_stt_lang(text: str, heard: str | None) -> str | None:
