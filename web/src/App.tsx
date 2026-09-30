@@ -5,6 +5,7 @@ import { TRANSLATE_LANGS } from './types'
 import { answerCopyText, applySources } from './qaSources'
 import { newSubmitId } from './submitId'
 import { PRODUCT_NAME } from './brand'
+import { siteUrl } from './siteOrigin'
 import { isWeb } from './platform'
 import TitleBar, { TitleIcons } from './components/TitleBar'
 import HistoryPane, { type HistorySession } from './components/HistoryPane'
@@ -4449,9 +4450,13 @@ export default function App() {
             <p>
               {IPHONE_COPY.consentBody}{' '}
               {IPHONE_COPY.consentLinksPrefix}{' '}
-              <a href="/privacy">{IPHONE_COPY.consentPrivacyLink}</a>{' '}
+              <a href={siteUrl('/privacy')} target="_blank" rel="noopener noreferrer">
+                {IPHONE_COPY.consentPrivacyLink}
+              </a>{' '}
               {IPHONE_COPY.consentLinksJoin}{' '}
-              <a href="/consent">{IPHONE_COPY.consentNoteLink}</a>
+              <a href={siteUrl('/consent')} target="_blank" rel="noopener noreferrer">
+                {IPHONE_COPY.consentNoteLink}
+              </a>
               {IPHONE_COPY.consentLinksSuffix}
             </p>
             <button className="keysetup-save" type="button" onClick={acceptConsent}>
