@@ -85,4 +85,44 @@ test.describe('Offline stop resume hint (T64)', () => {
     await expect(page.getByText('Back online — tap Continue to keep recording')).toHaveCount(0)
     await expect.poll(() => saveBannerBeforeContinue(page)).toBe(true)
   })
+
+  test('restoring another session from History clears the offline hint', async ({ page }) => {
+    const offlineLiveId = 'sess-offline-hist-live'
+    const otherSession = {
+      id: 'sess-history-other',
+      mode: 'meeting',
+      scene: 'meeting',
+      title: 'Prior standup notes',
+      started_at: '2026-01-15T10:00:00Z',
+      ended_at: '2026-01-15T10:30:00Z',
+      stt_seconds: 120,
+      kept: true,
+      items: [{ kind: 'transcript', text: 'We agreed to ship on Tuesday.' }],
+    }
+    await page.route('**/api/account/history**', async (route) => {
+      const url = route.request().url()
+      if (url.includes('pending=1')) {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ sessions: [] }) })
+        return
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ sessions: [otherSession] }) })
+    })
+
+    const ws = await mockListenWs(page)
+    await ws.gotoListening()
+    ws.send({ type: 'question', id: 'm1', text: 'Offline stop on this session.' })
+    ws.send({ type: 'phase', capture: 'off', engine: 'idle' })
+    ws.send({ type: 'status', text: OFFLINE_STOP })
+    ws.send({ type: 'save_prompt', id: offlineLiveId, mode: 'meeting' })
+    await expect(page.getByText('Back online — tap Continue to keep recording')).toBeVisible()
+
+    await page.getByRole('button', { name: 'More' }).click()
+    await page.getByRole('button', { name: 'History' }).click()
+    await expect(page.getByRole('dialog', { name: 'History' })).toBeVisible()
+    await page.getByRole('button', { name: /Prior standup notes/i }).click()
+
+    await expect(page.getByText('Back online — tap Continue to keep recording')).toHaveCount(0)
+    await expect(page.getByText('Save this session?')).toHaveCount(0)
+    await expect(page.getByText('We agreed to ship on Tuesday.')).toBeVisible()
+  })
 })

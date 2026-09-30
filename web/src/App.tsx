@@ -1439,6 +1439,7 @@ export default function App() {
   const [meetingSpeakersId, setMeetingSpeakersId] = useState<MeetingSpeakerId>(() => meetingSpeakerId())
   const [moreOpen, setMoreOpen] = useState(false)
   const restoreHistory = useCallback((session: HistorySession) => {
+    if (session.id !== saveBookRef.current.liveId) setOfflineStopped(false)
     const s = stateRef.current
     if (s.busy || s.capture !== 'off' || listenWanted.current) {
       dispatch({
