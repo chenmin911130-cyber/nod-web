@@ -72,6 +72,16 @@ eq(IPHONE_COPY.saveWaitingSync, 'Waiting to sync', 'native local keep on History
 eq(IPHONE_COPY.saveSavedLine, 'Saved to History', 'ack-only saved line')
 eq(IPHONE_COPY.newCompact, '+ New', 'compact Listen New legacy key')
 eq(IPHONE_COPY.continueRecording, 'Continue', 'ended sheet Continue')
+eq(
+  IPHONE_COPY.offlineResumeHint,
+  'Back online — tap Continue to keep recording',
+  'offline resume hint en',
+)
+eq(
+  iphoneCopyFor('zh').offlineResumeHint,
+  '网络已恢复，点继续接着录',
+  'offline resume hint zh',
+)
 eq(IPHONE_COPY.saveCancel, 'Cancel', 'non-native collect cancel')
 eq(IPHONE_COPY.keepRecording, 'Keep recording', 'Save can keep the WAV')
 eq(
