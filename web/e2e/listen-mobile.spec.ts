@@ -693,3 +693,22 @@ test.describe('Listen mobile small phone', () => {
     await page.screenshot({ path: `${EVIDENCE}/listen-recording-320.png` })
   })
 })
+
+test.describe('Spoken language lock hint (T08)', () => {
+  test.use({ viewport: { width: 390, height: 844 } })
+
+  const lockHelp =
+    'Only the selected language is transcribed. For mixed languages, choose Auto-detect.'
+
+  test('shows lock hint when a specific spoken language is selected', async ({ page }) => {
+    await page.goto('/app')
+    await expect(page.locator('html')).toHaveClass(/nod-phone/)
+    await expect(page.getByText(lockHelp)).toHaveCount(0)
+    await page.getByRole('button', { name: /Spoken language/ }).click()
+    await page.getByRole('listbox', { name: 'Spoken language' }).getByRole('option', { name: /English/ }).click()
+    await expect(page.getByText(lockHelp)).toBeVisible()
+    await page.getByRole('button', { name: /Spoken language/ }).click()
+    await page.getByRole('listbox', { name: 'Spoken language' }).getByRole('option', { name: /Auto-detect/ }).click()
+    await expect(page.getByText(lockHelp)).toHaveCount(0)
+  })
+})
