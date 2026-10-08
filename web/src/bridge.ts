@@ -4,6 +4,7 @@ import { getToken } from './auth'
 import { MicCapture } from './audio'
 import { apiUrl, isAndroidApp, isNativeApp, wsUrl } from './native'
 import { micSilenceShouldWarn } from './micGuard'
+import { reconnectStep } from './reconnect'
 import { audioUplinkWsUrl, controlWsUrl, shouldEmitUplinkNotice, uplinkFailureFromError, uplinkFailureLog, uplinkShouldForwardPcmFromJs, uplinkTokenAction, uplinkTokenAfterNativeStart } from './uplink'
 import { isWatchMicPreferred, setWatchPcmSink } from './watch'
 import { copyText } from './historyRestore'
@@ -177,10 +178,6 @@ const LAST_WINS_MSGS = new Set([
 const PENDING_MAX = 32
 const PENDING_STALE_MS = 10_000
 
-const RECONNECT_BASE_MS = 1_000
-const RECONNECT_MAX_MS = 30_000
-const RECONNECT_MAX_TRIES = 12
-
 export function installWebApi(): void {
   document.documentElement.classList.add('nod-web')
   const eventListeners = new Set<(e: EngineEvent) => void>()
@@ -351,17 +348,25 @@ export function installWebApi(): void {
       .catch(() => undefined)
   }
 
+  const shouldKeepReconnecting = () =>
+    isNativeApp() ||
+    Boolean(uplinkToken) ||
+    lastRun === 'listening' ||
+    lastRun === 'recording' ||
+    lastRun === 'paused'
+
   const scheduleReconnect = (authExpired: boolean) => {
     if (closing) return
-    if (retries >= RECONNECT_MAX_TRIES) {
-      clearUplink()
+    const { giveUp, delayMs } = reconnectStep({
+      retries,
+      authExpired,
+      keepTrying: shouldKeepReconnecting(),
+      random: Math.random(),
+    })
+    if (giveUp) {
       emit({ type: 'error', text: `Lost connection to ${PRODUCT_NAME}. Reload the page to reconnect.` })
       return
     }
-    // Exponential backoff with jitter: a fixed retry meant every open tab
-    // hammered the server in lockstep the moment it came back up.
-    const step = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** retries)
-    const delay = authExpired ? 2_000 : Math.round(step * (0.7 + Math.random() * 0.6))
     retries += 1
     window.clearTimeout(reconnectTimer)
     reconnectTimer = window.setTimeout(() => {
@@ -372,11 +377,20 @@ export function installWebApi(): void {
         }
         connect()
       })()
-    }, delay)
+    }, delayMs)
+  }
+
+  const nudgeReconnect = () => {
+    if (closing) return
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
+    window.clearTimeout(reconnectTimer)
+    retries = 0
+    connect()
   }
 
   const connect = () => {
     if (closing) return
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
     const socket = new WebSocket(controlWsUrl(wsUrl(), uplinkToken))
     ws = socket
     socket.binaryType = 'arraybuffer'
@@ -497,6 +511,18 @@ export function installWebApi(): void {
 
   window.api = api
   connect()
+
+  window.addEventListener('online', () => nudgeReconnect())
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') nudgeReconnect()
+  })
+  if (isNativeApp()) {
+    void import('@capacitor/app').then(({ App }) => {
+      void App.addListener('appStateChange', ({ isActive }) => {
+        if (isActive) nudgeReconnect()
+      })
+    })
+  }
 
   window.addEventListener('pagehide', () => {
     // Lock screen / background must keep the native mic session and the
