@@ -8103,18 +8103,19 @@ async def ws_endpoint(ws: WebSocket):
     except WebSocketDisconnect as exc:
         close_code = exc.code
     finally:
-        token = getattr(session, "audio_token", None)
-        parked = int(uplink.should_park(session) or uplink.is_parked(token))
+        superseded = getattr(session, "_control_owner", None) is not control_owner
+        parked = int((not superseded) and uplink.should_park(session))
         logging.getLogger("nod").info(
-            "ws_close kind=control code=%s dur_s=%.3f session=%s parked=%d",
+            "ws_close kind=control code=%s dur_s=%.3f session=%s parked=%d superseded=%d",
             close_code,
             max(0.0, time.time() - ws_open_at),
             getattr(session, "usage_session_id", None) or "-",
             parked,
+            int(superseded),
         )
         send_task.cancel()
         ws_disconnect(ip)
-        if getattr(session, "_control_owner", None) is not control_owner:
+        if superseded:
             # A newer control socket adopted this session while this one was
             # closing; it owns the session now, so closing/parking here would kill
             # a live listen (#279).

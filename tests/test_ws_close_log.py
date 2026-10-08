@@ -60,6 +60,51 @@ def test_audio_ws_close_logs_code_and_dur(caplog) -> None:
     assert float(m.group(1)) >= 0.0
 
 
+def _local_control_ws(client: TestClient):
+    return mock.patch("server.app.is_local_scope", return_value=True)
+
+
+def _control_session_from_uplink() -> Session:
+    with uplink._lock:  # type: ignore[attr-defined]
+        sessions = list(uplink._by_token.values())  # type: ignore[attr-defined]
+    assert len(sessions) == 1
+    return sessions[0]
+
+
+def test_control_ws_close_parked_when_should_park(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="nod")
+    client = TestClient(app)
+    usage_id = "park-me-session"
+    with _local_control_ws(client):
+        with client.websocket_connect("/ws") as ws:
+            sess = _control_session_from_uplink()
+            sess.usage_session_id = usage_id
+            sess._listener = object()
+            sess._uplink_seen = True
+            ws.close(1000)
+    hit = [ln for ln in _ws_close_lines(caplog) if "kind=control" in ln]
+    assert hit, _ws_close_lines(caplog)
+    assert "parked=1 superseded=0" in hit[0]
+    assert f"session={usage_id}" in hit[0]
+
+
+def test_control_ws_close_superseded_not_parked_and_no_close(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="nod")
+    client = TestClient(app)
+    with _local_control_ws(client):
+        with client.websocket_connect("/ws") as ws:
+            sess = _control_session_from_uplink()
+            sess.close = mock.Mock()  # type: ignore[method-assign]
+            sess._listener = object()
+            sess._uplink_seen = True
+            sess._control_owner = object()
+            ws.close(1000)
+    hit = [ln for ln in _ws_close_lines(caplog) if "kind=control" in ln]
+    assert hit, _ws_close_lines(caplog)
+    assert "parked=0 superseded=1" in hit[0]
+    sess.close.assert_not_called()
+
+
 def test_forged_token_audio_ws_no_ws_close_log(caplog) -> None:
     caplog.set_level(logging.INFO, logger="nod")
     client = TestClient(app)
