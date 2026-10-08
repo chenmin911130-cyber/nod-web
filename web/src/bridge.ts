@@ -4,7 +4,7 @@ import { getToken } from './auth'
 import { MicCapture } from './audio'
 import { apiUrl, isAndroidApp, isNativeApp, wsUrl } from './native'
 import { micSilenceShouldWarn } from './micGuard'
-import { reconnectStep } from './reconnect'
+import { reconnectStep, shouldKeepReconnecting } from './reconnect'
 import { audioUplinkWsUrl, controlWsUrl, shouldEmitUplinkNotice, uplinkFailureFromError, uplinkFailureLog, uplinkShouldForwardPcmFromJs, uplinkTokenAction, uplinkTokenAfterNativeStart } from './uplink'
 import { isWatchMicPreferred, setWatchPcmSink } from './watch'
 import { copyText } from './historyRestore'
@@ -348,19 +348,12 @@ export function installWebApi(): void {
       .catch(() => undefined)
   }
 
-  const shouldKeepReconnecting = () =>
-    isNativeApp() ||
-    Boolean(uplinkToken) ||
-    lastRun === 'listening' ||
-    lastRun === 'recording' ||
-    lastRun === 'paused'
-
   const scheduleReconnect = (authExpired: boolean) => {
     if (closing) return
     const { giveUp, delayMs } = reconnectStep({
       retries,
       authExpired,
-      keepTrying: shouldKeepReconnecting(),
+      keepTrying: shouldKeepReconnecting({ hasUplinkToken: Boolean(uplinkToken), lastRun }),
       random: Math.random(),
     })
     if (giveUp) {
@@ -424,6 +417,7 @@ export function installWebApi(): void {
       emit(payload)
     }
     socket.onclose = (ev) => {
+      if (ws !== socket) return
       ws = null
       window.clearInterval(pingTimer)
       window.clearTimeout(reconnectTimer)

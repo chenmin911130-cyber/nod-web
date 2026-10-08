@@ -1,8 +1,20 @@
-import { reconnectStep } from './reconnect'
+import { reconnectStep, shouldKeepReconnecting } from './reconnect'
 
 function eq<T>(got: T, want: T, label: string) {
   if (got !== want) throw new Error(`${label}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`)
 }
+
+eq(shouldKeepReconnecting({ hasUplinkToken: false, lastRun: 'off' }), false, 'idle without token')
+eq(shouldKeepReconnecting({ hasUplinkToken: true, lastRun: 'off' }), true, 'token while idle')
+eq(shouldKeepReconnecting({ hasUplinkToken: false, lastRun: 'listening' }), true, 'listening')
+eq(shouldKeepReconnecting({ hasUplinkToken: false, lastRun: 'recording' }), true, 'recording')
+eq(shouldKeepReconnecting({ hasUplinkToken: false, lastRun: 'paused' }), true, 'paused')
+
+eq(
+  reconnectStep({ retries: 12, authExpired: true, keepTrying: true, random: 0 }).giveUp,
+  true,
+  'authExpired gives up at 12 even when keepTrying',
+)
 
 for (let retries = 0; retries <= 50; retries += 1) {
   for (const random of [0, 1]) {
