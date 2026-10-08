@@ -141,7 +141,5 @@ def reap(now: float) -> None:
                 _parked.pop(token, None)
                 _by_token.pop(token, None)
             sess.close()
-    if to_stop:
-        reap(now)
     for _token, sess in to_close:
         sess.close()

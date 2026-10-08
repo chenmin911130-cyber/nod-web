@@ -746,6 +746,23 @@ class ReapNeverSilentlyClosesLiveListenTests(unittest.TestCase):
             with mock.patch.object(sess, "_abandon_forgotten_listen", side_effect=abandon):
                 uplink.reap(now)
 
+    def test_abandon_that_keeps_listener_does_not_recurse(self) -> None:
+        now = time.time()
+        sess = self._live_parked_session()
+        sess._uplink_connected = True
+        sess._control_lost_at = now - UPLINK_ORPHAN_SECONDS - 1
+        token = sess.audio_token
+        with (
+            mock.patch("server.uplink.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+            mock.patch("server.app.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+        ):
+            with mock.patch.object(sess, "_abandon_forgotten_listen") as abandon:
+                uplink.reap(now)
+        abandon.assert_called_once()
+        sess.close.assert_not_called()
+        self.assertIs(uplink.get(token), sess)
+        self.assertIsNotNone(sess._listener)
+
     def test_abandon_failure_falls_back_to_close(self) -> None:
         now = time.time()
         sess = self._live_parked_session()
