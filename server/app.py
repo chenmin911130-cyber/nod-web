@@ -3655,9 +3655,6 @@ class Session:
             return
         if getattr(self, "_closed", False):
             return
-        notice = getattr(self, "_offline_notice", None)
-        if isinstance(notice, dict) and notice:
-            return
         if self._listener:
             # ANY byte (even silence, even while muted or consent-blocked) proves the
             # client is alive and streaming — refresh the zero-PCM clock BEFORE the
@@ -3670,7 +3667,9 @@ class Session:
             return
         if self.user_id and not self._has_consent():
             return
-        if self.user_id:
+        notice = getattr(self, "_offline_notice", None)
+        offline_retained = isinstance(notice, dict) and notice
+        if self.user_id and not offline_retained:
             self._pcm_unmetered += len(pcm)
             if self._pcm_unmetered >= 16000:
                 seconds = self._pcm_unmetered / float(SR * 2)

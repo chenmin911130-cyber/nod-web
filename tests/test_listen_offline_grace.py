@@ -477,6 +477,31 @@ class OfflineStopReapTickTests(unittest.TestCase):
             sess.push_pcm(frame)
         consume.assert_not_called()
 
+    def test_offline_stop_retained_pcm_rejects_trailing_once(self) -> None:
+        sess = self._offline_tick_session()
+        now = time.time()
+        past = now - LISTEN_OFFLINE_GRACE_SECONDS - 1
+        sess._last_pcm_at = past
+        sess._uplink_lost_at = past
+        _tick_live_idle_watches()
+        self.assertIsInstance(sess._offline_notice, dict)
+        sess._listen_ended = True
+        sess._listen_wanted = False
+        sess._consent_ok = True
+        sess._pcm_unmetered = 0
+        sess._pcm_end_capture = "cap-offline"
+        frame = b"\x02" * 16000
+        with (
+            mock.patch("server.meter.consume_stt") as consume,
+            mock.patch.object(sess, "_ensure_usage", return_value=True),
+            mock.patch.object(sess, "_reject_pcm_ended") as reject,
+        ):
+            consume.return_value = (True, {"ok": True})
+            sess.push_pcm(frame)
+            sess.push_pcm(frame)
+        consume.assert_not_called()
+        reject.assert_called_once_with("sess-1", "cap-offline", "session_ended")
+
     def test_offline_stop_reattach_continue_listen_survives_reap(self) -> None:
         sess = self._offline_tick_session()
         now = time.time()
