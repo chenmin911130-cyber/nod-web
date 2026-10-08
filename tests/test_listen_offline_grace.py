@@ -7,7 +7,8 @@ import unittest
 from unittest import mock
 
 from server import uplink
-from server.app import Session
+from server.app import Session, _adopt_live_stt, _reset_live_stt, _tick_live_idle_watches
+from server.settings import UPLINK_ORPHAN_SECONDS
 
 
 def _clear_listener(sess: Session) -> None:
@@ -334,6 +335,122 @@ class OfflineGraceReapTests(unittest.TestCase):
         sess._uplink_connected = True
         sess._uplink_lost_at = 0.0
         sess._control_lost_at = time.time() - UPLINK_ORPHAN_SECONDS - 1
+        uplink.reap(time.time())
+        sess.close.assert_called_once()
+        self.assertIsNone(uplink.get(sess.audio_token))
+
+
+class OfflineStopReapTickTests(unittest.TestCase):
+    def setUp(self) -> None:
+        uplink.reset()
+        _reset_live_stt()
+
+    def tearDown(self) -> None:
+        uplink.reset()
+        _reset_live_stt()
+
+    def _offline_tick_session(self) -> Session:
+        sess = Session.__new__(Session)
+        sess.audio_token = "tok-offline-reap"
+        sess.user_id = "user-1"
+        sess._closed = False
+        listener = object()
+        sess._listener = listener
+        sess._listen_wanted = True
+        sess._paused = False
+        sess._idle_check_at = 0.0
+        sess._listen_started_at = time.time()
+        sess._listen_accum_sec = 0.0
+        sess._last_voice_at = time.time()
+        sess._listen_mic = "phone"
+        sess._uplink_connected = False
+        sess._uplink_seen = True
+        sess._control_lost_at = 0.0
+        sess._client_emit = None
+        sess._offline_notice = None
+        sess.usage_session_id = "sess-1"
+        sess._workspace = "meeting"
+        sess._usage_mode = "meeting"
+        sess._engine = "idle"
+        sess._manual = False
+        sess._watch_copy_session = "copy-1"
+        sess.pipeline = mock.Mock()
+        sess.pipeline.key_status.return_value = {"has_llm": False, "has_stt": False}
+        sess.close = mock.Mock()
+        sess.emit = mock.Mock()
+
+        def offer() -> None:
+            sess.emit({
+                "type": "save_prompt",
+                "id": "sess-1",
+                "mode": "meeting",
+                "text": "Save this session to History?",
+            })
+
+        sess._offer_save_history = offer
+
+        def stop() -> None:
+            sess._listener = None
+
+        sess._stop_listening = mock.Mock(side_effect=stop)
+        uplink.register(sess)
+        uplink.park(sess)
+        _adopt_live_stt("user-1:meeting", listener, sess)
+        return sess
+
+    def test_offline_stop_survives_same_tick_reap(self) -> None:
+        sess = self._offline_tick_session()
+        now = time.time()
+        sess._last_pcm_at = now - 121
+        sess._uplink_lost_at = now - 121
+        _tick_live_idle_watches()
+        sess.close.assert_not_called()
+        self.assertIs(uplink.adopt(sess.audio_token, "user-1"), sess)
+
+        replay: list[dict] = []
+        sess.emit = replay.append
+        sess._client_emit = replay.append
+        sess.reattach()
+        offline = [
+            ev for ev in replay
+            if ev.get("type") == "status" and "offline" in str(ev.get("text") or "")
+        ]
+        prompts = [ev for ev in replay if ev.get("type") == "save_prompt"]
+        self.assertEqual(len(offline), 1)
+        self.assertEqual(len(prompts), 1)
+
+    def test_offline_stop_reaped_after_orphan_from_stop(self) -> None:
+        now = time.time()
+        sess = self._offline_tick_session()
+        sess._listener = None
+        sess._offline_notice = {
+            "status": "offline stop",
+            "save_prompt": True,
+            "at": now - UPLINK_ORPHAN_SECONDS - 1,
+        }
+        sess._control_lost_at = now - 2000
+        uplink.reap(now)
+        sess.close.assert_called_once()
+
+        uplink.reset()
+        sess2 = self._offline_tick_session()
+        sess2._listener = None
+        sess2._offline_notice = {
+            "status": "offline stop",
+            "save_prompt": True,
+            "at": now - (UPLINK_ORPHAN_SECONDS - 10),
+        }
+        sess2._control_lost_at = now - 2000
+        sess2.close = mock.Mock()
+        uplink.reap(now)
+        sess2.close.assert_not_called()
+        self.assertIs(uplink.get(sess2.audio_token), sess2)
+
+    def test_flushed_notice_then_drop_closes_immediately(self) -> None:
+        sess = self._offline_tick_session()
+        sess._listener = None
+        sess._offline_notice = None
+        sess._control_lost_at = time.time()
         uplink.reap(time.time())
         sess.close.assert_called_once()
         self.assertIsNone(uplink.get(sess.audio_token))

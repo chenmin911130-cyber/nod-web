@@ -7089,7 +7089,7 @@ class Session:
         if not offline:
             return
         if getattr(self, "_client_emit", None) is None:
-            self._offline_notice = {"status": text, "save_prompt": True}
+            self._offline_notice = {"status": text, "save_prompt": True, "at": time.time()}
         else:
             self._offline_notice = None
 
