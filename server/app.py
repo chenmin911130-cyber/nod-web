@@ -8170,11 +8170,19 @@ async def ws_audio(ws: WebSocket):
         await ws.close(code=4409)
         return
     await ws.accept()
+    conn_done = asyncio.Event()
+    setattr(ws, "_uplink_conn_done", conn_done)
     if prev is not None and prev is not ws:
         try:
             await prev.close()
         except Exception:
             pass
+        prev_done = getattr(prev, "_uplink_conn_done", None)
+        if isinstance(prev_done, asyncio.Event):
+            try:
+                await asyncio.wait_for(prev_done.wait(), 2.0)
+            except TimeoutError:
+                pass
     session._audio_ws = ws
     session._replay_pcm_rejection()
     session._uplink_connected = True
@@ -8185,17 +8193,12 @@ async def ws_audio(ws: WebSocket):
     session._uplink_client = uplink_client_kind(raw_headers.get("user-agent"))
     ws_open_at = time.time()
     close_code = 1000
-    # Previous connection's byte total. Bump the generation first so a late
-    # finally from the socket we just closed cannot overwrite what we read.
-    prev_rx = int(getattr(session, "_uplink_prev_conn_rx", 0) or 0)
-    gen = int(getattr(session, "_uplink_rx_gen", 0) or 0) + 1
-    session._uplink_rx_gen = gen
+    # Session-cumulative wire bytes. Never cleared; a new Session starts at 0.
+    prev_rx = int(getattr(session, "_uplink_rx_total", 0) or 0)
     try:
         await ws.send_text(json.dumps({"type": "uplink_resume", "prev_rx": prev_rx}))
     except Exception:
         pass
-    session._uplink_prev_conn_rx = 0
-    conn_rx = 0
     limited_bytes = 0
     session._uplink_limited_bytes = 0
     last_ack_rx = 0
@@ -8205,7 +8208,7 @@ async def ws_audio(ws: WebSocket):
     async def maybe_ack() -> None:
         nonlocal last_ack_rx, last_ack_at
         async with ack_lock:
-            rx = conn_rx
+            rx = int(getattr(session, "_uplink_rx_total", 0) or 0)
             if rx <= last_ack_rx:
                 return
             now = time.monotonic()
@@ -8251,9 +8254,7 @@ async def ws_audio(ws: WebSocket):
             if getattr(session, "_closed", False):
                 break
             if data:
-                conn_rx += len(data)
-                if int(getattr(session, "_uplink_rx_gen", 0) or 0) == gen:
-                    session._uplink_prev_conn_rx = conn_rx
+                session._uplink_rx_total = int(getattr(session, "_uplink_rx_total", 0) or 0) + len(data)
                 if len(data) > MAX_WS_FRAME:
                     await maybe_ack()
                     continue
@@ -8312,9 +8313,7 @@ async def ws_audio(ws: WebSocket):
             await ack_task
         except (asyncio.CancelledError, Exception):
             pass
-        if int(getattr(session, "_uplink_rx_gen", 0) or 0) == gen:
-            session._uplink_prev_conn_rx = conn_rx
-            session._uplink_limited_bytes = limited_bytes
+        conn_done.set()
         parked = int(uplink.is_parked(getattr(session, "audio_token", None)))
         logging.getLogger("nod").info(
             "ws_close kind=audio code=%s dur_s=%.3f session=%s parked=%d",

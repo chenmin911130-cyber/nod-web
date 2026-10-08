@@ -7,6 +7,9 @@ enum UplinkInflightTests {
         ackInsideMessageKeepsTheTail()
         resumeRestoresUnconfirmedAheadOfNewFrames()
         resumeZeroAndOverflow()
+        flapResumeDoesNotRequeueTwice()
+        clearThenResumeAlignsPrefix()
+        resumeBehindPrefixRequeuesWithoutConsumed()
         paddingConfirmsOnWireBytes()
         eachRawByteConsumedOnce()
         capDropsOldestFrame()
@@ -57,6 +60,7 @@ enum UplinkInflightTests {
         pending.insert(contentsOf: result.frames, at: 0)
         eq(pending, [second, third, Data([9])])
         eq(u.isEmpty, true)
+        eq(u.testingPrefixWire, 10)
     }
 
     private static func resumeZeroAndOverflow() {
@@ -74,6 +78,69 @@ enum UplinkInflightTests {
         eq(over.consumed.count, 2)
         eq(over.frames.count, 0)
         eq(all.isEmpty, true)
+        eq(all.testingPrefixWire, 10_000)
+    }
+
+    /// Conn 2 resumes A+B and parks C. Conn 3 sees the same prev_rx and must not touch C again.
+    private static func flapResumeDoesNotRequeueTwice() {
+        var u = UplinkInflight()
+        let a = Data([1])
+        let b = Data([2])
+        let c = Data([3])
+        u.noteSent(frames: [a], raw: 1, sent: 10, captureId: "a", sessionId: "s")
+        u.noteSent(frames: [b], raw: 1, sent: 20, captureId: "b", sessionId: "s")
+        u.noteSent(frames: [c], raw: 1, sent: 30, captureId: "c", sessionId: "s")
+        var pending: [Data] = []
+        let second = u.resume(prevRx: 30)
+        eq(second.consumed.count, 2)
+        eq(second.consumed[0].rawBytes, 1)
+        eq(second.consumed[1].rawBytes, 1)
+        pending.insert(contentsOf: second.frames, at: 0)
+        eq(pending, [c])
+        eq(u.testingPrefixWire, 30)
+        let third = u.resume(prevRx: 30)
+        eq(third.consumed.count, 0)
+        eq(third.frames.count, 0)
+        pending.insert(contentsOf: third.frames, at: 0)
+        eq(pending, [c])
+        eq(u.testingPrefixWire, 30)
+    }
+
+    /// stop() clears prefixWire. The next uplink_resume realigns, then rx_ack pops only the new frame.
+    private static func clearThenResumeAlignsPrefix() {
+        var u = UplinkInflight()
+        u.noteSent(frames: [Data([1])], raw: 1, sent: 10, captureId: "old", sessionId: "s")
+        u.clear()
+        eq(u.testingPrefixWire, 0)
+        let t = 5000
+        let aligned = u.resume(prevRx: t)
+        eq(aligned.consumed.count, 0)
+        eq(aligned.frames.count, 0)
+        eq(u.testingPrefixWire, t)
+        let d = Data([4])
+        u.noteSent(frames: [d], raw: 4, sent: 40, captureId: "d", sessionId: "s")
+        let got = u.apply(rx: t + 40)
+        eq(got.count, 1)
+        eq(got[0].rawBytes, 4)
+        eq(u.isEmpty, true)
+        eq(u.testingPrefixWire, t + 40)
+    }
+
+    /// prev_rx behind prefixWire requeues every in-flight frame and confirms nothing.
+    private static func resumeBehindPrefixRequeuesWithoutConsumed() {
+        var u = UplinkInflight()
+        u.noteSent(frames: [Data([0])], raw: 1, sent: 1000, captureId: "pre", sessionId: "s")
+        eq(u.apply(rx: 1000).count, 1)
+        eq(u.testingPrefixWire, 1000)
+        let a = Data([1])
+        let b = Data([2])
+        u.noteSent(frames: [a], raw: 1, sent: 100, captureId: "a", sessionId: "s")
+        u.noteSent(frames: [b], raw: 1, sent: 100, captureId: "b", sessionId: "s")
+        let result = u.resume(prevRx: 400)
+        eq(result.consumed.count, 0)
+        eq(result.frames, [a, b])
+        eq(u.isEmpty, true)
+        eq(u.testingPrefixWire, 400)
     }
 
     private static func paddingConfirmsOnWireBytes() {

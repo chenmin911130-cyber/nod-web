@@ -68,6 +68,10 @@ struct UplinkInflight {
     /// Wire bytes of messages already popped or dropped, so a later absolute `rx` stays aligned.
     private var prefixWire = 0
 
+    #if PCM_REPLAY_TESTING
+    var testingPrefixWire: Int { prefixWire }
+    #endif
+
     var isEmpty: Bool { messages.isEmpty }
 
     mutating func noteSent(frames: [Data], raw: Int, sent: Int, captureId: String, sessionId: String) {
@@ -96,6 +100,17 @@ struct UplinkInflight {
     }
 
     mutating func resume(prevRx: Int) -> (consumed: [Consumed], frames: [Data]) {
+        if prevRx < prefixWire {
+            NSLog("uplink_resume prev_rx=\(prevRx) prefix=\(prefixWire)")
+            var frames: [Data] = []
+            for msg in messages {
+                frames.append(contentsOf: msg.frames)
+            }
+            messages.removeAll()
+            rawBytes = 0
+            prefixWire = prevRx
+            return ([], frames)
+        }
         let consumed = apply(rx: prevRx)
         var frames: [Data] = []
         for msg in messages {
@@ -103,7 +118,7 @@ struct UplinkInflight {
         }
         messages.removeAll()
         rawBytes = 0
-        prefixWire = 0
+        prefixWire = prevRx
         return (consumed, frames)
     }
 
