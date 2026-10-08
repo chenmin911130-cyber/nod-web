@@ -3667,7 +3667,9 @@ class Session:
             return
         if self.user_id and not self._has_consent():
             return
-        if self.user_id:
+        notice = getattr(self, "_offline_notice", None)
+        offline_retained = isinstance(notice, dict) and notice
+        if self.user_id and not offline_retained:
             self._pcm_unmetered += len(pcm)
             if self._pcm_unmetered >= 16000:
                 seconds = self._pcm_unmetered / float(SR * 2)
@@ -7089,7 +7091,7 @@ class Session:
         if not offline:
             return
         if getattr(self, "_client_emit", None) is None:
-            self._offline_notice = {"status": text, "save_prompt": True}
+            self._offline_notice = {"status": text, "save_prompt": True, "at": time.time()}
         else:
             self._offline_notice = None
 
