@@ -102,6 +102,14 @@ def reap(now: float) -> None:
             uplink_on = bool(getattr(sess, "_uplink_connected", False))
             uplink_lost = float(getattr(sess, "_uplink_lost_at", 0.0) or 0.0)
             if listener_gone:
+                notice = getattr(sess, "_offline_notice", None)
+                stop_at = (
+                    float(notice.get("at") or 0.0)
+                    if isinstance(notice, dict)
+                    else 0.0
+                )
+                if stop_at > 0 and now - stop_at < UPLINK_ORPHAN_SECONDS:
+                    continue
                 to_close.append((token, sess))
             elif now - lost >= UPLINK_ORPHAN_SECONDS:
                 to_close.append((token, sess))
