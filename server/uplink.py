@@ -141,20 +141,7 @@ def reap(now: float) -> None:
                 _parked.pop(token, None)
                 _by_token.pop(token, None)
             sess.close()
-    still_close: list[tuple[str, Any]] = []
-    with _lock:
-        for token, _parked_at in list(_parked.items()):
-            sess = _by_token.get(token)
-            if sess is None or getattr(sess, "_listener", None) is not None:
-                continue
-            notice = getattr(sess, "_offline_notice", None)
-            if isinstance(notice, dict) and notice:
-                continue
-            still_close.append((token, sess))
-        for token, _sess in still_close:
-            _parked.pop(token, None)
-            _by_token.pop(token, None)
-    for _token, sess in still_close:
-        sess.close()
+    if to_stop:
+        reap(now)
     for _token, sess in to_close:
         sess.close()
