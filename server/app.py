@@ -8070,10 +8070,13 @@ async def ws_endpoint(ws: WebSocket):
             await ws.send_text(msg)
 
     send_task = asyncio.create_task(sender())
+    ws_open_at = time.time()
+    close_code = 1000
     try:
         while True:
             message = await ws.receive()
             if message.get("type") == "websocket.disconnect":
+                close_code = int(message.get("code", 1000))
                 break
             data = message.get("bytes")
             text = message.get("text")
@@ -8097,9 +8100,18 @@ async def ws_endpoint(ws: WebSocket):
                 if not isinstance(payload, dict):
                     continue
                 await run_in_threadpool(session.dispatch, payload)
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        close_code = exc.code
     finally:
+        token = getattr(session, "audio_token", None)
+        parked = int(uplink.should_park(session) or uplink.is_parked(token))
+        logging.getLogger("nod").info(
+            "ws_close kind=control code=%s dur_s=%.3f session=%s parked=%d",
+            close_code,
+            max(0.0, time.time() - ws_open_at),
+            getattr(session, "usage_session_id", None) or "-",
+            parked,
+        )
         send_task.cancel()
         ws_disconnect(ip)
         if getattr(session, "_control_owner", None) is not control_owner:
@@ -8168,6 +8180,8 @@ async def ws_audio(ws: WebSocket):
     from server.stt_latency import uplink_client_kind
 
     session._uplink_client = uplink_client_kind(raw_headers.get("user-agent"))
+    ws_open_at = time.time()
+    close_code = 1000
     try:
         cfg_msg = uplink_config_from_env()
         if cfg_msg is not None:
@@ -8185,6 +8199,7 @@ async def ws_audio(ws: WebSocket):
         while True:
             message = await ws.receive()
             if message.get("type") == "websocket.disconnect":
+                close_code = int(message.get("code", 1000))
                 break
             data = message.get("bytes")
             text = message.get("text")
@@ -8236,9 +8251,17 @@ async def ws_audio(ws: WebSocket):
                         payload.get("byte_offset"),
                         payload.get("capture_id") or payload.get("captureId"),
                     )
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        close_code = exc.code
     finally:
+        parked = int(uplink.is_parked(getattr(session, "audio_token", None)))
+        logging.getLogger("nod").info(
+            "ws_close kind=audio code=%s dur_s=%.3f session=%s parked=%d",
+            close_code,
+            max(0.0, time.time() - ws_open_at),
+            getattr(session, "usage_session_id", None) or "-",
+            parked,
+        )
         ws_disconnect(ip)
         if getattr(session, "_audio_ws", None) is ws:
             session._audio_ws = None
