@@ -3655,6 +3655,9 @@ class Session:
             return
         if getattr(self, "_closed", False):
             return
+        notice = getattr(self, "_offline_notice", None)
+        if isinstance(notice, dict) and notice:
+            return
         if self._listener:
             # ANY byte (even silence, even while muted or consent-blocked) proves the
             # client is alive and streaming — refresh the zero-PCM clock BEFORE the
