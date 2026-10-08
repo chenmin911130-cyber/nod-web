@@ -548,3 +548,219 @@ class OfflineStopReapTickTests(unittest.TestCase):
         sess.close.assert_not_called()
         self.assertIs(uplink.get(token), sess)
         self.assertEqual(sess.usage_session_id, usage_id)
+
+
+class ReapNeverSilentlyClosesLiveListenTests(unittest.TestCase):
+    _GRACE = 300
+
+    def setUp(self) -> None:
+        uplink.reset()
+        _reset_live_stt()
+
+    def tearDown(self) -> None:
+        uplink.reset()
+        _reset_live_stt()
+
+    def _live_parked_session(self, *, in_live_stt: bool = True) -> Session:
+        sess = Session.__new__(Session)
+        sess.audio_token = "tok-live-reap"
+        sess.user_id = "user-1"
+        sess._closed = False
+        listener = object()
+        sess._listener = listener
+        sess._listen_wanted = True
+        sess._paused = False
+        sess._idle_check_at = 0.0
+        sess._listen_started_at = time.time()
+        sess._listen_accum_sec = 0.0
+        sess._last_voice_at = time.time()
+        sess._last_pcm_at = time.time()
+        sess._listen_mic = "phone"
+        sess._uplink_connected = False
+        sess._uplink_seen = True
+        sess._control_lost_at = time.time()
+        sess._uplink_lost_at = time.time()
+        sess._client_emit = None
+        sess._offline_notice = None
+        sess.usage_session_id = "sess-live"
+        sess._workspace = "meeting"
+        sess._usage_mode = "meeting"
+        sess._engine = "idle"
+        sess._manual = False
+        sess._mic_muted = False
+        sess._pcm_unmetered = 0
+        sess._watch_copy_session = "copy-1"
+        sess.pipeline = mock.Mock()
+        sess.pipeline.key_status.return_value = {"has_llm": False, "has_stt": False}
+        sess.close = mock.Mock()
+        sess.emit = mock.Mock()
+
+        def offer() -> None:
+            sess.emit({
+                "type": "save_prompt",
+                "id": "sess-live",
+                "mode": "meeting",
+                "text": "Save this session to History?",
+            })
+
+        sess._offer_save_history = offer
+
+        def stop() -> None:
+            sess._listener = None
+
+        sess._stop_listening = mock.Mock(side_effect=stop)
+        uplink.register(sess)
+        uplink.park(sess)
+        if in_live_stt:
+            _adopt_live_stt("user-1:meeting", listener, sess)
+        return sess
+
+    def test_control_orphan_before_uplink_grace_skips_reap(self) -> None:
+        now = time.time()
+        sess = self._live_parked_session()
+        sess._control_lost_at = now - 650
+        sess._uplink_lost_at = now - 200
+        sess._uplink_connected = False
+        with (
+            mock.patch("server.uplink.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+            mock.patch("server.app.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+        ):
+            with mock.patch.object(sess, "_abandon_forgotten_listen") as abandon:
+                uplink.reap(now)
+        sess.close.assert_not_called()
+        abandon.assert_not_called()
+        self.assertIsNotNone(sess._listener)
+
+    def test_watchdog_stops_after_uplink_grace_then_reattach_replays_once(self) -> None:
+        now = time.time()
+        sess = self._live_parked_session()
+        sess._control_lost_at = now - 650
+        sess._uplink_lost_at = now - 200
+        sess._uplink_connected = False
+        with (
+            mock.patch("server.uplink.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+            mock.patch("server.app.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+        ):
+            uplink.reap(now)
+            self.assertIsNotNone(sess._listener)
+
+            past = now - self._GRACE - 1
+            sess._uplink_lost_at = past
+            sess._last_pcm_at = past
+            _tick_live_idle_watches()
+
+        sess.close.assert_not_called()
+        notice = getattr(sess, "_offline_notice", None)
+        self.assertIsInstance(notice, dict)
+        self.assertGreater(float(notice.get("at") or 0.0), 0.0)
+
+        replay: list[dict] = []
+        sess.emit = replay.append
+        sess._client_emit = replay.append
+        adopted = uplink.adopt(sess.audio_token, "user-1")
+        self.assertIs(adopted, sess)
+        sess.reattach()
+        offline = [
+            ev for ev in replay
+            if ev.get("type") == "status" and "offline" in str(ev.get("text") or "")
+        ]
+        prompts = [ev for ev in replay if ev.get("type") == "save_prompt"]
+        self.assertEqual(len(offline), 1)
+        self.assertEqual(len(prompts), 1)
+
+    def test_control_orphan_stops_live_listen_then_reaps_from_at(self) -> None:
+        now = time.time()
+        sess = self._live_parked_session()
+        sess._uplink_connected = True
+        sess._uplink_lost_at = 0.0
+        sess._control_lost_at = now - UPLINK_ORPHAN_SECONDS - 50
+        with (
+            mock.patch("server.uplink.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+            mock.patch("server.app.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+        ):
+            with mock.patch.object(
+                sess, "_abandon_forgotten_listen", wraps=sess._abandon_forgotten_listen
+            ) as abandon:
+                uplink.reap(now)
+            abandon.assert_called_once()
+        sess.close.assert_not_called()
+        notice = sess._offline_notice
+        self.assertIsInstance(notice, dict)
+        stop_at = float(notice["at"])
+
+        sess.close.reset_mock()
+        notice["at"] = now - (UPLINK_ORPHAN_SECONDS - 10)
+        sess._listener = None
+        with (
+            mock.patch("server.uplink.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+            mock.patch("server.app.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+        ):
+            uplink.reap(now)
+        sess.close.assert_not_called()
+
+        notice["at"] = now - UPLINK_ORPHAN_SECONDS - 1
+        with (
+            mock.patch("server.uplink.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+            mock.patch("server.app.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+        ):
+            uplink.reap(now)
+        sess.close.assert_called_once()
+
+    def test_reap_stops_when_not_on_idle_watch_list(self) -> None:
+        now = time.time()
+        sess = self._live_parked_session(in_live_stt=False)
+        past = now - self._GRACE - 1
+        sess._uplink_lost_at = past
+        sess._last_pcm_at = past
+        sess._control_lost_at = now - 120
+        with (
+            mock.patch("server.uplink.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+            mock.patch("server.app.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+        ):
+            with mock.patch.object(
+                sess,
+                "_abandon_forgotten_listen",
+                wraps=Session._abandon_forgotten_listen.__get__(sess, Session),
+            ) as abandon:
+                uplink.reap(now)
+            abandon.assert_called_once()
+        sess.close.assert_not_called()
+        self.assertIsInstance(sess._offline_notice, dict)
+
+    def test_abandon_runs_without_holding_uplink_lock(self) -> None:
+        now = time.time()
+        sess = self._live_parked_session()
+        sess._uplink_connected = True
+        sess._control_lost_at = now - UPLINK_ORPHAN_SECONDS - 1
+
+        def abandon(text: str, *, offline: bool = False) -> None:
+            acquired = uplink._lock.acquire(blocking=False)
+            self.assertTrue(acquired, "reap must not call _abandon while holding uplink._lock")
+            uplink._lock.release()
+            Session._abandon_forgotten_listen(sess, text, offline=offline)
+
+        with (
+            mock.patch("server.uplink.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+            mock.patch("server.app.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+        ):
+            with mock.patch.object(sess, "_abandon_forgotten_listen", side_effect=abandon):
+                uplink.reap(now)
+
+    def test_abandon_failure_falls_back_to_close(self) -> None:
+        now = time.time()
+        sess = self._live_parked_session()
+        sess._uplink_connected = True
+        sess._control_lost_at = now - UPLINK_ORPHAN_SECONDS - 1
+        token = sess.audio_token
+        with (
+            mock.patch("server.uplink.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+            mock.patch("server.app.LISTEN_OFFLINE_GRACE_SECONDS", self._GRACE),
+        ):
+            with (
+                mock.patch.object(sess, "_abandon_forgotten_listen", side_effect=RuntimeError("boom")),
+                self.assertLogs("nod", level="ERROR") as logs,
+            ):
+                uplink.reap(now)
+        sess.close.assert_called_once()
+        self.assertIsNone(uplink.get(token))
+        self.assertTrue(any("reap abandon failed" in m for m in logs.output))
