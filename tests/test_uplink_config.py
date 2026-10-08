@@ -117,7 +117,7 @@ class UplinkConfigSocketTests(unittest.TestCase):
 
         uplink.reset()
 
-    def test_ws_audio_sends_config_first(self):
+    def test_ws_audio_resume_precedes_config(self):
         from server import uplink
         from server.app import app
         from tests.test_uplink import _session
@@ -133,7 +133,9 @@ class UplinkConfigSocketTests(unittest.TestCase):
                     _ = ws
         configs = _configs(calls)
         self.assertEqual(len(configs), 1)
-        self.assertEqual(json.loads(calls[0])["type"], "uplink_config")
+        # Ticket J: uplink_resume is the first text frame; config follows it.
+        self.assertEqual(json.loads(calls[0])["type"], "uplink_resume")
+        self.assertEqual(json.loads(calls[1])["type"], "uplink_config")
 
     def test_forged_token_gets_no_config(self):
         from server.app import app

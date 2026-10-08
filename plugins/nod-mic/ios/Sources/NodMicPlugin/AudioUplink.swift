@@ -44,6 +44,109 @@ struct UplinkPacer {
     #endif
 }
 
+/// Bytes handed to URLSession and not yet confirmed by `rx_ack` / `uplink_resume`.
+struct UplinkInflight {
+    struct Message {
+        var frames: [Data]
+        var rawBytes: Int
+        var sentBytes: Int
+        var captureId: String
+        var sessionId: String
+    }
+
+    struct Consumed: Equatable {
+        var rawBytes: Int
+        var captureId: String
+        var sessionId: String
+    }
+
+    static let maxBytes = 10 * 1024 * 1024
+    static let resumeTimeout: TimeInterval = 2
+
+    private(set) var messages: [Message] = []
+    private(set) var rawBytes = 0
+    /// Wire bytes of messages already popped or dropped, so a later absolute `rx` stays aligned.
+    private var prefixWire = 0
+
+    var isEmpty: Bool { messages.isEmpty }
+
+    mutating func noteSent(frames: [Data], raw: Int, sent: Int, captureId: String, sessionId: String) {
+        guard sent > 0 else { return }
+        messages.append(Message(
+            frames: frames,
+            rawBytes: raw,
+            sentBytes: sent,
+            captureId: captureId,
+            sessionId: sessionId
+        ))
+        rawBytes += raw
+    }
+
+    mutating func apply(rx: Int) -> [Consumed] {
+        let limit = max(0, rx)
+        var out: [Consumed] = []
+        while let first = messages.first, first.sentBytes > 0, prefixWire + first.sentBytes <= limit {
+            prefixWire += first.sentBytes
+            rawBytes -= first.rawBytes
+            if rawBytes < 0 { rawBytes = 0 }
+            messages.removeFirst()
+            out.append(Consumed(rawBytes: first.rawBytes, captureId: first.captureId, sessionId: first.sessionId))
+        }
+        return out
+    }
+
+    mutating func resume(prevRx: Int) -> (consumed: [Consumed], frames: [Data]) {
+        let consumed = apply(rx: prevRx)
+        var frames: [Data] = []
+        for msg in messages {
+            frames.append(contentsOf: msg.frames)
+        }
+        messages.removeAll()
+        rawBytes = 0
+        prefixWire = 0
+        return (consumed, frames)
+    }
+
+    /// Drop everything still unconfirmed. Returns the raw bytes to add to `droppedBytes`.
+    mutating func expireUnconfirmed() -> Int {
+        let n = rawBytes
+        messages.removeAll()
+        rawBytes = 0
+        prefixWire = 0
+        return n
+    }
+
+    mutating func clear() {
+        messages.removeAll()
+        rawBytes = 0
+        prefixWire = 0
+    }
+
+    /// Drop the oldest unconfirmed frame. Whole-message wire size joins `prefixWire` once the message is gone.
+    mutating func dropOldestFrame() -> Int {
+        while !messages.isEmpty {
+            if messages[0].frames.isEmpty {
+                prefixWire += messages[0].sentBytes
+                rawBytes -= messages[0].rawBytes
+                if rawBytes < 0 { rawBytes = 0 }
+                messages.removeFirst()
+                continue
+            }
+            let frame = messages[0].frames.removeFirst()
+            messages[0].rawBytes -= frame.count
+            if messages[0].rawBytes < 0 { messages[0].rawBytes = 0 }
+            rawBytes -= frame.count
+            if rawBytes < 0 { rawBytes = 0 }
+            if messages[0].frames.isEmpty {
+                prefixWire += messages[0].sentBytes
+                messages.removeFirst()
+            }
+            return frame.count
+        }
+        return 0
+    }
+}
+
 extension Notification.Name {
     static let nodUplinkState = Notification.Name("nod.uplink.state")
 }
@@ -87,6 +190,10 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     private var pumpWork: DispatchWorkItem?
     private var sending = false
     private var pacer = UplinkPacer()
+    private var inflight = UplinkInflight()
+    private var holdForResume = false
+    private var resumeSeen = false
+    private var resumeTimer: DispatchWorkItem?
     private var watchObserver: NSObjectProtocol?
     private var startCompletions: [(Error?) -> Void] = []
     private var startTimeoutWork: DispatchWorkItem?
@@ -95,7 +202,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     private let sampleBytesPerSec = 16_000 * 2
     private let minChunkBytes = 1600 // 50 ms — AssemblyAI 3007 floor
     private let frameBytes = 3200 // 100 ms
-    private let maxPendingBytes = 2 * 1024 * 1024
+    private let maxPendingBytes = UplinkInflight.maxBytes
     private var enqueuedBytes = 0
     private var sentBytes = 0
     private var droppedBytes = 0
@@ -226,11 +333,16 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             self.stash.removeAll(keepingCapacity: false)
             self.pending.removeAll(keepingCapacity: false)
             self.pendingBytes = 0
+            self.inflight.clear()
             self.resetByteCountersLocked()
             self.bufLock.unlock()
             self.pcmEndId = ""
             self.pcmEndCapture = ""
             self.pcmEndOffset = 0
+            self.resumeTimer?.cancel()
+            self.resumeTimer = nil
+            self.holdForResume = false
+            self.resumeSeen = false
         }
     }
 
@@ -251,7 +363,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     func tryEnqueue(_ data: Data) -> Bool {
         guard !data.isEmpty else { return true }
         bufLock.lock()
-        let ok = acceptingPcm && pendingBytes + stash.count + data.count <= maxPendingBytes
+        let ok = acceptingPcm && pendingBytes + stash.count + inflight.rawBytes + data.count <= maxPendingBytes
         if ok {
             append(data, dropOldest: false)
         }
@@ -400,18 +512,42 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         queue.asyncAfter(deadline: .now() + 0.1, execute: work)
     }
 
+    private func occupiedLocked() -> Int {
+        pendingBytes + stash.count + inflight.rawBytes
+    }
+
     private func buffer(_ frame: Data, dropOldest: Bool) {
-        if !dropOldest, pendingBytes + frame.count > maxPendingBytes {
+        if !dropOldest, occupiedLocked() + frame.count > maxPendingBytes {
             return
         }
         pending.append(frame)
         pendingBytes += frame.count
         if dropOldest {
-            while pendingBytes > maxPendingBytes, let oldest = pending.first {
+            trimOldestLocked()
+        }
+    }
+
+    private func trimOldestLocked() {
+        while occupiedLocked() > maxPendingBytes {
+            if inflight.rawBytes > 0 {
+                let n = inflight.dropOldestFrame()
+                if n > 0 {
+                    droppedBytes += n
+                    continue
+                }
+            }
+            if let oldest = pending.first {
                 pending.removeFirst()
                 pendingBytes -= oldest.count
                 droppedBytes += oldest.count
+                continue
             }
+            if !stash.isEmpty {
+                droppedBytes += stash.count
+                stash.removeAll(keepingCapacity: false)
+                continue
+            }
+            break
         }
     }
 
@@ -427,6 +563,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func pump() {
+        guard !holdForResume else { return }
         guard !sending, pumpWork == nil, isConnected, !stopped else { return }
         bufLock.lock()
         let hasPending = !pending.isEmpty
@@ -448,7 +585,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     private func sendPcmEndIfIdle() {
         guard !pcmEndId.isEmpty, !pcmEndCapture.isEmpty, isConnected, let task, !stopped, !sending else { return }
         bufLock.lock()
-        let idle = pending.isEmpty && stash.isEmpty
+        let idle = pending.isEmpty && stash.isEmpty && inflight.isEmpty
         bufLock.unlock()
         guard idle else { return }
         let payload: [String: Any] = [
@@ -516,24 +653,25 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                     return
                 }
                 self.bufLock.lock()
+                var removed: [Data] = []
                 for piece in batch {
                     if self.pending.first == piece {
                         self.pending.removeFirst()
                         self.pendingBytes -= piece.count
+                        removed.append(piece)
                     }
                 }
+                let raw = removed.reduce(0) { $0 + $1.count }
+                self.inflight.noteSent(
+                    frames: removed,
+                    raw: raw,
+                    sent: frame.count,
+                    captureId: consumeCapture,
+                    sessionId: consumeSession
+                )
                 self.sentBytes += batchBytes
                 self.bufLock.unlock()
                 self.pacer.noteSendCompleted(now: self.uptime(), audioSeconds: self.audioSeconds(frame))
-                NotificationCenter.default.post(
-                    name: Notification.Name("nod.uplink.consumed"),
-                    object: nil,
-                    userInfo: [
-                        "bytes": batchBytes,
-                        "captureId": consumeCapture,
-                        "sessionId": consumeSession,
-                    ]
-                )
                 self.pump()
             }
         }
@@ -541,6 +679,76 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
 
     #if PCM_REPLAY_TESTING
     var pacerForTesting: UplinkPacer { pacer }
+
+    func testingResetBuffers() {
+        bufLock.lock()
+        pending.removeAll()
+        pendingBytes = 0
+        stash.removeAll()
+        droppedBytes = 0
+        inflight = UplinkInflight()
+        bufLock.unlock()
+    }
+
+    func testingBuffer(_ frame: Data, dropOldest: Bool) {
+        bufLock.lock()
+        buffer(frame, dropOldest: dropOldest)
+        bufLock.unlock()
+    }
+
+    func testingOccupied() -> Int {
+        bufLock.lock()
+        let n = occupiedLocked()
+        bufLock.unlock()
+        return n
+    }
+
+    func testingDropped() -> Int {
+        bufLock.lock()
+        let n = droppedBytes
+        bufLock.unlock()
+        return n
+    }
+
+    func testingPendingBytes() -> Int {
+        bufLock.lock()
+        let n = pendingBytes
+        bufLock.unlock()
+        return n
+    }
+
+    func testingInflightRaw() -> Int {
+        bufLock.lock()
+        let n = inflight.rawBytes
+        bufLock.unlock()
+        return n
+    }
+
+    func testingNoteSent(frames: [Data], raw: Int, sent: Int, captureId: String, sessionId: String) {
+        bufLock.lock()
+        inflight.noteSent(frames: frames, raw: raw, sent: sent, captureId: captureId, sessionId: sessionId)
+        bufLock.unlock()
+    }
+
+    func testingRequeue(prevRx: Int) -> [UplinkInflight.Consumed] {
+        bufLock.lock()
+        let result = inflight.resume(prevRx: prevRx)
+        if !result.frames.isEmpty {
+            pending.insert(contentsOf: result.frames, at: 0)
+            pendingBytes += result.frames.reduce(0) { $0 + $1.count }
+        }
+        trimOldestLocked()
+        let consumed = result.consumed
+        bufLock.unlock()
+        return consumed
+    }
+
+    func testingPendingHead() -> Data? {
+        bufLock.lock()
+        let head = pending.first
+        bufLock.unlock()
+        return head
+    }
     #endif
 
     private func listen(_ task: URLSessionWebSocketTask) {
@@ -610,7 +818,12 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             pending.removeAll()
             pendingBytes = 0
             stash.removeAll()
+            inflight.clear()
             bufLock.unlock()
+            resumeTimer?.cancel()
+            resumeTimer = nil
+            holdForResume = false
+            resumeSeen = false
             WatchPcmIngest.shared.reject(sessionId: sid, captureId: capture)
             // Keep enabled=true: a dead native rail must not fall back to JS.
             NotificationCenter.default.post(
@@ -628,6 +841,15 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             )
         case "uplink_config":
             pacer.apply(config: obj)
+        case "rx_ack":
+            let rx = jsonInt(obj["rx"])
+            bufLock.lock()
+            let acked = inflight.apply(rx: rx)
+            bufLock.unlock()
+            emitConsumed(acked)
+            pump()
+        case "uplink_resume":
+            acceptResume(jsonInt(obj["prev_rx"]))
         case "qa_copy":
             // Live Q&A has its own server message type but the SAME Watch copy lane:
             // the bridge keeps one current copy (question -> original, answer ->
@@ -643,12 +865,71 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         }
     }
 
+    private func jsonInt(_ value: Any?) -> Int {
+        if let n = value as? Int { return n }
+        if let n = value as? Double { return Int(n) }
+        if let n = value as? NSNumber { return n.intValue }
+        return 0
+    }
+
+    private func emitConsumed(_ items: [UplinkInflight.Consumed]) {
+        for item in items {
+            NotificationCenter.default.post(
+                name: Notification.Name("nod.uplink.consumed"),
+                object: nil,
+                userInfo: [
+                    "bytes": item.rawBytes,
+                    "captureId": item.captureId,
+                    "sessionId": item.sessionId,
+                ]
+            )
+        }
+    }
+
+    private func acceptResume(_ prevRx: Int) {
+        resumeTimer?.cancel()
+        resumeTimer = nil
+        holdForResume = false
+        resumeSeen = true
+        bufLock.lock()
+        let result = inflight.resume(prevRx: prevRx)
+        if !result.frames.isEmpty {
+            pending.insert(contentsOf: result.frames, at: 0)
+            pendingBytes += result.frames.reduce(0) { $0 + $1.count }
+        }
+        trimOldestLocked()
+        bufLock.unlock()
+        emitConsumed(result.consumed)
+        pump()
+    }
+
+    private func beginResumeHold() {
+        holdForResume = true
+        resumeTimer?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.holdForResume else { return }
+            self.holdForResume = false
+            self.resumeTimer = nil
+            self.bufLock.lock()
+            let n = self.inflight.expireUnconfirmed()
+            self.droppedBytes += n
+            self.bufLock.unlock()
+            self.pump()
+        }
+        resumeTimer = work
+        queue.asyncAfter(deadline: .now() + UplinkInflight.resumeTimeout, execute: work)
+    }
+
     private func handleDrop() {
         guard !stopped else { return }
         pacer.reset()
         sending = false
         pumpWork?.cancel()
         pumpWork = nil
+        resumeTimer?.cancel()
+        resumeTimer = nil
+        holdForResume = false
+        resumeSeen = false
         setConnected(false)
         stopPing()
         if task != nil {
@@ -678,7 +959,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         timer.setEventHandler { [weak self] in
             guard let self, let task = self.task, self.isConnected, !self.stopped else { return }
             self.bufLock.lock()
-            let pendingMs = (self.pendingBytes + self.stash.count) / 32
+            let pendingMs = (self.pendingBytes + self.stash.count + self.inflight.rawBytes) / 32
             let enqueuedMs = self.enqueuedBytes / 32
             let sentMs = self.sentBytes / 32
             let droppedMs = self.droppedBytes / 32
@@ -716,7 +997,12 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             self.setConnected(true)
             self.setEnabled(true)
             self.startPing()
-            self.pump()
+            if self.resumeSeen {
+                self.resumeSeen = false
+                self.pump()
+            } else {
+                self.beginResumeHold()
+            }
             if !self.startCompletions.isEmpty {
                 self.finishStart(nil)
             }
@@ -739,10 +1025,17 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                 self.pumpWork?.cancel()
                 self.pumpWork = nil
                 self.sending = false
+                self.resumeTimer?.cancel()
+                self.resumeTimer = nil
+                self.holdForResume = false
+                self.resumeSeen = false
                 self.stopPing()
                 self.task = nil
                 self.setConnected(false)
                 self.setEnabled(false)
+                self.bufLock.lock()
+                self.inflight.clear()
+                self.bufLock.unlock()
                 if !self.startCompletions.isEmpty {
                     self.finishStart(
                         NSError(

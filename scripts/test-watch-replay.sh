@@ -14,6 +14,7 @@ xcrun swiftc -D PCM_REPLAY_TESTING -o "$replay_test_dir/watch-replay-tests" \
  plugins/nod-mic/ios/Sources/NodMicPlugin/AudioUplink.swift \
  plugins/nod-mic/ios/Sources/NodMicPlugin/WatchPcmIngest.swift \
  tests/native/UplinkPacerTests.swift \
+ tests/native/UplinkInflightTests.swift \
  tests/native/WatchReplayTests.swift \
  tests/native/WatchQASummaryTests.swift
 "$replay_test_dir/watch-replay-tests"
