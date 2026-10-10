@@ -97,6 +97,8 @@ def session_copy_text(title: str, mode: str | None, scene: str | None, items: li
     lines = [title.strip() or f"{label} session", f"{label}", ""]
     for item in items:
         kind = (item.get("kind") or "note").strip()
+        if kind == "gap":
+            continue
         text = (item.get("text") or "").strip()
         if not text:
             continue

@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
+import { gapLabel, interleaveGaps, type ListenGap } from '../listenGap'
 import type { CaptureState, CatchNote, Lang, MeetingLine, PairLang } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import {
@@ -59,6 +60,7 @@ interface Props {
   notesTranslateTo: PairLang
   notesLang: Lang
   lines: MeetingLine[]
+  gaps?: ListenGap[]
   speakerNames: Record<string, string>
   speakerNameLocked?: Record<string, boolean>
   speakerDecided?: Record<string, 'confirmed' | 'dismissed'>
@@ -1461,8 +1463,9 @@ export default function ListenPane(props: Props) {
       props.lines,
       props.ended ? null : { text: props.partial, speaker: props.partialSpeaker },
       { scene: props.scene, speakerNames: props.speakerNames, speakerNameLocked: locked },
+      props.gaps,
     ),
-    [props.lines, props.partial, props.partialSpeaker, props.ended, props.scene, props.speakerNames, locked],
+    [props.lines, props.gaps, props.partial, props.partialSpeaker, props.ended, props.scene, props.speakerNames, locked],
   )
   const hadAskAnswer = props.catchNotes.some((note) => note.kind === 'ask' && note.text.trim())
   const hasFeed = feed.items.length > 0 || Boolean(feed.draft)
@@ -1952,6 +1955,18 @@ export default function ListenPane(props: Props) {
                   {speakerSuggestRow}
                   {trGroups.map((group, gi) => {
                       const lastGroup = gi === trGroups.length - 1
+                      if (group.gap) {
+                        return (
+                          <div
+                            key={group.gap.id}
+                            className="listen-line iphone-tr-line iphone-tr-compact listen-gap-line"
+                          >
+                            <div className="iphone-tr-body">
+                              <div className="listen-orig">{gapLabel(group.gap, IPHONE_COPY)}</div>
+                            </div>
+                          </div>
+                        )
+                      }
                       return (
                         <div className="iphone-tr-group" key={`${group.speaker || 'none'}-${group.startTs || 'draft'}-${gi}`}>
                           <div className="iphone-tr-group-head">
@@ -2009,7 +2024,21 @@ export default function ListenPane(props: Props) {
                   </>
                 ) : (
                   <>
-                  {props.lines.map((line, i) => (
+                  {interleaveGaps(props.lines, props.gaps ?? []).map((item, i, rows) => {
+                    if ('gap' in item && item.gap) {
+                      return (
+                        <div
+                          key={item.gap.id}
+                          className="listen-line listen-gap-line"
+                        >
+                          <div className="listen-orig">{gapLabel(item.gap, IPHONE_COPY)}</div>
+                        </div>
+                      )
+                    }
+                    if (!('line' in item)) return null
+                    const line = item.line
+                    const lineIndex = props.lines.indexOf(line)
+                    return (
                     <LineRow
                       key={line.id || `${line.ts}-${i}`}
                       ts={line.ts}
@@ -2017,15 +2046,16 @@ export default function ListenPane(props: Props) {
                       translation={line.translation || ''}
                       speaker={line.speaker || ''}
                       speakerLabel={lineLabel(line)}
-                      live={props.listening && i === props.lines.length - 1 && !props.partial}
-                      last={(i === props.lines.length - 1 && !props.partial) || openedLine === line.id}
+                      live={props.listening && lineIndex === props.lines.length - 1 && !props.partial}
+                      last={(lineIndex === props.lines.length - 1 && !props.partial) || openedLine === line.id}
                       translateOn={biOn}
                       translateFailed={line.translateFailed || false}
                       onOpen={() => setOpenedLine(line.id)}
                       busy={props.busy}
                       onRename={props.onRenameSpeaker}
                     />
-                  ))}
+                    )
+                  })}
                 {props.partial && !props.ended && (
                     <div className="listen-line live">
                       <div className="listen-ts">

@@ -64,6 +64,8 @@ export interface AppConfig {
   has_tts?: boolean
 }
 
+import type { ListenGap } from './listenGap'
+
 export interface MeetingLine {
   id: string
   ts: string
@@ -129,6 +131,7 @@ export interface AppState {
   keys: { hasLlm: boolean; hasStt: boolean }
   workspaceMode: WorkspaceMode
   meetingLines: MeetingLine[]
+  listenGaps: ListenGap[]
   meetingStartedAt: number | null
   meetingPausedAt: number | null
   meetingElapsedMs: number
@@ -213,6 +216,7 @@ export type EngineEvent =
   | { type: 'attached'; usage_session_id?: string }
   | { type: 'pcm_drained'; id: string; capture_id: string; byte_offset: number }
   | { type: 'listen_flush'; id?: string; flush_id?: string; session_id?: string; ok: boolean; timeout?: boolean }
+  | { type: 'listen_gap'; id: string; from_ms: number; to_ms: number; reason?: string }
 
 // 前端 → 引擎
 export type EngineMsg =

@@ -101,6 +101,7 @@ from server.stt_audio import (
     uplink_config_from_env,
 )
 from server.stt_latency import ListenSummary
+from server.listen_gap import GapTracker
 from server.logging_setup import backup_now, setup_logging
 from server.settings import (
     AUTH_DISABLED,
@@ -3269,6 +3270,7 @@ class Session:
         self._listen_flush_history_ok = True
         self._listen_flush_client_id: str | None = None
         self._last_pcm_at = 0.0
+        self._gap_tracker = GapTracker()
         self._last_voice_at = 0.0
         self._idle_check_at = 0.0
         self._listen_mic = "phone"
@@ -3662,7 +3664,11 @@ class Session:
             # set_mic_muted keeps the socket up), so a muted session must never read as
             # 'no microphone'. Refreshing under the consent gate too is harmless: no
             # consent means no real listening, so the socket holds only briefly.
-            self._last_pcm_at = time.time()
+            now_pcm = time.time()
+            gap_tracker = getattr(self, "_gap_tracker", None)
+            if gap_tracker is not None:
+                gap_tracker.note_pcm(now_pcm, self._last_pcm_at)
+            self._last_pcm_at = now_pcm
         if self._mic_muted:
             return
         if self.user_id and not self._has_consent():
@@ -6750,6 +6756,9 @@ class Session:
             # Bank the just-listened segment into the accumulated 2h quota so
             # the wall-clock pause doesn't keep consuming the cap.
             self._listen_accum_sec = getattr(self, "_listen_accum_sec", 0.0) + (time.time() - self._listen_started_at)
+            gap_tracker = getattr(self, "_gap_tracker", None)
+            if gap_tracker is not None:
+                gap_tracker.note_pause()
             with self._listen_lock():
                 lst = self._listener or getattr(self, "_handoff_listener", None)
                 self._listener = None
@@ -6786,6 +6795,9 @@ class Session:
             self._last_voice_at = time.time()
             self._listen_started_at = time.time()
             self._pcm_rx_reanchor = True
+            gap_tracker = getattr(self, "_gap_tracker", None)
+            if gap_tracker is not None:
+                gap_tracker.note_resume_listen(time.time())
             self._start_listening(resume=True)
         else:
             # Not wanted (or manual recording): just clear the paused latch.
@@ -8199,6 +8211,9 @@ async def ws_audio(ws: WebSocket):
         await ws.send_text(json.dumps({"type": "uplink_resume", "prev_rx": prev_rx}))
     except Exception:
         pass
+    gap_tracker = getattr(session, "_gap_tracker", None)
+    if gap_tracker is not None:
+        gap_tracker.note_resume(time.time())
     limited_bytes = 0
     session._uplink_limited_bytes = 0
     last_ack_rx = 0
@@ -8256,6 +8271,8 @@ async def ws_audio(ws: WebSocket):
             if data:
                 session._uplink_rx_total = int(getattr(session, "_uplink_rx_total", 0) or 0) + len(data)
                 if len(data) > MAX_WS_FRAME:
+                    limited_bytes += len(data)
+                    session._uplink_limited_bytes = limited_bytes
                     await maybe_ack()
                     continue
                 if not allow(f"wsframe:{ip}", WS_FRAMES_PER_SEC, 1.0):
@@ -8297,6 +8314,54 @@ async def ws_audio(ws: WebSocket):
                         parts.append(f"stream={stream}")
                         parts.append(f"client={getattr(session, '_uplink_client', '') or ''}")
                         logging.getLogger("nod").info(" ".join(parts))
+                    if parsed:
+                        gap_tracker = getattr(session, "_gap_tracker", None)
+                        if gap_tracker is not None:
+                            gaps = gap_tracker.note_ping(
+                                time.time(),
+                                parsed.get("enqueued_ms", 0),
+                                parsed.get("dropped_ms", 0),
+                                limited_bytes,
+                                bool(getattr(session, "_paused", False)),
+                                float(getattr(session, "_listen_started_at", 0.0) or 0.0),
+                                float(getattr(session, "_listen_accum_sec", 0.0) or 0.0),
+                            )
+                        else:
+                            gaps = []
+                        for gap in gaps:
+                            session.emit(
+                                {
+                                    "type": "listen_gap",
+                                    "id": gap.id,
+                                    "from_ms": gap.from_ms,
+                                    "to_ms": gap.to_ms,
+                                    "reason": gap.reason,
+                                }
+                            )
+                            if session.user_id and session.usage_session_id:
+                                try:
+                                    from server.meter import update_history_text
+
+                                    update_history_text(
+                                        session.user_id,
+                                        session.usage_session_id,
+                                        gap.id,
+                                        f"{gap.from_ms}-{gap.to_ms}",
+                                        kind="gap",
+                                    )
+                                except Exception:
+                                    logging.getLogger("nod").exception(
+                                        "listen_gap history write failed session=%s gap=%s",
+                                        session.usage_session_id,
+                                        gap.id,
+                                    )
+                            logging.getLogger("nod").info(
+                                "listen_gap session=%s from_ms=%s to_ms=%s reason=%s",
+                                session.usage_session_id or "",
+                                gap.from_ms,
+                                gap.to_ms,
+                                gap.reason,
+                            )
                     continue
                 if mtype == "pcm_end":
                     await run_in_threadpool(

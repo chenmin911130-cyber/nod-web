@@ -492,3 +492,36 @@ eq(
   2,
   'lecture transcript keeps one card per server line',
 )
+
+const noGapGroups = groupTranscript(
+  [
+    { id: 'a', ts: '00:10', text: 'Hello', speaker: '1' },
+    { id: 'b', ts: '00:20', text: 'World', speaker: '1' },
+  ],
+  null,
+  { scene: 'meeting' },
+)
+const noGapGroupsAgain = groupTranscript(
+  [
+    { id: 'a', ts: '00:10', text: 'Hello', speaker: '1' },
+    { id: 'b', ts: '00:20', text: 'World', speaker: '1' },
+  ],
+  null,
+  { scene: 'meeting' },
+  undefined,
+)
+eq(noGapGroups, noGapGroupsAgain, 'no gaps: same as omitting 4th arg')
+
+const withGapGroups = groupTranscript(
+  [
+    { id: 'a', ts: '00:10', text: 'Before', speaker: '1' },
+    { id: 'b', ts: '01:30', text: 'After', speaker: '1' },
+  ],
+  null,
+  { scene: 'meeting' },
+  [{ id: 'gap-1', fromMs: 60_000, toMs: 80_000 }],
+)
+eq(withGapGroups.length, 3, 'gap splits same speaker into three groups')
+eq(withGapGroups[1].groupKey, 'gap', 'gap group key')
+eq(withGapGroups[1].lines.length, 0, 'gap group has no lines')
+eq(withGapGroups[1].gap?.id, 'gap-1', 'gap field present')
