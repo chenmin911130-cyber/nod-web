@@ -164,6 +164,7 @@ struct UplinkInflight {
 
 extension Notification.Name {
     static let nodUplinkState = Notification.Name("nod.uplink.state")
+    static let nodUplinkLink = Notification.Name("nod.uplink.link")
 }
 
 /// Native PCM WebSocket so lock-screen capture does not go through WKWebView JS.
@@ -212,6 +213,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
     private var watchObserver: NSObjectProtocol?
     private var startCompletions: [(Error?) -> Void] = []
     private var startTimeoutWork: DispatchWorkItem?
+    private var lastLinkPostAt: TimeInterval = 0
 
     /// 16 kHz PCM16 mono. Must match `server/stt_audio.py`.
     private let sampleBytesPerSec = 16_000 * 2
@@ -344,6 +346,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             self.task = nil
             self.setConnected(false)
             self.setEnabled(false)
+            self.postLink()
             self.bufLock.lock()
             self.stash.removeAll(keepingCapacity: false)
             self.pending.removeAll(keepingCapacity: false)
@@ -453,6 +456,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         task = nil
         setConnected(false)
         setEnabled(false)
+        postLink()
         bufLock.lock()
         stash.removeAll(keepingCapacity: false)
         pending.removeAll(keepingCapacity: false)
@@ -481,6 +485,29 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         lock.lock()
         _connected = on
         lock.unlock()
+    }
+
+    private func postLink(pendingMs: Int? = nil) {
+        let ms: Int
+        if let pendingMs {
+            ms = pendingMs
+        } else {
+            bufLock.lock()
+            ms = (pendingBytes + stash.count + inflight.rawBytes) / 32
+            bufLock.unlock()
+        }
+        lock.lock()
+        let enabled = _enabled
+        lock.unlock()
+        lock.lock()
+        let connected = _connected
+        lock.unlock()
+        NotificationCenter.default.post(
+            name: .nodUplinkLink,
+            object: nil,
+            userInfo: ["enabled": enabled, "connected": connected, "pendingMs": ms]
+        )
+        lastLinkPostAt = uptime()
     }
 
     private func open() {
@@ -862,6 +889,10 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             let acked = inflight.apply(rx: rx)
             bufLock.unlock()
             emitConsumed(acked)
+            let now = uptime()
+            if now - lastLinkPostAt >= 1 {
+                postLink()
+            }
             pump()
         case "uplink_resume":
             acceptResume(jsonInt(obj["prev_rx"]))
@@ -946,6 +977,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         holdForResume = false
         resumeSeen = false
         setConnected(false)
+        postLink()
         stopPing()
         if task != nil {
             task?.cancel(with: .goingAway, reason: nil)
@@ -991,6 +1023,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                   let text = String(data: data, encoding: .utf8)
             else { return }
             task.send(.string(text)) { _ in }
+            self.postLink(pendingMs: pendingMs)
         }
         pingTimer = timer
         timer.resume()
@@ -1011,6 +1044,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             self.reconnectAttempt = 0
             self.setConnected(true)
             self.setEnabled(true)
+            self.postLink()
             self.startPing()
             if self.resumeSeen {
                 self.resumeSeen = false
@@ -1048,6 +1082,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
                 self.task = nil
                 self.setConnected(false)
                 self.setEnabled(false)
+                self.postLink()
                 self.bufLock.lock()
                 self.inflight.clear()
                 self.bufLock.unlock()
@@ -1113,6 +1148,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
         stopPing()
         task = nil
         setConnected(false)
+        postLink()
         NotificationCenter.default.post(
             name: Notification.Name("nod.uplink.handshakeFailed"),
             object: nil,

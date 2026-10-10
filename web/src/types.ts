@@ -1,4 +1,5 @@
 import type { ListenFlushWait } from './recordReport'
+import type { UplinkLinkState } from './linkState'
 
 export type CaptureState = 'off' | 'listening' | 'recording' | 'paused'
 export type EngineState = 'idle' | 'transcribing' | 'generating'
@@ -172,6 +173,7 @@ export interface AppState {
   } | null
   listenFlushWait: ListenFlushWait
   link: 'online' | 'reconnecting'
+  uplink: UplinkLinkState | null
 }
 
 // 引擎 → 前端

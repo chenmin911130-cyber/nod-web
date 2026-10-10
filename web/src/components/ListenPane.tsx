@@ -39,7 +39,7 @@ import {
   speechChipTitle,
   spokenSettingsValue,
 } from '../iphoneCopy'
-import { listenChromeLinkLabel, type LinkState } from '../linkState'
+import { listenLinkBanner, type LinkState, type UplinkLinkState } from '../linkState'
 import { translateLangDisplayName } from '../langDisplayNames'
 import { ENDED_TAP_SLOP, bottomBarMode, endedDockFromPointer, endedHasContent, endedSheetAvailable, listenAskPlacement, nextComposeDraft, showNotesEmptyHint } from '../listenChrome'
 import { usePhoneChrome } from '../phoneChrome'
@@ -70,6 +70,7 @@ interface Props {
   paused?: boolean
   ended: boolean
   link?: LinkState
+  uplink?: UplinkLinkState | null
   capture?: CaptureState
   catchNotes: CatchNote[]
   notesRaw: string
@@ -1203,15 +1204,22 @@ export default function ListenPane(props: Props) {
     hasContent,
   })
   const linkHint = !props.qa
-    ? listenChromeLinkLabel({
+    ? listenLinkBanner({
         link: props.link ?? 'online',
+        uplink: props.uplink ?? null,
         capture: props.capture ?? 'off',
         ended: props.ended,
-        linkReconnecting: IPHONE_COPY.linkReconnecting,
-        linkWaitingForNotes: IPHONE_COPY.linkWaitingForNotes,
+        copy: {
+          linkReconnecting: IPHONE_COPY.linkReconnecting,
+          linkWaitingForNotes: IPHONE_COPY.linkWaitingForNotes,
+          linkLiveOnlyDown: IPHONE_COPY.linkLiveOnlyDown,
+          linkBothDown: IPHONE_COPY.linkBothDown,
+          linkUplinkDown: IPHONE_COPY.linkUplinkDown,
+          linkBackfilling: IPHONE_COPY.linkBackfilling,
+        },
       })
     : ''
-  const linkReconnectingChrome = linkHint && (props.link ?? 'online') === 'reconnecting' && props.capture !== 'off' && !props.ended
+  const linkReconnectingChrome = Boolean(linkHint) && !props.ended && props.capture !== 'off'
   const askPlacement = listenAskPlacement({
     phone,
     qa: Boolean(props.qa),
