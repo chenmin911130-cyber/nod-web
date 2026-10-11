@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 import unittest
 from unittest import mock
 
@@ -73,7 +74,6 @@ class GapTrackerTests(unittest.TestCase):
         self.assertEqual(gaps, [])
 
     def test_two_gaps_ids(self) -> None:
-        self.tracker.note_ping(self.t0 + 5, 0, 0, 0, False, self.t0, 0.0)
         self.tracker.note_pcm(self.t0 + 25, self.t0 + 5)
         self.tracker.note_ping(self.t0 + 25, 0, 0, 0, False, self.t0, 0.0)
         self.tracker.note_ping(self.t0 + 45, 20_000, 0, 0, False, self.t0, 0.0)
@@ -161,29 +161,25 @@ class GapTrackerTests(unittest.TestCase):
     def test_capture_60s_spans_four_pings_single_gap(self) -> None:
         base = self.t0
         self.tracker._store_baseline(base, 0, 0, 0)
-        t = base
         enq = 0
         for mark in (20, 40, 60):
-            t = base + mark
             enq = mark * 1000
-            self.tracker.note_ping(t, enq, 0, 0, False, base, 0.0)
-        call_start = base + 65
-        call_end = base + 125
-        self.tracker.note_pcm(call_end, call_start)
+            self.tracker.note_ping(base + mark, enq, 0, 0, False, base, 0.0)
+        self.tracker.note_pcm(base + 125, base + 65)
+        enq_during_call = enq
+        last_gap = None
         ids: list[str] = []
-        for mark in (80, 100, 120, 140):
-            gaps = self.tracker.note_ping(base + mark, enq, 0, 0, False, base, 0.0)
+        for mark in (80, 100, 120):
+            gaps = self.tracker.note_ping(base + mark, enq_during_call, 0, 0, False, base, 0.0)
             for g in gaps:
                 if g.reason == "capture":
                     ids.append(g.id)
+                    last_gap = g
         self.assertTrue(ids)
         self.assertEqual(len(set(ids)), 1)
-        last = [g for g in self.tracker.note_ping(base + 140, enq, 0, 0, False, base, 0.0) if g.reason == "capture"]
-        if not last:
-            last = [g for g in self.tracker.note_ping(base + 160, enq + 20_000, 0, 0, False, base, 0.0) if g.reason == "capture"]
-        if last:
-            self.assertGreaterEqual(last[0].to_ms - last[0].from_ms, 59_000)
-            self.assertLessEqual(last[0].to_ms - last[0].from_ms, 61_000)
+        self.assertIsNotNone(last_gap)
+        self.assertGreaterEqual(last_gap.to_ms - last_gap.from_ms, 59_000)
+        self.assertLessEqual(last_gap.to_ms - last_gap.from_ms, 61_000)
 
     def test_capture_contained_uses_pcm_pause_start(self) -> None:
         base = self.t0
@@ -194,19 +190,6 @@ class GapTrackerTests(unittest.TestCase):
         self.assertEqual(gaps[0].from_ms, recording_rel_ms(base + 10, base, 0.0))
         self.assertGreaterEqual(gaps[0].to_ms - gaps[0].from_ms, 9_000)
         self.assertLessEqual(gaps[0].to_ms - gaps[0].from_ms, 11_000)
-
-    def test_missing_fields_skip_signal_and_keep_baseline(self) -> None:
-        self.tracker = GapTracker()
-        t = self.t0
-        for step in range(3):
-            gaps = self.tracker.note_ping(t + 20, None, None, 0, False, self.t0, 0.0)
-            self.assertEqual(gaps, [])
-            t += 20
-        gaps = self.tracker.note_ping(t + 20, 0, 0, 0, False, self.t0, 0.0)
-        self.assertEqual(gaps, [])
-        self.tracker.note_ping(t + 40, 20_000, 0, 0, False, self.t0, 0.0)
-        gaps = self.tracker.note_ping(t + 60, 40_000, 0, 0, False, self.t0, 0.0)
-        self.assertEqual(gaps, [])
 
     def test_dropped_position_prefers_pcm_pause_start(self) -> None:
         t_out = self.t0 + 5
@@ -279,6 +262,22 @@ class WsAudioGapTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         uplink.reset()
+
+    @staticmethod
+    def _wait_ping_wall(sess, want: float, timeout: float = 3.0) -> None:
+        deadline = time.monotonic() + timeout
+        last_seen = None
+        while time.monotonic() < deadline:
+            last_seen = getattr(sess._gap_tracker, "_last_ping_wall", None)
+            if last_seen is not None and abs(last_seen - want) < 0.001:
+                return
+            time.sleep(0.005)
+        raise AssertionError(f"last_ping_wall={last_seen}, want={want}")
+
+    def _send_ping(self, sess, ws, clock: dict, t: float, payload: dict) -> None:
+        clock["t"] = t
+        ws.send_text(json.dumps(payload))
+        self._wait_ping_wall(sess, t)
 
     @mock.patch("server.meter.update_history_text")
     def test_idle_pings_without_listener_write_nothing(self, mock_update) -> None:
@@ -410,30 +409,98 @@ class WsAudioGapTests(unittest.TestCase):
         mock_update.assert_called()
 
     @mock.patch("server.meter.update_history_text")
-    def test_same_gap_id_upserts_history(self, mock_update) -> None:
+    def test_missing_fields_skip_signal_and_keep_baseline(self, mock_update) -> None:
+        base = 8_000_000.0
+        clock = {"t": base}
+        emitted: list[dict] = []
+
+        def _now() -> float:
+            return clock["t"]
+
+        uplink.reset()
+        emitted.clear()
         sess = _session()
         sess._listener = mock.Mock(_stream_id="st")
-        sess.usage_session_id = "usage-4"
-        base = 7_000_000.0
+        sess.usage_session_id = "usage-mid"
         sess._listen_started_at = base
-        tr = sess._gap_tracker
-        tr._store_baseline(base + 70, 70_000, 0, 0)
-        tr.note_ping(base + 90, 90_000, 0, 0, False, base, 0.0)
-        tr.note_pcm(base + 125, base + 105)
+        sess.emit = lambda ev: emitted.append(ev)
         uplink.register(sess)
         client = TestClient(app)
-        with client.websocket_connect(f"/ws/audio?token={sess.audio_token}") as ws:
-            ws.receive_text()
-            with mock.patch("time.time", return_value=base + 110):
-                ws.send_text(json.dumps({"type": "ping", "enqueued_ms": 90_000, "dropped_ms": 0}))
-            with mock.patch("time.time", return_value=base + 130):
-                ws.send_text(json.dumps({"type": "ping", "enqueued_ms": 110_000, "dropped_ms": 0}))
-        qids = [c.args[2] for c in mock_update.call_args_list]
-        texts = [c.args[3] for c in mock_update.call_args_list]
-        self.assertGreaterEqual(len(qids), 1)
-        self.assertEqual(len(set(qids)), 1)
-        if len(texts) >= 2:
-            self.assertGreater(int(texts[1].split("-")[1]), int(texts[0].split("-")[1]))
+        with mock.patch("time.time", side_effect=_now):
+            with client.websocket_connect(f"/ws/audio?token={sess.audio_token}") as ws:
+                ws.receive_text()
+                self._send_ping(
+                    sess,
+                    ws,
+                    clock,
+                    base + 20,
+                    {"type": "ping", "enqueued_ms": 20_000, "dropped_ms": 0, "sent_ms": 0},
+                )
+                self._send_ping(sess, ws, clock, base + 40, {"type": "ping", "pending_ms": 0})
+                self._send_ping(sess, ws, clock, base + 60, {"type": "ping", "pending_ms": 0})
+                self._send_ping(
+                    sess,
+                    ws,
+                    clock,
+                    base + 80,
+                    {"type": "ping", "enqueued_ms": 80_000, "dropped_ms": 0, "sent_ms": 0},
+                )
+                self._send_ping(
+                    sess,
+                    ws,
+                    clock,
+                    base + 100,
+                    {"type": "ping", "enqueued_ms": 100_000, "dropped_ms": 0, "sent_ms": 0},
+                )
+        mock_update.assert_not_called()
+        self.assertEqual([e for e in emitted if e.get("type") == "listen_gap"], [])
+
+    @mock.patch("server.meter.update_history_text")
+    def test_same_gap_id_upserts_history(self, mock_update) -> None:
+        for run in range(30):
+            with self.subTest(run=run):
+                uplink.reset()
+                mock_update.reset_mock()
+                base = 7_000_000.0 + run
+                clock = {"t": base}
+                emitted: list[dict] = []
+
+                def _now() -> float:
+                    return clock["t"]
+
+                sess = _session()
+                sess._listener = mock.Mock(_stream_id="st")
+                sess.usage_session_id = f"usage-4-{run}"
+                sess._listen_started_at = base
+                sess.emit = lambda ev: emitted.append(ev)
+                tr = sess._gap_tracker
+                tr._store_baseline(base + 70, 70_000, 0, 0)
+                tr.note_ping(base + 90, 90_000, 0, 0, False, base, 0.0)
+                tr.note_pcm(base + 125, base + 105)
+                uplink.register(sess)
+                client = TestClient(app)
+                with mock.patch("time.time", side_effect=_now):
+                    with client.websocket_connect(f"/ws/audio?token={sess.audio_token}") as ws:
+                        ws.receive_text()
+                        self._send_ping(
+                            sess,
+                            ws,
+                            clock,
+                            base + 110,
+                            {"type": "ping", "enqueued_ms": 90_000, "dropped_ms": 0, "sent_ms": 0},
+                        )
+                        self._send_ping(
+                            sess,
+                            ws,
+                            clock,
+                            base + 130,
+                            {"type": "ping", "enqueued_ms": 100_000, "dropped_ms": 0, "sent_ms": 0},
+                        )
+                self.assertEqual(mock_update.call_count, 2)
+                qids = [c.args[2] for c in mock_update.call_args_list]
+                texts = [c.args[3] for c in mock_update.call_args_list]
+                self.assertEqual(len(set(qids)), 1)
+                self.assertGreater(int(texts[1].split("-")[1]), int(texts[0].split("-")[1]))
 
 
 if __name__ == "__main__":
