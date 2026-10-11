@@ -2024,7 +2024,7 @@ export default function ListenPane(props: Props) {
                   </>
                 ) : (
                   <>
-                  {interleaveGaps(props.lines, props.gaps ?? []).map((item, i, rows) => {
+                  {interleaveGaps(props.lines, props.gaps ?? []).map((item, i) => {
                     if ('gap' in item && item.gap) {
                       return (
                         <div
@@ -2037,7 +2037,7 @@ export default function ListenPane(props: Props) {
                     }
                     if (!('line' in item)) return null
                     const line = item.line
-                    const lineIndex = props.lines.indexOf(line)
+                    const lineIndex = item.index
                     return (
                     <LineRow
                       key={line.id || `${line.ts}-${i}`}

@@ -65,4 +65,16 @@ eq(
   'empty lines only gap',
 )
 
+const upserted = insertGap(
+  [{ id: 'gap-1', fromMs: 1000, toMs: 2000 }],
+  { id: 'gap-1', fromMs: 1000, toMs: 5000 },
+)
+eq(upserted, [{ id: 'gap-1', fromMs: 1000, toMs: 5000 }], 'insertGap replaces same id')
+
+eq(
+  interleaveGaps([{ ts: '00:01', text: 'a' }, { ts: '00:02', text: 'b' }], []).map((row) => ('index' in row ? row.index : -1)),
+  [0, 1],
+  'line entries carry source index',
+)
+
 console.log('ok')

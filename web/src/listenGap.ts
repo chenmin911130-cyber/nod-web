@@ -38,8 +38,8 @@ export function gapFromHistoryItem(item: { kind: string; qid: string; text: stri
 }
 
 export function insertGap(gaps: ListenGap[], gap: ListenGap): ListenGap[] {
-  if (gaps.some((g) => g.id === gap.id)) return gaps
-  return [...gaps, gap].sort((a, b) => a.fromMs - b.fromMs || a.id.localeCompare(b.id))
+  const without = gaps.filter((g) => g.id !== gap.id)
+  return [...without, gap].sort((a, b) => a.fromMs - b.fromMs || a.id.localeCompare(b.id))
 }
 
 export function gapLabel(
@@ -72,18 +72,18 @@ export function tsToMs(ts: string): number {
 export function interleaveGaps<T extends { ts: string }>(
   lines: T[],
   gaps: ListenGap[],
-): Array<{ line: T } | { gap: ListenGap }> {
-  if (!gaps.length) return lines.map((line) => ({ line }))
+): Array<{ line: T; index: number } | { gap: ListenGap }> {
+  if (!gaps.length) return lines.map((line, index) => ({ line, index }))
   const sorted = [...gaps].sort((a, b) => a.fromMs - b.fromMs)
-  const out: Array<{ line: T } | { gap: ListenGap }> = []
+  const out: Array<{ line: T; index: number } | { gap: ListenGap }> = []
   let gi = 0
-  for (const line of lines) {
+  lines.forEach((line, index) => {
     while (gi < sorted.length && tsToMs(line.ts) >= sorted[gi].fromMs) {
       out.push({ gap: sorted[gi] })
       gi += 1
     }
-    out.push({ line })
-  }
+    out.push({ line, index })
+  })
   while (gi < sorted.length) {
     out.push({ gap: sorted[gi] })
     gi += 1

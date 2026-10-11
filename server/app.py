@@ -6899,6 +6899,10 @@ class Session:
     def _start_listening(self, resume: bool = False) -> None:
         if not self._claim_listen_start(resume):
             return
+        if not resume:
+            gap_tracker = getattr(self, "_gap_tracker", None)
+            if gap_tracker is not None:
+                gap_tracker.reset()
         try:
             self._open_listener(resume)
         finally:
@@ -7118,6 +7122,9 @@ class Session:
         self._listen_accum_sec = 0.0  # session over; reset the accumulated quota
         self._listen_ended = True  # definitive stop (issue #165 P2-8)
         self._last_pcm_at = 0.0  # zero-PCM guard must not carry into the next session
+        gap_tracker = getattr(self, "_gap_tracker", None)
+        if gap_tracker is not None:
+            gap_tracker.reset()
         self._pending_q.clear()
         self._cancel_stt_restart_timer()
         self._abandon_handoff(bump_gen=False)
@@ -8314,20 +8321,19 @@ async def ws_audio(ws: WebSocket):
                         parts.append(f"stream={stream}")
                         parts.append(f"client={getattr(session, '_uplink_client', '') or ''}")
                         logging.getLogger("nod").info(" ".join(parts))
-                    if parsed:
+                    if parsed and getattr(session, "_listener", None) is not None:
                         gap_tracker = getattr(session, "_gap_tracker", None)
+                        gaps: list = []
                         if gap_tracker is not None:
                             gaps = gap_tracker.note_ping(
                                 time.time(),
-                                parsed.get("enqueued_ms", 0),
-                                parsed.get("dropped_ms", 0),
+                                parsed.get("enqueued_ms"),
+                                parsed.get("dropped_ms"),
                                 limited_bytes,
                                 bool(getattr(session, "_paused", False)),
                                 float(getattr(session, "_listen_started_at", 0.0) or 0.0),
                                 float(getattr(session, "_listen_accum_sec", 0.0) or 0.0),
                             )
-                        else:
-                            gaps = []
                         for gap in gaps:
                             session.emit(
                                 {
@@ -8340,14 +8346,19 @@ async def ws_audio(ws: WebSocket):
                             )
                             if session.user_id and session.usage_session_id:
                                 try:
+                                    from functools import partial
+
                                     from server.meter import update_history_text
 
-                                    update_history_text(
-                                        session.user_id,
-                                        session.usage_session_id,
-                                        gap.id,
-                                        f"{gap.from_ms}-{gap.to_ms}",
-                                        kind="gap",
+                                    await run_in_threadpool(
+                                        partial(
+                                            update_history_text,
+                                            session.user_id,
+                                            session.usage_session_id,
+                                            gap.id,
+                                            f"{gap.from_ms}-{gap.to_ms}",
+                                            kind="gap",
+                                        )
                                     )
                                 except Exception:
                                     logging.getLogger("nod").exception(
