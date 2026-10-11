@@ -213,6 +213,7 @@ export const EN_IPHONE_COPY = {
     'Network lost — recording is kept on the phone (up to about 5 min) and uploads when back online.',
   linkUplinkDown: 'Recording upload interrupted — reconnecting…',
   linkBackfilling: 'Uploading offline recording (about {secs} s left)',
+  listenGapLine: 'Not recorded {from}–{to} (about {secs} s)',
 } as const
 
 export type IphoneCopy = { [K in keyof typeof EN_IPHONE_COPY]: string }
@@ -428,6 +429,7 @@ export const ZH_IPHONE_COPY: IphoneCopy = {
   linkBothDown: '网络中断，录音暂存在手机（最多约 5 分钟），恢复后自动补传',
   linkUplinkDown: '录音上传中断，正在重连…',
   linkBackfilling: '正在补传离线录音（剩余约 {secs} 秒）',
+  listenGapLine: '未录制 {from}–{to}（约 {secs} 秒）',
 }
 
 /** Overlap keys aligned with WatchCopy.swift; other keys fall back to en. */

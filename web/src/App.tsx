@@ -19,6 +19,7 @@ import AccountPane from './components/AccountPane'
 import LeaveSessionSheet from './components/LeaveSessionSheet'
 import IphoneActions from './components/IphoneActions'
 import SideRail from './components/SideRail'
+import { gapFromEvent, gapLabel, insertGap, interleaveGaps, formatGapTs } from './listenGap'
 import { IPHONE_COPY, canSwitchWorkspace, readyPreservesCapture, sameSpokenLine, sessionListening, toastSpeechOnly } from './iphoneCopy'
 import { translateLangDisplayName } from './langDisplayNames'
 import { showListenNew, composeSessionKey, nextComposeSessionId, endedHasContent, IDLE_CAPTURE_CLOCK, advanceCaptureClock, captureClockMs, clockCapture } from './listenChrome'
@@ -243,6 +244,7 @@ const initial: AppState = {
   keys: { hasLlm: true, hasStt: true },
   workspaceMode: 'meeting',
   meetingLines: [],
+  listenGaps: [],
   meetingStartedAt: null,
   meetingPausedAt: null,
   meetingElapsedMs: 0,
@@ -329,6 +331,7 @@ type Action =
       notes: string
       summary: string
       pairs: TranslatePair[]
+      gaps?: import('./listenGap').ListenGap[]
       elapsedMs?: number
       live?: boolean
     }
@@ -796,6 +799,11 @@ function reducer(state: AppState, action: Action): AppState {
           return { ...state, wsAttachSeq: state.wsAttachSeq + 1 }
         case 'pcm_drained':
           return state
+        case 'listen_gap': {
+          const gap = gapFromEvent(ev)
+          if (!gap) return state
+          return { ...state, listenGaps: insertGap(state.listenGaps, gap) }
+        }
         case 'listen_flush': {
           return {
             ...state,
@@ -849,6 +857,7 @@ function reducer(state: AppState, action: Action): AppState {
         partial: '',
         status: 'Cleared',
         meetingLines: [],
+        listenGaps: [],
         meetingStartedAt: null,
         meetingElapsedMs: 0,
         meetingEnded: false,
@@ -879,6 +888,10 @@ function reducer(state: AppState, action: Action): AppState {
       const translatePairs = action.live
         ? [...action.pairs, ...state.translatePairs.filter((p) => !seenPair.has(p.id))]
         : action.pairs
+      const restoredGaps = action.gaps ?? []
+      const listenGaps = action.live
+        ? restoredGaps.reduce((acc, gap) => insertGap(acc, gap), state.listenGaps)
+        : restoredGaps
       const lastTurn = turns[turns.length - 1]
       const elapsed = action.elapsedMs ?? restoreElapsedMs({ lines: meetingLines })
       const clock = action.live ? restoreAttachedClock(elapsed) : restoreSessionClock(elapsed)
@@ -891,6 +904,7 @@ function reducer(state: AppState, action: Action): AppState {
         workspaceMode: action.mode,
         listenScene: action.scene,
         meetingLines,
+        listenGaps,
         turns,
         currentQ: lastTurn?.q || PLACEHOLDER,
         currentQId: lastTurn?.id || '',
@@ -929,6 +943,7 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         meetingLines: [],
+        listenGaps: [],
         speakerNames: {},
         speakerNameLocked: {},
         speakerDecided: {},
@@ -3895,14 +3910,26 @@ export default function App() {
         followUps: notes.followUps,
         revisionNotes: notes.revisionNotes,
         catchNotes: s.catchNotes.map((n) => ({ title: n.title, text: n.text })),
-        transcript: lines.map((ln) => ({
-          ts: ln.ts,
-          speaker: lecture
-            ? resolveSpeakerName(s.speakerNames, ln.speaker)
-            : resolveMeetingLineLabel(ln, s.listenScene, s.speakerNames, s.speakerNameLocked),
-          text: ln.text,
-          translation: notesBilingualOn(s.notesLang, s.translateOn) ? ln.translation : undefined,
-        })),
+        transcript: interleaveGaps(lines, s.listenGaps).map((item) => {
+          if ('gap' in item && item.gap) {
+            const g = item.gap
+            return {
+              ts: formatGapTs(g.fromMs),
+              speaker: '',
+              text: gapLabel(g, IPHONE_COPY),
+            }
+          }
+          if (!('line' in item)) return { ts: '', speaker: '', text: '' }
+          const ln = item.line
+          return {
+            ts: ln.ts,
+            speaker: lecture
+              ? resolveSpeakerName(s.speakerNames, ln.speaker)
+              : resolveMeetingLineLabel(ln, s.listenScene, s.speakerNames, s.speakerNameLocked),
+            text: ln.text,
+            translation: notesBilingualOn(s.notesLang, s.translateOn) ? ln.translation : undefined,
+          }
+        }),
       })
       title = doc.title
       blocks.push({ kind: 'h1', text: title })
@@ -3967,9 +3994,15 @@ export default function App() {
         blocks.push({ kind: 'p', text: note.text.trim() })
       }
       blocks.push({ kind: 'h2', text: lecture ? 'Classroom stream' : 'Transcript' })
-      if (lines.length === 0) blocks.push({ kind: 'p', text: 'No transcript lines.' })
+      if (lines.length === 0 && s.listenGaps.length === 0) blocks.push({ kind: 'p', text: 'No transcript lines.' })
       else {
-        for (const ln of lines) {
+        for (const item of interleaveGaps(lines, s.listenGaps)) {
+          if ('gap' in item) {
+            const g = item.gap
+            blocks.push({ kind: 'line', text: gapLabel(g, IPHONE_COPY), ts: formatGapTs(g.fromMs), speaker: '' })
+            continue
+          }
+          const ln = item.line
           const who = lecture
             ? resolveSpeakerName(s.speakerNames, ln.speaker)
             : resolveMeetingLineLabel(ln, s.listenScene, s.speakerNames, s.speakerNameLocked)
@@ -4451,6 +4484,7 @@ export default function App() {
             notesTranslateTo={state.notesTranslateTo}
             notesLang={state.notesLang}
             lines={state.meetingLines}
+            gaps={state.listenGaps}
             speakerNames={state.speakerNames}
             speakerNameLocked={state.speakerNameLocked}
             speakerDecided={state.speakerDecided}
