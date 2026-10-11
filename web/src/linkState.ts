@@ -35,7 +35,8 @@ export function listenLinkBanner(input: {
     linkBackfilling: string
   }
 }): string {
-  if (input.uplink == null || !input.uplink.enabled) {
+  const active = input.capture === 'listening' || input.capture === 'recording'
+  if (input.uplink == null || !input.uplink.enabled || input.ended || !active) {
     return listenChromeLinkLabel({
       link: input.link,
       capture: input.capture,
@@ -43,12 +44,6 @@ export function listenLinkBanner(input: {
       linkReconnecting: input.copy.linkReconnecting,
       linkWaitingForNotes: input.copy.linkWaitingForNotes,
     })
-  }
-  if (input.link === 'reconnecting' && input.ended) {
-    return input.copy.linkWaitingForNotes
-  }
-  if (input.capture === 'off' && !input.ended) {
-    return ''
   }
   const { connected, pendingMs } = input.uplink
   if (input.link === 'reconnecting') {

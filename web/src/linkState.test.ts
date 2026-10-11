@@ -190,4 +190,126 @@ eq(
   'zh backfill placeholder',
 )
 
+// v2 F1 / F3 / F6
+eq(
+  listenLinkBanner({
+    link: 'online',
+    uplink: { enabled: true, connected: false, pendingMs: 0 },
+    capture: 'listening',
+    ended: true,
+    copy: bannerCopy,
+  }),
+  '',
+  'v2: ended × online × uplink down → empty',
+)
+eq(
+  listenLinkBanner({
+    link: 'online',
+    uplink: { enabled: true, connected: true, pendingMs: 30000 },
+    capture: 'listening',
+    ended: true,
+    copy: bannerCopy,
+  }),
+  '',
+  'v2: ended × online × backfill pending → empty',
+)
+eq(
+  listenLinkBanner({
+    link: 'reconnecting',
+    uplink: { enabled: true, connected: false, pendingMs: 0 },
+    capture: 'listening',
+    ended: true,
+    copy: bannerCopy,
+  }),
+  copy.linkWaitingForNotes,
+  'v2: ended × reconnecting × both down → wait notes',
+)
+eq(
+  listenLinkBanner({
+    link: 'online',
+    uplink: { enabled: true, connected: false, pendingMs: 0 },
+    capture: 'paused',
+    ended: false,
+    copy: bannerCopy,
+  }),
+  '',
+  'v2: paused × online × uplink down → empty',
+)
+eq(
+  listenLinkBanner({
+    link: 'reconnecting',
+    uplink: { enabled: true, connected: true, pendingMs: 0 },
+    capture: 'paused',
+    ended: false,
+    copy: bannerCopy,
+  }),
+  copy.linkReconnecting,
+  'v2: paused × reconnecting × uplink up → chrome reconnecting',
+)
+eq(
+  listenLinkBanner({
+    link: 'online',
+    uplink: { enabled: true, connected: false, pendingMs: 0 },
+    capture: '',
+    ended: false,
+    copy: bannerCopy,
+  }),
+  '',
+  'v2: empty capture × online × uplink down → empty',
+)
+
+const offUplinkVariants = [
+  null,
+  { enabled: true, connected: true, pendingMs: 0 },
+  { enabled: true, connected: false, pendingMs: 0 },
+  { enabled: true, connected: true, pendingMs: 30000 },
+] as const
+for (const link of ['online', 'reconnecting'] as const) {
+  for (const uplink of offUplinkVariants) {
+    eq(
+      listenLinkBanner({ link, uplink, capture: 'off', ended: false, copy: bannerCopy }),
+      '',
+      `v2: capture off ${link} uplink=${uplink == null ? 'null' : 'set'}`,
+    )
+  }
+}
+
+for (const capture of ['listening', 'recording', 'off', 'paused'] as const) {
+  const want = listenChromeLinkLabel({ link: 'reconnecting', capture, ended: false, ...copy })
+  eq(
+    listenLinkBanner({
+      link: 'reconnecting',
+      uplink: { enabled: false, connected: false, pendingMs: 0 },
+      capture,
+      ended: false,
+      copy: bannerCopy,
+    }),
+    want,
+    `v2: uplink disabled reconnecting capture=${capture}`,
+  )
+}
+
+eq(
+  listenLinkBanner({
+    link: 'online',
+    uplink: { enabled: true, connected: false, pendingMs: 0 },
+    capture: 'recording',
+    ended: false,
+    copy: bannerCopy,
+  }),
+  bannerCopy.linkUplinkDown,
+  'v2: recording is active → uplink down',
+)
+eq(
+  listenLinkBanner({
+    link: 'reconnecting',
+    uplink: { enabled: true, connected: true, pendingMs: 0 },
+    capture: 'recording',
+    ended: false,
+    copy: bannerCopy,
+  }),
+  bannerCopy.linkLiveOnlyDown,
+  'v2: recording is active → live only down',
+)
+
 console.log('linkState.test.ts: ok')

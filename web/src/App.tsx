@@ -3718,17 +3718,23 @@ export default function App() {
 
   useEffect(() => {
     if (!isNativeApp()) return
+    let cancelled = false
     let removeUplink: (() => void) | undefined
     void import('nod-mic').then(({ NodMic }) => {
       void NodMic.addListener('uplinkState', (ev) => {
         dispatch({ type: 'uplink_state', ev })
       }).then((handle) => {
+        if (cancelled) {
+          void handle.remove()
+          return
+        }
         removeUplink = () => {
           void handle.remove()
         }
       })
     }).catch(() => undefined)
     return () => {
+      cancelled = true
       removeUplink?.()
     }
   }, [])

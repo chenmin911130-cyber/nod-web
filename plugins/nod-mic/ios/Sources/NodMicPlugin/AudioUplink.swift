@@ -497,7 +497,7 @@ final class AudioUplink: NSObject, URLSessionWebSocketDelegate {
             bufLock.unlock()
         }
         lock.lock()
-        let enabled = _enabled
+        let enabled = _enabled && !stopped
         lock.unlock()
         lock.lock()
         let connected = _connected
