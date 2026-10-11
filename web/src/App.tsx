@@ -272,6 +272,7 @@ const initial: AppState = {
   quota: null as { stt_seconds: number; stt_limit: number; llm_tokens: number; llm_limit: number; ok: boolean; sessions: number; session_limit: number; daily_cost_usd: number; daily_cost_limit: number; daily_stt_seconds: number; daily_stt_limit: number; quota_disabled?: boolean } | null,
   listenFlushWait: idleListenFlushWait(),
   link: 'online',
+  uplink: null,
 }
 
 type Action =
@@ -331,6 +332,7 @@ type Action =
       elapsedMs?: number
       live?: boolean
     }
+  | { type: 'uplink_state'; ev: import('./linkState').UplinkLinkState }
 
 function formatClock(): string {
   const d = new Date()
@@ -1162,6 +1164,8 @@ function reducer(state: AppState, action: Action): AppState {
         translateBindId: state.translateBindId === action.id ? '' : state.translateBindId,
       }
     }
+    case 'uplink_state':
+      return { ...state, uplink: action.ev }
     default:
       return state
   }
@@ -3713,6 +3717,29 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    if (!isNativeApp()) return
+    let cancelled = false
+    let removeUplink: (() => void) | undefined
+    void import('nod-mic').then(({ NodMic }) => {
+      void NodMic.addListener('uplinkState', (ev) => {
+        dispatch({ type: 'uplink_state', ev })
+      }).then((handle) => {
+        if (cancelled) {
+          void handle.remove()
+          return
+        }
+        removeUplink = () => {
+          void handle.remove()
+        }
+      })
+    }).catch(() => undefined)
+    return () => {
+      cancelled = true
+      removeUplink?.()
+    }
+  }, [])
+
+  useEffect(() => {
     const onHidden = () => {
       if (document.visibilityState === 'hidden') settlePendingDiscardRef.current('hidden')
     }
@@ -4435,6 +4462,7 @@ export default function App() {
             paused={iphonePaused}
             ended={state.meetingEnded}
             link={state.link}
+            uplink={state.uplink}
             capture={state.capture}
             catchNotes={state.catchNotes}
             notesRaw={state.notesRaw}

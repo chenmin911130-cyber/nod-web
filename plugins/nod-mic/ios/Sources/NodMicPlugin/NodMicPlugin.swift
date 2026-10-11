@@ -35,6 +35,7 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
     private var silentPlayer: AVAudioPlayer?
     private var keepAlive = false
     private var interruptionObserver: NSObjectProtocol?
+    private var uplinkLinkObserver: NSObjectProtocol?
 
     @objc func start(_ call: CAPPluginCall) {
         if running {
@@ -162,6 +163,23 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
             queue: .main
         ) { [weak self] note in
             self?.handleInterruption(note)
+        }
+        uplinkLinkObserver = NotificationCenter.default.addObserver(
+            forName: .nodUplinkLink,
+            object: nil,
+            queue: nil
+        ) { [weak self] note in
+            guard let self else { return }
+            let enabled = note.userInfo?["enabled"] as? Bool ?? false
+            let connected = note.userInfo?["connected"] as? Bool ?? false
+            let pendingMs = note.userInfo?["pendingMs"] as? Int ?? 0
+            DispatchQueue.main.async {
+                self.notifyListeners("uplinkState", data: [
+                    "enabled": enabled,
+                    "connected": connected,
+                    "pendingMs": pendingMs,
+                ])
+            }
         }
     }
 
@@ -399,6 +417,9 @@ public class NodMicPlugin: CAPPlugin, CAPBridgedPlugin {
     deinit {
         if let interruptionObserver {
             NotificationCenter.default.removeObserver(interruptionObserver)
+        }
+        if let uplinkLinkObserver {
+            NotificationCenter.default.removeObserver(uplinkLinkObserver)
         }
         teardown()
         clearListeningNotification()
