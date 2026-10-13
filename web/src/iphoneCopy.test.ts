@@ -54,7 +54,7 @@ eq(IPHONE_COPY.translateStop, 'Stop', 'Translate stop capsule stays Stop')
 eq(IPHONE_COPY.resume, 'Resume', 'paused listen control is Resume')
 eq(IPHONE_COPY.more, 'More', 'PDF/Save/History live in More')
 eq(IPHONE_COPY.moreSession, 'This session', 'More sheet names this session')
-eq(IPHONE_COPY.moreSaveHint, 'Available after recording ends', 'disabled Save explains when it unlocks')
+eq(IPHONE_COPY.moreSaveHint, 'Available when paused or ended', 'disabled Save explains when it unlocks')
 eq(IPHONE_COPY.moreSaved, 'Saved', 'kept Save row says Saved')
 eq(IPHONE_COPY.moreViewHistory, 'View in History', 'kept Save row points at History')
 eq(IPHONE_COPY.meetingNotes, 'Meeting notes', 'Meeting notes page title')
@@ -72,6 +72,16 @@ eq(IPHONE_COPY.saveWaitingSync, 'Waiting to sync', 'native local keep on History
 eq(IPHONE_COPY.saveSavedLine, 'Saved to History', 'ack-only saved line')
 eq(IPHONE_COPY.newCompact, '+ New', 'compact Listen New legacy key')
 eq(IPHONE_COPY.continueRecording, 'Continue', 'ended sheet Continue')
+eq(
+  IPHONE_COPY.offlineResumeHint,
+  'Back online — tap Continue to keep recording',
+  'offline resume hint en',
+)
+eq(
+  iphoneCopyFor('zh').offlineResumeHint,
+  '网络已恢复，点继续接着录',
+  'offline resume hint zh',
+)
 eq(IPHONE_COPY.saveCancel, 'Cancel', 'non-native collect cancel')
 eq(IPHONE_COPY.keepRecording, 'Keep recording', 'Save can keep the WAV')
 eq(
@@ -286,7 +296,7 @@ eq(savedMore.newSession, true, 'saved session can start New')
 
 const liveSaveRow = moreSaveRow({ saved: false, canSave: false })
 eq(liveSaveRow.label, 'Save', 'recording Save row stays Save')
-eq(liveSaveRow.hint, 'Available after recording ends', 'recording Save row shows the after-end hint')
+eq(liveSaveRow.hint, 'Available when paused or ended', 'recording Save row shows the after-end hint')
 eq(liveSaveRow.trailing, '', 'recording Save row has no History trail')
 eq(liveSaveRow.disabled, true, 'recording Save row stays disabled')
 
@@ -339,5 +349,13 @@ eq(zh.toastPaused, '已暂停 · 准备好再继续', 'zh pause toast')
 eq(zh.histToday, '今天', 'zh history today')
 eq(zh.histUntitled, '未命名', 'zh history untitled')
 eq(IPHONE_COPY.moreNew, 'New session', 'moreNew stays en in node tests')
+eq(IPHONE_COPY.newShort, 'New', 'en compact New label beside ring')
+eq(zh.newShort, '新建', 'zh compact New label beside ring')
+eq(
+  IPHONE_COPY.speechLockHelp,
+  'Only the selected language is transcribed. For mixed languages, choose Auto-detect.',
+  'en speech lock help',
+)
+eq(zh.speechLockHelp, '只转写所选语言；多语言场合请选自动识别。', 'zh speech lock help')
 
 console.log('iphoneCopy.test.ts ok')

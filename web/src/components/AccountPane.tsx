@@ -9,7 +9,8 @@ import {
 } from '../accountCopy'
 import { shareOrCopy } from '../copyFeedback'
 import { IPHONE_COPY } from '../iphoneCopy'
-import { isNativeApp, readNativeAppBuild } from '../native'
+import { readNativeAppBuild } from '../native'
+import { siteUrl } from '../siteOrigin'
 import { PRODUCT_NAME } from '../brand'
 
 function Chevron() {
@@ -78,14 +79,8 @@ export function DeleteAccountSheet({
   )
 }
 
-async function openLegal(path: string): Promise<void> {
-  const url = isNativeApp() ? `https://nodpilot.com${path}` : path
-  if (isNativeApp()) {
-    const { Browser } = await import('@capacitor/browser')
-    await Browser.open({ url })
-    return
-  }
-  window.open(url, '_blank', 'noopener,noreferrer')
+function openLegal(path: string): void {
+  window.open(siteUrl(path), '_blank', 'noopener,noreferrer')
 }
 
 export default function AccountPane({

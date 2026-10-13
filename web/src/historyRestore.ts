@@ -1,6 +1,7 @@
 import type { HistoryItem, HistorySession } from './components/HistoryPane'
 import { IPHONE_COPY } from './iphoneCopy'
 import type { ListenScene } from './listen'
+import { gapFromHistoryItem, type ListenGap } from './listenGap'
 import type { MeetingLine, TranslatePair, Turn, WorkspaceMode } from './types'
 
 export type RestorePayload = {
@@ -11,6 +12,7 @@ export type RestorePayload = {
   notes: string
   summary: string
   pairs: TranslatePair[]
+  gaps: ListenGap[]
   elapsedMs: number
 }
 
@@ -63,6 +65,21 @@ export function sessionShouldOfferSave(input: {
   if (!modeIsSaveEligible(input.sessionMode)) return false
   if (input.workspaceMode !== 'meeting' || input.kept || !input.hasContent || input.listening || input.paused) return false
   return input.ended || !input.listening
+}
+
+/** More → Save. Same gates as sessionShouldOfferSave, except Pause may save. */
+export function sessionCanSaveManually(input: {
+  workspaceMode: string
+  ended: boolean
+  kept: boolean
+  hasContent: boolean
+  listening?: boolean
+  paused?: boolean
+  sessionMode?: string
+}): boolean {
+  if (!modeIsSaveEligible(input.sessionMode)) return false
+  if (input.workspaceMode !== 'meeting' || input.kept || !input.hasContent) return false
+  return !input.listening || Boolean(input.paused)
 }
 
 /** Engine save_prompt only opens the Meeting / Lecture dialog, never after Keep or Pause. */
@@ -471,6 +488,7 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
   const summaries: string[] = []
   const originals: Array<{ id: string; text: string; ts: string }> = []
   const translations: string[] = []
+  const gaps: ListenGap[] = []
 
   items.forEach((item, i) => {
     const text = (item.text || '').trim()
@@ -493,6 +511,9 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
       notes.push(text)
     } else if (item.kind === 'summary') {
       summaries.push(text)
+    } else if (item.kind === 'gap') {
+      const gap = gapFromHistoryItem({ kind: item.kind, qid: id, text })
+      if (gap) gaps.push(gap)
     } else if (item.kind === 'translate') {
       // A meeting/lecture translation whose qid matches a transcript line hangs
       // on that line. Translate-mode rows (and unmatched/legacy rows) keep the
@@ -539,6 +560,7 @@ export function restoreFromSession(session: HistorySession): RestorePayload {
     notes: notes.join('\n\n'),
     summary: summaries.join('\n\n'),
     pairs,
+    gaps,
     elapsedMs: restoreElapsedMs({ lines, sttSeconds: session.stt_seconds }),
   }
 }

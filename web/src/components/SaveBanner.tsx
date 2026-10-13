@@ -8,6 +8,7 @@ export default function SaveBanner({
   title,
   detail,
   declineLabel,
+  undo,
 }: {
   status: 'undecided' | 'saving' | 'saved' | 'failed'
   onSave: () => void
@@ -16,10 +17,25 @@ export default function SaveBanner({
   title?: string
   detail?: string
   declineLabel?: string
+  undo?: { onUndo: () => void; secondsLeft: number }
 }) {
   if (status === 'saved') return null
   const heading = title ?? IPHONE_COPY.saveBannerTitle
-  const decline = declineLabel ?? IPHONE_COPY.saveNotNow
+  const decline = declineLabel ?? (status === 'undecided' ? IPHONE_COPY.saveNo : IPHONE_COPY.saveNotNow)
+
+  if (undo && status === 'undecided') {
+    return (
+      <div className="save-banner" aria-live="polite">
+        <b>{IPHONE_COPY.saveDiscardedTitle}</b>
+        {undo.secondsLeft > 0 ? <p className="save-banner-detail">{undo.secondsLeft}</p> : null}
+        <div className="save-banner-actions">
+          <button type="button" className="save-banner-notnow" onClick={undo.onUndo}>
+            {IPHONE_COPY.saveUndo}
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   if (status === 'saving') {
     return (

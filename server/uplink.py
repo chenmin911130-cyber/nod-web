@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any
@@ -91,6 +92,8 @@ def adopt(token: str | None, user_id: str | None) -> Any | None:
 
 def reap(now: float) -> None:
     to_close: list[tuple[str, Any]] = []
+    to_stop: list[tuple[str, Any]] = []
+    grace = max(UPLINK_DROP_REAP_SECONDS, float(LISTEN_OFFLINE_GRACE_SECONDS))
     with _lock:
         for token, parked_at in list(_parked.items()):
             sess = _by_token.get(token)
@@ -102,22 +105,41 @@ def reap(now: float) -> None:
             uplink_on = bool(getattr(sess, "_uplink_connected", False))
             uplink_lost = float(getattr(sess, "_uplink_lost_at", 0.0) or 0.0)
             if listener_gone:
+                notice = getattr(sess, "_offline_notice", None)
+                stop_at = (
+                    float(notice.get("at") or 0.0)
+                    if isinstance(notice, dict)
+                    else 0.0
+                )
+                if stop_at > 0 and now - stop_at < UPLINK_ORPHAN_SECONDS:
+                    continue
                 to_close.append((token, sess))
             elif now - lost >= UPLINK_ORPHAN_SECONDS:
-                to_close.append((token, sess))
-            elif (not uplink_on) and uplink_lost and now - uplink_lost >= max(
-                UPLINK_DROP_REAP_SECONDS, float(LISTEN_OFFLINE_GRACE_SECONDS)
-            ):
-                to_close.append((token, sess))
+                if (
+                    (not uplink_on)
+                    and uplink_lost > 0
+                    and (now - uplink_lost) < grace
+                ):
+                    continue
+                to_stop.append((token, sess))
+            elif (not uplink_on) and uplink_lost and now - uplink_lost >= grace:
+                to_stop.append((token, sess))
             # Audio can close before the control socket parks, leaving
             # _uplink_lost_at at 0. The control-loss clock is the only one,
             # and a live listener still gets the offline grace.
-            elif (not uplink_on) and (not uplink_lost) and now - lost >= max(
-                UPLINK_DROP_REAP_SECONDS, float(LISTEN_OFFLINE_GRACE_SECONDS)
-            ):
-                to_close.append((token, sess))
+            elif (not uplink_on) and (not uplink_lost) and now - lost >= grace:
+                to_stop.append((token, sess))
         for token, _sess in to_close:
             _parked.pop(token, None)
             _by_token.pop(token, None)
+    for token, sess in to_stop:
+        try:
+            sess._abandon_forgotten_listen(sess._offline_stop_status(), offline=True)
+        except Exception:
+            logging.getLogger("nod").exception("reap abandon failed")
+            with _lock:
+                _parked.pop(token, None)
+                _by_token.pop(token, None)
+            sess.close()
     for _token, sess in to_close:
         sess.close()

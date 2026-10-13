@@ -71,13 +71,8 @@ export default function NativeSignIn({ onSignedIn }: { onSignedIn: () => void })
   const activeCover = signCoverById(cover)
   const copy = nativeSignInCopy(typeof navigator !== 'undefined' ? navigator.language : 'en-US')
 
-  const openLegal = async (url: string) => {
-    try {
-      const { Browser } = await import('@capacitor/browser')
-      await Browser.open({ url })
-    } catch {
-      window.open(url, '_blank', 'noopener,noreferrer')
-    }
+  const openLegal = (url: string) => {
+    window.open(url, '_blank', 'noopener,noreferrer')
   }
 
   const startApple = async () => {

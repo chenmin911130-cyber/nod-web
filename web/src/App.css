@@ -9907,6 +9907,16 @@ html.nod-phone .app.iphone-v2 .tb-new {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+html.nod-phone .app.iphone-v2 .tb-new-label {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 html.nod-phone .app.iphone-v2 .tb-new-ring {

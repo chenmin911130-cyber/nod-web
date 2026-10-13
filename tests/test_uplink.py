@@ -99,6 +99,9 @@ class ParkKeepTests(unittest.TestCase):
 
         sess._control_lost_at = time.time() - UPLINK_ORPHAN_SECONDS - 1
         uplink.reap(time.time())
+        sess.close.assert_not_called()
+        self.assertIsNone(sess._listener)
+        uplink.reap(time.time())
         sess.close.assert_called_once()
         self.assertIsNone(uplink.get(sess.audio_token))
 
@@ -120,6 +123,9 @@ class ParkKeepTests(unittest.TestCase):
         past = time.time() - LISTEN_OFFLINE_GRACE_SECONDS - 1
         sess._control_lost_at = past
         sess._uplink_lost_at = past
+        uplink.reap(time.time())
+        sess.close.assert_not_called()
+        self.assertIsNone(sess._listener)
         uplink.reap(time.time())
         sess.close.assert_called_once()
         self.assertIsNone(uplink.get(sess.audio_token))

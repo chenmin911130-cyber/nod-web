@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
+import { gapLabel, interleaveGaps, type ListenGap } from '../listenGap'
 import type { CaptureState, CatchNote, Lang, MeetingLine, PairLang } from '../types'
 import { TRANSLATE_LANGS } from '../types'
 import {
@@ -39,7 +40,7 @@ import {
   speechChipTitle,
   spokenSettingsValue,
 } from '../iphoneCopy'
-import { listenChromeLinkLabel, type LinkState } from '../linkState'
+import { listenLinkBanner, type LinkState, type UplinkLinkState } from '../linkState'
 import { translateLangDisplayName } from '../langDisplayNames'
 import { ENDED_TAP_SLOP, bottomBarMode, endedDockFromPointer, endedHasContent, endedSheetAvailable, listenAskPlacement, nextComposeDraft, showNotesEmptyHint } from '../listenChrome'
 import { usePhoneChrome } from '../phoneChrome'
@@ -59,6 +60,7 @@ interface Props {
   notesTranslateTo: PairLang
   notesLang: Lang
   lines: MeetingLine[]
+  gaps?: ListenGap[]
   speakerNames: Record<string, string>
   speakerNameLocked?: Record<string, boolean>
   speakerDecided?: Record<string, 'confirmed' | 'dismissed'>
@@ -70,6 +72,7 @@ interface Props {
   paused?: boolean
   ended: boolean
   link?: LinkState
+  uplink?: UplinkLinkState | null
   capture?: CaptureState
   catchNotes: CatchNote[]
   notesRaw: string
@@ -107,6 +110,7 @@ interface Props {
   translatingLineId?: string
   actions?: ReactNode
   saveBanner?: ReactNode
+  offlineResumeHint?: string
   showSavedLine?: boolean
 }
 
@@ -542,6 +546,9 @@ function IphoneSettingsList({
         <span className="iphone-settings-value">{spokenSettingsValue(speechLang)}</span>
         <SettingsChevron />
       </button>
+      {speechLang !== 'auto' ? (
+        <p className="iphone-settings-help">{IPHONE_COPY.speechLockHelp}</p>
+      ) : null}
       {qa ? null : (
         <button type="button" className="iphone-settings-row" ref={notesRef} aria-haspopup="dialog" onClick={onNotes}>
           <ChipNotes />
@@ -1199,15 +1206,22 @@ export default function ListenPane(props: Props) {
     hasContent,
   })
   const linkHint = !props.qa
-    ? listenChromeLinkLabel({
+    ? listenLinkBanner({
         link: props.link ?? 'online',
+        uplink: props.uplink ?? null,
         capture: props.capture ?? 'off',
         ended: props.ended,
-        linkReconnecting: IPHONE_COPY.linkReconnecting,
-        linkWaitingForNotes: IPHONE_COPY.linkWaitingForNotes,
+        copy: {
+          linkReconnecting: IPHONE_COPY.linkReconnecting,
+          linkWaitingForNotes: IPHONE_COPY.linkWaitingForNotes,
+          linkLiveOnlyDown: IPHONE_COPY.linkLiveOnlyDown,
+          linkBothDown: IPHONE_COPY.linkBothDown,
+          linkUplinkDown: IPHONE_COPY.linkUplinkDown,
+          linkBackfilling: IPHONE_COPY.linkBackfilling,
+        },
       })
     : ''
-  const linkReconnectingChrome = linkHint && (props.link ?? 'online') === 'reconnecting' && props.capture !== 'off' && !props.ended
+  const linkReconnectingChrome = Boolean(linkHint) && !props.ended && props.capture !== 'off'
   const askPlacement = listenAskPlacement({
     phone,
     qa: Boolean(props.qa),
@@ -1449,8 +1463,9 @@ export default function ListenPane(props: Props) {
       props.lines,
       props.ended ? null : { text: props.partial, speaker: props.partialSpeaker },
       { scene: props.scene, speakerNames: props.speakerNames, speakerNameLocked: locked },
+      props.gaps,
     ),
-    [props.lines, props.partial, props.partialSpeaker, props.ended, props.scene, props.speakerNames, locked],
+    [props.lines, props.gaps, props.partial, props.partialSpeaker, props.ended, props.scene, props.speakerNames, locked],
   )
   const hadAskAnswer = props.catchNotes.some((note) => note.kind === 'ask' && note.text.trim())
   const hasFeed = feed.items.length > 0 || Boolean(feed.draft)
@@ -1940,6 +1955,18 @@ export default function ListenPane(props: Props) {
                   {speakerSuggestRow}
                   {trGroups.map((group, gi) => {
                       const lastGroup = gi === trGroups.length - 1
+                      if (group.gap) {
+                        return (
+                          <div
+                            key={group.gap.id}
+                            className="listen-line iphone-tr-line iphone-tr-compact listen-gap-line"
+                          >
+                            <div className="iphone-tr-body">
+                              <div className="listen-orig">{gapLabel(group.gap, IPHONE_COPY)}</div>
+                            </div>
+                          </div>
+                        )
+                      }
                       return (
                         <div className="iphone-tr-group" key={`${group.speaker || 'none'}-${group.startTs || 'draft'}-${gi}`}>
                           <div className="iphone-tr-group-head">
@@ -1997,7 +2024,21 @@ export default function ListenPane(props: Props) {
                   </>
                 ) : (
                   <>
-                  {props.lines.map((line, i) => (
+                  {interleaveGaps(props.lines, props.gaps ?? []).map((item, i) => {
+                    if ('gap' in item && item.gap) {
+                      return (
+                        <div
+                          key={item.gap.id}
+                          className="listen-line listen-gap-line"
+                        >
+                          <div className="listen-orig">{gapLabel(item.gap, IPHONE_COPY)}</div>
+                        </div>
+                      )
+                    }
+                    if (!('line' in item)) return null
+                    const line = item.line
+                    const lineIndex = item.index
+                    return (
                     <LineRow
                       key={line.id || `${line.ts}-${i}`}
                       ts={line.ts}
@@ -2005,15 +2046,16 @@ export default function ListenPane(props: Props) {
                       translation={line.translation || ''}
                       speaker={line.speaker || ''}
                       speakerLabel={lineLabel(line)}
-                      live={props.listening && i === props.lines.length - 1 && !props.partial}
-                      last={(i === props.lines.length - 1 && !props.partial) || openedLine === line.id}
+                      live={props.listening && lineIndex === props.lines.length - 1 && !props.partial}
+                      last={(lineIndex === props.lines.length - 1 && !props.partial) || openedLine === line.id}
                       translateOn={biOn}
                       translateFailed={line.translateFailed || false}
                       onOpen={() => setOpenedLine(line.id)}
                       busy={props.busy}
                       onRename={props.onRenameSpeaker}
                     />
-                  ))}
+                    )
+                  })}
                 {props.partial && !props.ended && (
                     <div className="listen-line live">
                       <div className="listen-ts">
@@ -2231,21 +2273,44 @@ export default function ListenPane(props: Props) {
           </div>
             </>
           ) : null}
-          {props.saveBanner}
-          {phone && !props.qa && props.onStart ? (
-            <ListenRecordBar
-              mode={barMode}
-              elapsedMs={props.elapsedMs || 0}
-              startLabel={IPHONE_COPY.startListening}
-              stopLabel={IPHONE_COPY.stop}
-              continueLabel={IPHONE_COPY.continueRecording}
-              onStart={props.onStart}
-              onPause={props.onPause}
-              onResume={props.onResume}
-              onStop={props.onStop}
-              onContinue={props.onContinue}
-            />
-          ) : null}
+          {props.offlineResumeHint ? (
+            <>
+              {phone && !props.qa && props.onStart ? (
+                <ListenRecordBar
+                  mode={barMode}
+                  elapsedMs={props.elapsedMs || 0}
+                  startLabel={IPHONE_COPY.startListening}
+                  stopLabel={IPHONE_COPY.stop}
+                  continueLabel={IPHONE_COPY.continueRecording}
+                  onStart={props.onStart}
+                  onPause={props.onPause}
+                  onResume={props.onResume}
+                  onStop={props.onStop}
+                  onContinue={props.onContinue}
+                />
+              ) : null}
+              <p className="iphone-settings-help">{props.offlineResumeHint}</p>
+              {props.saveBanner}
+            </>
+          ) : (
+            <>
+              {props.saveBanner}
+              {phone && !props.qa && props.onStart ? (
+                <ListenRecordBar
+                  mode={barMode}
+                  elapsedMs={props.elapsedMs || 0}
+                  startLabel={IPHONE_COPY.startListening}
+                  stopLabel={IPHONE_COPY.stop}
+                  continueLabel={IPHONE_COPY.continueRecording}
+                  onStart={props.onStart}
+                  onPause={props.onPause}
+                  onResume={props.onResume}
+                  onStop={props.onStop}
+                  onContinue={props.onContinue}
+                />
+              ) : null}
+            </>
+          )}
           </div>
         </>
       )}

@@ -1777,6 +1777,7 @@ func waitSend() {
     // #218 Live Q&A reading rules (compact summary + no jump while reading).
     WatchQASummaryTests.run()
     UplinkPacerTests.run()
+    UplinkInflightTests.run()
 
     _ = bridge
     print("Watch replay: persist-ack, buffer pause, disconnect pause, leftover files, identity, handshake, Save, locked Live Q&A, Always-On display and waveform tests passed")

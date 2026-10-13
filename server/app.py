@@ -101,6 +101,7 @@ from server.stt_audio import (
     uplink_config_from_env,
 )
 from server.stt_latency import ListenSummary
+from server.listen_gap import GapTracker
 from server.logging_setup import backup_now, setup_logging
 from server.settings import (
     AUTH_DISABLED,
@@ -3269,6 +3270,7 @@ class Session:
         self._listen_flush_history_ok = True
         self._listen_flush_client_id: str | None = None
         self._last_pcm_at = 0.0
+        self._gap_tracker = GapTracker()
         self._last_voice_at = 0.0
         self._idle_check_at = 0.0
         self._listen_mic = "phone"
@@ -3662,12 +3664,18 @@ class Session:
             # set_mic_muted keeps the socket up), so a muted session must never read as
             # 'no microphone'. Refreshing under the consent gate too is harmless: no
             # consent means no real listening, so the socket holds only briefly.
-            self._last_pcm_at = time.time()
+            now_pcm = time.time()
+            gap_tracker = getattr(self, "_gap_tracker", None)
+            if gap_tracker is not None:
+                gap_tracker.note_pcm(now_pcm, self._last_pcm_at)
+            self._last_pcm_at = now_pcm
         if self._mic_muted:
             return
         if self.user_id and not self._has_consent():
             return
-        if self.user_id:
+        notice = getattr(self, "_offline_notice", None)
+        offline_retained = isinstance(notice, dict) and notice
+        if self.user_id and not offline_retained:
             self._pcm_unmetered += len(pcm)
             if self._pcm_unmetered >= 16000:
                 seconds = self._pcm_unmetered / float(SR * 2)
@@ -6748,6 +6756,9 @@ class Session:
             # Bank the just-listened segment into the accumulated 2h quota so
             # the wall-clock pause doesn't keep consuming the cap.
             self._listen_accum_sec = getattr(self, "_listen_accum_sec", 0.0) + (time.time() - self._listen_started_at)
+            gap_tracker = getattr(self, "_gap_tracker", None)
+            if gap_tracker is not None:
+                gap_tracker.note_pause()
             with self._listen_lock():
                 lst = self._listener or getattr(self, "_handoff_listener", None)
                 self._listener = None
@@ -6784,6 +6795,9 @@ class Session:
             self._last_voice_at = time.time()
             self._listen_started_at = time.time()
             self._pcm_rx_reanchor = True
+            gap_tracker = getattr(self, "_gap_tracker", None)
+            if gap_tracker is not None:
+                gap_tracker.note_resume_listen(time.time())
             self._start_listening(resume=True)
         else:
             # Not wanted (or manual recording): just clear the paused latch.
@@ -6885,6 +6899,10 @@ class Session:
     def _start_listening(self, resume: bool = False) -> None:
         if not self._claim_listen_start(resume):
             return
+        if not resume:
+            gap_tracker = getattr(self, "_gap_tracker", None)
+            if gap_tracker is not None:
+                gap_tracker.reset()
         try:
             self._open_listener(resume)
         finally:
@@ -7089,7 +7107,7 @@ class Session:
         if not offline:
             return
         if getattr(self, "_client_emit", None) is None:
-            self._offline_notice = {"status": text, "save_prompt": True}
+            self._offline_notice = {"status": text, "save_prompt": True, "at": time.time()}
         else:
             self._offline_notice = None
 
@@ -7104,6 +7122,9 @@ class Session:
         self._listen_accum_sec = 0.0  # session over; reset the accumulated quota
         self._listen_ended = True  # definitive stop (issue #165 P2-8)
         self._last_pcm_at = 0.0  # zero-PCM guard must not carry into the next session
+        gap_tracker = getattr(self, "_gap_tracker", None)
+        if gap_tracker is not None:
+            gap_tracker.reset()
         self._pending_q.clear()
         self._cancel_stt_restart_timer()
         self._abandon_handoff(bump_gen=False)
@@ -8070,10 +8091,13 @@ async def ws_endpoint(ws: WebSocket):
             await ws.send_text(msg)
 
     send_task = asyncio.create_task(sender())
+    ws_open_at = time.time()
+    close_code = 1000
     try:
         while True:
             message = await ws.receive()
             if message.get("type") == "websocket.disconnect":
+                close_code = int(message.get("code", 1000))
                 break
             data = message.get("bytes")
             text = message.get("text")
@@ -8097,12 +8121,22 @@ async def ws_endpoint(ws: WebSocket):
                 if not isinstance(payload, dict):
                     continue
                 await run_in_threadpool(session.dispatch, payload)
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        close_code = exc.code
     finally:
+        superseded = getattr(session, "_control_owner", None) is not control_owner
+        parked = int((not superseded) and uplink.should_park(session))
+        logging.getLogger("nod").info(
+            "ws_close kind=control code=%s dur_s=%.3f session=%s parked=%d superseded=%d",
+            close_code,
+            max(0.0, time.time() - ws_open_at),
+            getattr(session, "usage_session_id", None) or "-",
+            parked,
+            int(superseded),
+        )
         send_task.cancel()
         ws_disconnect(ip)
-        if getattr(session, "_control_owner", None) is not control_owner:
+        if superseded:
             # A newer control socket adopted this session while this one was
             # closing; it owns the session now, so closing/parking here would kill
             # a live listen (#279).
@@ -8155,11 +8189,19 @@ async def ws_audio(ws: WebSocket):
         await ws.close(code=4409)
         return
     await ws.accept()
+    conn_done = asyncio.Event()
+    setattr(ws, "_uplink_conn_done", conn_done)
     if prev is not None and prev is not ws:
         try:
             await prev.close()
         except Exception:
             pass
+        prev_done = getattr(prev, "_uplink_conn_done", None)
+        if isinstance(prev_done, asyncio.Event):
+            try:
+                await asyncio.wait_for(prev_done.wait(), 2.0)
+            except TimeoutError:
+                pass
     session._audio_ws = ws
     session._replay_pcm_rejection()
     session._uplink_connected = True
@@ -8168,6 +8210,48 @@ async def ws_audio(ws: WebSocket):
     from server.stt_latency import uplink_client_kind
 
     session._uplink_client = uplink_client_kind(raw_headers.get("user-agent"))
+    ws_open_at = time.time()
+    close_code = 1000
+    # Session-cumulative wire bytes. Never cleared; a new Session starts at 0.
+    prev_rx = int(getattr(session, "_uplink_rx_total", 0) or 0)
+    try:
+        await ws.send_text(json.dumps({"type": "uplink_resume", "prev_rx": prev_rx}))
+    except Exception:
+        pass
+    gap_tracker = getattr(session, "_gap_tracker", None)
+    if gap_tracker is not None:
+        gap_tracker.note_resume(time.time())
+    limited_bytes = 0
+    session._uplink_limited_bytes = 0
+    last_ack_rx = 0
+    last_ack_at = time.monotonic()
+    ack_lock = asyncio.Lock()
+
+    async def maybe_ack() -> None:
+        nonlocal last_ack_rx, last_ack_at
+        async with ack_lock:
+            rx = int(getattr(session, "_uplink_rx_total", 0) or 0)
+            if rx <= last_ack_rx:
+                return
+            now = time.monotonic()
+            if rx - last_ack_rx < 32000 and now - last_ack_at < 1.0:
+                return
+            try:
+                await ws.send_text(json.dumps({"type": "rx_ack", "rx": rx}))
+            except Exception:
+                return
+            last_ack_rx = rx
+            last_ack_at = now
+
+    async def ack_loop() -> None:
+        try:
+            while True:
+                await asyncio.sleep(1.0)
+                await maybe_ack()
+        except asyncio.CancelledError:
+            return
+
+    ack_task = asyncio.create_task(ack_loop())
     try:
         cfg_msg = uplink_config_from_env()
         if cfg_msg is not None:
@@ -8185,17 +8269,26 @@ async def ws_audio(ws: WebSocket):
         while True:
             message = await ws.receive()
             if message.get("type") == "websocket.disconnect":
+                close_code = int(message.get("code", 1000))
                 break
             data = message.get("bytes")
             text = message.get("text")
             if getattr(session, "_closed", False):
                 break
             if data:
+                session._uplink_rx_total = int(getattr(session, "_uplink_rx_total", 0) or 0) + len(data)
                 if len(data) > MAX_WS_FRAME:
+                    limited_bytes += len(data)
+                    session._uplink_limited_bytes = limited_bytes
+                    await maybe_ack()
                     continue
                 if not allow(f"wsframe:{ip}", WS_FRAMES_PER_SEC, 1.0):
+                    limited_bytes += len(data)
+                    session._uplink_limited_bytes = limited_bytes
+                    await maybe_ack()
                     continue
                 await run_in_threadpool(session.push_pcm, data)
+                await maybe_ack()
             elif text:
                 try:
                     payload = json.loads(text)
@@ -8228,6 +8321,58 @@ async def ws_audio(ws: WebSocket):
                         parts.append(f"stream={stream}")
                         parts.append(f"client={getattr(session, '_uplink_client', '') or ''}")
                         logging.getLogger("nod").info(" ".join(parts))
+                    if parsed and getattr(session, "_listener", None) is not None:
+                        gap_tracker = getattr(session, "_gap_tracker", None)
+                        gaps: list = []
+                        if gap_tracker is not None:
+                            gaps = gap_tracker.note_ping(
+                                time.time(),
+                                parsed.get("enqueued_ms"),
+                                parsed.get("dropped_ms"),
+                                limited_bytes,
+                                bool(getattr(session, "_paused", False)),
+                                float(getattr(session, "_listen_started_at", 0.0) or 0.0),
+                                float(getattr(session, "_listen_accum_sec", 0.0) or 0.0),
+                            )
+                        for gap in gaps:
+                            session.emit(
+                                {
+                                    "type": "listen_gap",
+                                    "id": gap.id,
+                                    "from_ms": gap.from_ms,
+                                    "to_ms": gap.to_ms,
+                                    "reason": gap.reason,
+                                }
+                            )
+                            if session.user_id and session.usage_session_id:
+                                try:
+                                    from functools import partial
+
+                                    from server.meter import update_history_text
+
+                                    await run_in_threadpool(
+                                        partial(
+                                            update_history_text,
+                                            session.user_id,
+                                            session.usage_session_id,
+                                            gap.id,
+                                            f"{gap.from_ms}-{gap.to_ms}",
+                                            kind="gap",
+                                        )
+                                    )
+                                except Exception:
+                                    logging.getLogger("nod").exception(
+                                        "listen_gap history write failed session=%s gap=%s",
+                                        session.usage_session_id,
+                                        gap.id,
+                                    )
+                            logging.getLogger("nod").info(
+                                "listen_gap session=%s from_ms=%s to_ms=%s reason=%s",
+                                session.usage_session_id or "",
+                                gap.from_ms,
+                                gap.to_ms,
+                                gap.reason,
+                            )
                     continue
                 if mtype == "pcm_end":
                     await run_in_threadpool(
@@ -8236,9 +8381,23 @@ async def ws_audio(ws: WebSocket):
                         payload.get("byte_offset"),
                         payload.get("capture_id") or payload.get("captureId"),
                     )
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        close_code = exc.code
     finally:
+        ack_task.cancel()
+        try:
+            await ack_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        conn_done.set()
+        parked = int(uplink.is_parked(getattr(session, "audio_token", None)))
+        logging.getLogger("nod").info(
+            "ws_close kind=audio code=%s dur_s=%.3f session=%s parked=%d",
+            close_code,
+            max(0.0, time.time() - ws_open_at),
+            getattr(session, "usage_session_id", None) or "-",
+            parked,
+        )
         ws_disconnect(ip)
         if getattr(session, "_audio_ws", None) is ws:
             session._audio_ws = None

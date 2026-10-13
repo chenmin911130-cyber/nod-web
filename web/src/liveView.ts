@@ -1,4 +1,5 @@
 import { showLineTranslation } from './iphoneCopy'
+import { formatGapTs, interleaveGaps, type ListenGap } from './listenGap'
 import type { CatchNote } from './types'
 import {
   expandSplitMeetingLines,
@@ -253,6 +254,7 @@ export type TranscriptGroup = {
   startTs: string
   lines: TranscriptGroupLine[]
   draft?: { text: string; speaker: string }
+  gap?: ListenGap
 }
 
 function speakerKey(speaker?: string): string {
@@ -306,20 +308,49 @@ export function groupTranscript(
   lines: TranscriptGroupLine[],
   partial?: { text?: string; speaker?: string } | null,
   opts?: GroupTranscriptOpts,
+  gaps?: ListenGap[],
 ): TranscriptGroup[] {
   const scene = opts?.scene
   const expanded = scene === 'meeting' || scene === 'interview'
     ? expandSplitMeetingLines(lines)
     : lines
   const groups: TranscriptGroup[] = []
-  for (const line of expanded) {
-    const groupKey = transcriptGroupKey(line, opts)
-    const speaker = speakerKey(line.speaker)
-    const last = groups[groups.length - 1]
-    if (last && last.groupKey === groupKey && !last.draft) {
-      last.lines.push(line)
-    } else {
-      groups.push({ speaker, groupKey, startTs: line.ts || '', lines: [line] })
+  const gapList = gaps?.length ? gaps : null
+  if (gapList) {
+    const merged = interleaveGaps(expanded, gapList)
+    for (const item of merged) {
+      if ('gap' in item && item.gap) {
+        const gap = item.gap
+        groups.push({
+          speaker: '',
+          groupKey: 'gap',
+          startTs: formatGapTs(gap.fromMs),
+          lines: [],
+          gap,
+        })
+        continue
+      }
+      if (!('line' in item)) continue
+      const line = item.line
+      const groupKey = transcriptGroupKey(line, opts)
+      const speaker = speakerKey(line.speaker)
+      const last = groups[groups.length - 1]
+      if (last && last.groupKey === groupKey && !last.draft && !last.gap) {
+        last.lines.push(line)
+      } else {
+        groups.push({ speaker, groupKey, startTs: line.ts || '', lines: [line] })
+      }
+    }
+  } else {
+    for (const line of expanded) {
+      const groupKey = transcriptGroupKey(line, opts)
+      const speaker = speakerKey(line.speaker)
+      const last = groups[groups.length - 1]
+      if (last && last.groupKey === groupKey && !last.draft) {
+        last.lines.push(line)
+      } else {
+        groups.push({ speaker, groupKey, startTs: line.ts || '', lines: [line] })
+      }
     }
   }
   const draftText = (partial?.text || '').trim()
