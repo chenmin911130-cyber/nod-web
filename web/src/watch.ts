@@ -502,8 +502,8 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(chunks.join(''))
 }
 
-export async function shareNativeFile(bytes: Uint8Array, name: string): Promise<void> {
-  await saveNativeFiles([{ bytes, name }])
+export async function shareNativeFile(file: { bytes: Uint8Array; name: string }): Promise<void> {
+  await NodWatch.shareFile({ data: bytesToBase64(file.bytes), name: file.name })
 }
 
 export async function saveNativeFiles(

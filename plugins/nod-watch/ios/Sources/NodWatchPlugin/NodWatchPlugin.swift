@@ -96,11 +96,43 @@ public class NodWatchPlugin: CAPPlugin, CAPBridgedPlugin {
     private var fileExport: FileExport?
 
     @objc func shareFile(_ call: CAPPluginCall) {
-        guard let b64 = call.getString("data"), let name = call.getString("name") else {
+        guard let b64 = call.getString("data"),
+              let name = call.getString("name"),
+              let data = Data(base64Encoded: b64) else {
             call.reject("Missing file")
             return
         }
-        saveFiles(call, items: [["data": b64, "name": name]])
+        let safe = name.replacingOccurrences(of: "/", with: "-")
+        DispatchQueue.global(qos: .userInitiated).async {
+            let url: URL
+            do {
+                let written = try Self.writeExport(data: data, name: safe)
+                url = Self.preparedExportURL(written)
+            } catch {
+                call.reject(error.localizedDescription)
+                return
+            }
+            DispatchQueue.main.async {
+                guard let vc = self.bridge?.viewController else {
+                    call.reject("No view")
+                    return
+                }
+                let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+                activity.popoverPresentationController?.sourceView = vc.view
+                let bounds = vc.view.bounds
+                activity.popoverPresentationController?.sourceRect = CGRect(
+                    x: bounds.midX, y: bounds.midY, width: 0, height: 0
+                )
+                activity.completionWithItemsHandler = { _, _, _, error in
+                    if let error {
+                        call.reject(error.localizedDescription)
+                        return
+                    }
+                    call.resolve()
+                }
+                vc.present(activity, animated: true)
+            }
+        }
     }
 
     @objc func saveToFiles(_ call: CAPPluginCall) {
