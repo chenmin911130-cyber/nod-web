@@ -3,7 +3,7 @@ import { PRODUCT_NAME } from './brand'
 import { getToken } from './auth'
 import { MicCapture } from './audio'
 import { apiUrl, isAndroidApp, isNativeApp, wsUrl } from './native'
-import { micSilenceShouldWarn } from './micGuard'
+import { micSilenceShouldWarn, pcmChunkHasVoice } from './micGuard'
 import { reconnectStep, shouldKeepReconnecting } from './reconnect'
 import { audioUplinkWsUrl, controlWsUrl, shouldEmitUplinkNotice, uplinkFailureFromError, uplinkFailureLog, uplinkShouldForwardPcmFromJs, uplinkTokenAction, uplinkTokenAfterNativeStart } from './uplink'
 import { isWatchMicPreferred, setWatchPcmSink } from './watch'
@@ -205,6 +205,7 @@ export function installWebApi(): void {
   const pending: Array<{ msg: EngineMsg; at: number }> = []
   let micMuted = false
   let pcmBytes = 0
+  let sawVoice = false
   let listenSince = 0
   let silenceWatch = 0
   let uplinkToken = ''
@@ -255,12 +256,14 @@ export function installWebApi(): void {
         if (!listenSince) {
           listenSince = Date.now()
           pcmBytes = 0
+          sawVoice = false
           window.clearInterval(silenceWatch)
           silenceWatch = window.setInterval(() => {
             if (
               micSilenceShouldWarn({
                 listening: lastRun === 'listening' || lastRun === 'recording',
                 pcmBytes,
+                sawVoice,
                 elapsedMs: Date.now() - listenSince,
                 watchPreferred: isWatchMicPreferred(),
                 uplinkActive: Boolean(uplinkToken) && isNativeApp(),
@@ -283,6 +286,7 @@ export function installWebApi(): void {
     } else if (mic.active) {
       listenSince = 0
       pcmBytes = 0
+      sawVoice = false
       window.clearInterval(silenceWatch)
       micStopTimer = window.setTimeout(() => {
         if (lastRun !== 'listening' && lastRun !== 'recording' && mic.active) mic.stop()
@@ -442,6 +446,7 @@ export function installWebApi(): void {
 
   mic.onPcm = (buf) => {
     pcmBytes += buf.byteLength
+    if (pcmChunkHasVoice(buf)) sawVoice = true
     if (micMuted) return
     if (!uplinkShouldForwardPcmFromJs({ nativeApp: isNativeApp(), hasToken: Boolean(uplinkToken) })) {
       return
