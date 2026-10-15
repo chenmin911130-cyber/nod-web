@@ -14,6 +14,18 @@ eq(statusIsAmbient('语音识别 · 自动'), true, 'zh speech prefix is ambient
 eq(statusIsAmbient('Mode · Translate'), true, 'workspace switch is ambient')
 eq(statusIsAmbient('Mode · AI Listening Assistant'), true, 'Listen mode toast is ambient')
 eq(statusIsAmbient('Opened meeting session'), true, 'history restore status is ambient')
+eq(
+  statusIsAmbient('Transcribing carefully — this can take a moment…'),
+  true,
+  'batch transcribe status stays ambient',
+)
+eq(statusIsAmbient('Transcription dropped — reconnecting'), false, 'stt reconnect is not ambient')
+eq(statusShouldOverlayToast('Transcription dropped — reconnecting'), true, 'stt reconnect overlays toast')
+eq(
+  nextStatusText('Transcription dropped — reconnecting', 'Listening'),
+  'Listening',
+  'listening replaces reconnect status',
+)
 eq(statusIsAmbient('Microphone is silent'), false, 'mic failure still toasts')
 eq(statusIsAmbient('Settings are locked while recording'), false, 'locked settings still toasts')
 eq(statusIsAmbient("Couldn't save. Try again."), false, 'save failure still toasts')
