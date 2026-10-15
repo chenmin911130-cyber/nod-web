@@ -1,10 +1,17 @@
 import { IPHONE_COPY } from './iphoneCopy'
 import { EN_IPHONE_COPY, iphoneCopyFor } from './iphoneCopyLocales'
 
+/** AssemblyAI streaming reconnect — must surface as a toast, not match /^Transcrib/. */
+export function statusIsSttReconnect(text: string): boolean {
+  const t = text.trim()
+  return t === 'Transcription dropped — reconnecting' || t.startsWith('Transcription dropped —')
+}
+
 /** Status strings that must not float over the phone title bar. */
 export function statusIsAmbient(text: string): boolean {
   const t = text.trim()
   if (!t) return true
+  if (statusIsSttReconnect(t)) return false
   if (/^(Starting|Ready|Listening|Recording|Calibrat|Transcrib|Checking|Generating|Thinking)/i.test(t)) return true
   if (t.startsWith('I caught part')) return true
   if (
