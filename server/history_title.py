@@ -165,7 +165,11 @@ def generate_history_title(user_id: str, session_id: str, complete) -> str:
 def _default_complete(messages: list[dict[str, str]]):
     from openai import OpenAI
 
-    from server.ollama_llm import chat_completions_with_ollama_fallback, ollama_configured
+    from server.ollama_llm import (
+        OLLAMA_NON_STREAM_TIMEOUT_S,
+        chat_completions_with_ollama_fallback,
+        ollama_configured,
+    )
     from server.settings import THINK_LLM_MODEL
 
     key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
@@ -194,7 +198,7 @@ def _default_complete(messages: list[dict[str, str]]):
     }
     return chat_completions_with_ollama_fallback(
         kwargs=kwargs,
-        timeout=TITLE_TIMEOUT_S,
+        ollama_timeout=OLLAMA_NON_STREAM_TIMEOUT_S,
         fallback=_deepseek_create,
     )
 

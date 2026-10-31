@@ -63,7 +63,13 @@ from server.lang import (
     split_code_switched,
     translate_should_passthrough,
 )
-from server.ollama_llm import chat_completions_with_ollama_fallback, ollama_configured
+from server.ollama_llm import (
+    OLLAMA_NON_STREAM_TIMEOUT_S,
+    OLLAMA_STREAM_DEFAULT_READ_S,
+    OLLAMA_STREAM_TRANSLATE_READ_S,
+    chat_completions_with_ollama_fallback,
+    ollama_configured,
+)
 from server.meeting_lines import (
     decide as meeting_decide,
     decide_full as meeting_decide_full,
@@ -1550,7 +1556,7 @@ class Pipeline:
                 kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
             resp = chat_completions_with_ollama_fallback(
                 kwargs=kwargs,
-                timeout=8.0,
+                ollama_timeout=OLLAMA_NON_STREAM_TIMEOUT_S,
                 fallback=lambda: self.client.with_options(timeout=8.0).chat.completions.create(**kwargs),
             )
             out = ""
@@ -1600,7 +1606,7 @@ class Pipeline:
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         resp = chat_completions_with_ollama_fallback(
             kwargs=kwargs,
-            timeout=timeout,
+            ollama_timeout=OLLAMA_NON_STREAM_TIMEOUT_S,
             fallback=lambda: self.client.with_options(timeout=timeout).chat.completions.create(**kwargs),
         )
         out = ""
@@ -2014,7 +2020,11 @@ class Pipeline:
                     kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
                 stream = chat_completions_with_ollama_fallback(
                     kwargs=kwargs,
-                    timeout=90.0,
+                    ollama_timeout=(
+                        OLLAMA_STREAM_TRANSLATE_READ_S
+                        if mode == "translate"
+                        else OLLAMA_STREAM_DEFAULT_READ_S
+                    ),
                     fallback=lambda: answer_client.chat.completions.create(**kwargs),
                 )
                 with self._stream_lock():
