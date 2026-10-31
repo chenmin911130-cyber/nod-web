@@ -63,6 +63,13 @@ from server.lang import (
     split_code_switched,
     translate_should_passthrough,
 )
+from server.ollama_llm import (
+    OLLAMA_NON_STREAM_TIMEOUT_S,
+    OLLAMA_STREAM_DEFAULT_READ_S,
+    OLLAMA_STREAM_TRANSLATE_READ_S,
+    chat_completions_with_ollama_fallback,
+    ollama_configured,
+)
 from server.meeting_lines import (
     decide as meeting_decide,
     decide_full as meeting_decide_full,
@@ -1447,7 +1454,10 @@ class Pipeline:
 
     def key_status(self) -> dict[str, bool]:
         return {
-            "has_llm": bool((self._keys.get("OPENROUTER_API_KEY") or self._keys.get("DEEPSEEK_API_KEY") or "").strip()),
+            "has_llm": bool(
+                (self._keys.get("OPENROUTER_API_KEY") or self._keys.get("DEEPSEEK_API_KEY") or "").strip()
+            )
+            or ollama_configured(),
             "has_stt": bool(self.assemblyai_key()),
         }
 
@@ -1544,7 +1554,11 @@ class Pipeline:
             )
             if self._provider == "deepseek":
                 kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-            resp = self.client.with_options(timeout=8.0).chat.completions.create(**kwargs)
+            resp = chat_completions_with_ollama_fallback(
+                kwargs=kwargs,
+                ollama_timeout=OLLAMA_NON_STREAM_TIMEOUT_S,
+                fallback=lambda: self.client.with_options(timeout=8.0).chat.completions.create(**kwargs),
+            )
             out = ""
             if resp and getattr(resp, "choices", None):
                 out = (resp.choices[0].message.content or "").strip()
@@ -1590,7 +1604,11 @@ class Pipeline:
         )
         if self._provider == "deepseek":
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-        resp = self.client.with_options(timeout=timeout).chat.completions.create(**kwargs)
+        resp = chat_completions_with_ollama_fallback(
+            kwargs=kwargs,
+            ollama_timeout=OLLAMA_NON_STREAM_TIMEOUT_S,
+            fallback=lambda: self.client.with_options(timeout=timeout).chat.completions.create(**kwargs),
+        )
         out = ""
         if resp and getattr(resp, "choices", None):
             out = (resp.choices[0].message.content or "").strip()
@@ -2000,7 +2018,15 @@ class Pipeline:
                     }
                 elif self._provider == "deepseek":
                     kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-                stream = answer_client.chat.completions.create(**kwargs)
+                stream = chat_completions_with_ollama_fallback(
+                    kwargs=kwargs,
+                    ollama_timeout=(
+                        OLLAMA_STREAM_TRANSLATE_READ_S
+                        if mode == "translate"
+                        else OLLAMA_STREAM_DEFAULT_READ_S
+                    ),
+                    fallback=lambda: answer_client.chat.completions.create(**kwargs),
+                )
                 with self._stream_lock():
                     self._stream = stream
                 reasoning = ""

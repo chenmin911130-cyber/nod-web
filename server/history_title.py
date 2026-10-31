@@ -165,17 +165,41 @@ def generate_history_title(user_id: str, session_id: str, complete) -> str:
 def _default_complete(messages: list[dict[str, str]]):
     from openai import OpenAI
 
+    from server.ollama_llm import (
+        OLLAMA_NON_STREAM_TIMEOUT_S,
+        chat_completions_with_ollama_fallback,
+        ollama_configured,
+    )
     from server.settings import THINK_LLM_MODEL
 
     key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
-    if not key:
+    if not key and not ollama_configured():
         raise RuntimeError("no_deepseek_key")
-    client = OpenAI(api_key=key, base_url="https://api.deepseek.com", timeout=TITLE_TIMEOUT_S, max_retries=0)
-    return client.chat.completions.create(
-        model=THINK_LLM_MODEL,
-        messages=messages,
-        max_tokens=48,
-        temperature=0.2,
+
+    def _deepseek_create():
+        if not key:
+            raise RuntimeError("no_deepseek_key")
+        client = OpenAI(
+            api_key=key, base_url="https://api.deepseek.com", timeout=TITLE_TIMEOUT_S, max_retries=0
+        )
+        return client.chat.completions.create(
+            model=THINK_LLM_MODEL,
+            messages=messages,
+            max_tokens=48,
+            temperature=0.2,
+        )
+
+    kwargs = {
+        "model": THINK_LLM_MODEL,
+        "messages": messages,
+        "max_tokens": 48,
+        "temperature": 0.2,
+        "stream": False,
+    }
+    return chat_completions_with_ollama_fallback(
+        kwargs=kwargs,
+        ollama_timeout=OLLAMA_NON_STREAM_TIMEOUT_S,
+        fallback=_deepseek_create,
     )
 
 
