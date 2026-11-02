@@ -184,6 +184,10 @@ class OllamaWebToolsTests(unittest.TestCase):
             pipe.process_text("What major news broke this week?", "ask", think=False)
 
         self.assertTrue(captured.get("kwargs", {}).get("ollama_web_tools"))
+        captured.clear()
+        with mock.patch("server.app.chat_completions_with_ollama_fallback", side_effect=fake_ollama):
+            pipe.process_text("Translate this line", "translate", think=False)
+        self.assertFalse(captured.get("kwargs", {}).get("ollama_web_tools"))
         # Fallback path uses the original kwargs without the Ollama-only flag.
         self.assertIsNotNone(pipe.client.chat.completions.create.call_args)
         self.assertNotIn("ollama_web_tools", pipe.client.chat.completions.create.call_args.kwargs)

@@ -325,20 +325,14 @@ class SemanticBufferTests(_QaBase):
         self.assertEqual(self._answers(sess), ["我想知道"])
         self.assertEqual(sess._qa_buffer, [])
 
-    def test_stop_commit_submits_a_still_valid_ready_verdict(self):
+    def test_stop_commit_force_submits_buffered_text(self):
         sess = self._session(judge_stub(qs.VERDICT_WAIT))
         frag = qs.new_fragment("how should we price it?", "en", frag_id="t1:1", at=time.time())
         sess._qa_buffer = [frag]
         sess._qa_version = 7
-        sess._qa_verdict = {
-            "version": 7,
-            "verdict": qs.VERDICT_READY,
-            "question": "How should we price it?",
-            "fragments": ["t1:1"],
-        }
         sess._qa_stop_commit()
         self._wait(lambda: sess.pipeline.process_text.called)
-        self.assertEqual(self._answers(sess), ["How should we price it?"])
+        self.assertEqual(self._answers(sess), ["how should we price it?"])
 
     def test_manual_submit_suppresses_the_same_candidate_and_keeps_unrelated_ones(self):
         # Acceptance: manual submit wins; the same candidate is not auto-answered
@@ -685,6 +679,26 @@ class LifecycleTests(_QaBase):
         self._wait(lambda: sess.pipeline.process_text.called)
         sess.pipeline.judge_qa.assert_not_called()
         self.assertEqual(self._answers(sess), ["Why?"])
+
+    def test_partial_after_wait_rearms_cap_and_eventually_submits(self):
+        import server.app as app_mod
+
+        old = app_mod.QA_WAIT_FORCE_SUBMIT_SECONDS
+        app_mod.QA_WAIT_FORCE_SUBMIT_SECONDS = 0.08
+        try:
+            sess = self._session(judge_stub(qs.VERDICT_WAIT))
+            sess._on_final("我想知道", "zh", None, {"stt_turn": 1, "listener_id": 1})
+            self._settle(sess)
+            self.assertTrue(getattr(sess, "_qa_wait_cap_pending", False))
+            # Partial-only STT must restart the cap, not disarm it (no new final).
+            sess._on_partial("大概要多少", "zh")
+            time.sleep(0.05)
+            sess.pipeline.process_text.assert_not_called()
+            time.sleep(0.12)
+            self._wait(lambda: sess.pipeline.process_text.called, timeout=2)
+            self.assertEqual(self._answers(sess), ["我想知道"])
+        finally:
+            app_mod.QA_WAIT_FORCE_SUBMIT_SECONDS = old
 
     def test_wait_verdict_emits_qa_wait_and_force_submits_after_cap(self):
         import server.app as app_mod
