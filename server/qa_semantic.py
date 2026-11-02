@@ -11,8 +11,8 @@ when they arrived less than 2s apart. That silently dropped the earlier half of
 a slow STT turn and answered "several words in". This module replaces the
 *completeness* decision with the model's, keeps the fragments in an ordered
 buffer keyed by STT turn identity (so a re-sent final / revision replaces its
-fragment instead of stacking), and never lets a timer promote a ``wait`` into an
-answer.
+fragment instead of stacking). A bounded timer or an explicit Stop may
+force-submit an incomplete candidate; Stop never drops a non-empty buffer.
 """
 
 from __future__ import annotations
@@ -41,6 +41,11 @@ DEFAULT_PRIOR_QA_PAIRS = 2
 DEFAULT_MAX_QUESTION_CHARS = 600
 
 _JSON_FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
+# Obvious complete questions: skip the LLM completeness judge (issue: voice Q&A latency).
+_OBVIOUS_QUESTION_END = re.compile(
+    r"(?:吗|么|呢|什么|多少钱|多少|怎么|为何|为什么|哪(?:里|儿|个|些|谁)?|谁|几|是不是|能不能|可不可以"
+    r"|\?|？)\s*$"
+)
 
 
 # --- fragment identity / buffer ---------------------------------------------
@@ -287,6 +292,49 @@ def _extract_json(raw: str) -> Any:
         return json.loads(txt[start : end + 1])
     except (TypeError, ValueError):
         return None
+
+
+UNCLEAR_TRANSCRIPT_ANSWER_HINT = (
+    "\n\nThe user's question may be incomplete or unclear from speech recognition. "
+    "Answer the most likely intended meaning. You may start with one brief line "
+    "confirming your interpretation, then give the answer."
+)
+
+
+def build_force_submit_verdict(
+    fragments: Sequence[dict[str, Any]],
+    *,
+    max_question_chars: int = DEFAULT_MAX_QUESTION_CHARS,
+    reason: str = "force_submit",
+) -> dict[str, Any] | None:
+    """Synthetic ``ready`` verdict from the buffered transcript (Stop / wait cap)."""
+    frags = [f for f in fragments if str(f.get("text") or "").strip()]
+    if not frags:
+        return None
+    ids = [str(f["id"]) for f in frags]
+    question = candidate_text(frags, max_chars=max_question_chars)
+    if not question or len(question) > max_question_chars:
+        return None
+    return {
+        "verdict": VERDICT_READY,
+        "question": question,
+        "fragments": ids,
+        "reason": reason,
+    }
+
+
+def local_obvious_ready_verdict(
+    fragments: Sequence[dict[str, Any]],
+    *,
+    max_question_chars: int = DEFAULT_MAX_QUESTION_CHARS,
+) -> dict[str, Any] | None:
+    """Local completeness gate for clearly finished questions (no model call)."""
+    text = candidate_text(fragments, max_chars=max_question_chars)
+    if len(text) < 2 or not _OBVIOUS_QUESTION_END.search(text):
+        return None
+    return build_force_submit_verdict(
+        fragments, max_question_chars=max_question_chars, reason="local_obvious"
+    )
 
 
 def parse_judge_reply(

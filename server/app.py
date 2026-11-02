@@ -68,6 +68,7 @@ from server.ollama_llm import (
     OLLAMA_STREAM_DEFAULT_READ_S,
     OLLAMA_STREAM_TRANSLATE_READ_S,
     chat_completions_with_ollama_fallback,
+    completion_message_text,
     ollama_configured,
 )
 from server.meeting_lines import (
@@ -131,6 +132,7 @@ from server.settings import (
     QA_MIN_JUDGE_INTERVAL_SECONDS,
     QA_PRIOR_QA_PAIRS,
     QA_SETTLE_SECONDS,
+    QA_WAIT_FORCE_SUBMIT_SECONDS,
     QUOTA_DISABLED,
     THINK_REASONING_EFFORT,
     THINK_LLM_MODEL,
@@ -1611,7 +1613,7 @@ class Pipeline:
         )
         out = ""
         if resp and getattr(resp, "choices", None):
-            out = (resp.choices[0].message.content or "").strip()
+            out = completion_message_text(resp.choices[0].message)
         if self.user_id:
             try:
                 from server.meter import consume_llm
@@ -2018,9 +2020,17 @@ class Pipeline:
                     }
                 elif self._provider == "deepseek":
                     kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-                # Ollama cloud tools (web_search / web_fetch) apply whenever Ollama is
-                # primary — independent of Think mode and Parallel lookup (#182).
-                ollama_kwargs = kwargs if images else {**kwargs, "ollama_web_tools": True}
+                # Ollama web_search for Q&A text only — never translation (#370 review).
+                use_ollama_web_tools = (
+                    not images
+                    and mode != "translate"
+                    and mode in ("ask", "file_ask", "listen_ask")
+                )
+                ollama_kwargs = (
+                    kwargs
+                    if not use_ollama_web_tools
+                    else {**kwargs, "ollama_web_tools": True}
+                )
                 stream = chat_completions_with_ollama_fallback(
                     kwargs=ollama_kwargs,
                     ollama_timeout=(
@@ -4873,9 +4883,9 @@ class Session:
     # Consecutive finals (and revisions of the SAME STT turn) accumulate into one
     # ordered candidate. A partial only means "still speaking": it extends the
     # settle window and invalidates a verdict being computed for the old buffer.
-    # The MODEL decides whether the candidate is a complete question (ready),
-    # background chatter, or still unfinished (wait); a timer can never promote a
-    # wait into an answer. Judgement never touches capture/engine state.
+    # The MODEL (or a local obvious-question gate) decides whether the candidate is
+    # ready, background, or wait; Stop and a bounded wait cap may force-submit.
+    # Judgement never touches capture/engine state.
 
     def _qa_lock(self) -> threading.Lock:
         mu = getattr(self, "_qa_mu", None)
@@ -4903,6 +4913,7 @@ class Session:
         self._qa_stale_version = int(getattr(self, "_qa_stale_version", -1) or -1)
         self._qa_verdict = getattr(self, "_qa_verdict", None)
         self._qa_candidate_id = str(getattr(self, "_qa_candidate_id", "") or "")
+        self._qa_wait_cap_pending = bool(getattr(self, "_qa_wait_cap_pending", False))
         self._qa_ready = True
 
     # --- Think (#182): session switch + submit-time snapshot -------------------
@@ -4931,6 +4942,15 @@ class Session:
         """
         return version == self._qa_judged_version and version != self._qa_stale_version
 
+    def _qa_cancel_wait_timer(self) -> None:
+        wait_timer = getattr(self, "_qa_wait_timer", None)
+        self._qa_wait_timer = None
+        if wait_timer:
+            try:
+                wait_timer.cancel()
+            except Exception:
+                pass
+
     def _qa_cancel_timer(self) -> None:
         timer = getattr(self, "_qa_timer", None)
         self._qa_timer = None
@@ -4939,6 +4959,62 @@ class Session:
                 timer.cancel()
             except Exception:
                 pass
+        self._qa_cancel_wait_timer()
+
+    def _qa_schedule_wait_force(self) -> None:
+        """After a ``wait`` verdict, submit if speech goes quiet for the cap window.
+
+        Restarts the timer when called again (e.g. partials during wait) so the cap
+        always fires unless a new final re-opens the candidate.
+        """
+        self._qa_init()
+        self._qa_cancel_wait_timer()
+        with self._qa_lock():
+            if not self._qa_buffer:
+                return
+        wait_s = max(0.05, float(QA_WAIT_FORCE_SUBMIT_SECONDS))
+        timer = threading.Timer(wait_s, self._qa_wait_force_fire)
+        timer.daemon = True
+        self._qa_wait_timer = timer
+        timer.start()
+
+    def _qa_wait_force_fire(self) -> None:
+        self._qa_wait_timer = None
+        self._qa_init()
+        if getattr(self, "_workspace", "") != "interview":
+            return
+        self._qa_wait_cap_pending = False
+        self._qa_force_submit("force_wait_cap")
+
+    def _qa_force_submit(self, trigger: str) -> bool:
+        """Submit the current candidate without a completeness model call."""
+        self._qa_init()
+        with self._qa_lock():
+            if not self._qa_buffer:
+                return False
+            version = self._qa_version
+            gen = self._qa_gen
+            frags = [dict(f) for f in self._qa_buffer]
+        verdict = qa_semantic.build_force_submit_verdict(
+            frags, max_question_chars=QA_MAX_QUESTION_CHARS
+        )
+        if not verdict:
+            return False
+        return self._qa_commit(
+            verdict["question"],
+            frags,
+            verdict=verdict,
+            trigger=trigger,
+            version=version,
+            gen=gen,
+        )
+
+    def _qa_emit_wait_listening(self, frags: list[dict[str, Any]]) -> None:
+        text = qa_semantic.candidate_text(frags, max_chars=QA_BUFFER_MAX_CHARS)
+        if text:
+            self.emit({"type": "qa_wait", "text": text})
+            self.emit({"type": "partial", "text": text})
+        self.emit({"type": "status", "text": STATUS_WAIT_MORE})
 
     def _qa_schedule_judge(self, delay: float | None = None) -> None:
         """Arm the settle timer. Idempotent: an armed timer is left alone."""
@@ -4965,6 +5041,10 @@ class Session:
             # judge worker re-validates against, so a verdict can never be read as
             # "current" after activity invalidated it.
             self._qa_verdict = None
+        if getattr(self, "_qa_wait_cap_pending", False) and getattr(self, "_qa_buffer", None):
+            self._qa_schedule_wait_force()
+        else:
+            self._qa_cancel_wait_timer()
         if getattr(self, "_qa_buffer", None):
             self._qa_schedule_judge()
 
@@ -5039,18 +5119,22 @@ class Session:
         if not frags:
             err = "no_buffer"
         else:
-            try:
-                messages = qa_semantic.build_judge_messages(
-                    frags, background, prior, prior_pairs=QA_PRIOR_QA_PAIRS
-                )
-                raw = self.pipeline.judge_qa(messages, timeout=QA_JUDGE_TIMEOUT_SECONDS)
-                verdict = qa_semantic.parse_judge_reply(
-                    raw, [f["id"] for f in frags], max_question_chars=QA_MAX_QUESTION_CHARS
-                )
-                if verdict is None:
-                    err = "invalid"
-            except Exception as e:
-                err = type(e).__name__
+            verdict = qa_semantic.local_obvious_ready_verdict(
+                frags, max_question_chars=QA_MAX_QUESTION_CHARS
+            )
+            if verdict is None:
+                try:
+                    messages = qa_semantic.build_judge_messages(
+                        frags, background, prior, prior_pairs=QA_PRIOR_QA_PAIRS
+                    )
+                    raw = self.pipeline.judge_qa(messages, timeout=QA_JUDGE_TIMEOUT_SECONDS)
+                    verdict = qa_semantic.parse_judge_reply(
+                        raw, [f["id"] for f in frags], max_question_chars=QA_MAX_QUESTION_CHARS
+                    )
+                    if verdict is None:
+                        err = "invalid"
+                except Exception as e:
+                    err = type(e).__name__
         latency_ms = int((time.time() - started) * 1000)
         with self._qa_lock():
             self._qa_judging = False
@@ -5106,9 +5190,9 @@ class Session:
                 self._qa_maybe_reschedule()
             return
         if kind == qa_semantic.VERDICT_WAIT:
-            # Still mid-thought: keep listening. Deliberately NOT an answer, and
-            # deliberately no re-judge until new fragments arrive.
-            self.emit({"type": "status", "text": STATUS_WAIT_MORE})
+            self._qa_wait_cap_pending = True
+            self._qa_emit_wait_listening(frags)
+            self._qa_schedule_wait_force()
             return
         if not self._qa_demote_to_background(frags, verdict, version=version, gen=gen):
             # A background verdict for a buffer the speaker already moved past must
@@ -5211,6 +5295,9 @@ class Session:
                 list(self._qa_background) + qa_semantic.referenced_texts(frags, cited),
                 max_chars=QA_CONTEXT_MAX_CHARS,
             )
+            if trigger in ("stop", "force_wait_cap"):
+                hint = qa_semantic.UNCLEAR_TRANSCRIPT_ANSWER_HINT.strip()
+                context = f"{context}{hint}" if context else hint
             rest = list(self._qa_buffer)
             i = 0
             while i < len(rest) and i < len(keys) and str(rest[i]["id"]) == keys[i]:
@@ -5226,6 +5313,7 @@ class Session:
             while len(self._qa_answered) > QA_ANSWERED_MAX:
                 self._qa_answered.pop(next(iter(self._qa_answered)))
             leftover = len(self._qa_buffer)
+            self._qa_wait_cap_pending = False
         logging.getLogger("nod").info(
             "qa_submit trigger=%s frags=%s cited=%s q_chars=%s ctx=%s rest=%s",
             trigger, len(frags), len(cited), len(question or ""), len(context), leftover,
@@ -5360,6 +5448,7 @@ class Session:
             self._qa_stale_version = -1
             self._qa_verdict = None
             self._qa_candidate_id = ""
+            self._qa_wait_cap_pending = False
             # #182: New / clear / workspace switch / close starts a fresh session,
             # so Think goes back to its default (off). A question that was already
             # submitted keeps the value it snapshotted.
@@ -5383,33 +5472,18 @@ class Session:
     def _qa_stop_commit(self) -> None:
         """Definitive end of speech (Stop / stream taken / session end).
 
-        Only an already-valid ``ready`` verdict for the CURRENT buffer may be
-        submitted here: stop and timer are never allowed to upgrade a wait or an
-        unjudged candidate into an answer.
+        A non-empty pending candidate is force-submitted (skipping the judge).
+        An empty buffer is a no-op. ``_qa_verdict`` is never parked in production.
         """
         self._qa_init()
         self._qa_cancel_timer()
+        self._qa_wait_cap_pending = False
         with self._qa_lock():
-            verdict = self._qa_verdict
-            version = self._qa_version
-            gen = self._qa_gen
-            frags = [dict(f) for f in self._qa_buffer]
-            self._qa_verdict = None
-        if verdict and verdict.get("version") == version and frags:
-            if self._qa_commit(
-                verdict["question"],
-                frags,
-                verdict=verdict,
-                trigger="stop",
-                version=version,
-                gen=gen,
-            ):
+            if not self._qa_buffer:
                 return
-            # Something cleared/replaced the candidate between the check and the
-            # commit — the candidate is gone either way, so record the drop.
-            self._qa_drop(reason="stop_commit_raced", trigger="stop")
+        if self._qa_force_submit("stop"):
             return
-        self._qa_drop(reason="stop_no_ready_verdict", trigger="stop")
+        self._qa_drop(reason="stop_commit_raced", trigger="stop")
 
     def _qa_on_manual_submit(self) -> None:
         """A manual text/recording submit supersedes the pending auto candidate.
@@ -5443,6 +5517,8 @@ class Session:
     ) -> None:
         """Accumulate one final (or revision) into the semantic candidate."""
         self._qa_init()
+        self._qa_wait_cap_pending = False
+        self._qa_cancel_wait_timer()
         now = time.time()
         with self._qa_lock():
             self._qa_frag_seq += 1

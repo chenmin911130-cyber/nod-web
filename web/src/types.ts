@@ -186,6 +186,7 @@ export type EngineEvent =
   | { type: 'keys_status'; has_llm: boolean; has_stt: boolean }
   | { type: 'phase'; capture: CaptureState; engine: EngineState }
   | { type: 'status'; text: string }
+  | { type: 'qa_wait'; text: string }
   | { type: 'partial'; text: string; language?: string; speaker?: string }
   | { type: 'question'; id: string; text: string; language?: string; speaker?: string; think?: boolean; submit_id?: string; server_translate?: boolean; translation?: string; order?: number }
   | { type: 'line_update'; id: string; text: string; language?: string; speaker?: string; rev: number }
