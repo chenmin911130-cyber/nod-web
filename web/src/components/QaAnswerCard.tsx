@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { IPHONE_COPY } from '../iphoneCopy'
 import { qaAnswerParts, qaDetectedLine } from '../qaCard'
 import type { AnswerSources } from '../types'
 import { hasSourceBlock, renderableSources } from '../qaSources'
@@ -27,7 +28,11 @@ export function QaAnswerCard({
   const [open, setOpen] = useState(false)
   const parts = qaAnswerParts(answer)
   const pending = generating || listening || !answer.trim()
-  const status = listening ? 'Listening…' : generating ? 'Generating answer…' : ''
+  const status = listening
+    ? `${IPHONE_COPY.listeningNow} ${question}`.trim()
+    : generating
+      ? 'Generating answer…'
+      : ''
 
   return (
     <article className={`qa-result${listening || generating ? ' live' : ''}`}>

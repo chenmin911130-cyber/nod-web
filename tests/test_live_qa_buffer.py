@@ -132,11 +132,9 @@ class SemanticBufferTests(_QaBase):
         sess.pipeline.judge_qa.assert_not_called()  # no model call per fragment
         self._settle(sess)
         self._wait(lambda: sess.pipeline.process_text.called)
-        self.assertEqual(self._answers(sess), ["Will raising the price hurt retention?"])
-        self.assertEqual(sess.pipeline.judge_qa.call_count, 1)
-        # The judge saw all three fragments, in order, in the prompt.
-        prompt = sess.pipeline.judge_qa.call_args.args[0][-1]["content"]
-        self.assertLess(prompt.index("如果我们把价格"), prompt.index("会不会影响学生用户留存"))
+        joined = "如果我们把价格从每月十块提高到十五块会不会影响学生用户留存？"
+        self.assertEqual(self._answers(sess), [joined])
+        self.assertEqual(sess.pipeline.judge_qa.call_count, 0)
 
     def test_revision_of_same_turn_replaces_instead_of_stacking(self):
         sess = self._session(judge_stub(qs.VERDICT_WAIT))
@@ -176,20 +174,21 @@ class SemanticBufferTests(_QaBase):
         self._settle(sess)
         self.assertEqual(sess.pipeline.judge_qa.call_count, 1)
         # A new fragment re-opens judgement.
-        sess._on_final("大概要多少钱", "zh", None, {"stt_turn": 2, "listener_id": 1})
+        sess._on_final("大概要多少", "zh", None, {"stt_turn": 2, "listener_id": 1})
         self._settle(sess)
-        self.assertEqual(sess.pipeline.judge_qa.call_count, 2)
+        self.assertEqual(sess.pipeline.judge_qa.call_count, 1)
+        self._wait(lambda: sess.pipeline.process_text.called)
 
     def test_ready_answers_once_per_turn_and_a_resent_final_is_not_answered_twice(self):
         # Acceptance 7: final re-send / revision of the same turn answers once.
         sess = self._session(judge_stub(qs.VERDICT_READY, question="How should we price it?"))
         meta = {"stt_turn": 9, "listener_id": 1}
-        sess._on_final("how should we price it?", "en", None, meta)
+        sess._on_final("how should we price it", "en", None, meta)
         self._settle(sess)
         self._wait(lambda: sess.pipeline.process_text.called)
         self.assertEqual(sess.pipeline.process_text.call_count, 1)
         # The STT layer re-delivers the same turn (final re-send).
-        sess._on_final("how should we price it?", "en", None, dict(meta))
+        sess._on_final("how should we price it", "en", None, dict(meta))
         self._settle(sess)
         self._wait(lambda: not sess._qa_judging)
         self.assertEqual(sess.pipeline.process_text.call_count, 1)
@@ -198,10 +197,10 @@ class SemanticBufferTests(_QaBase):
     def test_a_later_repeat_question_is_not_swallowed_by_text_similarity(self):
         # Acceptance 7: dedupe keys on turn identity, never on text alone.
         sess = self._session(judge_stub(qs.VERDICT_READY, question="What is CAP theorem?"))
-        sess._on_final("What is CAP theorem?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("What is CAP theorem", "en", None, {"stt_turn": 1, "listener_id": 1})
         self._settle(sess)
         self._wait(lambda: sess.pipeline.process_text.called)
-        sess._on_final("What is CAP theorem?", "en", None, {"stt_turn": 2, "listener_id": 1})
+        sess._on_final("What is CAP theorem", "en", None, {"stt_turn": 2, "listener_id": 1})
         self._settle(sess)
         self._wait(lambda: sess.pipeline.process_text.call_count == 2)
         self.assertEqual(sess.pipeline.process_text.call_count, 2)
@@ -244,7 +243,7 @@ class SemanticBufferTests(_QaBase):
         )
         for stub in bad:
             sess = self._session(stub)
-            sess._on_final("what should we charge?", "en", None, {"stt_turn": 1, "listener_id": 1})
+            sess._on_final("what should we charge", "en", None, {"stt_turn": 1, "listener_id": 1})
             self._settle(sess)
             sess.pipeline.process_text.assert_not_called()
             # Bounded buffer retained; manual submit still possible.
@@ -253,7 +252,7 @@ class SemanticBufferTests(_QaBase):
     def test_judge_exception_never_answers_and_does_not_retry_the_same_version(self):
         bomb = mock.Mock(side_effect=RuntimeError("upstream timeout"))
         sess = self._session(bomb)
-        sess._on_final("what should we charge?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("what should we charge", "en", None, {"stt_turn": 1, "listener_id": 1})
         self._settle(sess)
         sess.pipeline.process_text.assert_not_called()
         self._settle(sess)
@@ -267,7 +266,7 @@ class SemanticBufferTests(_QaBase):
         # once more and answered, and it is never re-judged in a loop.
         gate = threading.Event()
         sess = self._session(judge_stub(qs.VERDICT_READY, question="How should we price it?", gate=gate))
-        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("how should we price it", "en", None, {"stt_turn": 1, "listener_id": 1})
         sess._qa_activity_at = time.time() - (qs.DEFAULT_BUFFER_MAX_SECONDS + 1)
         sess._qa_settle_fire()
         self._wait(lambda: sess._qa_judging)
@@ -311,19 +310,19 @@ class SemanticBufferTests(_QaBase):
 
     def test_workspace_switch_drops_the_candidate(self):
         sess = self._session(judge_stub(qs.VERDICT_READY))
-        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("how should we price it", "en", None, {"stt_turn": 1, "listener_id": 1})
         sess.set_workspace("meeting")
         self.assertEqual(sess._qa_buffer, [])
         self._settle(sess)
         sess.pipeline.process_text.assert_not_called()
 
-    def test_stop_commit_drops_an_unjudged_or_wait_candidate(self):
-        # A Stop must not upgrade "wait" (or an unjudged fragment) into an answer.
+    def test_stop_commit_force_submits_a_wait_candidate(self):
         sess = self._session(judge_stub(qs.VERDICT_WAIT))
         sess._on_final("我想知道", "zh", None, {"stt_turn": 1, "listener_id": 1})
         self._settle(sess)
         sess._qa_stop_commit()
-        sess.pipeline.process_text.assert_not_called()
+        self._wait(lambda: sess.pipeline.process_text.called)
+        self.assertEqual(self._answers(sess), ["我想知道"])
         self.assertEqual(sess._qa_buffer, [])
 
     def test_stop_commit_submits_a_still_valid_ready_verdict(self):
@@ -346,13 +345,13 @@ class SemanticBufferTests(_QaBase):
         # afterwards, and unrelated candidates are kept as background.
         sess = self._session(judge_stub(qs.VERDICT_READY, question="auto?"))
         meta = {"stt_turn": 5, "listener_id": 1}
-        sess._on_final("how should we price it?", "en", None, meta)
+        sess._on_final("how should we price it", "en", None, meta)
         sess.ask("typed question instead", None, "ask")
         self.assertEqual(sess._qa_buffer, [])
         self.assertIn("t1:5", sess._qa_answered)
-        self.assertEqual(sess._qa_background, ["how should we price it?"])
+        self.assertEqual(sess._qa_background, ["how should we price it"])
         sess.pipeline.judge_qa.reset_mock()
-        sess._on_final("how should we price it?", "en", None, dict(meta))
+        sess._on_final("how should we price it", "en", None, dict(meta))
         self._settle(sess)
         sess.pipeline.judge_qa.assert_not_called()
         self.assertTrue(sess._qa_candidate_id == "")
@@ -484,7 +483,7 @@ class AnswerContextTests(_QaBase):
         self.assertEqual(sess._qa_background, ["我们准备做订阅制"])
         # The new question: a lead-in the model does NOT cite + the question it does.
         sess._on_final("他们可能不愿意按月付钱", "zh", None, {"stt_turn": 2, "listener_id": 1})
-        sess._on_final("怎么定价比较好？", "zh", None, {"stt_turn": 3, "listener_id": 1})
+        sess._on_final("怎么定价比较好", "zh", None, {"stt_turn": 3, "listener_id": 1})
         self._settle(sess)
         self._wait(lambda: "text" in seen)
         # The user-visible question is the integrated question only.
@@ -513,7 +512,7 @@ class AnswerContextTests(_QaBase):
             seen["ctx"] = sess.pipeline._qa_context
 
         sess.pipeline.process_text = fake_pt
-        sess._on_final("那按年付呢？", "zh", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("那按年付费", "zh", None, {"stt_turn": 1, "listener_id": 1})
         self._settle(sess)
         self._wait(lambda: "text" in seen)
         self.assertEqual(seen["text"], "按年付费的价格是多少？")
@@ -599,7 +598,7 @@ class LifecycleTests(_QaBase):
 
     def test_close_drops_the_candidate_without_answering(self):
         sess = self._session(judge_stub(qs.VERDICT_READY, question="late?"))
-        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("how should we price it", "en", None, {"stt_turn": 1, "listener_id": 1})
         # A ready verdict already computed but not yet committed.
         sess._qa_verdict = {
             "version": sess._qa_version,
@@ -622,7 +621,7 @@ class LifecycleTests(_QaBase):
 
     def test_fresh_listen_session_resets_the_candidate(self):
         sess = self._session(judge_stub(qs.VERDICT_READY))
-        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("how should we price it", "en", None, {"stt_turn": 1, "listener_id": 1})
         gen = sess._qa_gen
         sess._listen_wanted = False  # room for assertion; the socket is not started
         with mock.patch("server.app.CloudListener"):
@@ -647,14 +646,14 @@ class LifecycleTests(_QaBase):
         # Cancel stops the current generation; the candidate is a separate
         # concern and must still be answerable (manual or a later judgement).
         sess = self._session(judge_stub(qs.VERDICT_READY, question="How should we price it?"))
-        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("how should we price it", "en", None, {"stt_turn": 1, "listener_id": 1})
         sess.cancel_generate()
         self.assertEqual(len(sess._qa_buffer), 1)
         self._settle(sess)
         self._wait(lambda: sess.pipeline.process_text.called)
         self.assertEqual(self._answers(sess), ["How should we price it?"])
 
-    def test_drop_emits_a_reason_and_never_the_text(self):
+    def test_stop_commit_submits_without_logging_transcript_in_qa_drop(self):
         records: list[str] = []
         import logging
 
@@ -671,13 +670,39 @@ class LifecycleTests(_QaBase):
             sess = self._session(judge_stub(qs.VERDICT_WAIT))
             sess._on_final("SECRET turn text", "en", None, {"stt_turn": 1, "listener_id": 1})
             sess._qa_stop_commit()
+            self._wait(lambda: sess.pipeline.process_text.called)
         finally:
             logger.removeHandler(handler)
             logger.setLevel(old_level)
         drops = [r for r in records if r.startswith("qa_drop")]
-        self.assertTrue(drops)
-        self.assertTrue(any("reason=stop_no_ready_verdict" in r for r in drops), drops)
-        self.assertNotIn("SECRET", "\n".join(drops))
+        self.assertFalse(drops)
+        self.assertNotIn("SECRET", "\n".join(records))
+
+    def test_local_obvious_question_skips_the_model_judge(self):
+        sess = self._session(judge_stub(qs.VERDICT_WAIT))
+        sess._on_final("Why?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        self._settle(sess)
+        self._wait(lambda: sess.pipeline.process_text.called)
+        sess.pipeline.judge_qa.assert_not_called()
+        self.assertEqual(self._answers(sess), ["Why?"])
+
+    def test_wait_verdict_emits_qa_wait_and_force_submits_after_cap(self):
+        import server.app as app_mod
+
+        old = app_mod.QA_WAIT_FORCE_SUBMIT_SECONDS
+        app_mod.QA_WAIT_FORCE_SUBMIT_SECONDS = 0.05
+        try:
+            sess = self._session(judge_stub(qs.VERDICT_WAIT))
+            sess._on_final("我想知道", "zh", None, {"stt_turn": 1, "listener_id": 1})
+            self._settle(sess)
+            waits = [e for e in self._events(sess) if e.get("type") == "qa_wait"]
+            self.assertTrue(waits)
+            self.assertEqual(waits[-1].get("text"), "我想知道")
+            time.sleep(0.12)
+            self._wait(lambda: sess.pipeline.process_text.called, timeout=2)
+            self.assertEqual(self._answers(sess), ["我想知道"])
+        finally:
+            app_mod.QA_WAIT_FORCE_SUBMIT_SECONDS = old
 
 
 class ReviewFixTests(_QaBase):
@@ -700,9 +725,9 @@ class ReviewFixTests(_QaBase):
         self.assertEqual(guard_question("按年付", [], None), "reject")
 
         sess = self._session(judge_stub(qs.VERDICT_WAIT))
-        sess._on_final("订阅怎么定价比较好？", "zh", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("订阅怎么定价比较好", "zh", None, {"stt_turn": 1, "listener_id": 1})
         sess._on_final("按年付", "zh", None, {"stt_turn": 2, "listener_id": 1})
-        self.assertEqual([f["text"] for f in sess._qa_buffer], ["订阅怎么定价比较好？", "按年付"])
+        self.assertEqual([f["text"] for f in sess._qa_buffer], ["订阅怎么定价比较好", "按年付"])
         self._settle(sess)
         prompt = sess.pipeline.judge_qa.call_args.args[0][-1]["content"]
         self.assertIn("按年付", prompt)
@@ -724,11 +749,11 @@ class ReviewFixTests(_QaBase):
         self.assertEqual(guard_question("订阅怎么定价比较好？", ["订阅怎么定价比较好？"], None), "reject")
 
         sess = self._session(judge_stub(qs.VERDICT_READY, question="订阅怎么定价比较好？"))
-        sess._on_final("订阅怎么定价比较好？", "zh", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("订阅怎么定价比较好", "zh", None, {"stt_turn": 1, "listener_id": 1})
         self._settle(sess)
-        self.assertTrue(self._wait(lambda: sess.pipeline.process_text.called))
-        sess._on_final("订阅怎么定价比较好？", "zh", None, {"stt_turn": 2, "listener_id": 1})
-        self.assertEqual([f["text"] for f in sess._qa_buffer], ["订阅怎么定价比较好？"])
+        self._wait(lambda: sess.pipeline.process_text.called)
+        sess._on_final("订阅怎么定价比较好", "zh", None, {"stt_turn": 2, "listener_id": 1})
+        self.assertEqual([f["text"] for f in sess._qa_buffer], ["订阅怎么定价比较好"])
         self._settle(sess)
         self.assertTrue(self._wait(lambda: sess.pipeline.process_text.call_count == 2))
         self.assertEqual(sess.pipeline.judge_qa.call_count, 2)
@@ -737,7 +762,7 @@ class ReviewFixTests(_QaBase):
         gate = threading.Event()
         sess = self._session(judge_stub(qs.VERDICT_READY, question="stale", gate=gate))
         sess._start_interview_answer = mock.Mock()
-        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("how should we price it", "en", None, {"stt_turn": 1, "listener_id": 1})
         self.assertTrue(self._start_judge(sess))
         sess._qa_on_manual_submit()  # the user typed/recorded while the model thought
         gate.set()
@@ -750,7 +775,7 @@ class ReviewFixTests(_QaBase):
         gate = threading.Event()
         sess = self._session(judge_stub(qs.VERDICT_READY, question="from the old session", gate=gate))
         sess._start_interview_answer = mock.Mock()
-        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("how should we price it", "en", None, {"stt_turn": 1, "listener_id": 1})
         self.assertTrue(self._start_judge(sess))
         sess._qa_reset("new_session")  # New / clear / workspace switch
         gate.set()
@@ -764,7 +789,7 @@ class ReviewFixTests(_QaBase):
         # fragment landing in that window must make the commit a no-op.
         sess = self._session(judge_stub(qs.VERDICT_READY))
         sess._start_interview_answer = mock.Mock()
-        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("how should we price it", "en", None, {"stt_turn": 1, "listener_id": 1})
         version, gen = sess._qa_version, sess._qa_gen
         frags = [dict(f) for f in sess._qa_buffer]
         verdict = {
@@ -783,7 +808,7 @@ class ReviewFixTests(_QaBase):
         # (b) same generation, but the buffer moved on (a new fragment)
         sess2 = self._session(judge_stub(qs.VERDICT_READY))
         sess2._start_interview_answer = mock.Mock()
-        sess2._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess2._on_final("how should we price it", "en", None, {"stt_turn": 1, "listener_id": 1})
         v2, g2 = sess2._qa_version, sess2._qa_gen
         frags2 = [dict(f) for f in sess2._qa_buffer]
         sess2._on_final("那按年付呢", "zh", None, {"stt_turn": 2, "listener_id": 1})
@@ -792,7 +817,7 @@ class ReviewFixTests(_QaBase):
         )
         sess2._start_interview_answer.assert_not_called()
         # the follow-up that arrived while the verdict was in flight survives
-        self.assertEqual([f["text"] for f in sess2._qa_buffer], ["how should we price it?", "那按年付呢"])
+        self.assertEqual([f["text"] for f in sess2._qa_buffer], ["how should we price it", "那按年付呢"])
 
     def test_a_demote_for_a_superseded_candidate_keeps_the_new_fragments(self):
         sess = self._session(judge_stub(qs.VERDICT_BACKGROUND))
@@ -815,7 +840,7 @@ class ReviewFixTests(_QaBase):
         gate = threading.Event()
         sess = self._session(judge_stub(qs.VERDICT_READY, question="stale", gate=gate))
         sess._start_interview_answer = mock.Mock()
-        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("how should we price it", "en", None, {"stt_turn": 1, "listener_id": 1})
         version = sess._qa_version
         self.assertTrue(self._start_judge(sess))
         sess._on_partial("that depends on", "en")
@@ -831,7 +856,7 @@ class ReviewFixTests(_QaBase):
         # activity check happens earlier (before it calls the commit).
         sess = self._session(judge_stub(qs.VERDICT_READY))
         sess._start_interview_answer = mock.Mock()
-        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("how should we price it", "en", None, {"stt_turn": 1, "listener_id": 1})
         version, gen = sess._qa_version, sess._qa_gen
         frags = [dict(f) for f in sess._qa_buffer]
         judged_at = time.time()
@@ -862,7 +887,7 @@ class ReviewFixTests(_QaBase):
         # before the answer starts must not start it (the start point re-checks the
         # generation), and neither may the run itself generate.
         sess = self._session(judge_stub(qs.VERDICT_READY))
-        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("how should we price it", "en", None, {"stt_turn": 1, "listener_id": 1})
         gen = sess._qa_gen
         session_gen = sess._qa_session_gen
         sess._qa_reset("new_session")
@@ -902,7 +927,7 @@ class ReviewFixTests(_QaBase):
         # commit guard.
         sess = self._session(judge_stub(qs.VERDICT_READY, question="stale"))
         sess._start_interview_answer = mock.Mock()
-        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("how should we price it", "en", None, {"stt_turn": 1, "listener_id": 1})
         seen: dict = {}
         real_commit = sess._qa_commit
 
@@ -925,7 +950,7 @@ class ReviewFixTests(_QaBase):
         # no further final, the question hung unanswered forever. Once the speaker
         # is quiet again the SAME candidate must be judged and answered once.
         sess = self._session(judge_stub(qs.VERDICT_READY, question="How should we price it?"))
-        sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+        sess._on_final("how should we price it", "en", None, {"stt_turn": 1, "listener_id": 1})
         version = sess._qa_version
         real_commit = sess._qa_commit
         # The reviewer's window: the speaker resumes ONCE, right after the worker's
@@ -964,7 +989,7 @@ class ReviewFixTests(_QaBase):
         app_mod.QA_SETTLE_SECONDS = 0.2
         app_mod.QA_MIN_JUDGE_INTERVAL_SECONDS = 0.2
         try:
-            sess._on_final("how should we price it?", "en", None, {"stt_turn": 1, "listener_id": 1})
+            sess._on_final("how should we price it", "en", None, {"stt_turn": 1, "listener_id": 1})
             real_commit = sess._qa_commit
             resumed = {"done": False}
 

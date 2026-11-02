@@ -470,6 +470,11 @@ function reducer(state: AppState, action: Action): AppState {
         }
         case 'status':
           return { ...state, status: nextStatusText(state.status, ev.text) }
+        case 'qa_wait': {
+          const text = (ev.text ?? '').trim()
+          if (state.workspaceMode !== 'interview' || !text) return state
+          return { ...state, partial: text }
+        }
         case 'partial': {
           const text = ev.text ?? ''
           if (state.workspaceMode === 'translate' && state.translateFrom !== 'auto') {

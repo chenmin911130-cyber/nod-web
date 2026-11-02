@@ -172,7 +172,7 @@ UPLINK_ORPHAN_SECONDS = max(60, int(float(os.environ.get("UPLINK_ORPHAN_SECONDS"
 # How long speech must be quiet (no final, no partial) before the buffered
 # candidate is judged. A new fragment/partial extends the window, so a slow STT
 # turn is never cut in half.
-QA_SETTLE_SECONDS = max(0.3, float(os.environ.get("QA_SETTLE_SECONDS") or "1.3"))
+QA_SETTLE_SECONDS = max(0.3, float(os.environ.get("QA_SETTLE_SECONDS") or "0.8"))
 # One bounded, non-streaming judgement call. On timeout/failure the candidate is
 # NEVER answered (the buffer is kept and manual submit still works).
 QA_JUDGE_TIMEOUT_SECONDS = max(2.0, float(os.environ.get("QA_JUDGE_TIMEOUT_SECONDS") or "8"))
@@ -188,6 +188,11 @@ QA_MAX_QUESTION_CHARS = max(120, int(float(os.environ.get("QA_MAX_QUESTION_CHARS
 QA_BACKGROUND_MAX_FRAGS = max(1, int(float(os.environ.get("QA_BACKGROUND_MAX_FRAGS") or "6")))
 QA_CONTEXT_MAX_CHARS = max(120, int(float(os.environ.get("QA_CONTEXT_MAX_CHARS") or "600")))
 QA_PRIOR_QA_PAIRS = max(0, int(float(os.environ.get("QA_PRIOR_QA_PAIRS") or "2")))
+# After a ``wait`` completeness verdict, force-submit the buffered candidate if
+# no new fragment arrives within this window (issue: voice Q&A stuck on wait).
+QA_WAIT_FORCE_SUBMIT_SECONDS = max(
+    1.0, float(os.environ.get("QA_WAIT_FORCE_SUBMIT_SECONDS") or "4.5")
+)
 
 # --- Think (#182): live retrieval + deep thinking for Live Q&A answers -------
 # One bounded lookup per committed question. Nothing here runs a background or

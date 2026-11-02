@@ -21,6 +21,7 @@ const EVENT_TYPES = new Set([
   'keys_status',
   'phase',
   'status',
+  'qa_wait',
   'partial',
   'question',
   'line_update',
@@ -72,6 +73,8 @@ function normalizeEvent(raw: unknown): EngineEvent | null {
     }
     case 'status':
       return { type: 'status', text: asText(o.text) }
+    case 'qa_wait':
+      return { type: 'qa_wait', text: asText(o.text) }
     case 'error': {
       // #182: a question-scoped failure carries the id of the card it belongs to.
       const id = asText(o.id)

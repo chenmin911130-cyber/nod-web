@@ -98,10 +98,8 @@ class OllamaWebToolsTests(unittest.TestCase):
 
         def fake_post(payload, _timeout):
             if payload.get("tools"):
-                if len(payload["messages"]) == 1:
-                    return chat_tool
-                return chat_final
-            raise AssertionError("unexpected no-tools call")
+                return chat_tool
+            return chat_final
 
         with mock.patch("server.ollama_llm._ollama_post") as post, mock.patch(
             "server.ollama_llm._execute_web_tool", return_value='{"results":[]}'
@@ -119,9 +117,27 @@ class OllamaWebToolsTests(unittest.TestCase):
         with mock.patch(
             "server.ollama_llm._ollama_web_api_post", return_value={"content": long_text}
         ):
-            out = ollama_llm._execute_web_tool("web_fetch", json.dumps({"url": "https://example.com"}))
+            out = ollama_llm._execute_web_tool("web_search", json.dumps({"query": "news"}))
         self.assertLessEqual(len(out), ollama_llm.OLLAMA_WEB_TOOL_RESULT_MAX_CHARS + 20)
         self.assertTrue(out.endswith("…[truncated]"))
+
+    def test_web_fetch_is_not_offered(self):
+        out = ollama_llm._execute_web_tool("web_fetch", json.dumps({"url": "https://example.com"}))
+        data = json.loads(out)
+        self.assertEqual(data.get("error"), "tool_not_available")
+
+    def test_completion_message_text_uses_reasoning_when_content_empty(self):
+        msg = SimpleNamespace(content="", reasoning_content='{"verdict":"ready"}')
+        self.assertEqual(
+            ollama_llm.completion_message_text(msg),
+            '{"verdict":"ready"}',
+        )
+
+    def test_web_search_defaults_to_three_results(self):
+        with mock.patch("server.ollama_llm._ollama_web_api_post", return_value={"results": []}) as post:
+            ollama_llm._execute_web_tool("web_search", json.dumps({"query": "news"}))
+        post.assert_called_once()
+        self.assertEqual(post.call_args[0][1].get("max_results"), 3)
 
     def test_chat_fallback_kwargs_omit_ollama_web_tools(self):
         """Think-off chat enables tools on the Ollama path only; DeepSeek fallback stays unchanged."""

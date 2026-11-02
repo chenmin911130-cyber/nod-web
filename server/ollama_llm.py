@@ -23,39 +23,35 @@ OLLAMA_STREAM_DEFAULT_READ_S = 25.0
 OLLAMA_WEB_SEARCH_URL = "https://ollama.com/api/web_search"
 OLLAMA_WEB_FETCH_URL = "https://ollama.com/api/web_fetch"
 OLLAMA_WEB_TOOL_TIMEOUT_S = 20.0
-OLLAMA_WEB_TOOL_MAX_ITERATIONS = 4
+OLLAMA_WEB_TOOL_MAX_ITERATIONS = 1
 OLLAMA_WEB_TOOL_RESULT_MAX_CHARS = 8000
+OLLAMA_WEB_SEARCH_DEFAULT_MAX_RESULTS = 3
+
+OLLAMA_WEB_TOOLS_SYSTEM_HINT = (
+    "Web search policy: call web_search ONLY when the question needs current or latest "
+    "information (news, live prices, events after your knowledge cutoff). Answer ordinary "
+    "factual questions from your knowledge without searching."
+)
 
 OLLAMA_WEB_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search the web for up-to-date information.",
+            "description": (
+                "Search the web for up-to-date information when the question requires "
+                "current or latest facts. Do not use for general knowledge."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search query string"},
                     "max_results": {
                         "type": "integer",
-                        "description": "Maximum number of results (default 5, max 10)",
+                        "description": "Maximum number of results (default 3, max 10)",
                     },
                 },
                 "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "web_fetch",
-            "description": "Fetch the main content of a web page by URL.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "URL to fetch"},
-                },
-                "required": ["url"],
             },
         },
     },
@@ -122,7 +118,10 @@ def _ns_message(data: dict[str, Any] | None) -> Any:
     data = data or {}
     tool_calls_raw = data.get("tool_calls") if isinstance(data.get("tool_calls"), list) else []
     tool_calls = [_ns_tool_call(tc) for tc in tool_calls_raw if isinstance(tc, dict)]
-    msg = SimpleNamespace(content=data.get("content") or "")
+    msg = SimpleNamespace(
+        content=data.get("content") or "",
+        reasoning_content=data.get("reasoning_content") or data.get("reasoning") or "",
+    )
     if tool_calls:
         msg.tool_calls = tool_calls
     return msg
@@ -153,11 +152,24 @@ def _chunk_has_content_token(chunk: Any) -> bool:
     return bool(piece)
 
 
+def completion_message_text(message: Any) -> str:
+    """Text from a chat completion message (content, then reasoning fields)."""
+    if message is None:
+        return ""
+    content = (getattr(message, "content", None) or "").strip()
+    if content:
+        return content
+    for attr in ("reasoning_content", "reasoning"):
+        piece = getattr(message, attr, None)
+        if isinstance(piece, str) and piece.strip():
+            return piece.strip()
+    return ""
+
+
 def _completion_text(resp: Any) -> str:
     if resp is None or not getattr(resp, "choices", None):
         return ""
-    msg = resp.choices[0].message
-    return (getattr(msg, "content", None) or "").strip()
+    return completion_message_text(resp.choices[0].message)
 
 
 def _truncate_tool_result(text: str) -> str:
@@ -199,13 +211,10 @@ def _execute_web_tool(name: str, arguments_raw: str) -> str:
         max_results = args.get("max_results")
         if isinstance(max_results, int) and max_results > 0:
             body["max_results"] = min(max_results, 10)
+        else:
+            body["max_results"] = OLLAMA_WEB_SEARCH_DEFAULT_MAX_RESULTS
         return _truncate_tool_result(json.dumps(_ollama_web_api_post(OLLAMA_WEB_SEARCH_URL, body)))
-    if name == "web_fetch":
-        url = str(args.get("url") or "").strip()
-        if not url:
-            return _truncate_tool_result(json.dumps({"error": "missing_url"}))
-        return _truncate_tool_result(json.dumps(_ollama_web_api_post(OLLAMA_WEB_FETCH_URL, {"url": url})))
-    return _truncate_tool_result(json.dumps({"error": "unknown_tool", "name": name}))
+    return _truncate_tool_result(json.dumps({"error": "tool_not_available", "name": name}))
 
 
 def _message_has_tool_calls(message: dict[str, Any]) -> bool:
@@ -243,54 +252,126 @@ def _ollama_chat_once(payload: dict[str, Any], ollama_timeout: float) -> dict[st
     return body
 
 
-def _ollama_chat_with_web_tools(payload: dict[str, Any], ollama_timeout: float) -> Any:
-    """Non-stream chat with Ollama web_search / web_fetch tool loop."""
+def _inject_web_tools_system_hint(messages: list[Any]) -> None:
+    if not messages:
+        messages.insert(0, {"role": "system", "content": OLLAMA_WEB_TOOLS_SYSTEM_HINT})
+        return
+    first = messages[0]
+    if isinstance(first, dict) and str(first.get("role") or "") == "system":
+        content = str(first.get("content") or "").strip()
+        if OLLAMA_WEB_TOOLS_SYSTEM_HINT not in content:
+            first["content"] = (content + "\n\n" + OLLAMA_WEB_TOOLS_SYSTEM_HINT).strip()
+    else:
+        messages.insert(0, {"role": "system", "content": OLLAMA_WEB_TOOLS_SYSTEM_HINT})
+
+
+def _ollama_web_tool_phase(
+    payload: dict[str, Any], ollama_timeout: float
+) -> tuple[list[Any], dict[str, Any] | None]:
+    """At most one web_search round. Returns (messages, body) when the model answered without tools."""
     messages: list[Any] = list(payload.get("messages") or [])
+    _inject_web_tools_system_hint(messages)
     base_payload = {k: v for k, v in payload.items() if k not in ("messages", "stream")}
     base_payload["stream"] = False
     base_payload["tools"] = OLLAMA_WEB_TOOL_DEFINITIONS
 
-    last_body: dict[str, Any] | None = None
-    for _ in range(OLLAMA_WEB_TOOL_MAX_ITERATIONS):
-        body = _ollama_chat_once({**base_payload, "messages": messages}, ollama_timeout)
-        last_body = body
-        choice0 = (body.get("choices") or [{}])[0]
-        message = choice0.get("message") if isinstance(choice0.get("message"), dict) else {}
-        if _message_has_tool_calls(message):
-            messages.append(message)
-            for tc in message.get("tool_calls") or []:
-                if not isinstance(tc, dict):
-                    continue
-                fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
-                name = str(fn.get("name") or "")
-                arguments = fn.get("arguments")
-                if not isinstance(arguments, str):
-                    arguments = json.dumps(arguments or {})
-                result = _execute_web_tool(name, arguments)
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": str(tc.get("id") or ""),
-                        "content": result,
-                    }
-                )
-            continue
-        parsed = _parse_completion_body(body)
+    body = _ollama_chat_once({**base_payload, "messages": messages}, ollama_timeout)
+    choice0 = (body.get("choices") or [{}])[0]
+    message = choice0.get("message") if isinstance(choice0.get("message"), dict) else {}
+    if _message_has_tool_calls(message):
+        messages.append(message)
+        for tc in message.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+            name = str(fn.get("name") or "")
+            arguments = fn.get("arguments")
+            if not isinstance(arguments, str):
+                arguments = json.dumps(arguments or {})
+            result = _execute_web_tool(name, arguments)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": str(tc.get("id") or ""),
+                    "content": result,
+                }
+            )
+        return messages, None
+    if _completion_text(_parse_completion_body(body)):
+        return messages, body
+    return messages, None
+
+
+def _ollama_open_sse_stream(
+    payload: dict[str, Any], ollama_timeout: float
+) -> tuple[httpx.Client, httpx.Response, Iterator[Any]]:
+    headers = {
+        "Authorization": f"Bearer {ollama_api_key()}",
+        "Content-Type": "application/json",
+    }
+    body = dict(payload)
+    body["stream"] = True
+    body.pop("tools", None)
+    saw: dict[str, bool] = {"v": False}
+
+    def _saw() -> bool:
+        return saw["v"]
+
+    client = httpx.Client(timeout=_httpx_timeout(ollama_timeout))
+    res = client.send(
+        client.build_request("POST", ollama_chat_url(), headers=headers, json=body),
+        stream=True,
+    )
+    if res.status_code == 429 or res.status_code >= 400:
+        res.close()
+        client.close()
+        raise httpx.HTTPStatusError(f"ollama http {res.status_code}", request=res.request, response=res)
+
+    def _iter() -> Iterator[Any]:
+        try:
+            for chunk in _iter_ollama_sse(res, saw_content=_saw):
+                if _chunk_has_content_token(chunk):
+                    saw["v"] = True
+                yield chunk
+        finally:
+            res.close()
+            client.close()
+
+    return client, res, _iter()
+
+
+def _ollama_chat_with_web_tools(payload: dict[str, Any], ollama_timeout: float) -> Any:
+    """Non-stream chat: one optional web_search round, then a final completion."""
+    messages, early = _ollama_web_tool_phase(payload, ollama_timeout)
+    if early is not None:
+        parsed = _parse_completion_body(early)
         if _completion_text(parsed):
             return parsed
-        raise ValueError("ollama empty completion")
-
-    # Cap reached: one final answer without tools so the chat still completes.
-    if last_body is not None and _message_has_tool_calls(
-        ((last_body.get("choices") or [{}])[0].get("message") or {})
-    ):
-        _log.info("ollama web tools iteration cap reached")
+    base_payload = {k: v for k, v in payload.items() if k not in ("messages", "stream")}
+    base_payload["stream"] = False
     no_tools = {k: v for k, v in base_payload.items() if k != "tools"}
     body = _ollama_chat_once({**no_tools, "messages": messages}, ollama_timeout)
     parsed = _parse_completion_body(body)
     if not _completion_text(parsed):
         raise ValueError("ollama empty completion")
     return parsed
+
+
+def _immediate_answer_stream_chunks(body: dict[str, Any]) -> list[Any]:
+    """When the model skips tools, emit its non-stream reply as one stream chunk."""
+    parsed = _parse_completion_body(body)
+    text = _completion_text(parsed)
+    usage = _ns_usage(body.get("usage") if isinstance(body.get("usage"), dict) else None)
+    if not text:
+        return []
+    return [
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(delta=SimpleNamespace(content=text, reasoning_content=None))
+            ],
+            usage=usage,
+        )
+    ]
 
 
 def _ollama_chat_complete(payload: dict[str, Any], ollama_timeout: float) -> Any:
@@ -331,7 +412,7 @@ def _iter_ollama_sse(
 
 
 class _OllamaWebToolsStream:
-    """Run the web-tool loop (non-stream), then emit the final answer as SSE-shaped chunks."""
+    """One web_search round (non-stream), then a real streamed final answer."""
 
     def __init__(
         self,
@@ -346,16 +427,27 @@ class _OllamaWebToolsStream:
         self._using_fallback = False
         self._inner: Iterator[Any] | None = None
         self._fallback_stream: Any = None
+        self._hold_client: httpx.Client | None = None
+        self._hold_response: httpx.Response | None = None
 
     def _start(self) -> None:
         if self._started:
             return
         self._started = True
         try:
-            parsed = _ollama_chat_with_web_tools(self._payload, self._ollama_timeout)
-            text = _completion_text(parsed)
-            usage = getattr(parsed, "usage", None)
-            self._inner = iter(_synthetic_stream_chunks(text, usage))
+            messages, early = _ollama_web_tool_phase(self._payload, self._ollama_timeout)
+            if early is not None:
+                self._inner = iter(_immediate_answer_stream_chunks(early))
+                return
+            stream_payload = {
+                k: v
+                for k, v in self._payload.items()
+                if k not in ("messages", "stream", "ollama_web_tools")
+            }
+            stream_payload["messages"] = messages
+            client, res, self._inner = _ollama_open_sse_stream(stream_payload, self._ollama_timeout)
+            self._hold_client = client
+            self._hold_response = res
         except Exception as exc:
             _log.info("ollama web tools stream fallback reason=%s", exc.__class__.__name__)
             self._using_fallback = True
@@ -371,6 +463,18 @@ class _OllamaWebToolsStream:
         return next(self._inner)
 
     def close(self) -> None:
+        if self._hold_response is not None:
+            try:
+                self._hold_response.close()
+            except Exception:
+                pass
+            self._hold_response = None
+        if self._hold_client is not None:
+            try:
+                self._hold_client.close()
+            except Exception:
+                pass
+            self._hold_client = None
         if self._fallback_stream is not None:
             try:
                 close = getattr(self._fallback_stream, "close", None)
@@ -382,25 +486,6 @@ class _OllamaWebToolsStream:
                     resp.close()
             except Exception:
                 pass
-
-
-def _synthetic_stream_chunks(text: str, usage: Any | None) -> list[Any]:
-    """Split final text into a few chunks so downstream streaming logic behaves normally."""
-    if not text:
-        return []
-    step = 240
-    chunks: list[Any] = []
-    for i in range(0, len(text), step):
-        piece = text[i : i + step]
-        chunks.append(
-            SimpleNamespace(
-                choices=[SimpleNamespace(delta=SimpleNamespace(content=piece, reasoning_content=None))],
-                usage=None,
-            )
-        )
-    if usage is not None:
-        chunks.append(SimpleNamespace(choices=[], usage=usage))
-    return chunks
 
 
 class _OllamaOrFallbackStream:

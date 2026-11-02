@@ -77,6 +77,25 @@ class MergeBufferTests(unittest.TestCase):
         self.assertEqual([f["id"] for f in buf], ["f2", "f3"])
 
 
+class LocalObviousReadyTests(unittest.TestCase):
+    def test_question_mark_is_ready_locally(self):
+        frags = [_frag("f1", "Why?", at=1.0)]
+        out = qs.local_obvious_ready_verdict(frags)
+        self.assertIsNotNone(out)
+        self.assertEqual(out["verdict"], qs.VERDICT_READY)
+        self.assertEqual(out["question"], "Why?")
+
+    def test_chinese_question_word_is_ready_locally(self):
+        frags = [_frag("f1", "大概要多少钱", at=1.0)]
+        out = qs.local_obvious_ready_verdict(frags)
+        self.assertIsNotNone(out)
+        self.assertEqual(out["question"], "大概要多少钱")
+
+    def test_incomplete_clause_is_not_local_ready(self):
+        frags = [_frag("f1", "我想知道", at=1.0)]
+        self.assertIsNone(qs.local_obvious_ready_verdict(frags))
+
+
 class CandidateTextTests(unittest.TestCase):
     def test_chinese_fragments_join_without_space(self):
         buf = [_frag("f1", "当下"), _frag("f2", "经济情况")]
