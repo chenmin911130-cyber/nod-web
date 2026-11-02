@@ -2018,8 +2018,11 @@ class Pipeline:
                     }
                 elif self._provider == "deepseek":
                     kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+                # Ollama cloud tools (web_search / web_fetch) apply whenever Ollama is
+                # primary — independent of Think mode and Parallel lookup (#182).
+                ollama_kwargs = kwargs if images else {**kwargs, "ollama_web_tools": True}
                 stream = chat_completions_with_ollama_fallback(
-                    kwargs=kwargs,
+                    kwargs=ollama_kwargs,
                     ollama_timeout=(
                         OLLAMA_STREAM_TRANSLATE_READ_S
                         if mode == "translate"
