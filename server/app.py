@@ -73,6 +73,12 @@ from server.gemini_llm import (
     gemini_configured,
     gemini_lite_model,
 )
+from server.plain_text import (
+    PLAIN_TEXT_NOTES_RULE,
+    PLAIN_TEXT_OUTPUT_RULE,
+    PLAIN_TEXT_TRANSLATE_RULE,
+    PlainTextSanitizer,
+)
 from server.meeting_lines import (
     decide as meeting_decide,
     decide_full as meeting_decide_full,
@@ -1786,7 +1792,8 @@ class Pipeline:
                         "Keep product names, brand names, and capitalized proper nouns exactly as written in the source (do not translate or transliterate them); keep their original casing. "
                         "If the line ends mid-sentence (no terminal punctuation, or ends with a preposition / article / conjunction / auxiliary), translate only what is there and end the translation without terminal punctuation. Never complete, guess, or round off the sentence. "
                         "If the line is already in the target language, return it unchanged. "
-                        "Allowed targets: Chinese, English, Japanese, Italian, Spanish, French, German, Portuguese."
+                        "Allowed targets: Chinese, English, Japanese, Italian, Spanish, French, German, Portuguese.\n"
+                        + PLAIN_TEXT_TRANSLATE_RULE
                     ),
                 },
                 {"role": "user", "content": question},
@@ -1814,7 +1821,8 @@ class Pipeline:
                         "Use the transcript when it helps. If it is empty or silent on the topic, say so, then answer from general knowledge if the question allows it.\n"
                         "Do not invent quotes, names, numbers, or decisions that were not said.\n"
                         "If the question needs current information beyond the transcript, say you cannot check live sources, then answer what you can.\n"
-                        "4-10 short sentences or bullets. No preamble."
+                        "4-10 short sentences or bullets. No preamble.\n"
+                        + PLAIN_TEXT_OUTPUT_RULE
                         + out_rule
                     ),
                 },
@@ -1830,7 +1838,8 @@ class Pipeline:
                         "If they only attached files, summarize the useful information, then answer any implied question.\n"
                         "Be specific. Quote names, numbers, and claims from the files when they matter.\n"
                         "If an image is attached, describe and analyze what you actually see.\n"
-                        "Do not invent contents that are not in the files."
+                        "Do not invent contents that are not in the files.\n"
+                        + PLAIN_TEXT_OUTPUT_RULE
                         + out_rule
                         # #182: a question sent with an attachment is still a
                         # committed question, so a Think lookup's evidence has to
@@ -1857,7 +1866,8 @@ class Pipeline:
                         "(self-introduction, or another speaker addressing them by name); "
                         "evidence = the short quote that proves it. Never infer a name from topic, role, or context. "
                         "Empty array when nobody is named.\n"
-                        "Use empty arrays when the transcript has nothing for that key. Do not invent."
+                        "Use empty arrays when the transcript has nothing for that key. Do not invent.\n"
+                        + PLAIN_TEXT_NOTES_RULE
                         + out_rule
                     ),
                 },
@@ -1895,6 +1905,7 @@ class Pipeline:
             f"2. Style: {style}\n"
             "3. Keep it short: 60-100 words, 3-5 sentences, lead with the conclusion.\n"
             "4. Follow the LANGUAGE hard rule above even if notes are in another language.\n"
+            "5. " + PLAIN_TEXT_OUTPUT_RULE + "\n"
             + ctx
             + qa_ctx
             # #182: retrieved material rides in the SAME system prompt as the rest
@@ -2074,6 +2085,9 @@ class Pipeline:
                     self._stream = stream
                 reasoning = ""
                 n_chunks = 0
+                # Notes stay raw JSON. Every other visible answer is cleaned
+                # so leftover markdown never reaches a client that cannot render it.
+                sanitizer = None if mode == "notes" else PlainTextSanitizer()
                 for ch in stream:
                     if seq != self._gen_seq or self._cancel.is_set():
                         self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
@@ -2086,39 +2100,52 @@ class Pipeline:
                     delta = ch.choices[0].delta
                     piece = getattr(delta, "content", None) or ""
                     if piece:
-                        answer += piece
-                        self.emit({"type": "chunk", "id": qid, "text": piece})
-                        n_chunks += 1
-                        if self.user_id and stream_should_recheck_quota(n_chunks):
-                            from server.meter import check_can_generate
+                        visible = sanitizer.feed(piece) if sanitizer is not None else piece
+                        if visible:
+                            answer += visible
+                            self.emit({"type": "chunk", "id": qid, "text": visible})
+                            n_chunks += 1
+                            if self.user_id and stream_should_recheck_quota(n_chunks):
+                                from server.meter import check_can_generate
 
-                            ok, snap = check_can_generate(self.user_id)
-                            if not ok:
-                                logging.getLogger("nod").warning(
-                                    "quota_exceeded user=%s reason=%s sessions=%s/%s daily_cost=%s global_cost=%s",
-                                    self.user_id, snap.get("reason"), snap.get("sessions"), snap.get("session_limit"),
-                                    snap.get("daily_cost_usd"), snap.get("global_cost_usd"),
-                                )
-                                self.emit({"type": "quota", **snap})
-                                self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "llm"})
-                                # #182: a failure that belongs to THIS question names it;
-                                # a generic error must never be written into whichever
-                                # card happens to be open.
-                                self.emit({"type": "error", "id": qid, "text": _quota_copy(snap)})
-                                self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
-                                return
+                                ok, snap = check_can_generate(self.user_id)
+                                if not ok:
+                                    logging.getLogger("nod").warning(
+                                        "quota_exceeded user=%s reason=%s sessions=%s/%s daily_cost=%s global_cost=%s",
+                                        self.user_id, snap.get("reason"), snap.get("sessions"), snap.get("session_limit"),
+                                        snap.get("daily_cost_usd"), snap.get("global_cost_usd"),
+                                    )
+                                    self.emit({"type": "quota", **snap})
+                                    self.emit({"type": "quota_exceeded", "reason": snap.get("reason") or "llm"})
+                                    # #182: a failure that belongs to THIS question names it;
+                                    # a generic error must never be written into whichever
+                                    # card happens to be open.
+                                    self.emit({"type": "error", "id": qid, "text": _quota_copy(snap)})
+                                    self.emit({"type": "done", "id": qid, "stt": 0, "llm": round(time.time() - t0, 2), "ok": False})
+                                    return
                     # #182: this local used to be called `think`, which now collides
                     # with the Think flag — keep the two apart.
                     cot_piece = getattr(delta, "reasoning_content", None) or ""
                     if cot_piece:
                         reasoning += cot_piece
+                if sanitizer is not None:
+                    tail = sanitizer.flush()
+                    if tail:
+                        answer += tail
+                        self.emit({"type": "chunk", "id": qid, "text": tail})
+                        n_chunks += 1
                 search_queries = int(getattr(stream, "search_queries", 0) or 0)
                 if not answer and reasoning and not think:
                     # Pre-existing safety net for an empty body. It is deliberately
                     # NOT used on a Think answer: dumping the chain of thought into
                     # the answer body is exactly what #182 forbids.
-                    answer = reasoning
-                    self.emit({"type": "chunk", "id": qid, "text": reasoning})
+                    if sanitizer is not None:
+                        extra = PlainTextSanitizer()
+                        dumped = extra.feed(reasoning) + extra.flush() or reasoning
+                    else:
+                        dumped = reasoning
+                    answer = dumped
+                    self.emit({"type": "chunk", "id": qid, "text": dumped})
                 last_err = None
                 break
             except Exception as e:

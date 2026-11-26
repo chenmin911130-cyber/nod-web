@@ -5545,6 +5545,8 @@ html.nod-phone .app.iphone-v2 .iphone-stack .iphone-meta-row .iphone-meta {
   color: #dce6f6;
   font-size: 13px;
   line-height: 1.5;
+  /* Ask/notes answers are plain text with real line breaks (lists, indented code). */
+  white-space: pre-wrap;
 }
 
 .listen-card.ask {
