@@ -2167,9 +2167,11 @@ export default function ListenPane(props: Props) {
                           {IPHONE_COPY.askRetry}
                         </button>
                       </div>
+                    ) : note.kind === 'ask' ? (
+                      <p>{note.text || (props.busy && !note.text ? '…' : 'Waiting for an answer…')}</p>
                     ) : (
                       <BiText
-                        text={note.text || (props.busy && !note.text ? '…' : note.kind === 'ask' && !note.text ? 'Waiting for an answer…' : '')}
+                        text={note.text || (props.busy && !note.text ? '…' : '')}
                         bilingual={false}
                       />
                     )}

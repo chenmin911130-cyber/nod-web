@@ -13,12 +13,25 @@ export function qaDetectedLine(input: { listening?: boolean; generating?: boolea
 
 /** Split an answer for the card. Numbers stay as written — no rounding or invented stats. */
 export function qaAnswerParts(answer: string): { hero: string | null; summary: string; more: string } {
-  const text = answer.replace(/\s+/g, ' ').trim()
-  if (!text) return { hero: null, summary: '', more: '' }
-  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean)
-  const summary = sentences[0] || text
-  const more = sentences.slice(1).join(' ')
-  const lead = summary.match(/^(?:about|approximately|around|≈|~)?\s*(\d[\d.,]*)\s*(million|billion|thousand|m|k|%)\b/i)
+  const normalized = answer.replace(/\r\n?/g, '\n')
+  if (!normalized.trim()) return { hero: null, summary: '', more: '' }
+  // Trim only leading/trailing blank lines and trailing horizontal whitespace
+  // so multi-line lists and indented code keep their line breaks and indent.
+  const text = normalized
+    .replace(/^(?:[ \t]*\n)+/, '')
+    .replace(/(?:\n[ \t]*)+$/, '')
+    .replace(/[ \t]+$/, '')
+  let summary = text
+  let more = ''
+  if (!text.includes('\n')) {
+    const split = /(?<=[.!?])[ \t]+/.exec(text)
+    if (split) {
+      summary = text.slice(0, split.index)
+      more = text.slice(split.index + split[0].length)
+    }
+  }
+  const firstLine = summary.split('\n', 1)[0].trimStart()
+  const lead = firstLine.match(/^(?:about|approximately|around|≈|~)?\s*(\d[\d.,]*)\s*(million|billion|thousand|m|k|%)\b/i)
   if (!lead) return { hero: null, summary, more }
   const n = lead[1]
   const unit = lead[2].toLowerCase()
