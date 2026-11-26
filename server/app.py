@@ -63,13 +63,15 @@ from server.lang import (
     split_code_switched,
     translate_should_passthrough,
 )
-from server.ollama_llm import (
-    OLLAMA_NON_STREAM_TIMEOUT_S,
-    OLLAMA_STREAM_DEFAULT_READ_S,
-    OLLAMA_STREAM_TRANSLATE_READ_S,
-    chat_completions_with_ollama_fallback,
+from server.gemini_llm import (
+    GEMINI_NON_STREAM_TIMEOUT_S,
+    GEMINI_STREAM_DEFAULT_READ_S,
+    GEMINI_STREAM_TRANSLATE_READ_S,
+    GROUNDED_MODES,
+    chat_completions_with_gemini_fallback,
     completion_message_text,
-    ollama_configured,
+    gemini_configured,
+    gemini_lite_model,
 )
 from server.meeting_lines import (
     decide as meeting_decide,
@@ -237,11 +239,21 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = ROOT / "config.json"
 WEB_DIST = ROOT / "web" / "dist"
 
+# Text answers go to Gemini first (server/gemini_llm.py, native API with Google
+# Search grounding); these OpenAI-compatible endpoints are the session client,
+# i.e. the fallback (DeepSeek official by default) and the pinned Think path.
+# "gemini" is listed so a deployment may also advertise a Gemini model as the
+# session model; it then runs on Gemini's OpenAI-compatible endpoint (no grounding).
 PROVIDER_ENDPOINTS = {
     "deepseek": "https://api.deepseek.com",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
     "openrouter": "https://openrouter.ai/api/v1",
 }
-PROVIDER_KEY = {"deepseek": "DEEPSEEK_API_KEY", "openrouter": "OPENROUTER_API_KEY"}
+PROVIDER_KEY = {
+    "deepseek": "DEEPSEEK_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+}
 
 _STT_HALLUCINATIONS = (
     "thank you for watching", "thanks for watching", "thanks for listening",
@@ -286,7 +298,7 @@ def _ratio(a: str, b: str) -> float:
 
 
 def load_all_keys() -> dict[str, str]:
-    names = ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "ASSEMBLYAI_API_KEY"]
+    names = ["DEEPSEEK_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "ASSEMBLYAI_API_KEY"]
     keys: dict[str, str] = {}
     # Test/e2e harnesses set NOD_SKIP_DOTENV so the repo's real .env (which
     # load_all_keys reads FIRST — env vars are only a fallback) can never leak
@@ -926,6 +938,19 @@ def _is_transient_llm_error(err: BaseException) -> bool:
     return any(tok in text for tok in _TRANSIENT_LLM)
 
 
+def _thinking_off(kwargs: dict[str, Any], provider: str) -> None:
+    """Explicitly disable thinking on the session (fallback) client.
+
+    Flash models spend the output budget on thoughts otherwise and the visible
+    answer is truncated. Gemini's native call (server/gemini_llm.py) sets
+    ``thinkingBudget: 0`` itself; this covers the OpenAI-compatible client.
+    """
+    if provider == "deepseek":
+        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+    elif provider == "gemini":
+        kwargs["reasoning_effort"] = "none"
+
+
 def _close_llm_stream(stream) -> None:
     """Stop reading so the provider can halt token generation."""
     if stream is None:
@@ -1457,9 +1482,14 @@ class Pipeline:
     def key_status(self) -> dict[str, bool]:
         return {
             "has_llm": bool(
-                (self._keys.get("OPENROUTER_API_KEY") or self._keys.get("DEEPSEEK_API_KEY") or "").strip()
+                (
+                    self._keys.get("OPENROUTER_API_KEY")
+                    or self._keys.get("DEEPSEEK_API_KEY")
+                    or self._keys.get("GEMINI_API_KEY")
+                    or ""
+                ).strip()
             )
-            or ollama_configured(),
+            or gemini_configured(),
             "has_stt": bool(self.assemblyai_key()),
         }
 
@@ -1554,11 +1584,11 @@ class Pipeline:
                 stream=False,
                 temperature=0.1,
             )
-            if self._provider == "deepseek":
-                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-            resp = chat_completions_with_ollama_fallback(
+            _thinking_off(kwargs, self._provider)
+            resp = chat_completions_with_gemini_fallback(
                 kwargs=kwargs,
-                ollama_timeout=OLLAMA_NON_STREAM_TIMEOUT_S,
+                timeout=GEMINI_NON_STREAM_TIMEOUT_S,
+                model=gemini_lite_model(),
                 fallback=lambda: self.client.with_options(timeout=8.0).chat.completions.create(**kwargs),
             )
             out = ""
@@ -1604,11 +1634,11 @@ class Pipeline:
             stream=False,
             temperature=0.0,
         )
-        if self._provider == "deepseek":
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-        resp = chat_completions_with_ollama_fallback(
+        _thinking_off(kwargs, self._provider)
+        resp = chat_completions_with_gemini_fallback(
             kwargs=kwargs,
-            ollama_timeout=OLLAMA_NON_STREAM_TIMEOUT_S,
+            timeout=GEMINI_NON_STREAM_TIMEOUT_S,
+            model=gemini_lite_model(),
             fallback=lambda: self.client.with_options(timeout=timeout).chat.completions.create(**kwargs),
         )
         out = ""
@@ -1957,6 +1987,7 @@ class Pipeline:
             max_tokens = max(max_tokens, 800)
         answer = ""
         stream_usage: tuple[int, int] | None = None
+        search_queries = 0
         # #182: Think looks the question up ONCE, here — before the model call and
         # only for a question that was actually submitted. Never per partial, never
         # on a timer, and the outcome (including "found nothing" / "failed") is what
@@ -2018,28 +2049,27 @@ class Pipeline:
                         "thinking": {"type": "enabled"},
                         "reasoning_effort": THINK_REASONING_EFFORT,
                     }
-                elif self._provider == "deepseek":
-                    kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-                # Ollama web_search for Q&A text only — never translation (#370 review).
-                use_ollama_web_tools = (
-                    not images
-                    and mode != "translate"
-                    and mode in ("ask", "file_ask", "listen_ask")
-                )
-                ollama_kwargs = (
-                    kwargs
-                    if not use_ollama_web_tools
-                    else {**kwargs, "ollama_web_tools": True}
-                )
-                stream = chat_completions_with_ollama_fallback(
-                    kwargs=ollama_kwargs,
-                    ollama_timeout=(
-                        OLLAMA_STREAM_TRANSLATE_READ_S
-                        if mode == "translate"
-                        else OLLAMA_STREAM_DEFAULT_READ_S
-                    ),
-                    fallback=lambda: answer_client.chat.completions.create(**kwargs),
-                )
+                else:
+                    _thinking_off(kwargs, self._provider)
+                if think_pinned:
+                    # Think stays exactly as specified (#182): DeepSeek thinking mode
+                    # on the pinned client, evidence from the Parallel lookup above.
+                    # It never goes through Gemini.
+                    stream = answer_client.chat.completions.create(**kwargs)
+                else:
+                    # Gemini first, DeepSeek (session client) before the first token.
+                    # Google Search grounding for Q&A text only — never translation,
+                    # notes or image questions (#370 review).
+                    stream = chat_completions_with_gemini_fallback(
+                        kwargs=kwargs,
+                        timeout=(
+                            GEMINI_STREAM_TRANSLATE_READ_S
+                            if mode == "translate"
+                            else GEMINI_STREAM_DEFAULT_READ_S
+                        ),
+                        grounding=(not images and mode in GROUNDED_MODES),
+                        fallback=lambda: answer_client.chat.completions.create(**kwargs),
+                    )
                 with self._stream_lock():
                     self._stream = stream
                 reasoning = ""
@@ -2082,6 +2112,7 @@ class Pipeline:
                     cot_piece = getattr(delta, "reasoning_content", None) or ""
                     if cot_piece:
                         reasoning += cot_piece
+                search_queries = int(getattr(stream, "search_queries", 0) or 0)
                 if not answer and reasoning and not think:
                     # Pre-existing safety net for an empty body. It is deliberately
                     # NOT used on a Think answer: dumping the chain of thought into
@@ -2148,6 +2179,7 @@ class Pipeline:
                     stream_usage,
                     # #182: a Think answer persists the sources it actually used.
                     sources=think_search.sources_payload(think_outcome) if think_outcome is not None else None,
+                    search_queries=search_queries,
                 )
             except Exception:
                 logging.getLogger("nod").exception("usage accounting failed")
@@ -2380,11 +2412,12 @@ class Pipeline:
         internal: bool,
         stream_usage: tuple[int, int] | None = None,
         sources: dict | None = None,
+        search_queries: int = 0,
     ) -> None:
         from server.meter import consume_llm, save_history, update_history_text
 
         inp, out = resolve_llm_usage(stream_usage, t, answer)
-        ok, snap = consume_llm(self.user_id, self.usage_session_id, inp, out)
+        ok, snap = consume_llm(self.user_id, self.usage_session_id, inp, out, search_queries=search_queries)
         self.emit({"type": "quota", **snap})
         kind_q = "transcript" if mode == "translate" else "question"
         if not internal:

@@ -11,6 +11,7 @@ from server.db import Feedback, GlobalDay, HistoryItem, UsageDay, UsageSession, 
 from server.security import new_id
 from server.settings import (
     DAILY_STT_SECONDS,
+    GEMINI_SEARCH_USD_PER_QUERY,
     GLOBAL_DAILY_BUDGET_USD,
     HISTORY_RETENTION_DAYS,
     LLM_USD_PER_1K_IN,
@@ -90,8 +91,12 @@ def _cost_stt(seconds: float) -> float:
     return (seconds / 60.0) * STT_USD_PER_MINUTE
 
 
-def _cost_llm(inp: int, out: int) -> float:
-    return (inp / 1000.0) * LLM_USD_PER_1K_IN + (out / 1000.0) * LLM_USD_PER_1K_OUT
+def _cost_llm(inp: int, out: int, search_queries: int = 0) -> float:
+    return (
+        (inp / 1000.0) * LLM_USD_PER_1K_IN
+        + (out / 1000.0) * LLM_USD_PER_1K_OUT
+        + max(0, int(search_queries or 0)) * GEMINI_SEARCH_USD_PER_QUERY
+    )
 
 
 def usage_snapshot(user_id: str) -> dict:
@@ -431,8 +436,9 @@ def consume_llm(
     session_id: str | None,
     inp: int,
     out: int,
+    search_queries: int = 0,
 ) -> tuple[bool, dict]:
-    cost = _cost_llm(inp, out)
+    cost = _cost_llm(inp, out, search_queries)
     with db_session() as db:
         if session_id:
             db.execute(

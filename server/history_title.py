@@ -1,4 +1,4 @@
-"""Async DeepSeek titles for kept Meeting History. Keep never waits on this."""
+"""Async LLM titles (Gemini flash-lite, DeepSeek fallback) for kept Meeting History. Keep never waits on this."""
 
 from __future__ import annotations
 
@@ -163,18 +163,20 @@ def generate_history_title(user_id: str, session_id: str, complete) -> str:
 
 
 def _default_complete(messages: list[dict[str, str]]):
+    """Gemini flash-lite (no grounding, thinking off) first; DeepSeek official as fallback."""
     from openai import OpenAI
 
-    from server.ollama_llm import (
-        OLLAMA_NON_STREAM_TIMEOUT_S,
-        chat_completions_with_ollama_fallback,
-        ollama_configured,
+    from server.gemini_llm import (
+        GEMINI_NON_STREAM_TIMEOUT_S,
+        chat_completions_with_gemini_fallback,
+        gemini_configured,
+        gemini_lite_model,
     )
     from server.settings import THINK_LLM_MODEL
 
     key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
-    if not key and not ollama_configured():
-        raise RuntimeError("no_deepseek_key")
+    if not key and not gemini_configured():
+        raise RuntimeError("no_llm_key")
 
     def _deepseek_create():
         if not key:
@@ -187,6 +189,7 @@ def _default_complete(messages: list[dict[str, str]]):
             messages=messages,
             max_tokens=48,
             temperature=0.2,
+            extra_body={"thinking": {"type": "disabled"}},
         )
 
     kwargs = {
@@ -196,9 +199,10 @@ def _default_complete(messages: list[dict[str, str]]):
         "temperature": 0.2,
         "stream": False,
     }
-    return chat_completions_with_ollama_fallback(
+    return chat_completions_with_gemini_fallback(
         kwargs=kwargs,
-        ollama_timeout=OLLAMA_NON_STREAM_TIMEOUT_S,
+        timeout=GEMINI_NON_STREAM_TIMEOUT_S,
+        model=gemini_lite_model(),
         fallback=_deepseek_create,
     )
 
