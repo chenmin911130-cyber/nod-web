@@ -17,3 +17,18 @@ eq(nz.more, 'Stats NZ updates the estimate.', 'later sentences sit behind More')
 
 const noNum = qaAnswerParts('I cut admin export from v1 so the September 8 beta could ship.')
 eq(noNum.hero, null, 'a date like September 8 is not a hero stat')
+
+const numbered = qaAnswerParts('1. First item\n2. Second item\n3. Third item')
+eq(numbered.hero, null, 'numbered list has no hero stat')
+eq(numbered.summary, '1. First item\n2. Second item\n3. Third item', 'numbered list keeps newlines')
+eq(numbered.more, '', 'numbered list stays together')
+
+const bullets = qaAnswerParts('Key points:\n• Alpha\n• Beta')
+eq(bullets.summary, 'Key points:\n• Alpha\n• Beta', 'bullet list keeps newlines')
+
+const code = qaAnswerParts('    def foo():\n        return 1')
+eq(code.hero, null, 'indented code has no hero stat')
+eq(code.summary, '    def foo():\n        return 1', 'indented code keeps leading spaces and newlines')
+
+const mixed = qaAnswerParts('\nHere is the helper:\n\n    def foo():\n        return 1\n')
+eq(mixed.summary, 'Here is the helper:\n\n    def foo():\n        return 1', 'multi-line answer keeps blank lines and indent')
