@@ -136,8 +136,16 @@ ALLOWED_HOSTS = _allowed_hosts()
 HOST_LOCK = bool(ALLOWED_HOSTS)
 
 STT_USD_PER_MINUTE = float(os.environ.get("STT_USD_PER_MINUTE") or "0.01")
-LLM_USD_PER_1K_IN = float(os.environ.get("LLM_USD_PER_1K_IN") or "0.00014")
-LLM_USD_PER_1K_OUT = float(os.environ.get("LLM_USD_PER_1K_OUT") or "0.00028")
+# LLM metering rates (USD per 1K tokens). Text answers run on Gemini first, so the
+# defaults are gemini-3.8-flash paid-tier list prices ($0.75 / $3.75 per 1M through
+# 2026-12-31; Google doubles them on 2027-01-01 — raise these then). The DeepSeek
+# fallback and the flash-lite background jobs are cheaper, so this over-estimates
+# them, which is the safe side for the daily budget gates.
+LLM_USD_PER_1K_IN = float(os.environ.get("LLM_USD_PER_1K_IN") or "0.00075")
+LLM_USD_PER_1K_OUT = float(os.environ.get("LLM_USD_PER_1K_OUT") or "0.00375")
+# Google Search grounding on Gemini 3+: billed per search query the model runs
+# ($14 / 1,000 after the 5,000/month free allowance). Metered at the paid rate.
+GEMINI_SEARCH_USD_PER_QUERY = float(os.environ.get("GEMINI_SEARCH_USD_PER_QUERY") or "0.014")
 GLOBAL_DAILY_BUDGET_USD = float(os.environ.get("GLOBAL_DAILY_BUDGET_USD") or "25")
 # Off unless QUOTA_DISABLED=1. Daily STT is the spend control (2 hours).
 QUOTA_DISABLED = os.environ.get("QUOTA_DISABLED", "0").strip().lower() in ("1", "true", "yes")

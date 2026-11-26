@@ -24,6 +24,10 @@ os.environ["DATA_DIR"] = _TEST_DATA_DIR
 os.environ.setdefault("ASSEMBLYAI_API_KEY", "test-stt")
 os.environ.setdefault("DEEPSEEK_API_KEY", "test-llm")
 os.environ.setdefault("OPENROUTER_API_KEY", "test-llm")
+# Gemini is the primary text LLM when GEMINI_API_KEY is set. A real key exported in
+# the shell would make every answer test call Google, so tests run without it;
+# tests/test_gemini_llm.py sets a fake key and mocks the HTTP transport.
+os.environ.pop("GEMINI_API_KEY", None)
 # Force quota checks on so metering tests exercise the cap logic.
 os.environ.pop("QUOTA_DISABLED", None)
 # NOTE: DO NOT set AUTH_DISABLED here. Several hardening tests rely on
